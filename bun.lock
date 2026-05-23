@@ -220,6 +220,20 @@
         "vite-plus": "catalog:",
       },
     },
+    "packages/theme-gruvbox": {
+      "name": "@codemirror-treesitter/theme-gruvbox",
+      "version": "0.0.0",
+      "dependencies": {
+        "@codemirror-treesitter/language": "workspace:*",
+        "@codemirror/state": "^6.6.0",
+        "@codemirror/view": "^6.43.0",
+      },
+      "devDependencies": {
+        "@typescript/native-preview": "7.0.0-dev.20260509.2",
+        "typescript": "^6.0.3",
+        "vite-plus": "catalog:",
+      },
+    },
   },
   "overrides": {
     "vite": "catalog:",
@@ -244,6 +258,8 @@
     "@codemirror-treesitter/lsp-client": ["@codemirror-treesitter/lsp-client@workspace:packages/lsp-client"],
 
     "@codemirror-treesitter/merge": ["@codemirror-treesitter/merge@workspace:packages/merge"],
+
+    "@codemirror-treesitter/theme-gruvbox": ["@codemirror-treesitter/theme-gruvbox@workspace:packages/theme-gruvbox"],
 
     "@codemirror/autocomplete": ["@codemirror/autocomplete@6.20.2", "", { "dependencies": { "@codemirror/language": "^6.0.0", "@codemirror/state": "^6.0.0", "@codemirror/view": "^6.17.0", "@lezer/common": "^1.0.0" } }, "sha512-G5FPkgIiLjOgZMjqVjvuKQ1rGPtHogLldJr33eFJdVLtmwY+giGrlv/ewljLz6b9BSQLkjxuwBc6g6omDM+YxQ=="],
 

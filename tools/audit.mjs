@@ -74,6 +74,7 @@ async function main() {
   await checkAutocompletePublicExports();
   await checkAutocompleteHasNoKnownStubs();
   await checkLanguageTreeSitterHighlightHelpers();
+  await checkGruvboxThemePackage();
   await checkMergePublicExports();
   await checkMergeUsesLocalHighlighting();
   await checkLspClientPublicExports();
@@ -184,6 +185,32 @@ async function checkLanguageTreeSitterHighlightHelpers() {
     if (!local.has(name)) fail(`language package is missing tree-sitter highlight helper ${name}`);
   }
   pass("language package exposes tree-sitter highlight compatibility helpers");
+}
+
+async function checkGruvboxThemePackage() {
+  let pkg = JSON.parse(await readText("packages/theme-gruvbox/package.json"));
+  if (pkg.dependencies?.["@codemirror-treesitter/language"] == null) {
+    fail("theme-gruvbox does not depend on the local tree-sitter language package");
+  }
+  for (let name of ["@codemirror/language", "@lezer/highlight"]) {
+    if (pkg.dependencies?.[name] != null) fail(`theme-gruvbox depends on ${name}`);
+  }
+
+  let source = await readText("packages/theme-gruvbox/src/index.ts");
+  for (let snippet of [
+    'from "@codemirror-treesitter/language"',
+    "gruvboxDarkColors",
+    "gruvboxDarkTheme",
+    "gruvboxDarkHighlightStyle",
+    "gruvboxDark",
+    "gruvboxLightColors",
+    "gruvboxLightTheme",
+    "gruvboxLightHighlightStyle",
+    "gruvboxLight",
+  ]) {
+    if (!source.includes(snippet)) fail(`theme-gruvbox source is missing ${snippet}`);
+  }
+  pass("theme-gruvbox exposes local dark and light Gruvbox themes");
 }
 
 async function checkMergePublicExports() {

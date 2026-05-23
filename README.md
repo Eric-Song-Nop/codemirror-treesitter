@@ -19,6 +19,7 @@ the local Tree-sitter behavior against the original implementation.
 | `@codemirror-treesitter/commands`      | A local reimplementation of the public `@codemirror/commands` surface, including cursor movement, selection commands, multiple cursors, deletion, line moving/copying, indentation, tab focus mode, commenting, history, and the standard/default/emacs/history keymaps.                                                                          |
 | `@codemirror-treesitter/autocomplete`  | Local autocomplete and close-bracket infrastructure: completion contexts/sources/results, completion state, tooltip rendering, filtering, completion commands and keymaps, snippets, word completion, close brackets, and bracket-pair deletion.                                                                                                  |
 | `@codemirror-treesitter/basic-setup`   | Local `basicSetup` and `minimalSetup` assembled from the Tree-sitter packages, with extension and keymap ordering checked against upstream `codemirror`.                                                                                                                                                                                          |
+| `@codemirror-treesitter/theme-gruvbox` | Lezer-free Gruvbox editor themes for CodeMirror, exporting dark and light editor themes, highlight styles, combined extensions, and reusable color palettes.                                                                                                                                                                                      |
 
 ## Apps and Tools
 
@@ -96,5 +97,8 @@ these invariants:
   `minimalSetup` extension sequences and basic keymap ordering.
 - `@codemirror-treesitter/language-data` mirrors upstream language metadata and
   all built language entries load a parser.
+- `@codemirror-treesitter/theme-gruvbox` exports both dark and light Gruvbox
+  themes and imports syntax highlighting from the local Tree-sitter language
+  package.
 - Parser-relevant official examples are either implemented in `apps/examples`
   or explicitly classified as out of scope.
