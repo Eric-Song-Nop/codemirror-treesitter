@@ -95,6 +95,7 @@ import { basicSetup as lezerBasicSetup } from "codemirror";
 
 type EngineId = "tree" | "lezer";
 type ThemeMode = "dark" | "light";
+type ViewMode = "example" | "benchmark";
 type Status = Record<string, string>;
 type SupportMap<Support> = Map<string, Support>;
 type LoadSupport<Support> = (name: string) => Promise<Support>;
@@ -175,6 +176,7 @@ let statusTimer = 0;
 let benchmarkRun = 0;
 let benchmarkBusy = false;
 let themeMode: ThemeMode = readStoredThemeMode();
+let viewMode: ViewMode = "example";
 
 const benchmarkResults = new Map<string, BenchmarkResult>();
 const treeLanguageNames = new Set(treeLanguages.map((language) => language.name));
@@ -215,74 +217,90 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       </div>
       <a id="official-link" class="official-link" target="_blank" rel="noreferrer">Official page</a>
     </header>
-    <p id="example-summary" class="summary"></p>
-    <section class="benchmark-console" aria-label="Benchmark suite">
-      <header class="benchmark-toolbar">
-        <div>
-          <p class="source">Benchmark Suite</p>
-          <h3>Language Editing Latency</h3>
-        </div>
-        <div class="benchmark-actions">
-          <button id="run-active-benchmark" type="button">Run Active</button>
-          <button id="run-suite-benchmark" type="button">Run Suite</button>
-        </div>
-      </header>
-      <div id="benchmark-summary" class="metric-strip"></div>
-      <div class="benchmark-grid">
-        <section class="benchmark-panel">
+    <section
+      id="example-panel"
+      class="view-panel example-view"
+      role="tabpanel"
+      data-view-panel="example"
+    >
+      <p id="example-summary" class="summary"></p>
+      <section class="coverage-panel" aria-label="Language coverage">
+        <header>
+          <div>
+            <p class="source">Language Coverage</p>
+            <h3>Tree-sitter package span against CodeMirror language-data</h3>
+          </div>
+          <div id="coverage-stats" class="coverage-stats"></div>
+        </header>
+        <div id="language-grid" class="language-grid"></div>
+      </section>
+      <div class="work-area">
+        <section class="engine-card" data-engine="tree">
           <header>
-            <h4>Active Feature Metrics</h4>
-            <p id="benchmark-status">No benchmark run yet</p>
+            <div>
+              <p>Local implementation</p>
+              <h3>Tree-sitter</h3>
+            </div>
+            <span class="engine-badge">TS</span>
           </header>
-          <div id="active-benchmark" class="metrics-table"></div>
+          <div id="tree-editor" class="editor-host"></div>
+          <dl id="tree-status" class="status-list" data-engine="tree"></dl>
         </section>
-        <section class="benchmark-panel">
+        <section class="engine-card" data-engine="lezer">
           <header>
-            <h4>Suite Results</h4>
-            <p id="suite-status">0 examples measured</p>
+            <div>
+              <p>Original implementation</p>
+              <h3>CodeMirror + Lezer</h3>
+            </div>
+            <span class="engine-badge">LZ</span>
           </header>
-          <div id="suite-benchmark" class="suite-table"></div>
+          <div id="lezer-editor" class="editor-host"></div>
+          <dl id="lezer-status" class="status-list" data-engine="lezer"></dl>
         </section>
+        <aside class="comparison-panel">
+          <h3>Behavior Comparison</h3>
+          <dl id="comparison-status" class="status-list comparison-list"></dl>
+        </aside>
       </div>
     </section>
-    <section class="coverage-panel" aria-label="Language coverage">
-      <header>
-        <div>
-          <p class="source">Language Coverage</p>
-          <h3>Tree-sitter package span against CodeMirror language-data</h3>
+    <section
+      id="benchmark-panel"
+      class="view-panel benchmark-view"
+      role="tabpanel"
+      aria-labelledby="benchmark-nav"
+      data-view-panel="benchmark"
+      hidden
+    >
+      <section class="benchmark-console" aria-label="Benchmark suite">
+        <header class="benchmark-toolbar">
+          <div>
+            <p class="source">Benchmark Suite</p>
+            <h3>Language Editing Latency</h3>
+          </div>
+          <div class="benchmark-actions">
+            <button id="run-active-benchmark" type="button">Run Active</button>
+            <button id="run-suite-benchmark" type="button">Run Suite</button>
+          </div>
+        </header>
+        <div id="benchmark-summary" class="metric-strip"></div>
+        <div class="benchmark-grid">
+          <section class="benchmark-panel">
+            <header>
+              <h4>Active Feature Metrics</h4>
+              <p id="benchmark-status">No benchmark run yet</p>
+            </header>
+            <div id="active-benchmark" class="metrics-table"></div>
+          </section>
+          <section class="benchmark-panel">
+            <header>
+              <h4>Suite Results</h4>
+              <p id="suite-status">0 examples measured</p>
+            </header>
+            <div id="suite-benchmark" class="suite-table"></div>
+          </section>
         </div>
-        <div id="coverage-stats" class="coverage-stats"></div>
-      </header>
-      <div id="language-grid" class="language-grid"></div>
+      </section>
     </section>
-    <div class="work-area">
-      <section class="engine-card" data-engine="tree">
-        <header>
-          <div>
-            <p>Local implementation</p>
-            <h3>Tree-sitter</h3>
-          </div>
-          <span class="engine-badge">TS</span>
-        </header>
-        <div id="tree-editor" class="editor-host"></div>
-        <dl id="tree-status" class="status-list" data-engine="tree"></dl>
-      </section>
-      <section class="engine-card" data-engine="lezer">
-        <header>
-          <div>
-            <p>Original implementation</p>
-            <h3>CodeMirror + Lezer</h3>
-          </div>
-          <span class="engine-badge">LZ</span>
-        </header>
-        <div id="lezer-editor" class="editor-host"></div>
-        <dl id="lezer-status" class="status-list" data-engine="lezer"></dl>
-      </section>
-      <aside class="comparison-panel">
-        <h3>Behavior Comparison</h3>
-        <dl id="comparison-status" class="status-list comparison-list"></dl>
-      </aside>
-    </div>
   </section>
 </main>
 `;
@@ -304,6 +322,7 @@ const suiteBenchmark = document.querySelector<HTMLElement>("#suite-benchmark")!;
 const coverageStats = document.querySelector<HTMLElement>("#coverage-stats")!;
 const languageGrid = document.querySelector<HTMLElement>("#language-grid")!;
 const themeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-theme-mode]")];
+const viewPanels = [...document.querySelectorAll<HTMLElement>("[data-view-panel]")];
 
 const treeEngine: EngineState<TreeLanguageSupport> = {
   id: "tree",
@@ -1188,9 +1207,21 @@ for (let example of examples) {
   button.type = "button";
   button.textContent = example.title;
   button.dataset.example = example.id;
-  button.addEventListener("click", () => void showExample(example.id));
+  button.addEventListener("click", () => {
+    setViewMode("example");
+    void showExample(example.id);
+  });
   nav.append(button);
 }
+
+const benchmarkNav = document.createElement("button");
+benchmarkNav.id = "benchmark-nav";
+benchmarkNav.className = "benchmark-nav";
+benchmarkNav.type = "button";
+benchmarkNav.textContent = "Benchmarks";
+benchmarkNav.setAttribute("aria-controls", "benchmark-panel");
+benchmarkNav.addEventListener("click", () => setViewMode("benchmark"));
+nav.append(benchmarkNav);
 
 for (let button of themeButtons) {
   button.addEventListener("click", () => {
@@ -1202,14 +1233,15 @@ for (let button of themeButtons) {
 runActiveBenchmarkButton.addEventListener("click", () => void runBenchmarks("active"));
 runSuiteBenchmarkButton.addEventListener("click", () => void runBenchmarks("suite"));
 setThemeMode(themeMode);
+setViewMode("example");
 renderLanguageCoverage();
 renderBenchmarkResults();
 
 void showExample(location.hash.slice(1) || examples[0]!.id);
-window.addEventListener(
-  "hashchange",
-  () => void showExample(location.hash.slice(1) || examples[0]!.id),
-);
+window.addEventListener("hashchange", () => {
+  setViewMode("example");
+  void showExample(location.hash.slice(1) || examples[0]!.id);
+});
 
 Object.assign(window, {
   __exampleComparison: () => collectComparisonSnapshot(),
@@ -1239,6 +1271,42 @@ function setThemeMode(mode: ThemeMode, rerender = false) {
     // Ignore storage failures in private or embedded browser contexts.
   }
   if (changed && rerender && activeExample) void showExample(activeExample.id);
+}
+
+function setViewMode(mode: ViewMode) {
+  viewMode = mode;
+  for (let panel of viewPanels) {
+    panel.hidden = panel.dataset.viewPanel != mode;
+  }
+  syncNavigationState();
+  renderStageHeader();
+}
+
+function syncNavigationState() {
+  benchmarkNav.classList.toggle("active", viewMode == "benchmark");
+  benchmarkNav.setAttribute("aria-current", viewMode == "benchmark" ? "page" : "false");
+  for (let button of nav.querySelectorAll<HTMLButtonElement>("[data-example]")) {
+    let active = viewMode == "example" && button.dataset.example == activeExample?.id;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-current", active ? "page" : "false");
+  }
+}
+
+function renderStageHeader() {
+  if (viewMode == "benchmark") {
+    source.textContent = "workbench/benchmarks/";
+    title.textContent = "Benchmarks";
+    officialLink.hidden = true;
+    officialLink.removeAttribute("href");
+    return;
+  }
+
+  let example = activeExample ?? examples[0]!;
+  title.textContent = example.title;
+  source.textContent = example.official.replace("https://codemirror.net/examples/", "examples/");
+  summary.textContent = example.summary;
+  officialLink.hidden = false;
+  officialLink.href = example.official;
 }
 
 function treeBaseExtensions(): Extension[] {
@@ -1337,13 +1405,8 @@ async function showExample(id: string) {
   let run = ++activeRun;
   activeExample = example;
   if (location.hash.slice(1) != example.id) location.hash = example.id;
-  for (let button of nav.querySelectorAll("button")) {
-    button.classList.toggle("active", button.dataset.example == example.id);
-  }
-  title.textContent = example.title;
-  source.textContent = example.official.replace("https://codemirror.net/examples/", "examples/");
-  summary.textContent = example.summary;
-  officialLink.href = example.official;
+  syncNavigationState();
+  renderStageHeader();
   setEngineStatus(engines.tree, { status: "Loading grammars" });
   setEngineStatus(engines.lezer, { status: "Loading grammars" });
   renderComparisonLoading();

@@ -88,6 +88,7 @@ async function main() {
   await checkExamplesIncludeMergeAndLspClient();
   await checkExamplesComparisonImplementation();
   await checkExamplesUseGruvboxTheme();
+  await checkExamplesBenchmarkIsTabbed();
 
   if (failures) {
     console.error(`audit failed with ${failures} issue${failures == 1 ? "" : "s"}`);
@@ -561,6 +562,28 @@ async function checkExamplesUseGruvboxTheme() {
     if (!css.includes(snippet)) fail(`apps/examples Gruvbox UI is missing ${snippet}`);
   }
   pass("examples app uses local Gruvbox themes for both runtimes and UI modes");
+}
+
+async function checkExamplesBenchmarkIsTabbed() {
+  let source = await readText("apps/examples/src/main.ts");
+  for (let snippet of [
+    'id = "benchmark-nav"',
+    'className = "benchmark-nav"',
+    "nav.append(benchmarkNav)",
+    'data-view-panel="example"',
+    'data-view-panel="benchmark"',
+    "setViewMode",
+    "syncNavigationState",
+    "viewPanels",
+  ]) {
+    if (!source.includes(snippet)) fail(`apps/examples benchmark tab wiring is missing ${snippet}`);
+  }
+
+  let css = await readText("apps/examples/src/style.css");
+  for (let snippet of [".benchmark-nav", ".view-panel", ".view-panel[hidden]"]) {
+    if (!css.includes(snippet)) fail(`apps/examples benchmark tab CSS is missing ${snippet}`);
+  }
+  pass("examples app keeps benchmarks as a top-level examples navigation item");
 }
 
 async function checkExamplesIncludeMergeAndLspClient() {
