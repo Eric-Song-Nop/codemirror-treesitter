@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "moduleDetection": "force",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "declaration": true,
+    "noEmit": true,
+    "paths": {
+      "@codemirror-treesitter/language": ["../language/src/index.ts"],
+      "@codemirror-treesitter/commands": ["../commands/src/index.ts"],
+      "@codemirror-treesitter/autocomplete": ["../autocomplete/src/index.ts"]
+    },
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true
+  },
+  "include": ["src", "tests"]
+}

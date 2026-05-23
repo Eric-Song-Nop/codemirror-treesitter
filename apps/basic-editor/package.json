@@ -1,0 +1,24 @@
+{
+  "name": "basic-editor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "tsc && vp build",
+    "preview": "vp preview"
+  },
+  "dependencies": {
+    "@codemirror-treesitter/autocomplete": "workspace:*",
+    "@codemirror-treesitter/basic-setup": "workspace:*",
+    "@codemirror-treesitter/commands": "workspace:*",
+    "@codemirror-treesitter/language": "workspace:*",
+    "@codemirror-treesitter/language-data": "workspace:*",
+    "@codemirror/state": "^6.6.0"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
