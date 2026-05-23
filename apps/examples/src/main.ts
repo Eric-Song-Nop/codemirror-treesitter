@@ -2,17 +2,24 @@ import "./style.css";
 import {
   CompletionContext as TreeCompletionContext,
   autocompletion as treeAutocompletion,
+  insertBracket as treeInsertBracket,
   type CompletionResult as TreeCompletionResult,
 } from "@codemirror-treesitter/autocomplete";
 import { basicSetup as treeBasicSetup } from "@codemirror-treesitter/basic-setup";
-import { indentWithTab as treeIndentWithTab } from "@codemirror-treesitter/commands";
+import {
+  indentWithTab as treeIndentWithTab,
+  toggleComment as treeToggleComment,
+} from "@codemirror-treesitter/commands";
 import { languages as treeLanguages } from "@codemirror-treesitter/language-data";
 import {
   HighlightStyle as TreeHighlightStyle,
   NodeProp as TreeNodeProp,
   bidiIsolates as treeBidiIsolates,
   ensureSyntaxTree as treeEnsureSyntaxTree,
+  foldable as treeFoldable,
+  getIndentation as treeGetIndentation,
   language as treeLanguageFacet,
+  matchBrackets as treeMatchBrackets,
   syntaxHighlighting as treeSyntaxHighlighting,
   syntaxTree as treeSyntaxTree,
   syntaxTreeAvailable as treeSyntaxTreeAvailable,
@@ -20,23 +27,50 @@ import {
   type LanguageSupport as TreeLanguageSupport,
 } from "@codemirror-treesitter/language";
 import {
+  LSPClient as TreeLSPClient,
+  LSPPlugin as TreeLSPPlugin,
+  languageServerExtensions as treeLanguageServerExtensions,
+} from "@codemirror-treesitter/lsp-client";
+import {
+  getChunks as treeGetChunks,
+  getOriginalDoc as treeGetOriginalDoc,
+  unifiedMergeView as treeUnifiedMergeView,
+} from "@codemirror-treesitter/merge";
+import {
   CompletionContext as LezerCompletionContext,
   autocompletion as lezerAutocompletion,
+  insertBracket as lezerInsertBracket,
   type CompletionResult as LezerCompletionResult,
 } from "@codemirror/autocomplete";
-import { indentWithTab as lezerIndentWithTab } from "@codemirror/commands";
+import {
+  indentWithTab as lezerIndentWithTab,
+  toggleComment as lezerToggleComment,
+} from "@codemirror/commands";
 import { languages as lezerLanguages } from "@codemirror/language-data";
 import {
   HighlightStyle as LezerHighlightStyle,
   bidiIsolates as lezerBidiIsolates,
   ensureSyntaxTree as lezerEnsureSyntaxTree,
+  foldable as lezerFoldable,
+  getIndentation as lezerGetIndentation,
   language as lezerLanguageFacet,
+  matchBrackets as lezerMatchBrackets,
   syntaxHighlighting as lezerSyntaxHighlighting,
   syntaxTree as lezerSyntaxTree,
   syntaxTreeAvailable as lezerSyntaxTreeAvailable,
   type LanguageSupport as LezerLanguageSupport,
 } from "@codemirror/language";
 import { linter, type Diagnostic } from "@codemirror/lint";
+import {
+  LSPClient as LezerLSPClient,
+  LSPPlugin as LezerLSPPlugin,
+  languageServerExtensions as lezerLanguageServerExtensions,
+} from "@codemirror/lsp-client";
+import {
+  getChunks as lezerGetChunks,
+  getOriginalDoc as lezerGetOriginalDoc,
+  unifiedMergeView as lezerUnifiedMergeView,
+} from "@codemirror/merge";
 import { Compartment, EditorState, RangeSetBuilder, type Extension } from "@codemirror/state";
 import {
   Decoration,
@@ -68,6 +102,36 @@ type CompareRow = {
   detail: string;
 };
 
+type BenchmarkMetric = {
+  label: string;
+  tree: number;
+  lezer: number;
+  unit: "ms" | "ops";
+  lowerIsBetter: boolean;
+};
+
+type RuntimeBenchmark = {
+  load: number;
+  state: number;
+  mount: number;
+  parse: number;
+  edit: number;
+  inspect: number;
+  status: Status;
+  parseReady: boolean;
+  bytes: number;
+  lines: number;
+};
+
+type BenchmarkResult = {
+  exampleId: string;
+  title: string;
+  tree: RuntimeBenchmark;
+  lezer: RuntimeBenchmark;
+  metrics: readonly BenchmarkMetric[];
+  comparisons: readonly CompareRow[];
+};
+
 type Example = {
   id: string;
   title: string;
@@ -97,6 +161,21 @@ const lezerLanguageCache = new Map<string, Promise<LezerLanguageSupport>>();
 let activeExample: Example | null = null;
 let activeRun = 0;
 let statusTimer = 0;
+let benchmarkRun = 0;
+let benchmarkBusy = false;
+
+const benchmarkResults = new Map<string, BenchmarkResult>();
+const treeLanguageNames = new Set(treeLanguages.map((language) => language.name));
+const lezerLanguageNames = new Set(lezerLanguages.map((language) => language.name));
+const commonLanguageNames = [...treeLanguageNames]
+  .filter((name) => lezerLanguageNames.has(name))
+  .sort((a, b) => a.localeCompare(b));
+const treeOnlyLanguageNames = [...treeLanguageNames]
+  .filter((name) => !lezerLanguageNames.has(name))
+  .sort((a, b) => a.localeCompare(b));
+const lezerOnlyLanguageNames = [...lezerLanguageNames]
+  .filter((name) => !treeLanguageNames.has(name))
+  .sort((a, b) => a.localeCompare(b));
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
 <main class="app-shell">
@@ -119,6 +198,45 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <a id="official-link" class="official-link" target="_blank" rel="noreferrer">Official page</a>
     </header>
     <p id="example-summary" class="summary"></p>
+    <section class="benchmark-console" aria-label="Benchmark suite">
+      <header class="benchmark-toolbar">
+        <div>
+          <p class="source">Benchmark Suite</p>
+          <h3>Language Editing Latency</h3>
+        </div>
+        <div class="benchmark-actions">
+          <button id="run-active-benchmark" type="button">Run Active</button>
+          <button id="run-suite-benchmark" type="button">Run Suite</button>
+        </div>
+      </header>
+      <div id="benchmark-summary" class="metric-strip"></div>
+      <div class="benchmark-grid">
+        <section class="benchmark-panel">
+          <header>
+            <h4>Active Feature Metrics</h4>
+            <p id="benchmark-status">No benchmark run yet</p>
+          </header>
+          <div id="active-benchmark" class="metrics-table"></div>
+        </section>
+        <section class="benchmark-panel">
+          <header>
+            <h4>Suite Results</h4>
+            <p id="suite-status">0 examples measured</p>
+          </header>
+          <div id="suite-benchmark" class="suite-table"></div>
+        </section>
+      </div>
+    </section>
+    <section class="coverage-panel" aria-label="Language coverage">
+      <header>
+        <div>
+          <p class="source">Language Coverage</p>
+          <h3>Tree-sitter package span against CodeMirror language-data</h3>
+        </div>
+        <div id="coverage-stats" class="coverage-stats"></div>
+      </header>
+      <div id="language-grid" class="language-grid"></div>
+    </section>
     <div class="work-area">
       <section class="engine-card" data-engine="tree">
         <header>
@@ -157,6 +275,16 @@ const source = document.querySelector<HTMLElement>("#example-source")!;
 const summary = document.querySelector<HTMLElement>("#example-summary")!;
 const officialLink = document.querySelector<HTMLAnchorElement>("#official-link")!;
 const comparisonList = document.querySelector<HTMLElement>("#comparison-status")!;
+const runActiveBenchmarkButton =
+  document.querySelector<HTMLButtonElement>("#run-active-benchmark")!;
+const runSuiteBenchmarkButton = document.querySelector<HTMLButtonElement>("#run-suite-benchmark")!;
+const benchmarkSummary = document.querySelector<HTMLElement>("#benchmark-summary")!;
+const benchmarkStatus = document.querySelector<HTMLElement>("#benchmark-status")!;
+const suiteStatus = document.querySelector<HTMLElement>("#suite-status")!;
+const activeBenchmark = document.querySelector<HTMLElement>("#active-benchmark")!;
+const suiteBenchmark = document.querySelector<HTMLElement>("#suite-benchmark")!;
+const coverageStats = document.querySelector<HTMLElement>("#coverage-stats")!;
+const languageGrid = document.querySelector<HTMLElement>("#language-grid")!;
 
 const treeEngine: EngineState<TreeLanguageSupport> = {
   id: "tree",
@@ -183,6 +311,25 @@ const lezerEngine: EngineState<LezerLanguageSupport> = {
 const engines = {
   tree: treeEngine,
   lezer: lezerEngine,
+};
+
+const mergeOriginalDoc = `const rate = 1.2;
+
+function total(items) {
+  const subtotal = items.reduce((sum, item) => sum + item.value, 0);
+  return subtotal * rate;
+}
+`;
+
+const lspMarkdownSample = {
+  kind: "markdown" as const,
+  value: `Hover renders markup and highlighted code blocks.
+
+\`\`\`javascript
+const answer = 42;
+if (answer < limit) console.log(answer);
+\`\`\`
+`,
 };
 
 const examples: readonly Example[] = [
@@ -676,6 +823,307 @@ console.log("Press Tab at the start of this line.");
     ],
   },
   {
+    id: "indent-fold",
+    title: "Indentation and Folding",
+    official: "https://codemirror.net/examples/fold/",
+    summary:
+      "Indent services and fold metadata are read from the same JavaScript syntax tree shape used by editor commands.",
+    doc: `function render(items) {
+  return items.map((item) => {
+    if (item.active) {
+      return { label: item.label };
+    }
+    return null;
+  });
+}
+`,
+    tree: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [treeSupport(supports, "JavaScript").extension],
+      inspect: (view) => {
+        treeReadyTree(view);
+        let indentLine = view.state.doc.line(2);
+        let foldLine = view.state.doc.line(1);
+        let fold = treeFoldable(view.state, foldLine.from, foldLine.to);
+        return {
+          language: treeCurrentLanguageName(view),
+          lineIndent: String(treeGetIndentation(view.state, indentLine.from)),
+          foldRange: fold ? `${fold.from}-${fold.to}` : "none",
+        };
+      },
+    },
+    lezer: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [lezerSupport(supports, "JavaScript").extension],
+      inspect: (view) => {
+        lezerReadyTree(view);
+        let indentLine = view.state.doc.line(2);
+        let foldLine = view.state.doc.line(1);
+        let fold = lezerFoldable(view.state, foldLine.from, foldLine.to);
+        return {
+          language: lezerCurrentLanguageName(view),
+          lineIndent: String(lezerGetIndentation(view.state, indentLine.from)),
+          foldRange: fold ? `${fold.from}-${fold.to}` : "none",
+        };
+      },
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "javascript"),
+      equalityCheck("indentation", tree.lineIndent, lezer.lineIndent, "2"),
+      presentCheck(
+        "fold range",
+        tree.foldRange == "none" ? undefined : tree.foldRange,
+        lezer.foldRange == "none" ? undefined : lezer.foldRange,
+      ),
+    ],
+  },
+  {
+    id: "comments",
+    title: "Comment Commands",
+    official: "https://codemirror.net/examples/change/",
+    summary:
+      "Command behavior is benchmarked through language data by toggling line comments without mutating the visible editor.",
+    doc: `const value = 1;
+const next = value + 1;
+`,
+    tree: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [treeSupport(supports, "JavaScript").extension],
+      inspect: (view) => {
+        let commentTokens = view.state.languageDataAt<{ line?: string }>("commentTokens", 0)[0];
+        return {
+          language: treeCurrentLanguageName(view),
+          lineToken: commentTokens?.line ?? "none",
+          toggledPrefix: treeCommentPrefix(view),
+        };
+      },
+    },
+    lezer: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [lezerSupport(supports, "JavaScript").extension],
+      inspect: (view) => {
+        let commentTokens = view.state.languageDataAt<{ line?: string }>("commentTokens", 0)[0];
+        return {
+          language: lezerCurrentLanguageName(view),
+          lineToken: commentTokens?.line ?? "none",
+          toggledPrefix: lezerCommentPrefix(view),
+        };
+      },
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "javascript"),
+      equalityCheck("line comment token", tree.lineToken, lezer.lineToken, "//"),
+      equalityCheck("toggle comment", tree.toggledPrefix, lezer.toggledPrefix, "//"),
+    ],
+  },
+  {
+    id: "bracket-match",
+    title: "Bracket Matching",
+    official: "https://codemirror.net/examples/styling/",
+    summary:
+      "Bracket matching is checked directly against the syntax-aware matchBrackets helper in both runtimes.",
+    doc: `function call() {
+  return [1, 2, 3].map((value) => value * 2);
+}
+`,
+    tree: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [treeSupport(supports, "JavaScript").extension],
+      inspect: (view) => {
+        treeReadyTree(view);
+        let result = treeBracketMatch(view);
+        return {
+          language: treeCurrentLanguageName(view),
+          matched: String(result.matched),
+          matchRange: result.range,
+        };
+      },
+    },
+    lezer: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [lezerSupport(supports, "JavaScript").extension],
+      inspect: (view) => {
+        lezerReadyTree(view);
+        let result = lezerBracketMatch(view);
+        return {
+          language: lezerCurrentLanguageName(view),
+          matched: String(result.matched),
+          matchRange: result.range,
+        };
+      },
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "javascript"),
+      equalityCheck("matched bracket", tree.matched, lezer.matched, "true"),
+      presentCheck(
+        "match range",
+        tree.matchRange == "none" ? undefined : tree.matchRange,
+        lezer.matchRange == "none" ? undefined : lezer.matchRange,
+      ),
+    ],
+  },
+  {
+    id: "close-brackets",
+    title: "Close Brackets",
+    official: "https://codemirror.net/examples/autocompletion/",
+    summary:
+      "Close-bracket language data and insertBracket transactions are compared from identical cursor state.",
+    doc: "const payload = ",
+    selection: 16,
+    tree: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [treeSupport(supports, "JavaScript").extension],
+      inspect: (view) => {
+        let config = view.state.languageDataAt<{ brackets?: readonly string[] }>(
+          "closeBrackets",
+          view.state.selection.main.head,
+        )[0];
+        return {
+          language: treeCurrentLanguageName(view),
+          brackets: config?.brackets?.join(" ") ?? "none",
+          insertedPair: treeInsertedBracketPair(view),
+        };
+      },
+    },
+    lezer: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [lezerSupport(supports, "JavaScript").extension],
+      inspect: (view) => {
+        let config = view.state.languageDataAt<{ brackets?: readonly string[] }>(
+          "closeBrackets",
+          view.state.selection.main.head,
+        )[0];
+        return {
+          language: lezerCurrentLanguageName(view),
+          brackets: config?.brackets?.join(" ") ?? "none",
+          insertedPair: lezerInsertedBracketPair(view),
+        };
+      },
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "javascript"),
+      truthyCheck(
+        "bracket config",
+        Boolean(tree.brackets?.includes("{")) && Boolean(lezer.brackets?.includes("{")),
+        tree,
+        lezer,
+      ),
+      equalityCheck("inserted pair", tree.insertedPair, lezer.insertedPair, "{}"),
+    ],
+  },
+  {
+    id: "merge-view",
+    title: "Merge View",
+    official: "https://codemirror.net/docs/ref/#merge",
+    summary:
+      "Unified merge view compares a changed JavaScript document against an original and highlights deletion widgets through the active parser.",
+    doc: `const rate = 1.2;
+
+function total(items) {
+  return items
+    .filter((item) => item.active)
+    .reduce((sum, item) => sum + item.value, 0) * rate;
+}
+`,
+    tree: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [
+        treeSupport(supports, "JavaScript").extension,
+        treeSyntaxHighlighting(treeLspHighlightStyle),
+        treeUnifiedMergeView({
+          original: mergeOriginalDoc,
+          syntaxHighlightDeletions: true,
+        }),
+      ],
+      inspect: (view) => {
+        let merge = treeGetChunks(view.state);
+        return {
+          language: treeCurrentLanguageName(view),
+          chunks: String(merge?.chunks.length ?? 0),
+          side: merge?.side ?? "none",
+          originalLines: String(treeGetOriginalDoc(view.state).lines),
+          deletedHighlights: String(
+            view.dom.querySelectorAll(".cm-deletedChunk .cmx-keyword").length,
+          ),
+        };
+      },
+    },
+    lezer: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [
+        lezerSupport(supports, "JavaScript").extension,
+        lezerSyntaxHighlighting(lezerLspHighlightStyle),
+        lezerUnifiedMergeView({
+          original: mergeOriginalDoc,
+          syntaxHighlightDeletions: true,
+        }),
+      ],
+      inspect: (view) => {
+        let merge = lezerGetChunks(view.state);
+        return {
+          language: lezerCurrentLanguageName(view),
+          chunks: String(merge?.chunks.length ?? 0),
+          side: merge?.side ?? "none",
+          originalLines: String(lezerGetOriginalDoc(view.state).lines),
+          deletedHighlights: String(
+            view.dom.querySelectorAll(".cm-deletedChunk .cmx-keyword").length,
+          ),
+        };
+      },
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "javascript"),
+      truthyCheck(
+        "changed chunks",
+        Number(tree.chunks) > 0 && Number(lezer.chunks) > 0,
+        tree,
+        lezer,
+      ),
+      equalityCheck("merge side", tree.side, lezer.side, "b"),
+      equalityCheck("original document", tree.originalLines, lezer.originalLines),
+    ],
+  },
+  {
+    id: "lsp-client",
+    title: "LSP Client Rendering",
+    official: "https://codemirror.net/docs/ref/#lsp-client",
+    summary:
+      "A mock LSP client mounts the plugin and renders Markdown hover documentation with JavaScript code-block highlighting.",
+    doc: `const limit = 100;
+const answer = 42;
+
+function report() {
+  return answer < limit ? "ok" : "large";
+}
+`,
+    tree: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [
+        treeSupport(supports, "JavaScript").extension,
+        treeSyntaxHighlighting(treeLspHighlightStyle),
+        treeLspExtension(treeSupport(supports, "JavaScript")),
+      ],
+      inspect: treeLspStatus,
+    },
+    lezer: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [
+        lezerSupport(supports, "JavaScript").extension,
+        lezerSyntaxHighlighting(lezerLspHighlightStyle),
+        lezerLspExtension(lezerSupport(supports, "JavaScript")),
+      ],
+      inspect: lezerLspStatus,
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "javascript"),
+      equalityCheck("plugin", tree.plugin, lezer.plugin, "mounted"),
+      equalityCheck("workspace file", tree.workspaceFiles, lezer.workspaceFiles, "1"),
+      equalityCheck("rendered markdown", tree.renderedMarkdown, lezer.renderedMarkdown, "true"),
+      truthyCheck("tree-sitter highlighting", tree.highlightedMarkdown == "true", tree, lezer),
+      equalityCheck("escaped markdown", tree.escapedMarkdown, lezer.escapedMarkdown, "true"),
+    ],
+  },
+  {
     id: "huge-document",
     title: "Huge Document",
     official: "https://codemirror.net/examples/million/",
@@ -722,6 +1170,11 @@ for (let example of examples) {
   nav.append(button);
 }
 
+runActiveBenchmarkButton.addEventListener("click", () => void runBenchmarks("active"));
+runSuiteBenchmarkButton.addEventListener("click", () => void runBenchmarks("suite"));
+renderLanguageCoverage();
+renderBenchmarkResults();
+
 void showExample(location.hash.slice(1) || examples[0]!.id);
 window.addEventListener(
   "hashchange",
@@ -730,6 +1183,7 @@ window.addEventListener(
 
 Object.assign(window, {
   __exampleComparison: () => collectComparisonSnapshot(),
+  __benchmarkResults: () => collectBenchmarkSnapshot(),
 });
 
 async function showExample(id: string) {
@@ -765,6 +1219,7 @@ async function showExample(id: string) {
     EditorView.lineWrapping,
     example.lezer.extensions(lezerSupports),
   ]);
+  renderBenchmarkResults();
   queueStatus();
 }
 
@@ -855,6 +1310,387 @@ function inspectEngine<Support>(runtime: Runtime<Support>, view: EditorView | nu
   }
 }
 
+async function runBenchmarks(scope: "active" | "suite") {
+  if (benchmarkBusy) return;
+  let run = ++benchmarkRun;
+  benchmarkBusy = true;
+  setBenchmarkButtons(true);
+  let targets = scope == "active" && activeExample ? [activeExample] : examples;
+  benchmarkStatus.textContent =
+    scope == "active" ? "Measuring active feature" : "Measuring full suite";
+  suiteStatus.textContent = `${benchmarkResults.size}/${examples.length} examples measured`;
+
+  try {
+    for (let index = 0; index < targets.length; index++) {
+      if (run != benchmarkRun) return;
+      let example = targets[index]!;
+      benchmarkStatus.textContent = `Measuring ${example.title}`;
+      let result = await benchmarkExample(example);
+      benchmarkResults.set(example.id, result);
+      suiteStatus.textContent = `${benchmarkResults.size}/${examples.length} examples measured`;
+      renderBenchmarkResults();
+      await nextFrame();
+    }
+  } finally {
+    if (run == benchmarkRun) {
+      benchmarkBusy = false;
+      setBenchmarkButtons(false);
+      benchmarkStatus.textContent =
+        scope == "active" && activeExample
+          ? `Measured ${activeExample.title}`
+          : `Measured ${benchmarkResults.size}/${examples.length} examples`;
+      renderBenchmarkResults();
+    }
+  }
+}
+
+function setBenchmarkButtons(disabled: boolean) {
+  runActiveBenchmarkButton.disabled = disabled;
+  runSuiteBenchmarkButton.disabled = disabled;
+}
+
+async function benchmarkExample(example: Example): Promise<BenchmarkResult> {
+  let [tree, lezer] = await Promise.all([
+    benchmarkRuntime(engines.tree, example.tree, example),
+    benchmarkRuntime(engines.lezer, example.lezer, example),
+  ]);
+  let comparisons =
+    tree.status.error || lezer.status.error
+      ? [
+          {
+            label: "runtime",
+            pass: false,
+            detail: `tree=${tree.status.error ?? "ok"}; lezer=${lezer.status.error ?? "ok"}`,
+          },
+        ]
+      : example.compare(tree.status, lezer.status);
+  return {
+    exampleId: example.id,
+    title: example.title,
+    tree,
+    lezer,
+    metrics: benchmarkMetrics(tree, lezer),
+    comparisons,
+  };
+}
+
+async function benchmarkRuntime<Support>(
+  engine: EngineState<Support>,
+  runtime: Runtime<Support>,
+  example: Example,
+): Promise<RuntimeBenchmark> {
+  let load = 0;
+  let stateCreate = 0;
+  let mount = 0;
+  let parse = 0;
+  let edit = 0;
+  let inspect = 0;
+  let parseReady = false;
+  let status: Status = {};
+  let view: EditorView | null = null;
+  let host = createBenchmarkHost();
+
+  try {
+    let loadStart = performance.now();
+    let supports = await loadSupports(runtime.languageNames, engine.loadSupport);
+    load = performance.now() - loadStart;
+
+    let extensions = [
+      engine.id == "tree" ? treeBasicSetup : lezerBasicSetup,
+      EditorView.lineWrapping,
+      runtime.extensions(supports),
+    ];
+    let stateStart = performance.now();
+    let state = EditorState.create({
+      doc: example.doc,
+      selection: example.selection ? { anchor: example.selection } : undefined,
+      extensions,
+    });
+    stateCreate = performance.now() - stateStart;
+
+    let mountStart = performance.now();
+    view = new EditorView({ parent: host, state });
+    mount = performance.now() - mountStart;
+    await nextFrame();
+
+    let parseStart = performance.now();
+    parseReady = ensureRuntimeTree(engine.id, view.state, parseBudget(example));
+    parse = performance.now() - parseStart;
+
+    let editStart = performance.now();
+    let cycles = editCycles(example);
+    let anchor = view.state.doc.length;
+    for (let i = 0; i < cycles; i++) {
+      view.dispatch({ changes: { from: anchor, insert: " " } });
+      ensureRuntimeTree(engine.id, view.state, parseBudget(example));
+      view.dispatch({ changes: { from: anchor, to: anchor + 1 } });
+      ensureRuntimeTree(engine.id, view.state, parseBudget(example));
+    }
+    edit = (performance.now() - editStart) / (cycles * 2);
+    await nextFrame();
+
+    let inspectStart = performance.now();
+    status = runtime.inspect(view);
+    inspect = performance.now() - inspectStart;
+  } catch (error) {
+    status = { error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    view?.destroy();
+    host.remove();
+  }
+
+  return {
+    load,
+    state: stateCreate,
+    mount,
+    parse,
+    edit,
+    inspect,
+    status,
+    parseReady,
+    bytes: textBytes(example.doc),
+    lines: EditorState.create({ doc: example.doc }).doc.lines,
+  };
+}
+
+function benchmarkMetrics(tree: RuntimeBenchmark, lezer: RuntimeBenchmark): BenchmarkMetric[] {
+  return [
+    metric("Support load", tree.load, lezer.load),
+    metric("State create", tree.state, lezer.state),
+    metric("Editor mount", tree.mount, lezer.mount),
+    metric("Parse to end", tree.parse, lezer.parse),
+    metric("Incremental edit", tree.edit, lezer.edit),
+    metric("Feature inspect", tree.inspect, lezer.inspect),
+    metric("Total measured", runtimeTotal(tree), runtimeTotal(lezer)),
+  ];
+}
+
+function metric(label: string, tree: number, lezer: number): BenchmarkMetric {
+  return { label, tree, lezer, unit: "ms", lowerIsBetter: true };
+}
+
+function runtimeTotal(result: RuntimeBenchmark) {
+  return result.load + result.state + result.mount + result.parse + result.inspect + result.edit;
+}
+
+function ensureRuntimeTree(engine: EngineId, state: EditorState, timeout: number) {
+  if (engine == "tree") {
+    return (
+      Boolean(treeEnsureSyntaxTree(state, state.doc.length, timeout)) ||
+      treeSyntaxTreeAvailable(state)
+    );
+  }
+  return (
+    Boolean(lezerEnsureSyntaxTree(state, state.doc.length, timeout)) ||
+    lezerSyntaxTreeAvailable(state)
+  );
+}
+
+function parseBudget(example: Example) {
+  return Math.min(1800, Math.max(80, Math.ceil(example.doc.length / 35)));
+}
+
+function editCycles(example: Example) {
+  return example.doc.length > 30_000 ? 4 : 20;
+}
+
+function createBenchmarkHost() {
+  let host = document.createElement("div");
+  host.className = "benchmark-host";
+  document.body.append(host);
+  return host;
+}
+
+function nextFrame() {
+  return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function textBytes(text: string) {
+  return new TextEncoder().encode(text).byteLength;
+}
+
+function renderBenchmarkResults() {
+  renderBenchmarkSummary();
+  renderActiveBenchmark();
+  renderSuiteBenchmark();
+}
+
+function renderBenchmarkSummary() {
+  let results = [...benchmarkResults.values()];
+  let checks = results.flatMap((result) => result.comparisons);
+  let passed = checks.filter((row) => row.pass).length;
+  let treeTotal = results.reduce((sum, result) => sum + runtimeTotal(result.tree), 0);
+  let lezerTotal = results.reduce((sum, result) => sum + runtimeTotal(result.lezer), 0);
+  benchmarkSummary.replaceChildren(
+    metricTile("Measured", `${results.length}/${examples.length}`, "features"),
+    metricTile("Parity", checks.length ? `${passed}/${checks.length}` : "pending", "checks"),
+    metricTile("Tree-sitter", results.length ? formatMs(treeTotal) : "pending", "suite total"),
+    metricTile("Lezer", results.length ? formatMs(lezerTotal) : "pending", "suite total"),
+    metricTile(
+      "Coverage",
+      `${commonLanguageNames.length}/${lezerLanguageNames.size}`,
+      "shared languages",
+    ),
+  );
+}
+
+function metricTile(label: string, value: string, detail: string) {
+  let tile = document.createElement("article");
+  let key = document.createElement("span");
+  let amount = document.createElement("strong");
+  let note = document.createElement("small");
+  key.textContent = label;
+  amount.textContent = value;
+  note.textContent = detail;
+  tile.append(key, amount, note);
+  return tile;
+}
+
+function renderActiveBenchmark() {
+  let result = activeExample ? benchmarkResults.get(activeExample.id) : undefined;
+  if (!benchmarkBusy) {
+    benchmarkStatus.textContent = result
+      ? `Measured ${result.title}`
+      : "No benchmark run for active feature";
+  }
+  if (!result) {
+    activeBenchmark.replaceChildren(emptyState("Awaiting benchmark data."));
+    return;
+  }
+  activeBenchmark.replaceChildren(
+    tableRow(["Metric", "Tree-sitter", "Lezer", "Delta", "Leader"], "header"),
+    ...result.metrics.map((row) =>
+      tableRow([
+        row.label,
+        formatMetric(row.tree, row.unit),
+        formatMetric(row.lezer, row.unit),
+        formatDelta(row),
+        metricLeader(row),
+      ]),
+    ),
+    tableRow(
+      [
+        "Feature checks",
+        `${result.comparisons.filter((row) => row.pass).length}/${result.comparisons.length}`,
+        result.tree.parseReady && result.lezer.parseReady ? "parsed" : "partial",
+        `${result.tree.lines} lines`,
+        `${formatInteger(result.tree.bytes)} bytes`,
+      ],
+      "summary",
+    ),
+  );
+}
+
+function renderSuiteBenchmark() {
+  let results = examples
+    .map((example) => benchmarkResults.get(example.id))
+    .filter((result): result is BenchmarkResult => Boolean(result));
+  suiteStatus.textContent = `${results.length}/${examples.length} examples measured`;
+  if (!results.length) {
+    suiteBenchmark.replaceChildren(emptyState("Awaiting suite data."));
+    return;
+  }
+  suiteBenchmark.replaceChildren(
+    tableRow(["Feature", "Tree total", "Lezer total", "Leader", "Checks"], "header"),
+    ...results.map((result) => {
+      let total = metric("total", runtimeTotal(result.tree), runtimeTotal(result.lezer));
+      return tableRow([
+        result.title,
+        formatMs(total.tree),
+        formatMs(total.lezer),
+        metricLeader(total),
+        `${result.comparisons.filter((row) => row.pass).length}/${result.comparisons.length}`,
+      ]);
+    }),
+  );
+}
+
+function renderLanguageCoverage() {
+  coverageStats.replaceChildren(
+    coverageStat("Common", commonLanguageNames.length),
+    coverageStat("Tree-only", treeOnlyLanguageNames.length),
+    coverageStat("Lezer-only", lezerOnlyLanguageNames.length),
+  );
+  languageGrid.replaceChildren(
+    languageGroup("Common", commonLanguageNames),
+    languageGroup("Tree-only", treeOnlyLanguageNames),
+    languageGroup("Lezer-only", lezerOnlyLanguageNames),
+  );
+}
+
+function coverageStat(label: string, value: number) {
+  let stat = document.createElement("span");
+  stat.textContent = `${label}: ${value}`;
+  return stat;
+}
+
+function languageGroup(label: string, names: readonly string[]) {
+  let group = document.createElement("section");
+  let title = document.createElement("h4");
+  let list = document.createElement("div");
+  title.textContent = label;
+  list.className = "language-pills";
+  list.replaceChildren(...names.map((name) => languagePill(name)));
+  group.append(title, list);
+  return group;
+}
+
+function languagePill(name: string) {
+  let pill = document.createElement("span");
+  pill.textContent = name;
+  return pill;
+}
+
+function tableRow(values: readonly string[], kind = "") {
+  let row = document.createElement("div");
+  row.className = kind;
+  row.replaceChildren(
+    ...values.map((value) => {
+      let cell = document.createElement("span");
+      cell.textContent = value;
+      return cell;
+    }),
+  );
+  return row;
+}
+
+function emptyState(message: string) {
+  let empty = document.createElement("p");
+  empty.className = "empty-state";
+  empty.textContent = message;
+  return empty;
+}
+
+function formatMetric(value: number, unit: BenchmarkMetric["unit"]) {
+  return unit == "ms" ? formatMs(value) : formatInteger(value);
+}
+
+function formatMs(value: number) {
+  if (!Number.isFinite(value)) return "n/a";
+  if (Math.abs(value) < 10) return `${value.toFixed(2)}ms`;
+  if (Math.abs(value) < 100) return `${value.toFixed(1)}ms`;
+  return `${Math.round(value)}ms`;
+}
+
+function formatInteger(value: number) {
+  return new Intl.NumberFormat("en-US").format(Math.round(value));
+}
+
+function formatDelta(metric: BenchmarkMetric) {
+  let delta = metric.tree - metric.lezer;
+  if (Math.abs(delta) < 0.01) return "even";
+  let sign = delta > 0 ? "+" : "";
+  let percent = metric.lezer ? `, ${sign}${((delta / metric.lezer) * 100).toFixed(1)}%` : "";
+  return `${sign}${formatMs(delta)}${percent}`;
+}
+
+function metricLeader(metric: BenchmarkMetric) {
+  let delta = metric.tree - metric.lezer;
+  if (Math.abs(delta) < 0.05) return "tie";
+  let treeWins = metric.lowerIsBetter ? delta < 0 : delta > 0;
+  return treeWins ? "Tree-sitter" : "Lezer";
+}
+
 function setEngineStatus<Support>(engine: EngineState<Support>, status: Status) {
   engine.status = status;
   renderStatusRows(engine.statusList, status);
@@ -930,6 +1766,17 @@ function collectComparisonSnapshot() {
   }));
 }
 
+function collectBenchmarkSnapshot() {
+  return [...benchmarkResults.values()].map((result) => ({
+    id: result.exampleId,
+    title: result.title,
+    tree: result.tree,
+    lezer: result.lezer,
+    metrics: result.metrics,
+    comparisons: result.comparisons,
+  }));
+}
+
 function treeReadyTree(view: EditorView) {
   treeEnsureSyntaxTree(view.state, view.state.doc.length, 25);
   return treeSyntaxTree(view.state);
@@ -966,6 +1813,58 @@ function lezerCountIsolatedNodes(view: EditorView) {
     },
   });
   return count;
+}
+
+function treeCommentPrefix(view: EditorView) {
+  let next = view.state;
+  let ran = treeToggleComment({
+    state: view.state,
+    dispatch(transaction) {
+      next = transaction.state;
+    },
+  });
+  return ran ? next.doc.line(1).text.trimStart().slice(0, 2) : "none";
+}
+
+function lezerCommentPrefix(view: EditorView) {
+  let next = view.state;
+  let ran = lezerToggleComment({
+    state: view.state,
+    dispatch(transaction) {
+      next = transaction.state;
+    },
+  });
+  return ran ? next.doc.line(1).text.trimStart().slice(0, 2) : "none";
+}
+
+function treeBracketMatch(view: EditorView) {
+  let pos = view.state.doc.toString().indexOf("{");
+  let match = treeMatchBrackets(view.state, pos, 1);
+  return {
+    matched: Boolean(match?.matched),
+    range: match?.end ? `${match.start.from}-${match.end.to}` : "none",
+  };
+}
+
+function lezerBracketMatch(view: EditorView) {
+  let pos = view.state.doc.toString().indexOf("{");
+  let match = lezerMatchBrackets(view.state, pos, 1);
+  return {
+    matched: Boolean(match?.matched),
+    range: match?.end ? `${match.start.from}-${match.end.to}` : "none",
+  };
+}
+
+function treeInsertedBracketPair(view: EditorView) {
+  let head = view.state.selection.main.head;
+  let transaction = treeInsertBracket(view.state, "{");
+  return transaction ? transaction.state.sliceDoc(head, head + 2) : "none";
+}
+
+function lezerInsertedBracketPair(view: EditorView) {
+  let head = view.state.selection.main.head;
+  let transaction = lezerInsertBracket(view.state, "{");
+  return transaction ? transaction.state.sliceDoc(head, head + 2) : "none";
 }
 
 class BooleanWidget extends WidgetType {
@@ -1096,6 +1995,61 @@ function regexpDiagnostics(
   return diagnostics;
 }
 
+function treeLspExtension(support: TreeLanguageSupport) {
+  let client = new TreeLSPClient({
+    timeout: 50,
+    extensions: treeLanguageServerExtensions(),
+    highlightLanguage: (name) => (lspLanguageMatches(name) ? support.language : null),
+  });
+  return TreeLSPPlugin.create(client, "file:///examples/lsp-client.ts", "javascript");
+}
+
+function lezerLspExtension(support: LezerLanguageSupport) {
+  let client = new LezerLSPClient({
+    timeout: 50,
+    extensions: lezerLanguageServerExtensions(),
+    highlightLanguage: (name) => (lspLanguageMatches(name) ? support.language : null),
+  });
+  return LezerLSPPlugin.create(client, "file:///examples/lsp-client.ts", "javascript");
+}
+
+function lspLanguageMatches(name: string) {
+  return /^(?:javascript|js|typescript|ts)$/.test(name.toLowerCase());
+}
+
+function treeLspStatus(view: EditorView) {
+  let plugin = TreeLSPPlugin.get(view);
+  let html = plugin?.docToHTML(lspMarkdownSample, "markdown") ?? "";
+  return lspStatus(
+    treeCurrentLanguageName(view),
+    Boolean(plugin),
+    plugin?.client.workspace.files.length ?? 0,
+    html,
+  );
+}
+
+function lezerLspStatus(view: EditorView) {
+  let plugin = LezerLSPPlugin.get(view);
+  let html = plugin?.docToHTML(lspMarkdownSample, "markdown") ?? "";
+  return lspStatus(
+    lezerCurrentLanguageName(view),
+    Boolean(plugin),
+    plugin?.client.workspace.files.length ?? 0,
+    html,
+  );
+}
+
+function lspStatus(languageName: string, plugin: boolean, workspaceFiles: number, html: string) {
+  return {
+    language: languageName,
+    plugin: plugin ? "mounted" : "missing",
+    workspaceFiles: String(workspaceFiles),
+    renderedMarkdown: String(html.includes("<pre><code")),
+    highlightedMarkdown: String(html.includes("<span")),
+    escapedMarkdown: String(html.includes("&lt;")),
+  };
+}
+
 const treeExampleHighlightStyle = TreeHighlightStyle.define([
   { tag: treeTags.heading, class: "cmx-heading" },
   { tag: treeTags.strong, class: "cmx-strong" },
@@ -1108,6 +2062,18 @@ const lezerExampleHighlightStyle = LezerHighlightStyle.define([
   { tag: lezerTags.strong, class: "cmx-strong" },
   { tag: lezerTags.emphasis, class: "cmx-emphasis" },
   { tag: lezerTags.monospace, class: "cmx-code" },
+]);
+
+const treeLspHighlightStyle = TreeHighlightStyle.define([
+  { tag: treeTags.keyword, class: "cmx-keyword" },
+  { tag: treeTags.number, class: "cmx-number" },
+  { tag: treeTags.variableName, class: "cmx-variable" },
+]);
+
+const lezerLspHighlightStyle = LezerHighlightStyle.define([
+  { tag: lezerTags.keyword, class: "cmx-keyword" },
+  { tag: lezerTags.number, class: "cmx-number" },
+  { tag: lezerTags.variableName, class: "cmx-variable" },
 ]);
 
 function highlightProbe(view: EditorView) {

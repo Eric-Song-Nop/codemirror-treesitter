@@ -8,8 +8,8 @@ import {
 } from "@codemirror/view";
 import { StyleModule, type StyleSpec } from "style-mod";
 import { Language, languageDataProp, syntaxTree } from "./language.js";
-import { NodeType, SyntaxNode } from "./tree.js";
-import { Tag, tagHighlighter, tags, type Highlighter } from "./tags.js";
+import { type NestedTree, type NodeType, type SyntaxNode, type Tree } from "./tree.js";
+import { getStyleTags, tagHighlighter, tags, type Highlighter, type Tag } from "./tags.js";
 
 export class HighlightStyle implements Highlighter {
   readonly module: StyleModule | null;
@@ -188,58 +188,179 @@ const treeHighlighter = Prec.high(
   }),
 );
 
-function highlightTree(
-  tree: ReturnType<typeof syntaxTree>,
-  highlighters: readonly Highlighter[],
+export function highlightTree(
+  tree: Tree,
+  highlighter: Highlighter | readonly Highlighter[],
   putStyle: (from: number, to: number, style: string) => void,
-  from: number,
-  to: number,
+  from = 0,
+  to = tree.length,
 ) {
-  let active = highlighters;
-  let scopeStack: (readonly Highlighter[] | null)[] = [];
+  let highlighters = Array.isArray(highlighter) ? highlighter : [highlighter];
   let queryTags = collectQueryTags(tree, from, to);
-  tree.iterate({
+  let builder = new HighlightBuilder(from, highlighters, putStyle, queryTags);
+  builder.highlightNode(tree.topNode, from, to, "", highlighters);
+  builder.flush(to);
+}
+
+export function highlightCode(
+  code: string,
+  tree: Tree,
+  highlighter: Highlighter | readonly Highlighter[],
+  putText: (code: string, classes: string) => void,
+  putBreak: () => void,
+  from = 0,
+  to = code.length,
+) {
+  let pos = from;
+  let writeTo = (target: number, classes: string) => {
+    if (target <= pos) return;
+    let text = code.slice(pos, target);
+    for (let i = 0; ; ) {
+      let nextBreak = text.indexOf("\n", i);
+      let upto = nextBreak < 0 ? text.length : nextBreak;
+      if (upto > i) putText(text.slice(i, upto), classes);
+      if (nextBreak < 0) break;
+      putBreak();
+      i = nextBreak + 1;
+    }
+    pos = target;
+  };
+
+  highlightTree(
+    tree,
+    highlighter,
+    (from, to, classes) => {
+      writeTo(from, "");
+      writeTo(to, classes);
+    },
     from,
     to,
-    enter(node) {
-      let previous = null;
-      if (node.type.isTop) {
-        previous = active;
-        active = highlighters.filter(
-          (highlighter) => !highlighter.scope || highlighter.scope(node.type),
-        );
-      }
-      scopeStack.push(previous);
-
-      let nodeTags = queryTags.get(node.tree)?.get(node.id) ?? tagsForNode(node);
-      if (!nodeTags.length || node.from == node.to) return;
-      let classes: string[] = [];
-      for (let highlighter of active) {
-        let cls = highlighter.style(nodeTags);
-        if (cls) classes.push(cls);
-      }
-      if (classes.length) putStyle(node.from, node.to, classes.join(" "));
-    },
-    leave() {
-      let previous = scopeStack.pop();
-      if (previous) active = previous;
-    },
-  });
+  );
+  writeTo(to, "");
 }
 
 function collectQueryTags(
-  tree: ReturnType<typeof syntaxTree>,
+  tree: Tree,
   from: number,
   to: number,
-): WeakMap<ReturnType<typeof syntaxTree>, Map<number, readonly Tag[]>> {
-  let result = new WeakMap<ReturnType<typeof syntaxTree>, Map<number, readonly Tag[]>>();
-  let collect = (tree: ReturnType<typeof syntaxTree>) => {
+): WeakMap<Tree, Map<number, readonly Tag[]>> {
+  let result = new WeakMap<Tree, Map<number, readonly Tag[]>>();
+  let collect = (tree: Tree) => {
     let tags = tree.config?.highlightTags?.(tree, from, to);
     if (tags) result.set(tree, tags);
     for (let nest of tree.nested) collect(nest.tree);
   };
   collect(tree);
   return result;
+}
+
+class HighlightBuilder {
+  private className = "";
+
+  constructor(
+    private at: number,
+    private readonly highlighters: readonly Highlighter[],
+    private readonly span: (from: number, to: number, cls: string) => void,
+    private readonly queryTags: WeakMap<Tree, Map<number, readonly Tag[]>>,
+  ) {}
+
+  highlightNode(
+    node: SyntaxNode,
+    from: number,
+    to: number,
+    inheritedClass: string,
+    activeHighlighters: readonly Highlighter[],
+  ) {
+    if (node.from >= to || node.to <= from) return;
+    if (node.type.isTop) {
+      activeHighlighters = this.highlighters.filter(
+        (highlighter) => !highlighter.scope || highlighter.scope(node.type),
+      );
+    }
+
+    let style = styleForNode(node, this.queryTags);
+    let cls = inheritedClass;
+    let childInherited = inheritedClass;
+    if (style) {
+      let tagCls = highlightTags(activeHighlighters, style.tags);
+      if (tagCls) {
+        cls = cls ? `${cls} ${tagCls}` : tagCls;
+        if (style.inherit) childInherited = childInherited ? `${childInherited} ${tagCls}` : tagCls;
+      }
+    }
+
+    this.startSpan(Math.max(from, node.from), cls);
+    if (style?.opaque) return;
+
+    let rangeFrom = Math.max(from, node.from);
+    let rangeTo = Math.min(to, node.to);
+    for (let child of sortedChildren(node)) {
+      if (child.to <= rangeFrom) continue;
+      if (child.from >= rangeTo) break;
+      let childStyle = styleForNode(child, this.queryTags);
+      let childOwnClass = childStyle && highlightTags(activeHighlighters, childStyle.tags);
+      let childClass =
+        cls && (!childOwnClass || (child.from <= node.from && child.to >= node.to))
+          ? cls
+          : childInherited;
+      this.highlightNode(child, rangeFrom, rangeTo, childClass, activeHighlighters);
+      this.startSpan(Math.min(rangeTo, child.to), cls);
+    }
+  }
+
+  startSpan(at: number, cls: string) {
+    if (cls == this.className) return;
+    this.flush(at);
+    if (at > this.at) this.at = at;
+    this.className = cls;
+  }
+
+  flush(to: number) {
+    if (to > this.at && this.className) this.span(this.at, to, this.className);
+  }
+}
+
+function highlightTags(highlighters: readonly Highlighter[], tags: readonly Tag[]) {
+  let result = null;
+  for (let highlighter of highlighters) {
+    let cls = highlighter.style(tags);
+    if (cls) result = result ? `${result} ${cls}` : cls;
+  }
+  return result;
+}
+
+function styleForNode(
+  node: SyntaxNode,
+  queryTags: WeakMap<Tree, Map<number, readonly Tag[]>>,
+): { tags: readonly Tag[]; opaque: boolean; inherit: boolean } | null {
+  let style = getStyleTags(node);
+  if (style) return style;
+  let configured =
+    node.tree.config && "styleTags" in node.tree.config
+      ? (node.tree.config.styleTags as ReadonlyMap<string, readonly Tag[]>).get(node.name)
+      : undefined;
+  let nodeTags = queryTags.get(node.tree)?.get(node.id) ?? configured ?? tagsForNode(node);
+  return nodeTags.length ? { tags: nodeTags, opaque: false, inherit: false } : null;
+}
+
+function sortedChildren(node: SyntaxNode): SyntaxNode[] {
+  let children = node.children.slice();
+  let nested = directNested(node);
+  if (nested.length) children.push(...nested.map((nest) => nest.tree.topNode));
+  return children.sort((a, b) => a.from - b.from || a.to - b.to);
+}
+
+function directNested(node: SyntaxNode): NestedTree[] {
+  let nested = node.tree.nested.filter((nest) => nestedInsideNode(nest, node));
+  if (!nested.length) return [];
+  return nested.filter(
+    (nest) =>
+      !node.children.some((child) => nestedInsideNode(nest, child) && child.to > child.from),
+  );
+}
+
+function nestedInsideNode(nest: NestedTree, node: SyntaxNode) {
+  return nest.ranges.some((range) => range.from >= node.from && range.to <= node.to);
 }
 
 export function __testHighlightTree(

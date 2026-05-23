@@ -1,7 +1,12 @@
-import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState, type Transaction } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
-import { filterCompletionOptions } from "../src/filter.js";
-import { CompletionContext, insertCompletionText } from "../src/index.js";
+import {
+  CompletionContext,
+  completeFromList,
+  hasNextSnippetField,
+  insertCompletionText,
+  snippet,
+} from "../src/index.js";
 
 describe("completion helpers", () => {
   it("matches text directly before the cursor", () => {
@@ -26,38 +31,65 @@ describe("completion helpers", () => {
     expect(tr.state.selection.main.head).toBe(10);
   });
 
-  it("filters completion options by the existing prefix", () => {
+  it("creates fixed-list completion sources", () => {
     let state = EditorState.create({
       doc: "/** @pa */",
       selection: EditorSelection.cursor(7),
     });
-    let options = filterCompletionOptions(
-      state,
-      {
-        options: [{ label: "@param" }, { label: "@returns" }, { label: "@deprecated" }],
-      },
-      4,
-      7,
-    );
+    let source = completeFromList([{ label: "@param" }, { label: "@returns" }]);
+    let result = source(new CompletionContext(state, 7, true));
 
-    expect(options.map((option) => option.label)).toEqual(["@param"]);
+    expect(result && "then" in result).toBe(false);
+    expect(result && !("then" in result) ? result.from : null).toBe(4);
+    expect(
+      result && !("then" in result) ? result.options.map((option) => option.label) : [],
+    ).toEqual(["@param", "@returns"]);
   });
 
-  it("keeps source order when filtering is disabled", () => {
+  it("skips fixed-list completions without a token unless explicit", () => {
     let state = EditorState.create({
-      doc: "/** @pa */",
-      selection: EditorSelection.cursor(7),
+      doc: "/**  */",
+      selection: EditorSelection.cursor(4),
     });
-    let options = filterCompletionOptions(
-      state,
-      {
-        filter: false,
-        options: [{ label: "@param" }, { label: "@returns" }, { label: "@deprecated" }],
-      },
-      4,
-      7,
-    );
+    let source = completeFromList([{ label: "@param" }]);
 
-    expect(options.map((option) => option.label)).toEqual(["@param", "@returns", "@deprecated"]);
+    expect(source(new CompletionContext(state, 4, false))).toBe(null);
+  });
+
+  it("registers completion context abort handlers", () => {
+    let state = EditorState.create({ doc: "value" });
+    let context = new CompletionContext(state, 5, true);
+    let aborted = false;
+
+    context.addEventListener(
+      "abort",
+      () => {
+        aborted = true;
+      },
+      { onDocChange: true },
+    );
+    context.abortListeners?.forEach((listener) => listener());
+    context.abortListeners = null;
+
+    expect(aborted).toBe(true);
+    expect(context.abortOnDocChange).toBe(true);
+    expect(context.aborted).toBe(true);
+  });
+
+  it("applies snippets and selects the first field", () => {
+    let state = EditorState.create({
+      doc: "fn",
+      selection: EditorSelection.cursor(2),
+    });
+    let apply = snippet("function ${name}() {\n\t${}\n}");
+    let dispatch = (tr: Transaction) => {
+      state = tr.state;
+    };
+
+    apply({ state, dispatch }, null, 0, 2);
+
+    expect(state.doc.toString()).toBe("function name() {\n  \n}");
+    expect(state.sliceDoc(state.selection.main.from, state.selection.main.to)).toBe("name");
+    expect(hasNextSnippetField(state)).toBe(true);
   });
 });

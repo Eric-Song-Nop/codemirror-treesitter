@@ -10,12 +10,25 @@ const upstreamLanguageIndexUrl =
   "https://raw.githubusercontent.com/codemirror/language/main/src/index.ts";
 const upstreamBasicSetupUrl =
   "https://raw.githubusercontent.com/codemirror/basic-setup/main/src/codemirror.ts";
+const upstreamCommandsUrls = [
+  "https://raw.githubusercontent.com/codemirror/commands/main/src/commands.ts",
+  "https://raw.githubusercontent.com/codemirror/commands/main/src/comment.ts",
+  "https://raw.githubusercontent.com/codemirror/commands/main/src/history.ts",
+];
+const upstreamAutocompleteIndexUrl =
+  "https://raw.githubusercontent.com/codemirror/autocomplete/main/src/index.ts";
+const upstreamMergeIndexUrl =
+  "https://raw.githubusercontent.com/codemirror/merge/main/src/index.ts";
+const upstreamLspClientIndexUrl =
+  "https://raw.githubusercontent.com/codemirror/lsp-client/main/src/index.ts";
 const examplesUrl = "https://codemirror.net/examples/";
 
 const officialPackageNames = new Set([
   "@codemirror/language",
   "@codemirror/language-data",
   "@codemirror/basic-setup",
+  "@codemirror/merge",
+  "@codemirror/lsp-client",
 ]);
 
 const requiredExampleSlugs = new Set([
@@ -56,12 +69,22 @@ async function main() {
   await checkPackageNames();
   await checkNoLezerDependencies();
   await checkLanguagePublicExports();
+  await checkCommandsPublicExports();
+  await checkCommandsHaveNoStubs();
+  await checkAutocompletePublicExports();
+  await checkAutocompleteHasNoKnownStubs();
+  await checkLanguageTreeSitterHighlightHelpers();
+  await checkMergePublicExports();
+  await checkMergeUsesLocalHighlighting();
+  await checkLspClientPublicExports();
+  await checkLspClientUsesLocalHighlighting();
   await checkBuiltStreamLanguageWorks();
   await checkBasicSetupImports();
   await checkBasicSetupParity();
   await checkLanguageDataParity();
   await checkBuiltLanguageDataLoads();
   await checkExamplesCoverage();
+  await checkExamplesIncludeMergeAndLspClient();
   await checkExamplesComparisonImplementation();
 
   if (failures) {
@@ -78,6 +101,140 @@ async function checkLanguagePublicExports() {
   let missing = [...upstream].filter((name) => !local.has(name)).sort(compareString);
   for (let name of missing) fail(`language package is missing upstream export ${String(name)}`);
   pass(`language package exposes all ${upstream.size} upstream exports`);
+}
+
+async function checkCommandsPublicExports() {
+  let upstreamSources = await Promise.all(upstreamCommandsUrls.map(fetchText));
+  let localSources = await Promise.all([
+    readText("packages/commands/src/index.ts"),
+    readText("packages/commands/src/comment.ts"),
+    readText("packages/commands/src/history.ts"),
+  ]);
+  let upstream = parsePublicExports(upstreamSources);
+  let local = parsePublicExports(localSources);
+  let missing = [...upstream].filter((name) => !local.has(name)).sort(compareString);
+  let extra = [...local].filter((name) => !upstream.has(name)).sort(compareString);
+
+  for (let name of missing) fail(`commands package is missing upstream export ${String(name)}`);
+  for (let name of extra) fail(`commands package has unclassified extra export ${String(name)}`);
+  pass(`commands package exposes all ${upstream.size} upstream exports`);
+}
+
+async function checkCommandsHaveNoStubs() {
+  let files = await collectFiles("packages/commands/src", (file) => file.endsWith(".ts"));
+  for (let file of files) {
+    let text = await readText(file);
+    if (/\bconst\s+noOp\s*:/.test(text) || /\bconst\s+noOp\s*=/.test(text)) {
+      fail(`${relative(file)} defines a no-op command placeholder`);
+    }
+    if (/emacsStyleKeymap\s*:\s*readonly\s+KeyBinding\[\]\s*=\s*\[\]/.test(text)) {
+      fail(`${relative(file)} leaves emacsStyleKeymap empty`);
+    }
+  }
+  pass("commands package has no known command stubs");
+}
+
+async function checkAutocompletePublicExports() {
+  let upstream = parsePublicExports([await fetchText(upstreamAutocompleteIndexUrl)]);
+  let local = parsePublicExports([await readText("packages/autocomplete/src/index.ts")]);
+  let missing = [...upstream].filter((name) => !local.has(name)).sort(compareString);
+  let extra = [...local].filter((name) => !upstream.has(name)).sort(compareString);
+
+  for (let name of missing) fail(`autocomplete package is missing upstream export ${String(name)}`);
+  for (let name of extra)
+    fail(`autocomplete package has unclassified extra export ${String(name)}`);
+  pass(`autocomplete package exposes all ${upstream.size} upstream exports`);
+}
+
+async function checkIndexPublicExports(packageName, upstreamUrl, localIndexPath) {
+  let upstream = parsePublicExports([await fetchText(upstreamUrl)]);
+  let local = parsePublicExports([await readText(localIndexPath)]);
+  let missing = [...upstream].filter((name) => !local.has(name)).sort(compareString);
+  let extra = [...local].filter((name) => !upstream.has(name)).sort(compareString);
+
+  for (let name of missing)
+    fail(`${packageName} package is missing upstream export ${String(name)}`);
+  for (let name of extra)
+    fail(`${packageName} package has unclassified extra export ${String(name)}`);
+  pass(`${packageName} package exposes all ${upstream.size} upstream exports`);
+}
+
+async function checkAutocompleteHasNoKnownStubs() {
+  let files = await collectFiles("packages/autocomplete/src", (file) => file.endsWith(".ts"));
+  for (let file of files) {
+    let text = await readText(file);
+    if (/get\s+aborted\s*\(\)\s*{\s*return\s+false\s*;?\s*}/.test(text)) {
+      fail(`${relative(file)} leaves CompletionContext.aborted stubbed`);
+    }
+    if (/addEventListener\s*\([^)]*_type[^)]*_listener[^)]*\)\s*{\s*}/.test(text)) {
+      fail(`${relative(file)} leaves CompletionContext.addEventListener stubbed`);
+    }
+  }
+  pass("autocomplete package has no known completion context stubs");
+}
+
+async function checkLanguageTreeSitterHighlightHelpers() {
+  let local = parsePublicExports([
+    await readText("packages/language/src/index.ts"),
+    await readText("packages/language/src/language.ts"),
+    await readText("packages/language/src/highlight.ts"),
+    await readText("packages/language/src/tags.ts"),
+  ]);
+  for (let name of ["highlightTree", "highlightCode", "styleTags", "getStyleTags"]) {
+    if (!local.has(name)) fail(`language package is missing tree-sitter highlight helper ${name}`);
+  }
+  pass("language package exposes tree-sitter highlight compatibility helpers");
+}
+
+async function checkMergePublicExports() {
+  await checkIndexPublicExports("merge", upstreamMergeIndexUrl, "packages/merge/src/index.ts");
+}
+
+async function checkMergeUsesLocalHighlighting() {
+  let source = await readText("packages/merge/src/unified.ts");
+  if (!source.includes('from "@codemirror-treesitter/language"')) {
+    fail("merge unified view does not import the local tree-sitter language package");
+  }
+  if (!source.includes("highlightTree")) fail("merge unified view does not highlight deletions");
+  if (!source.includes("Text.of(")) {
+    fail("merge deletion highlighter does not parse deletion text through CodeMirror Text");
+  }
+  pass("merge deletion highlighting uses local tree-sitter helpers");
+}
+
+async function checkLspClientPublicExports() {
+  await checkIndexPublicExports(
+    "lsp-client",
+    upstreamLspClientIndexUrl,
+    "packages/lsp-client/src/index.ts",
+  );
+}
+
+async function checkLspClientUsesLocalHighlighting() {
+  let files = [
+    "packages/lsp-client/src/text.ts",
+    "packages/lsp-client/src/hover.ts",
+    "packages/lsp-client/src/completion.ts",
+    "packages/lsp-client/src/client.ts",
+    "packages/lsp-client/src/plugin.ts",
+    "packages/lsp-client/src/formatting.ts",
+  ];
+  let sources = await Promise.all(files.map(readText));
+  let joined = sources.join("\n");
+  for (let name of ["@codemirror/language", "@codemirror/autocomplete", "@lezer/highlight"]) {
+    if (joined.includes(name)) fail(`lsp-client source still imports ${name}`);
+  }
+  if (!joined.includes("@codemirror-treesitter/language")) {
+    fail("lsp-client does not import the local tree-sitter language package");
+  }
+  if (!joined.includes("@codemirror-treesitter/autocomplete")) {
+    fail("lsp-client completion does not import the local autocomplete package");
+  }
+  if (!joined.includes("highlightCode")) fail("lsp-client does not highlight markdown code blocks");
+  if (!joined.includes("Text.of(")) {
+    fail("lsp-client highlighter does not parse markdown code through CodeMirror Text");
+  }
+  pass("lsp-client markdown and completion integrations use local tree-sitter packages");
 }
 
 async function checkBuiltStreamLanguageWorks() {
@@ -329,13 +486,42 @@ async function checkExamplesComparisonImplementation() {
     if (!source.includes(snippet)) fail(`apps/examples comparison source is missing ${snippet}`);
   }
   let comparisons = [...source.matchAll(new RegExp("\\n {4}compare:\\s*\\(", "g"))].length;
-  if (comparisons != requiredExampleSlugs.size) {
+  if (comparisons < requiredExampleSlugs.size) {
     fail(
       `apps/examples defines ${comparisons} comparison blocks for ${requiredExampleSlugs.size} required examples`,
     );
   } else {
     pass("examples app implements original Lezer side and per-example comparisons");
   }
+}
+
+async function checkExamplesIncludeMergeAndLspClient() {
+  let pkg = JSON.parse(await readText("apps/examples/package.json"));
+  for (let name of [
+    "@codemirror-treesitter/merge",
+    "@codemirror-treesitter/lsp-client",
+    "@codemirror/merge",
+    "@codemirror/lsp-client",
+  ]) {
+    if (!pkg.dependencies?.[name]) fail(`apps/examples is missing dependency ${name}`);
+  }
+
+  let source = await readText("apps/examples/src/main.ts");
+  for (let snippet of [
+    'id: "merge-view"',
+    'id: "lsp-client"',
+    'from "@codemirror-treesitter/merge"',
+    'from "@codemirror-treesitter/lsp-client"',
+    'from "@codemirror/merge"',
+    'from "@codemirror/lsp-client"',
+    "treeUnifiedMergeView",
+    "treeLanguageServerExtensions",
+    "lezerUnifiedMergeView",
+    "lezerLanguageServerExtensions",
+  ]) {
+    if (!source.includes(snippet)) fail(`apps/examples merge/LSP coverage is missing ${snippet}`);
+  }
+  pass("examples app covers merge and lsp-client comparisons");
 }
 
 let builtLanguageDataPromise;
@@ -363,6 +549,53 @@ function parseNamedExports(sourceText) {
     for (let specifier of clause.elements) exports.add(specifier.name.text);
   }
   return exports;
+}
+
+function parsePublicExports(sourceTexts) {
+  let exports = new Set();
+  for (let [index, sourceText] of sourceTexts.entries()) {
+    let source = ts.createSourceFile(
+      `source-${index}.ts`,
+      sourceText,
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    for (let statement of source.statements) {
+      if (ts.isExportDeclaration(statement)) {
+        let clause = statement.exportClause;
+        if (!clause || !ts.isNamedExports(clause)) continue;
+        for (let specifier of clause.elements) exports.add(specifier.name.text);
+      } else if (
+        statement.modifiers?.some((modifier) => modifier.kind == ts.SyntaxKind.ExportKeyword)
+      ) {
+        if (
+          (ts.isFunctionDeclaration(statement) ||
+            ts.isClassDeclaration(statement) ||
+            ts.isInterfaceDeclaration(statement) ||
+            ts.isTypeAliasDeclaration(statement) ||
+            ts.isEnumDeclaration(statement)) &&
+          statement.name
+        ) {
+          exports.add(statement.name.text);
+        } else if (ts.isVariableStatement(statement)) {
+          for (let declaration of statement.declarationList.declarations) {
+            addBindingExports(declaration.name, exports);
+          }
+        }
+      }
+    }
+  }
+  return exports;
+}
+
+function addBindingExports(name, exports) {
+  if (ts.isIdentifier(name)) {
+    exports.add(name.text);
+  } else if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
+    for (let element of name.elements) {
+      if (ts.isBindingElement(element)) addBindingExports(element.name, exports);
+    }
+  }
 }
 
 function parseLanguageDataSource(sourceText) {

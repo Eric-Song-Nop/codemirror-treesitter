@@ -42,7 +42,16 @@ export {
   type SyntaxNode,
   type SyntaxNodeRef,
 } from "./tree.js";
-export { Tag, classHighlighter, tagHighlighter, tags, type Highlighter } from "./tags.js";
+export {
+  Tag,
+  classHighlighter,
+  getStyleTags,
+  styleTags,
+  tagHighlighter,
+  tags,
+  type Highlighter,
+  type StyleTags,
+} from "./tags.js";
 
 export const languageDataProp = new NodeProp<Facet<{ [name: string]: unknown }>>();
 
@@ -209,13 +218,18 @@ export class TreeSitterParser implements TreeConfig {
   }
 
   prop<T>(type: NodeType, prop: NodeProp<T>): T | undefined {
+    let result: T | undefined;
     for (let source of this.props) {
       if (source.prop == prop) {
         let value = source.match(type) as T | undefined;
-        if (value !== undefined) return value;
+        if (value !== undefined) {
+          if (result === undefined) result = value;
+          else if (prop.combine) result = prop.combine(result, value);
+          else return result;
+        }
       }
     }
-    return undefined;
+    return result;
   }
 
   parse(doc: Text, oldTree: TSTree | Tree | null = null): Tree {

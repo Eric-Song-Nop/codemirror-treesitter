@@ -15,6 +15,12 @@ export default defineConfig({
         "packages/autocomplete/src/index.ts",
         import.meta.url,
       ).pathname,
+      "@codemirror-treesitter/merge": new URL("packages/merge/src/index.ts", import.meta.url)
+        .pathname,
+      "@codemirror-treesitter/lsp-client": new URL(
+        "packages/lsp-client/src/index.ts",
+        import.meta.url,
+      ).pathname,
       "@codemirror-treesitter/basic-setup": new URL(
         "packages/codemirror/src/index.ts",
         import.meta.url,

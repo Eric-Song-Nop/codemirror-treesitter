@@ -1,4 +1,4 @@
-import { EditorState } from "@codemirror/state";
+import { EditorState, Text } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
 import {
   HighlightStyle,
@@ -6,7 +6,10 @@ import {
   TreeSitterLanguage,
   TreeSitterParser,
   classHighlighter,
+  highlightCode,
+  highlightTree,
   highlightingFor,
+  styleTags,
   syntaxHighlighting,
   syntaxTree,
   tagHighlighter,
@@ -221,6 +224,55 @@ describe("highlight tags", () => {
 
     expect(classAt("demo")).toContain("fn");
     expect(classAt("MAX_VALUE")).toContain("const");
+  });
+
+  it("supports Lezer-compatible styleTags rules and code highlighting", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    let javascript = TreeSitterLanguage.define({
+      name: "javascript",
+      parser: await javascriptParser,
+      props: [
+        styleTags({
+          "lexical_declaration/variable_declarator/identifier": tags.definition(tags.variableName),
+          number: tags.number,
+        }),
+      ],
+    });
+    let highlighter = tagHighlighter([
+      { tag: tags.definition(tags.variableName), class: "def" },
+      { tag: tags.number, class: "num" },
+    ]);
+    let code = "let value = 1;\nvalue;\n";
+    let tree = javascript.parser.parse(Text.of(code.split("\n")));
+    let spans: { from: number; to: number; cls: string }[] = [];
+    highlightTree(tree, highlighter, (from, to, cls) => spans.push({ from, to, cls }));
+
+    expect(spans).toContainEqual({
+      from: code.indexOf("value"),
+      to: code.indexOf("value") + "value".length,
+      cls: "def",
+    });
+    expect(spans).not.toContainEqual({
+      from: code.lastIndexOf("value"),
+      to: code.lastIndexOf("value") + "value".length,
+      cls: "def",
+    });
+
+    let html = "";
+    highlightCode(
+      code,
+      tree,
+      highlighter,
+      (text, cls) => {
+        html += cls ? `<${cls}>${text}</${cls}>` : text;
+      },
+      () => {
+        html += "<br>";
+      },
+    );
+    expect(html).toContain("<def>value</def>");
+    expect(html).toContain("<num>1</num>");
+    expect(html).toContain("<br>");
   });
 
   it("highlights host HTML after nested CSS and JavaScript ranges", async () => {

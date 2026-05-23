@@ -1,4 +1,4 @@
-import type { NodeType } from "./tree.js";
+import { NodeProp, type NodePropSource, type NodeType, type SyntaxNodeRef } from "./tree.js";
 
 let nextTagId = 0;
 
@@ -202,6 +202,119 @@ export const tags = {
 export interface Highlighter {
   style(tags: readonly Tag[]): string | null;
   scope?: (type: NodeType) => boolean;
+}
+
+enum StyleMode {
+  Opaque,
+  Inherit,
+  Normal,
+}
+
+class StyleRule {
+  constructor(
+    readonly tags: readonly Tag[],
+    readonly mode: StyleMode,
+    readonly context: readonly string[] | null,
+    public next?: StyleRule,
+  ) {}
+
+  get opaque() {
+    return this.mode == StyleMode.Opaque;
+  }
+
+  get inherit() {
+    return this.mode == StyleMode.Inherit;
+  }
+
+  get depth() {
+    return this.context ? this.context.length : 0;
+  }
+
+  sort(other: StyleRule | undefined): StyleRule {
+    if (!other || other.depth < this.depth) {
+      this.next = other;
+      return this;
+    }
+    other.next = this.sort(other.next);
+    return other;
+  }
+
+  static empty = new StyleRule([], StyleMode.Normal, null);
+}
+
+const styleTagProp = new NodeProp<StyleRule>({
+  combine(a, b) {
+    let left: StyleRule | undefined = a;
+    let right: StyleRule | undefined = b;
+    let cur: StyleRule | undefined;
+    let root: StyleRule | undefined;
+    while (left || right) {
+      let take: StyleRule;
+      if (!left || (right && left.depth >= right.depth)) {
+        take = right!;
+        right = right!.next;
+      } else {
+        take = left;
+        left = left.next;
+      }
+      if (cur && cur.mode == take.mode && !take.context && !cur.context) continue;
+      let copy = new StyleRule(take.tags, take.mode, take.context);
+      if (cur) cur.next = copy;
+      else root = copy;
+      cur = copy;
+    }
+    return root ?? StyleRule.empty;
+  },
+});
+
+export interface StyleTags {
+  tags: readonly Tag[];
+  opaque: boolean;
+  inherit: boolean;
+}
+
+export function styleTags(spec: Record<string, Tag | readonly Tag[]>): NodePropSource {
+  let byName: Record<string, StyleRule> = Object.create(null);
+  for (let prop of Object.keys(spec)) {
+    let value = spec[prop]!;
+    let tags = value instanceof Tag ? [value] : Array.from(value);
+    for (let part of prop.split(" ")) {
+      if (!part) continue;
+      let pieces: string[] = [];
+      let mode = StyleMode.Normal;
+      let rest = part;
+      for (let pos = 0; ; ) {
+        if (rest == "..." && pos > 0 && pos + 3 == part.length) {
+          mode = StyleMode.Inherit;
+          break;
+        }
+        let match = /^"(?:[^"\\]|\\.)*?"|[^/!]+/.exec(rest);
+        if (!match) throw new RangeError(`Invalid path: ${part}`);
+        pieces.push(match[0] == "*" ? "" : match[0][0] == '"' ? JSON.parse(match[0]) : match[0]);
+        pos += match[0].length;
+        if (pos == part.length) break;
+        let next = part[pos++];
+        if (pos == part.length && next == "!") {
+          mode = StyleMode.Opaque;
+          break;
+        }
+        if (next != "/") throw new RangeError(`Invalid path: ${part}`);
+        rest = part.slice(pos);
+      }
+      let last = pieces.length - 1;
+      let inner = pieces[last];
+      if (!inner) throw new RangeError(`Invalid path: ${part}`);
+      let rule = new StyleRule(tags, mode, last > 0 ? pieces.slice(0, last) : null);
+      byName[inner] = rule.sort(byName[inner]);
+    }
+  }
+  return styleTagProp.add(byName);
+}
+
+export function getStyleTags(node: SyntaxNodeRef): StyleTags | null {
+  let rule = node.type.prop(styleTagProp);
+  while (rule && rule.context && !node.matchContext(rule.context)) rule = rule.next;
+  return rule || null;
 }
 
 export function tagHighlighter(
