@@ -1,38 +1,72 @@
 import "./style.css";
 import {
-  CompletionContext,
-  autocompletion,
-  type CompletionResult,
+  CompletionContext as TreeCompletionContext,
+  autocompletion as treeAutocompletion,
+  type CompletionResult as TreeCompletionResult,
 } from "@codemirror-treesitter/autocomplete";
-import { EditorView, basicSetup } from "@codemirror-treesitter/basic-setup";
-import { indentWithTab } from "@codemirror-treesitter/commands";
-import { languages } from "@codemirror-treesitter/language-data";
+import { basicSetup as treeBasicSetup } from "@codemirror-treesitter/basic-setup";
+import { indentWithTab as treeIndentWithTab } from "@codemirror-treesitter/commands";
+import { languages as treeLanguages } from "@codemirror-treesitter/language-data";
 import {
-  HighlightStyle,
-  NodeProp,
-  bidiIsolates,
-  ensureSyntaxTree,
-  language as languageFacet,
-  syntaxHighlighting,
-  syntaxTree,
-  syntaxTreeAvailable,
-  tagHighlighter,
-  tags,
-  type LanguageSupport,
+  HighlightStyle as TreeHighlightStyle,
+  NodeProp as TreeNodeProp,
+  bidiIsolates as treeBidiIsolates,
+  ensureSyntaxTree as treeEnsureSyntaxTree,
+  language as treeLanguageFacet,
+  syntaxHighlighting as treeSyntaxHighlighting,
+  syntaxTree as treeSyntaxTree,
+  syntaxTreeAvailable as treeSyntaxTreeAvailable,
+  tags as treeTags,
+  type LanguageSupport as TreeLanguageSupport,
 } from "@codemirror-treesitter/language";
+import {
+  CompletionContext as LezerCompletionContext,
+  autocompletion as lezerAutocompletion,
+  type CompletionResult as LezerCompletionResult,
+} from "@codemirror/autocomplete";
+import { indentWithTab as lezerIndentWithTab } from "@codemirror/commands";
+import { languages as lezerLanguages } from "@codemirror/language-data";
+import {
+  HighlightStyle as LezerHighlightStyle,
+  bidiIsolates as lezerBidiIsolates,
+  ensureSyntaxTree as lezerEnsureSyntaxTree,
+  language as lezerLanguageFacet,
+  syntaxHighlighting as lezerSyntaxHighlighting,
+  syntaxTree as lezerSyntaxTree,
+  syntaxTreeAvailable as lezerSyntaxTreeAvailable,
+  type LanguageSupport as LezerLanguageSupport,
+} from "@codemirror/language";
 import { linter, type Diagnostic } from "@codemirror/lint";
 import { Compartment, EditorState, RangeSetBuilder, type Extension } from "@codemirror/state";
 import {
   Decoration,
+  EditorView,
   ViewPlugin,
   WidgetType,
   keymap,
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
+import { tags as lezerTags } from "@lezer/highlight";
+import { NodeProp as LezerNodeProp } from "@lezer/common";
+import { basicSetup as lezerBasicSetup } from "codemirror";
 
-type SupportMap = Map<string, LanguageSupport>;
+type EngineId = "tree" | "lezer";
 type Status = Record<string, string>;
+type SupportMap<Support> = Map<string, Support>;
+type LoadSupport<Support> = (name: string) => Promise<Support>;
+
+type Runtime<Support> = {
+  languageNames: readonly string[];
+  extensions: (supports: SupportMap<Support>) => Extension[];
+  inspect: (view: EditorView) => Status;
+};
+
+type CompareRow = {
+  label: string;
+  pass: boolean;
+  detail: string;
+};
 
 type Example = {
   id: string;
@@ -40,24 +74,37 @@ type Example = {
   official: string;
   summary: string;
   doc: string;
-  languageNames: readonly string[];
   selection?: number;
-  extensions: (supports: SupportMap) => Extension[];
-  inspect: (view: EditorView) => Status;
+  tree: Runtime<TreeLanguageSupport>;
+  lezer: Runtime<LezerLanguageSupport>;
+  compare: (tree: Status, lezer: Status) => CompareRow[];
 };
 
-const languageCache = new Map<string, Promise<LanguageSupport>>();
-let activeView: EditorView | null = null;
+type EngineState<Support> = {
+  id: EngineId;
+  label: string;
+  source: string;
+  loadSupport: LoadSupport<Support>;
+  view: EditorView | null;
+  status: Status;
+  editor: HTMLElement;
+  statusList: HTMLElement;
+};
+
+const treeLanguageCache = new Map<string, Promise<TreeLanguageSupport>>();
+const lezerLanguageCache = new Map<string, Promise<LezerLanguageSupport>>();
+
 let activeExample: Example | null = null;
+let activeRun = 0;
 let statusTimer = 0;
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
 <main class="app-shell">
   <aside class="sidebar">
     <div class="brand">
-      <span class="mark">TS</span>
+      <span class="mark">CM</span>
       <div>
-        <p>CodeMirror Tree-sitter</p>
+        <p>Tree-sitter vs Lezer</p>
         <h1>Example Workbench</h1>
       </div>
     </div>
@@ -73,10 +120,31 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     </header>
     <p id="example-summary" class="summary"></p>
     <div class="work-area">
-      <div id="editor" class="editor-host"></div>
-      <aside class="status-panel">
-        <h3>Runtime Checks</h3>
-        <dl id="status"></dl>
+      <section class="engine-card" data-engine="tree">
+        <header>
+          <div>
+            <p>Local implementation</p>
+            <h3>Tree-sitter</h3>
+          </div>
+          <span class="engine-badge">TS</span>
+        </header>
+        <div id="tree-editor" class="editor-host"></div>
+        <dl id="tree-status" class="status-list" data-engine="tree"></dl>
+      </section>
+      <section class="engine-card" data-engine="lezer">
+        <header>
+          <div>
+            <p>Original implementation</p>
+            <h3>CodeMirror + Lezer</h3>
+          </div>
+          <span class="engine-badge">LZ</span>
+        </header>
+        <div id="lezer-editor" class="editor-host"></div>
+        <dl id="lezer-status" class="status-list" data-engine="lezer"></dl>
+      </section>
+      <aside class="comparison-panel">
+        <h3>Behavior Comparison</h3>
+        <dl id="comparison-status" class="status-list comparison-list"></dl>
       </aside>
     </div>
   </section>
@@ -84,19 +152,46 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
 `;
 
 const nav = document.querySelector<HTMLElement>("#examples")!;
-const editorHost = document.querySelector<HTMLElement>("#editor")!;
 const title = document.querySelector<HTMLElement>("#example-title")!;
 const source = document.querySelector<HTMLElement>("#example-source")!;
 const summary = document.querySelector<HTMLElement>("#example-summary")!;
 const officialLink = document.querySelector<HTMLAnchorElement>("#official-link")!;
-const statusList = document.querySelector<HTMLElement>("#status")!;
+const comparisonList = document.querySelector<HTMLElement>("#comparison-status")!;
+
+const treeEngine: EngineState<TreeLanguageSupport> = {
+  id: "tree",
+  label: "Tree-sitter",
+  source: "local @codemirror-treesitter packages",
+  loadSupport: loadTreeSupport,
+  view: null,
+  status: { status: "idle" },
+  editor: document.querySelector<HTMLElement>("#tree-editor")!,
+  statusList: document.querySelector<HTMLElement>("#tree-status")!,
+};
+
+const lezerEngine: EngineState<LezerLanguageSupport> = {
+  id: "lezer",
+  label: "CodeMirror + Lezer",
+  source: "official @codemirror packages",
+  loadSupport: loadLezerSupport,
+  view: null,
+  status: { status: "idle" },
+  editor: document.querySelector<HTMLElement>("#lezer-editor")!,
+  statusList: document.querySelector<HTMLElement>("#lezer-status")!,
+};
+
+const engines = {
+  tree: treeEngine,
+  lezer: lezerEngine,
+};
 
 const examples: readonly Example[] = [
   {
     id: "basic",
     title: "Basic Editor",
     official: "https://codemirror.net/examples/basic/",
-    summary: "basicSetup plus a TypeScript tree-sitter language loaded from language-data.",
+    summary:
+      "The same TypeScript document is loaded with local Tree-sitter packages and official Lezer packages.",
     doc: `type Point = { x: number; y: number };
 
 function distance(a: Point, b: Point) {
@@ -105,75 +200,147 @@ function distance(a: Point, b: Point) {
   return Math.hypot(dx, dy);
 }
 `,
-    languageNames: ["TypeScript"],
-    extensions: (supports) => [support(supports, "TypeScript").extension],
-    inspect: (view) => ({
-      language: currentLanguageName(view),
-      topNode: readyTree(view).topNode.name,
-      parsed: String(syntaxTreeAvailable(view.state)),
-    }),
+    tree: {
+      languageNames: ["TypeScript"],
+      extensions: (supports) => [treeSupport(supports, "TypeScript").extension],
+      inspect: (view) => ({
+        language: treeCurrentLanguageName(view),
+        topNode: treeReadyTree(view).topNode.name,
+        parsed: String(treeSyntaxTreeAvailable(view.state)),
+      }),
+    },
+    lezer: {
+      languageNames: ["TypeScript"],
+      extensions: (supports) => [lezerSupport(supports, "TypeScript").extension],
+      inspect: (view) => ({
+        language: lezerCurrentLanguageName(view),
+        topNode: lezerReadyTree(view).topNode.name,
+        parsed: String(lezerSyntaxTreeAvailable(view.state)),
+      }),
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "typescript"),
+      truthyCheck("parser ready", tree.parsed == "true" && lezer.parsed == "true", tree, lezer),
+      presentCheck("top node", tree.topNode, lezer.topNode),
+    ],
   },
   {
     id: "configuration",
     title: "Configuration",
     official: "https://codemirror.net/examples/config/",
-    summary: "Compartment-based language reconfiguration switches between HTML and TypeScript.",
+    summary: "Both implementations use a Compartment to choose HTML for documents starting with <.",
     doc: `<main>
   <h1>Switchable configuration</h1>
   <script>const mode = "html";</script>
 </main>
 `,
-    languageNames: ["HTML", "TypeScript"],
-    extensions: (supports) => {
-      let languageConfig = new Compartment();
-      let html = support(supports, "HTML");
-      let typeScript = support(supports, "TypeScript");
-      return [
-        languageConfig.of(html.extension),
-        EditorState.transactionExtender.of((tr) => {
-          if (!tr.docChanged) return null;
-          let wantsHTML = /^\s*</.test(tr.newDoc.sliceString(0, Math.min(80, tr.newDoc.length)));
-          let next = wantsHTML ? html : typeScript;
-          return tr.startState.facet(languageFacet) == next.language
-            ? null
-            : { effects: languageConfig.reconfigure(next.extension) };
-        }),
-      ];
+    tree: {
+      languageNames: ["HTML", "TypeScript"],
+      extensions: (supports) => {
+        let languageConfig = new Compartment();
+        let html = treeSupport(supports, "HTML");
+        let typeScript = treeSupport(supports, "TypeScript");
+        return [
+          languageConfig.of(html.extension),
+          EditorState.transactionExtender.of((tr) => {
+            if (!tr.docChanged) return null;
+            let wantsHTML = /^\s*</.test(tr.newDoc.sliceString(0, Math.min(80, tr.newDoc.length)));
+            let next = wantsHTML ? html : typeScript;
+            return tr.startState.facet(treeLanguageFacet) == next.language
+              ? null
+              : { effects: languageConfig.reconfigure(next.extension) };
+          }),
+        ];
+      },
+      inspect: (view) => ({
+        language: treeCurrentLanguageName(view),
+        topNode: treeReadyTree(view).topNode.name,
+        modeRule: "leading < selects HTML",
+      }),
     },
-    inspect: (view) => ({
-      language: currentLanguageName(view),
-      topNode: readyTree(view).topNode.name,
-      modeRule: "leading < selects HTML",
-    }),
+    lezer: {
+      languageNames: ["HTML", "TypeScript"],
+      extensions: (supports) => {
+        let languageConfig = new Compartment();
+        let html = lezerSupport(supports, "HTML");
+        let typeScript = lezerSupport(supports, "TypeScript");
+        return [
+          languageConfig.of(html.extension),
+          EditorState.transactionExtender.of((tr) => {
+            if (!tr.docChanged) return null;
+            let wantsHTML = /^\s*</.test(tr.newDoc.sliceString(0, Math.min(80, tr.newDoc.length)));
+            let next = wantsHTML ? html : typeScript;
+            return tr.startState.facet(lezerLanguageFacet) == next.language
+              ? null
+              : { effects: languageConfig.reconfigure(next.extension) };
+          }),
+        ];
+      },
+      inspect: (view) => ({
+        language: lezerCurrentLanguageName(view),
+        topNode: lezerReadyTree(view).topNode.name,
+        modeRule: "leading < selects HTML",
+      }),
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("configured language", tree.language, lezer.language, "html"),
+      equalityCheck("mode rule", tree.modeRule, lezer.modeRule, "leading < selects HTML"),
+      presentCheck("configured parser", tree.topNode, lezer.topNode),
+    ],
   },
   {
     id: "language-package",
     title: "Writing a Language Package",
     official: "https://codemirror.net/examples/lang-package/",
     summary:
-      "A tree-sitter language-data entry bundles parser, language data, and highlight query.",
+      "Markdown loads as a language package in both runtimes; inline emphasis is parsed by each parser stack.",
     doc: `# Tree-sitter Markdown
 
 This sample loads a language package with *block* and \`inline\` parsers.
 `,
-    languageNames: ["Markdown"],
-    extensions: (supports) => [support(supports, "Markdown").extension],
-    inspect: (view) => {
-      let tree = readyTree(view);
-      let emphasis = view.state.doc.toString().indexOf("block");
-      return {
-        language: currentLanguageName(view),
-        topNode: tree.topNode.name,
-        nestedParsers: String(tree.nested.length),
-        nodeAtText: tree.resolveInner(emphasis).name,
-      };
+    tree: {
+      languageNames: ["Markdown"],
+      extensions: (supports) => [treeSupport(supports, "Markdown").extension],
+      inspect: (view) => {
+        let tree = treeReadyTree(view);
+        let emphasis = view.state.doc.toString().indexOf("block");
+        return {
+          language: treeCurrentLanguageName(view),
+          topNode: tree.topNode.name,
+          nestedParsers: String(tree.nested.length),
+          nodeAtText: tree.resolveInner(emphasis).name,
+        };
+      },
     },
+    lezer: {
+      languageNames: ["Markdown"],
+      extensions: (supports) => [lezerSupport(supports, "Markdown").extension],
+      inspect: (view) => {
+        let tree = lezerReadyTree(view);
+        let emphasis = view.state.doc.toString().indexOf("block");
+        return {
+          language: lezerCurrentLanguageName(view),
+          topNode: tree.topNode.name,
+          inlineParser: "Lezer markdown inline parser",
+          nodeAtText: tree.resolveInner(emphasis).name,
+        };
+      },
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "markdown"),
+      semanticNodeCheck("inline emphasis", tree.nodeAtText, lezer.nodeAtText, [
+        "emphasis",
+        "Emphasis",
+      ]),
+      presentCheck("document tree", tree.topNode, lezer.topNode),
+    ],
   },
   {
     id: "mixed-language",
     title: "Mixed-Language Parsing",
     official: "https://codemirror.net/examples/mixed-language/",
-    summary: "HTML delegates script/style ranges to JavaScript and CSS tree-sitter parsers.",
+    summary:
+      "HTML delegates style and script ranges to nested CSS and JavaScript parsers in both runtimes.",
     doc: `<main>
   <style>
     main { display: grid; color: steelblue; }
@@ -184,63 +351,144 @@ This sample loads a language package with *block* and \`inline\` parsers.
   </script>
 </main>
 `,
-    languageNames: ["HTML"],
-    extensions: (supports) => [support(supports, "HTML").extension],
-    inspect: (view) => {
-      let doc = view.state.doc.toString();
-      let tree = readyTree(view);
-      return {
-        language: currentLanguageName(view),
-        cssNode: tree.resolveInner(doc.indexOf("color")).name,
-        jsNode: tree.resolveInner(doc.indexOf("message =")).name,
-        nestedParsers: String(tree.nested.length),
-      };
+    tree: {
+      languageNames: ["HTML"],
+      extensions: (supports) => [treeSupport(supports, "HTML").extension],
+      inspect: (view) => {
+        let doc = view.state.doc.toString();
+        let tree = treeReadyTree(view);
+        return {
+          language: treeCurrentLanguageName(view),
+          cssNode: tree.resolveInner(doc.indexOf("color")).name,
+          jsNode: tree.resolveInner(doc.indexOf("message =")).name,
+          nestedParsers: String(tree.nested.length),
+        };
+      },
     },
+    lezer: {
+      languageNames: ["HTML"],
+      extensions: (supports) => [lezerSupport(supports, "HTML").extension],
+      inspect: (view) => {
+        let doc = view.state.doc.toString();
+        let tree = lezerReadyTree(view);
+        return {
+          language: lezerCurrentLanguageName(view),
+          cssNode: tree.resolveInner(doc.indexOf("color")).name,
+          jsNode: tree.resolveInner(doc.indexOf("message =")).name,
+          nestedParsers: "CSS and JavaScript mounted parsers",
+        };
+      },
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("host language", tree.language, lezer.language, "html"),
+      semanticNodeCheck("CSS range parsed", tree.cssNode, lezer.cssNode, [
+        "property_name",
+        "PropertyName",
+        "Block",
+      ]),
+      semanticNodeCheck("JavaScript range parsed", tree.jsNode, lezer.jsNode, [
+        "identifier",
+        "VariableDefinition",
+        "VariableDeclaration",
+      ]),
+      truthyCheck(
+        "nested languages",
+        Number(tree.nestedParsers) >= 2 && lezer.nestedParsers.includes("mounted"),
+        tree,
+        lezer,
+      ),
+    ],
   },
   {
     id: "bidi",
     title: "Right-to-left Text",
     official: "https://codemirror.net/examples/bidi/",
-    summary:
-      "HTML tag nodes expose bidi isolate metadata, and bidiIsolates turns it into editor decorations.",
+    summary: "HTML nodes expose bidi isolate metadata, and bidiIsolates turns it into decorations.",
     doc: `النص <span class="blue">الأزرق</span>
 `,
-    languageNames: ["HTML"],
-    extensions: (supports) => [
-      support(supports, "HTML").extension,
-      bidiIsolates({ alwaysIsolate: true }),
-      EditorView.theme({ "&": { direction: "rtl" } }),
+    tree: {
+      languageNames: ["HTML"],
+      extensions: (supports) => [
+        treeSupport(supports, "HTML").extension,
+        treeBidiIsolates({ alwaysIsolate: true }),
+        EditorView.theme({ "&": { direction: "rtl" } }),
+      ],
+      inspect: (view) => ({
+        language: treeCurrentLanguageName(view),
+        topNode: treeReadyTree(view).topNode.name,
+        isolatedTags: String(treeCountIsolatedNodes(view)),
+      }),
+    },
+    lezer: {
+      languageNames: ["HTML"],
+      extensions: (supports) => [
+        lezerSupport(supports, "HTML").extension,
+        lezerBidiIsolates({ alwaysIsolate: true }),
+        EditorView.theme({ "&": { direction: "rtl" } }),
+      ],
+      inspect: (view) => ({
+        language: lezerCurrentLanguageName(view),
+        topNode: lezerReadyTree(view).topNode.name,
+        isolatedTags: String(lezerCountIsolatedNodes(view)),
+      }),
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "html"),
+      truthyCheck(
+        "isolate metadata",
+        Number(tree.isolatedTags) > 0 && Number(lezer.isolatedTags) > 0,
+        tree,
+        lezer,
+      ),
+      presentCheck("HTML tree", tree.topNode, lezer.topNode),
     ],
-    inspect: (view) => ({
-      language: currentLanguageName(view),
-      topNode: readyTree(view).topNode.name,
-      isolatedTags: String(countIsolatedNodes(view)),
-    }),
   },
   {
     id: "decoration",
     title: "Decoration",
     official: "https://codemirror.net/examples/decoration/",
-    summary: "A ViewPlugin scans the syntax tree and replaces boolean literal ranges.",
+    summary: "Each runtime scans its syntax tree and replaces JSON boolean literals with widgets.",
     doc: `{
   "enabled": true,
   "archived": false,
   "nested": { "visible": true }
 }
 `,
-    languageNames: ["JSON"],
-    extensions: (supports) => [support(supports, "JSON").extension, booleanDecorations],
-    inspect: (view) => ({
-      language: currentLanguageName(view),
-      topNode: readyTree(view).topNode.name,
-      booleanWidgets: String(countText(view, /true|false/g)),
-    }),
+    tree: {
+      languageNames: ["JSON"],
+      extensions: (supports) => [
+        treeSupport(supports, "JSON").extension,
+        booleanDecorations(treeSyntaxTree, ["true", "false"]),
+      ],
+      inspect: (view) => ({
+        language: treeCurrentLanguageName(view),
+        topNode: treeReadyTree(view).topNode.name,
+        booleanWidgets: String(countBooleanWidgets(view)),
+      }),
+    },
+    lezer: {
+      languageNames: ["JSON"],
+      extensions: (supports) => [
+        lezerSupport(supports, "JSON").extension,
+        booleanDecorations(lezerSyntaxTree, ["True", "False"]),
+      ],
+      inspect: (view) => ({
+        language: lezerCurrentLanguageName(view),
+        topNode: lezerReadyTree(view).topNode.name,
+        booleanWidgets: String(countBooleanWidgets(view)),
+      }),
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "json"),
+      equalityCheck("boolean widgets", tree.booleanWidgets, lezer.booleanWidgets, "3"),
+      presentCheck("JSON tree", tree.topNode, lezer.topNode),
+    ],
   },
   {
     id: "autocompletion",
     title: "Autocompletion",
     official: "https://codemirror.net/examples/autocompletion/",
-    summary: "A completion source uses the tree-sitter syntax tree to limit JSDoc tag suggestions.",
+    summary: "Both completion sources use the active syntax tree to limit JSDoc tag suggestions.",
     doc: `/**
  * Send a request.
  * @pa
@@ -249,102 +497,219 @@ function request(url: string) {
   return fetch(url);
 }
 `,
-    languageNames: ["TypeScript"],
     selection: 29,
-    extensions: (supports) => [
-      support(supports, "TypeScript").extension,
-      autocompletion({ override: [jsDocCompletions] }),
-    ],
-    inspect: (view) => {
-      let result = jsDocCompletions(
-        new CompletionContext(view.state, view.state.selection.main.head, true),
-      );
-      return {
-        language: currentLanguageName(view),
-        cursorNode: syntaxTree(view.state).resolveInner(view.state.selection.main.head, -1).name,
-        suggestions: result ? result.options.map((option) => option.label).join(", ") : "none",
-      };
+    tree: {
+      languageNames: ["TypeScript"],
+      extensions: (supports) => [
+        treeSupport(supports, "TypeScript").extension,
+        treeAutocompletion({ override: [treeJsDocCompletions] }),
+      ],
+      inspect: (view) => {
+        let result = treeJsDocCompletions(
+          new TreeCompletionContext(view.state, view.state.selection.main.head, true),
+        );
+        return {
+          language: treeCurrentLanguageName(view),
+          cursorNode: treeSyntaxTree(view.state).resolveInner(view.state.selection.main.head, -1)
+            .name,
+          suggestions: result ? result.options.map((option) => option.label).join(", ") : "none",
+        };
+      },
     },
+    lezer: {
+      languageNames: ["TypeScript"],
+      extensions: (supports) => [
+        lezerSupport(supports, "TypeScript").extension,
+        lezerAutocompletion({ override: [lezerJsDocCompletions] }),
+      ],
+      inspect: (view) => {
+        let result = lezerJsDocCompletions(
+          new LezerCompletionContext(view.state, view.state.selection.main.head, true),
+        );
+        return {
+          language: lezerCurrentLanguageName(view),
+          cursorNode: lezerSyntaxTree(view.state).resolveInner(view.state.selection.main.head, -1)
+            .name,
+          suggestions: result ? result.options.map((option) => option.label).join(", ") : "none",
+        };
+      },
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "typescript"),
+      equalityCheck("JSDoc suggestions", tree.suggestions, lezer.suggestions),
+      semanticNodeCheck("comment context", tree.cursorNode, lezer.cursorNode, [
+        "comment",
+        "BlockComment",
+      ]),
+    ],
   },
   {
     id: "lint",
     title: "Linting",
     official: "https://codemirror.net/examples/lint/",
-    summary: "A linter walks the tree-sitter syntax tree to reject regular expression literals.",
+    summary: "The same linter rule walks each syntax tree to reject regular expression literals.",
     doc: `const words = /\\w+/g;
 const plain = "use a string instead";
 `,
-    languageNames: ["JavaScript"],
-    extensions: (supports) => [
-      support(supports, "JavaScript").extension,
-      linter((view) => regexpDiagnostics(view.state)),
+    tree: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [
+        treeSupport(supports, "JavaScript").extension,
+        linter((view) => regexpDiagnostics(view.state, treeSyntaxTree, ["regex"])),
+      ],
+      inspect: (view) => ({
+        language: treeCurrentLanguageName(view),
+        topNode: treeReadyTree(view).topNode.name,
+        diagnostics: String(regexpDiagnostics(view.state, treeSyntaxTree, ["regex"]).length),
+      }),
+    },
+    lezer: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [
+        lezerSupport(supports, "JavaScript").extension,
+        linter((view) => regexpDiagnostics(view.state, lezerSyntaxTree, ["RegExp"])),
+      ],
+      inspect: (view) => ({
+        language: lezerCurrentLanguageName(view),
+        topNode: lezerReadyTree(view).topNode.name,
+        diagnostics: String(regexpDiagnostics(view.state, lezerSyntaxTree, ["RegExp"]).length),
+      }),
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "javascript"),
+      equalityCheck("regex diagnostics", tree.diagnostics, lezer.diagnostics, "1"),
+      presentCheck("JavaScript tree", tree.topNode, lezer.topNode),
     ],
-    inspect: (view) => ({
-      language: currentLanguageName(view),
-      topNode: readyTree(view).topNode.name,
-      diagnostics: String(regexpDiagnostics(view.state).length),
-    }),
   },
   {
     id: "styling",
     title: "Styling",
     official: "https://codemirror.net/examples/styling/",
-    summary: "HighlightStyle and syntaxHighlighting consume tree-sitter query tags.",
+    summary: "HighlightStyle and syntaxHighlighting render equivalent Markdown emphasis classes.",
     doc: `# Styled Markdown
 
 Strong **text**, emphasized *text*, and \`code\`.
 `,
-    languageNames: ["Markdown"],
-    extensions: (supports) => [
-      support(supports, "Markdown").extension,
-      syntaxHighlighting(exampleHighlightStyle),
-    ],
-    inspect: (view) => {
-      let spans = highlightProbe(view);
-      return {
-        language: currentLanguageName(view),
-        headingSpans: String(spans.heading),
-        emphasisSpans: String(spans.emphasis),
-      };
+    tree: {
+      languageNames: ["Markdown"],
+      extensions: (supports) => [
+        treeSupport(supports, "Markdown").extension,
+        treeSyntaxHighlighting(treeExampleHighlightStyle),
+      ],
+      inspect: (view) => {
+        let spans = highlightProbe(view);
+        return {
+          language: treeCurrentLanguageName(view),
+          headingSpans: String(spans.heading),
+          emphasisSpans: String(spans.emphasis),
+        };
+      },
     },
+    lezer: {
+      languageNames: ["Markdown"],
+      extensions: (supports) => [
+        lezerSupport(supports, "Markdown").extension,
+        lezerSyntaxHighlighting(lezerExampleHighlightStyle),
+      ],
+      inspect: (view) => {
+        let spans = highlightProbe(view);
+        return {
+          language: lezerCurrentLanguageName(view),
+          headingSpans: String(spans.heading),
+          emphasisSpans: String(spans.emphasis),
+        };
+      },
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "markdown"),
+      truthyCheck(
+        "heading highlight",
+        Number(tree.headingSpans) > 0 && Number(lezer.headingSpans) > 0,
+        tree,
+        lezer,
+      ),
+      truthyCheck(
+        "emphasis highlight",
+        Number(tree.emphasisSpans) > 0 && Number(lezer.emphasisSpans) > 0,
+        tree,
+        lezer,
+      ),
+    ],
   },
   {
     id: "tab",
     title: "Handling Tab",
     official: "https://codemirror.net/examples/tab/",
-    summary:
-      "The local commands package provides an indentWithTab key binding for tree-sitter indentation.",
+    summary: "The Tab key binding uses each runtime's indentation behavior.",
     doc: `function tabHandled() {
 console.log("Press Tab at the start of this line.");
 }
 `,
-    languageNames: ["JavaScript"],
-    extensions: (supports) => [
-      support(supports, "JavaScript").extension,
-      keymap.of([indentWithTab]),
+    tree: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [
+        treeSupport(supports, "JavaScript").extension,
+        keymap.of([treeIndentWithTab]),
+      ],
+      inspect: (view) => ({
+        language: treeCurrentLanguageName(view),
+        indentUnit: view.state.facet(EditorState.tabSize).toString(),
+        topNode: treeReadyTree(view).topNode.name,
+      }),
+    },
+    lezer: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [
+        lezerSupport(supports, "JavaScript").extension,
+        keymap.of([lezerIndentWithTab]),
+      ],
+      inspect: (view) => ({
+        language: lezerCurrentLanguageName(view),
+        indentUnit: view.state.facet(EditorState.tabSize).toString(),
+        topNode: lezerReadyTree(view).topNode.name,
+      }),
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "javascript"),
+      equalityCheck("tab size", tree.indentUnit, lezer.indentUnit, "4"),
+      presentCheck("JavaScript tree", tree.topNode, lezer.topNode),
     ],
-    inspect: (view) => ({
-      language: currentLanguageName(view),
-      indentUnit: view.state.facet(EditorState.tabSize).toString(),
-      topNode: readyTree(view).topNode.name,
-    }),
   },
   {
     id: "huge-document",
     title: "Huge Document",
     official: "https://codemirror.net/examples/million/",
-    summary: "A large document exercises parser scheduling, time budgets, and resumable parsing.",
+    summary: "Large-document parsing reaches an available syntax tree in both parser runtimes.",
     doc: makeLargeDocument(),
-    languageNames: ["JavaScript"],
-    extensions: (supports) => [support(supports, "JavaScript").extension],
-    inspect: (view) => {
-      let tree = ensureSyntaxTree(view.state, view.state.doc.length, 100);
-      return {
-        language: currentLanguageName(view),
-        lines: String(view.state.doc.lines),
-        treeAvailable: String(Boolean(tree) || syntaxTreeAvailable(view.state)),
-      };
+    tree: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [treeSupport(supports, "JavaScript").extension],
+      inspect: (view) => {
+        let tree = treeEnsureSyntaxTree(view.state, view.state.doc.length, 100);
+        return {
+          language: treeCurrentLanguageName(view),
+          lines: String(view.state.doc.lines),
+          treeAvailable: String(Boolean(tree) || treeSyntaxTreeAvailable(view.state)),
+        };
+      },
     },
+    lezer: {
+      languageNames: ["JavaScript"],
+      extensions: (supports) => [lezerSupport(supports, "JavaScript").extension],
+      inspect: (view) => {
+        let tree = lezerEnsureSyntaxTree(view.state, view.state.doc.length, 100);
+        return {
+          language: lezerCurrentLanguageName(view),
+          lines: String(view.state.doc.lines),
+          treeAvailable: String(Boolean(tree) || lezerSyntaxTreeAvailable(view.state)),
+        };
+      },
+    },
+    compare: (tree, lezer) => [
+      equalityCheck("language", tree.language, lezer.language, "javascript"),
+      equalityCheck("line count", tree.lines, lezer.lines, "4002"),
+      equalityCheck("tree available", tree.treeAvailable, lezer.treeAvailable, "true"),
+    ],
   },
 ];
 
@@ -363,10 +728,15 @@ window.addEventListener(
   () => void showExample(location.hash.slice(1) || examples[0]!.id),
 );
 
+Object.assign(window, {
+  __exampleComparison: () => collectComparisonSnapshot(),
+});
+
 async function showExample(id: string) {
   let example = examples.find((example) => example.id == id) ?? examples[0]!;
+  let run = ++activeRun;
   activeExample = example;
-  location.hash = example.id;
+  if (location.hash.slice(1) != example.id) location.hash = example.id;
   for (let button of nav.querySelectorAll("button")) {
     button.classList.toggle("active", button.dataset.example == example.id);
   }
@@ -374,31 +744,56 @@ async function showExample(id: string) {
   source.textContent = example.official.replace("https://codemirror.net/examples/", "examples/");
   summary.textContent = example.summary;
   officialLink.href = example.official;
-  statusList.innerHTML = "<div><dt>Status</dt><dd>Loading grammars</dd></div>";
+  setEngineStatus(engines.tree, { status: "Loading grammars" });
+  setEngineStatus(engines.lezer, { status: "Loading grammars" });
+  renderComparisonLoading();
 
-  let supports = await loadSupports(example.languageNames);
-  if (activeExample != example) return;
-  activeView?.destroy();
-  activeView = new EditorView({
-    parent: editorHost,
+  let [treeSupports, lezerSupports] = await Promise.all([
+    loadSupports(example.tree.languageNames, engines.tree.loadSupport),
+    loadSupports(example.lezer.languageNames, engines.lezer.loadSupport),
+  ]);
+  if (run != activeRun) return;
+
+  destroyViews();
+  engines.tree.view = createView(engines.tree.editor, example, [
+    treeBasicSetup,
+    EditorView.lineWrapping,
+    example.tree.extensions(treeSupports),
+  ]);
+  engines.lezer.view = createView(engines.lezer.editor, example, [
+    lezerBasicSetup,
+    EditorView.lineWrapping,
+    example.lezer.extensions(lezerSupports),
+  ]);
+  queueStatus();
+}
+
+function createView(parent: HTMLElement, example: Example, extensions: Extension[]) {
+  parent.replaceChildren();
+  return new EditorView({
+    parent,
     state: EditorState.create({
       doc: example.doc,
       selection: example.selection ? { anchor: example.selection } : undefined,
       extensions: [
-        basicSetup,
-        EditorView.lineWrapping,
-        example.extensions(supports),
+        extensions,
         EditorView.updateListener.of((update) => {
           if (update.docChanged || update.selectionSet || update.viewportChanged) queueStatus();
         }),
       ],
     }),
   });
-  queueStatus();
 }
 
-async function loadSupports(names: readonly string[]) {
-  let supports = new Map<string, LanguageSupport>();
+function destroyViews() {
+  engines.tree.view?.destroy();
+  engines.lezer.view?.destroy();
+  engines.tree.view = null;
+  engines.lezer.view = null;
+}
+
+async function loadSupports<Support>(names: readonly string[], loadSupport: LoadSupport<Support>) {
+  let supports = new Map<string, Support>();
   await Promise.all(
     names.map(async (name) => {
       supports.set(name, await loadSupport(name));
@@ -407,19 +802,35 @@ async function loadSupports(names: readonly string[]) {
   return supports;
 }
 
-function loadSupport(name: string) {
-  let found = languageCache.get(name);
+function loadTreeSupport(name: string) {
+  let found = treeLanguageCache.get(name);
   if (found) return found;
-  let description = languages.find((language) => language.name == name);
-  if (!description) throw new RangeError(`Missing language-data entry for ${name}`);
+  let description = treeLanguages.find((language) => language.name == name);
+  if (!description) throw new RangeError(`Missing tree-sitter language-data entry for ${name}`);
   let loaded = description.load();
-  languageCache.set(name, loaded);
+  treeLanguageCache.set(name, loaded);
   return loaded;
 }
 
-function support(supports: SupportMap, name: string) {
+function loadLezerSupport(name: string) {
+  let found = lezerLanguageCache.get(name);
+  if (found) return found;
+  let description = lezerLanguages.find((language) => language.name == name);
+  if (!description) throw new RangeError(`Missing Lezer language-data entry for ${name}`);
+  let loaded = description.load();
+  lezerLanguageCache.set(name, loaded);
+  return loaded;
+}
+
+function treeSupport(supports: SupportMap<TreeLanguageSupport>, name: string) {
   let found = supports.get(name);
-  if (!found) throw new RangeError(`Language ${name} was not loaded`);
+  if (!found) throw new RangeError(`Tree-sitter language ${name} was not loaded`);
+  return found;
+}
+
+function lezerSupport(supports: SupportMap<LezerLanguageSupport>, name: string) {
+  let found = supports.get(name);
+  if (!found) throw new RangeError(`Lezer language ${name} was not loaded`);
   return found;
 }
 
@@ -429,14 +840,28 @@ function queueStatus() {
 }
 
 function renderStatus() {
-  if (!activeView || !activeExample) return;
-  let status: Status;
+  if (!activeExample) return;
+  setEngineStatus(engines.tree, inspectEngine(activeExample.tree, engines.tree.view));
+  setEngineStatus(engines.lezer, inspectEngine(activeExample.lezer, engines.lezer.view));
+  renderComparison(activeExample);
+}
+
+function inspectEngine<Support>(runtime: Runtime<Support>, view: EditorView | null) {
+  if (!view) return { status: "Loading grammars" };
   try {
-    status = activeExample.inspect(activeView);
+    return runtime.inspect(view);
   } catch (error) {
-    status = { error: error instanceof Error ? error.message : String(error) };
+    return { error: error instanceof Error ? error.message : String(error) };
   }
-  statusList.replaceChildren(
+}
+
+function setEngineStatus<Support>(engine: EngineState<Support>, status: Status) {
+  engine.status = status;
+  renderStatusRows(engine.statusList, status);
+}
+
+function renderStatusRows(parent: HTMLElement, status: Status) {
+  parent.replaceChildren(
     ...Object.entries(status).map(([label, value]) => {
       let row = document.createElement("div");
       let key = document.createElement("dt");
@@ -449,20 +874,95 @@ function renderStatus() {
   );
 }
 
-function readyTree(view: EditorView) {
-  ensureSyntaxTree(view.state, view.state.doc.length, 25);
-  return syntaxTree(view.state);
+function renderComparisonLoading() {
+  comparisonList.replaceChildren(statusRow("status", "Waiting for both runtimes", "pending"));
 }
 
-function currentLanguageName(view: EditorView) {
-  return view.state.facet(languageFacet)?.name ?? "none";
+function renderComparison(example: Example) {
+  let tree = engines.tree.status;
+  let lezer = engines.lezer.status;
+  let rows =
+    tree.error || lezer.error
+      ? [
+          {
+            label: "runtime",
+            pass: false,
+            detail: `tree=${tree.error ?? "ok"}; lezer=${lezer.error ?? "ok"}`,
+          },
+        ]
+      : example.compare(tree, lezer);
+  comparisonList.replaceChildren(
+    ...rows.map((row) =>
+      statusRow(
+        row.label,
+        `${row.pass ? "pass" : "fail"}: ${row.detail}`,
+        row.pass ? "pass" : "fail",
+      ),
+    ),
+  );
 }
 
-function countIsolatedNodes(view: EditorView) {
+function statusRow(label: string, value: string, state: "pass" | "fail" | "pending") {
+  let row = document.createElement("div");
+  row.className = state;
+  let key = document.createElement("dt");
+  let val = document.createElement("dd");
+  key.textContent = label;
+  val.textContent = value;
+  row.append(key, val);
+  return row;
+}
+
+function collectComparisonSnapshot() {
+  return examples.map((example) => ({
+    id: example.id,
+    title: example.title,
+    tree: example.id == activeExample?.id ? engines.tree.status : null,
+    lezer: example.id == activeExample?.id ? engines.lezer.status : null,
+    comparison:
+      example.id == activeExample?.id
+        ? Array.from(comparisonList.querySelectorAll("div")).map((row) => ({
+            key: row.querySelector("dt")?.textContent ?? "",
+            value: row.querySelector("dd")?.textContent ?? "",
+            state: row.className,
+          }))
+        : null,
+  }));
+}
+
+function treeReadyTree(view: EditorView) {
+  treeEnsureSyntaxTree(view.state, view.state.doc.length, 25);
+  return treeSyntaxTree(view.state);
+}
+
+function lezerReadyTree(view: EditorView) {
+  lezerEnsureSyntaxTree(view.state, view.state.doc.length, 25);
+  return lezerSyntaxTree(view.state);
+}
+
+function treeCurrentLanguageName(view: EditorView) {
+  return view.state.facet(treeLanguageFacet)?.name ?? "none";
+}
+
+function lezerCurrentLanguageName(view: EditorView) {
+  return view.state.facet(lezerLanguageFacet)?.name ?? "none";
+}
+
+function treeCountIsolatedNodes(view: EditorView) {
   let count = 0;
-  readyTree(view).iterate({
+  treeReadyTree(view).iterate({
     enter(node) {
-      if (node.type.prop(NodeProp.isolate)) count++;
+      if (node.type.prop(TreeNodeProp.isolate)) count++;
+    },
+  });
+  return count;
+}
+
+function lezerCountIsolatedNodes(view: EditorView) {
+  let count = 0;
+  lezerReadyTree(view).iterate({
+    enter(node) {
+      if (node.type.prop(LezerNodeProp.isolate)) count++;
     },
   });
   return count;
@@ -473,7 +973,7 @@ class BooleanWidget extends WidgetType {
 
   constructor(value: string) {
     super();
-    this.value = value;
+    this.value = value.toLowerCase();
   }
 
   eq(other: BooleanWidget) {
@@ -488,57 +988,81 @@ class BooleanWidget extends WidgetType {
   }
 }
 
-const booleanDecorations = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
-
-    constructor(view: EditorView) {
-      this.decorations = this.build(view);
-    }
-
-    update(update: ViewUpdate) {
-      if (
-        update.docChanged ||
-        update.viewportChanged ||
-        syntaxTree(update.startState) != syntaxTree(update.state)
-      ) {
-        this.decorations = this.build(update.view);
-      }
-    }
-
-    build(view: EditorView) {
-      let builder = new RangeSetBuilder<Decoration>();
-      let tree = syntaxTree(view.state);
-      for (let range of view.visibleRanges) {
-        tree.iterate({
-          from: range.from,
-          to: range.to,
-          enter(node) {
-            if ((node.name == "true" || node.name == "false") && node.from < node.to) {
-              builder.add(
-                node.from,
-                node.to,
-                Decoration.replace({ widget: new BooleanWidget(node.name) }),
-              );
-            }
-          },
-        });
-      }
-      return builder.finish();
-    }
+function booleanDecorations(
+  getTree: (state: EditorState) => {
+    iterate: (spec: {
+      from?: number;
+      to?: number;
+      enter: (node: { name: string; from: number; to: number }) => void;
+    }) => void;
   },
-  {
-    decorations: (plugin) => plugin.decorations,
-  },
-);
+  nodeNames: readonly string[],
+) {
+  let names = new Set(nodeNames);
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
 
-function jsDocCompletions(context: CompletionContext): CompletionResult | null {
+      constructor(view: EditorView) {
+        this.decorations = this.build(view);
+      }
+
+      update(update: ViewUpdate) {
+        if (
+          update.docChanged ||
+          update.viewportChanged ||
+          getTree(update.startState) != getTree(update.state)
+        ) {
+          this.decorations = this.build(update.view);
+        }
+      }
+
+      build(view: EditorView) {
+        let builder = new RangeSetBuilder<Decoration>();
+        let syntaxTree = getTree(view.state);
+        for (let range of view.visibleRanges) {
+          syntaxTree.iterate({
+            from: range.from,
+            to: range.to,
+            enter(node) {
+              if (names.has(node.name) && node.from < node.to) {
+                builder.add(
+                  node.from,
+                  node.to,
+                  Decoration.replace({ widget: new BooleanWidget(node.name) }),
+                );
+              }
+            },
+          });
+        }
+        return builder.finish();
+      }
+    },
+    {
+      decorations: (plugin) => plugin.decorations,
+    },
+  );
+}
+
+function treeJsDocCompletions(context: TreeCompletionContext): TreeCompletionResult | null {
   let token = context.matchBefore(/@\w*/);
   if (!token) return null;
-  let node = syntaxTree(context.state).resolveInner(context.pos, -1);
+  let node = treeSyntaxTree(context.state).resolveInner(context.pos, -1);
   if (node.name != "comment") return null;
+  return jsDocResult(token.from);
+}
+
+function lezerJsDocCompletions(context: LezerCompletionContext): LezerCompletionResult | null {
+  let token = context.matchBefore(/@\w*/);
+  if (!token) return null;
+  let node = lezerSyntaxTree(context.state).resolveInner(context.pos, -1);
+  if (node.name != "BlockComment") return null;
+  return jsDocResult(token.from);
+}
+
+function jsDocResult(from: number) {
   return {
-    from: token.from,
+    from,
     options: [
       { label: "@param", type: "keyword", detail: "document a parameter" },
       { label: "@returns", type: "keyword", detail: "document a return value" },
@@ -548,16 +1072,23 @@ function jsDocCompletions(context: CompletionContext): CompletionResult | null {
   };
 }
 
-function regexpDiagnostics(state: EditorState): Diagnostic[] {
+function regexpDiagnostics(
+  state: EditorState,
+  getTree: (state: EditorState) => {
+    iterate: (spec: { enter: (node: { name: string; from: number; to: number }) => void }) => void;
+  },
+  regexNodeNames: readonly string[],
+) {
   let diagnostics: Diagnostic[] = [];
-  syntaxTree(state).iterate({
+  let names = new Set(regexNodeNames);
+  getTree(state).iterate({
     enter(node) {
-      if (node.name == "regex" || node.name == "regex_pattern") {
+      if (names.has(node.name)) {
         diagnostics.push({
           from: node.from,
           to: node.to,
           severity: "warning",
-          message: "Regular expression literal found by tree-sitter syntax traversal",
+          message: "Regular expression literal found by syntax-tree traversal",
         });
       }
     },
@@ -565,43 +1096,79 @@ function regexpDiagnostics(state: EditorState): Diagnostic[] {
   return diagnostics;
 }
 
-const exampleHighlightStyle = HighlightStyle.define([
-  { tag: tags.heading, class: "cmx-heading" },
-  { tag: tags.strong, class: "cmx-strong" },
-  { tag: tags.emphasis, class: "cmx-emphasis" },
-  { tag: tags.monospace, class: "cmx-code" },
+const treeExampleHighlightStyle = TreeHighlightStyle.define([
+  { tag: treeTags.heading, class: "cmx-heading" },
+  { tag: treeTags.strong, class: "cmx-strong" },
+  { tag: treeTags.emphasis, class: "cmx-emphasis" },
+  { tag: treeTags.monospace, class: "cmx-code" },
 ]);
 
-const probeHighlighter = tagHighlighter([
-  { tag: tags.heading, class: "heading" },
-  { tag: tags.emphasis, class: "emphasis" },
+const lezerExampleHighlightStyle = LezerHighlightStyle.define([
+  { tag: lezerTags.heading, class: "cmx-heading" },
+  { tag: lezerTags.strong, class: "cmx-strong" },
+  { tag: lezerTags.emphasis, class: "cmx-emphasis" },
+  { tag: lezerTags.monospace, class: "cmx-code" },
 ]);
 
 function highlightProbe(view: EditorView) {
-  let counts = { heading: 0, emphasis: 0 };
-  let tree = syntaxTree(view.state);
-  let tagsByTree = tree.config?.highlightTags?.(tree, 0, view.state.doc.length);
-  if (tagsByTree) {
-    for (let tags of tagsByTree.values()) {
-      let cls = probeHighlighter.style(tags);
-      if (cls?.includes("heading")) counts.heading++;
-      if (cls?.includes("emphasis")) counts.emphasis++;
-    }
-  }
-  for (let nested of tree.nested) {
-    let nestedTags = nested.tree.config?.highlightTags?.(nested.tree, 0, view.state.doc.length);
-    if (!nestedTags) continue;
-    for (let tags of nestedTags.values()) {
-      let cls = probeHighlighter.style(tags);
-      if (cls?.includes("heading")) counts.heading++;
-      if (cls?.includes("emphasis")) counts.emphasis++;
-    }
-  }
-  return counts;
+  return {
+    heading: view.dom.querySelectorAll(".cmx-heading").length,
+    emphasis: view.dom.querySelectorAll(".cmx-emphasis").length,
+  };
 }
 
-function countText(view: EditorView, pattern: RegExp) {
-  return Array.from(view.state.doc.toString().matchAll(pattern)).length;
+function countBooleanWidgets(view: EditorView) {
+  return view.dom.querySelectorAll(".bool-widget").length;
+}
+
+function equalityCheck(
+  label: string,
+  treeValue: string | undefined,
+  lezerValue: string | undefined,
+  expected?: string,
+) {
+  let matches =
+    expected == null ? treeValue == lezerValue : treeValue == expected && lezerValue == expected;
+  let target = expected == null ? "matching values" : expected;
+  return {
+    label,
+    pass: matches,
+    detail: `tree=${treeValue ?? "missing"}; lezer=${lezerValue ?? "missing"}; expected=${target}`,
+  };
+}
+
+function truthyCheck(label: string, pass: boolean, tree: Status, lezer: Status) {
+  return {
+    label,
+    pass,
+    detail: `tree=${JSON.stringify(tree)}; lezer=${JSON.stringify(lezer)}`,
+  };
+}
+
+function presentCheck(
+  label: string,
+  treeValue: string | undefined,
+  lezerValue: string | undefined,
+) {
+  return {
+    label,
+    pass: Boolean(treeValue) && Boolean(lezerValue),
+    detail: `tree=${treeValue ?? "missing"}; lezer=${lezerValue ?? "missing"}`,
+  };
+}
+
+function semanticNodeCheck(
+  label: string,
+  treeValue: string | undefined,
+  lezerValue: string | undefined,
+  accepted: readonly string[],
+) {
+  let values = new Set(accepted);
+  return {
+    label,
+    pass: values.has(treeValue ?? "") && values.has(lezerValue ?? ""),
+    detail: `tree=${treeValue ?? "missing"}; lezer=${lezerValue ?? "missing"}; accepted=${accepted.join(", ")}`,
+  };
 }
 
 function makeLargeDocument() {

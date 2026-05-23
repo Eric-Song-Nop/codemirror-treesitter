@@ -650,6 +650,7 @@ const stylesheetStyleTags: Record<string, Tag | readonly Tag[]> = {
   attribute_name: tags.attributeName,
   function_name: tags.function(tags.variableName),
   string_value: tags.string,
+  plain_value: tags.atom,
   color_value: tags.color,
   boolean_value: tags.bool,
   null_value: tags.null,
@@ -1407,6 +1408,7 @@ const cssSpec: LanguageSpec = {
   wasm: cssWasm,
   languageData: blockComment("", "/*", "*/"),
   highlightQuery: cssHighlights,
+  styleTags: stylesheetStyleTags,
 };
 
 const javascriptSpec: LanguageSpec = {

@@ -8,11 +8,20 @@ import {
   StateField,
   Transaction,
   combineConfig,
+  countColumn,
+  type ChangeSpec,
   type Extension,
+  type Line,
+  type SelectionRange,
   type StateCommand,
 } from "@codemirror/state";
 import { EditorView, type Command, type KeyBinding } from "@codemirror/view";
-import { getIndentation, indentString, indentUnit } from "@codemirror-treesitter/language";
+import {
+  getIndentUnit,
+  getIndentation,
+  indentString,
+  indentUnit,
+} from "@codemirror-treesitter/language";
 
 interface HistoryConfig {
   minDepth?: number;
@@ -250,44 +259,92 @@ export const deleteLine: Command = (view) => {
   return true;
 };
 
+function changeBySelectedLine(
+  state: EditorState,
+  f: (line: Line, changes: ChangeSpec[], range: SelectionRange) => void,
+) {
+  let atLine = -1;
+  return state.changeByRange((range) => {
+    let changes: ChangeSpec[] = [];
+    for (let pos = range.from; pos <= range.to; ) {
+      let line = state.doc.lineAt(pos);
+      if (line.number > atLine && (range.empty || range.to > line.from)) {
+        f(line, changes, range);
+        atLine = line.number;
+      }
+      pos = line.to + 1;
+    }
+    let changeSet = state.changes(changes);
+    return {
+      changes,
+      range: EditorSelection.range(
+        changeSet.mapPos(range.anchor, 1),
+        changeSet.mapPos(range.head, 1),
+      ),
+    };
+  });
+}
+
 export const indentMore: StateCommand = ({ state, dispatch }) => {
+  if (state.readOnly) return false;
   let indent = state.facet(indentUnit);
-  let changes = state.selection.ranges.map((range) => ({
-    from: state.doc.lineAt(range.from).from,
-    insert: indent,
-  }));
-  dispatch(state.update({ changes, scrollIntoView: true, userEvent: "input.indent" }));
+  dispatch(
+    state.update(
+      changeBySelectedLine(state, (line, changes) => {
+        changes.push({ from: line.from, insert: indent });
+      }),
+      { scrollIntoView: true, userEvent: "input.indent" },
+    ),
+  );
   return true;
 };
 
 export const indentLess: StateCommand = ({ state, dispatch }) => {
-  let changes = [];
-  for (let range of state.selection.ranges) {
-    let line = state.doc.lineAt(range.from);
-    let match = /^\s{1,2}|\t/.exec(line.text);
-    if (match) changes.push({ from: line.from, to: line.from + match[0].length });
-  }
-  if (!changes.length) return false;
-  dispatch(state.update({ changes, scrollIntoView: true, userEvent: "delete.dedent" }));
+  if (state.readOnly) return false;
+  dispatch(
+    state.update(
+      changeBySelectedLine(state, (line, changes) => {
+        let space = /^\s*/.exec(line.text)![0];
+        if (!space) return;
+        let col = countColumn(space, state.tabSize);
+        let keep = 0;
+        let insert = indentString(state, Math.max(0, col - getIndentUnit(state)));
+        while (
+          keep < space.length &&
+          keep < insert.length &&
+          space.charCodeAt(keep) == insert.charCodeAt(keep)
+        ) {
+          keep++;
+        }
+        changes.push({
+          from: line.from + keep,
+          to: line.from + space.length,
+          insert: insert.slice(keep),
+        });
+      }),
+      { scrollIntoView: true, userEvent: "delete.dedent" },
+    ),
+  );
   return true;
 };
 
 export const indentSelection: StateCommand = ({ state, dispatch }) => {
-  let changes = [];
-  let seen = new Set<number>();
-  for (let range of state.selection.ranges) {
-    for (let pos = range.from; pos <= range.to; ) {
-      let line = state.doc.lineAt(pos);
-      if (!seen.has(line.from)) {
-        seen.add(line.from);
-        changes.push({ from: line.from, insert: "  " });
-      }
-      pos = line.to + 1;
-    }
-  }
-  dispatch(state.update({ changes, scrollIntoView: true, userEvent: "input.indent" }));
+  if (state.readOnly) return false;
+  dispatch(
+    state.update(indentRangeBySelection(state), {
+      scrollIntoView: true,
+      userEvent: "input.indent",
+    }),
+  );
   return true;
 };
+
+function indentRangeBySelection(state: EditorState) {
+  let indent = state.facet(indentUnit);
+  return changeBySelectedLine(state, (line, changes) => {
+    changes.push({ from: line.from, insert: indent });
+  });
+}
 
 export interface CommentTokens {
   line?: string;
@@ -388,7 +445,10 @@ export const simplifySelection = noOp;
 export const toggleTabFocusMode = noOp;
 export const temporarilySetTabFocusMode = noOp;
 export const insertTab: StateCommand = ({ state, dispatch }) => {
-  dispatch(state.update(state.replaceSelection("\t")));
+  if (state.selection.ranges.some((range) => !range.empty)) return indentMore({ state, dispatch });
+  dispatch(
+    state.update(state.replaceSelection("\t"), { scrollIntoView: true, userEvent: "input" }),
+  );
   return true;
 };
 

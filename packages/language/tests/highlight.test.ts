@@ -17,9 +17,15 @@ import {
 import { __testHighlightTree } from "../src/highlight.js";
 import { tagsForCapture } from "../src/tags.js";
 import javascriptHighlights from "tree-sitter-javascript/queries/highlights.scm?raw";
+import cssHighlights from "tree-sitter-css/queries/highlights.scm?raw";
+import htmlHighlights from "tree-sitter-html/queries/highlights.scm?raw";
 
 const javascriptWasm = new URL(
   "../../../node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm",
+  import.meta.url,
+).pathname;
+const cssWasm = new URL(
+  "../../../node_modules/tree-sitter-css/tree-sitter-css.wasm",
   import.meta.url,
 ).pathname;
 const htmlWasm = new URL(
@@ -28,6 +34,7 @@ const htmlWasm = new URL(
 ).pathname;
 
 let javascriptParser: Promise<TreeSitterParser> | null = null;
+let cssParser: Promise<TreeSitterParser> | null = null;
 let htmlParser: Promise<TreeSitterParser> | null = null;
 
 async function languageState(doc: string, language: TreeSitterLanguage, highlight: HighlightStyle) {
@@ -38,10 +45,18 @@ async function languageState(doc: string, language: TreeSitterLanguage, highligh
 }
 
 function scriptTextRanges(tree: Tree): DocRange[] {
+  return rawTextRanges(tree, "script_element");
+}
+
+function styleTextRanges(tree: Tree): DocRange[] {
+  return rawTextRanges(tree, "style_element");
+}
+
+function rawTextRanges(tree: Tree, parentName: string): DocRange[] {
   let ranges: DocRange[] = [];
   tree.iterate({
     enter(node) {
-      if (node.name == "raw_text" && node.parent?.name == "script_element") {
+      if (node.name == "raw_text" && node.parent?.name == parentName) {
         ranges.push({ from: node.from, to: node.to });
       }
     },
@@ -206,5 +221,59 @@ describe("highlight tags", () => {
 
     expect(classAt("demo")).toContain("fn");
     expect(classAt("MAX_VALUE")).toContain("const");
+  });
+
+  it("highlights host HTML after nested CSS and JavaScript ranges", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    cssParser ??= TreeSitterParser.load(cssWasm);
+    htmlParser ??= TreeSitterParser.load(htmlWasm);
+    let javascript = TreeSitterLanguage.define({
+      name: "javascript",
+      parser: await javascriptParser,
+      highlightQuery: javascriptHighlights,
+    });
+    let css = TreeSitterLanguage.define({
+      name: "css",
+      parser: await cssParser,
+      highlightQuery: cssHighlights,
+      styleTags: { plain_value: tags.atom },
+    });
+    let html = TreeSitterLanguage.define({
+      name: "html",
+      parser: await htmlParser,
+      highlightQuery: htmlHighlights,
+      nested: [
+        { parser: css.parser, ranges: styleTextRanges },
+        { parser: javascript.parser, ranges: scriptTextRanges },
+      ],
+    });
+    let highlighter = tagHighlighter([
+      { tag: tags.tagName, class: "tag" },
+      { tag: tags.keyword, class: "keyword" },
+      { tag: tags.atom, class: "atom" },
+      { tag: tags.string, class: "string" },
+    ]);
+    let doc = `<main>
+  <style>
+    main { display: grid; color: steelblue; }
+  </style>
+  <script>
+    const message = "nested JavaScript";
+  </script>
+</main>
+`;
+    let state = EditorState.create({
+      doc,
+      extensions: [html.extension],
+    });
+    let spans = __testHighlightTree(syntaxTree(state), [highlighter]);
+    let classAt = (text: string, start = doc.indexOf(text)) =>
+      spans.find((span) => span.from == start && span.to == start + text.length)?.class;
+
+    expect(classAt("style", doc.indexOf("style"))).toBe("tag");
+    expect(classAt("grid")).toBe("atom");
+    expect(classAt("const")).toBe("keyword");
+    expect(classAt("script", doc.indexOf("</script>") + 2)).toBe("tag");
+    expect(classAt("main", doc.indexOf("</main>") + 2)).toBe("tag");
   });
 });

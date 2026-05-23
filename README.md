@@ -12,10 +12,12 @@ bracket-closing, and keymap pieces needed by `basicSetup`. These packages use a
 separate `@codemirror-treesitter/*` scope to avoid confusion or dependency
 resolution conflicts with the official CodeMirror packages.
 
-The workspace intentionally has no Lezer dependency.
+The implementation packages intentionally have no Lezer dependency.
 `@codemirror-treesitter/language` wraps `web-tree-sitter`, edits the previous
 tree with CodeMirror change data, and passes that edited tree back into
-tree-sitter for incremental reparsing.
+tree-sitter for incremental reparsing. The examples app also installs the
+official CodeMirror/Lezer packages so it can render the original behavior
+beside the local Tree-sitter behavior for comparison.
 
 ## Development
 
@@ -29,8 +31,11 @@ vp run -r build
 
 The `apps/examples` workspace is a runtime workbench for the official
 CodeMirror examples that exercise language parsing or this tree-sitter
-replacement surface. It intentionally skips IE11, i18n, and examples that are
-fully about editor APIs outside the language/parser layer.
+replacement surface. Each implemented example renders two editors: the local
+Tree-sitter packages and the original CodeMirror/Lezer packages. The page also
+shows per-example behavior comparison rows. It intentionally skips IE11, i18n,
+and examples that are fully about editor APIs outside the language/parser
+layer.
 
 ## Current Parity Notes
 

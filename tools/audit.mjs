@@ -62,6 +62,7 @@ async function main() {
   await checkLanguageDataParity();
   await checkBuiltLanguageDataLoads();
   await checkExamplesCoverage();
+  await checkExamplesComparisonImplementation();
 
   if (failures) {
     console.error(`audit failed with ${failures} issue${failures == 1 ? "" : "s"}`);
@@ -131,12 +132,7 @@ async function checkPackageNames() {
 }
 
 async function checkNoLezerDependencies() {
-  let files = [
-    "package.json",
-    "bun.lock",
-    ...(await workspacePackageJsons("packages")),
-    ...(await workspacePackageJsons("apps")),
-  ];
+  let files = ["package.json", ...(await workspacePackageJsons("packages"))];
   for (let file of files) {
     let text = await readText(file);
     if (/@lezer\//.test(text)) fail(`${relative(file)} references @lezer`);
@@ -149,7 +145,7 @@ async function checkNoLezerDependencies() {
       fail(`${relative(file)} imports a Lezer package`);
     }
   }
-  pass("no Lezer dependencies or source imports found");
+  pass("implementation packages have no Lezer dependencies or source imports");
 }
 
 async function checkBasicSetupImports() {
@@ -307,6 +303,39 @@ async function checkExamplesCoverage() {
     if (!implemented.has(slug)) fail(`apps/examples is missing required example ${slug}/`);
   }
   pass("parser-relevant CodeMirror examples are implemented or explicitly skipped");
+}
+
+async function checkExamplesComparisonImplementation() {
+  let pkg = JSON.parse(await readText("apps/examples/package.json"));
+  for (let name of [
+    "codemirror",
+    "@codemirror/language",
+    "@codemirror/language-data",
+    "@lezer/common",
+    "@lezer/highlight",
+  ]) {
+    if (!pkg.dependencies?.[name])
+      fail(`apps/examples is missing original comparison dependency ${name}`);
+  }
+
+  let source = await readText("apps/examples/src/main.ts");
+  for (let snippet of [
+    'from "@codemirror-treesitter/language-data"',
+    'from "@codemirror/language-data"',
+    'from "codemirror"',
+    "CodeMirror + Lezer",
+    "Behavior Comparison",
+  ]) {
+    if (!source.includes(snippet)) fail(`apps/examples comparison source is missing ${snippet}`);
+  }
+  let comparisons = [...source.matchAll(new RegExp("\\n {4}compare:\\s*\\(", "g"))].length;
+  if (comparisons != requiredExampleSlugs.size) {
+    fail(
+      `apps/examples defines ${comparisons} comparison blocks for ${requiredExampleSlugs.size} required examples`,
+    );
+  } else {
+    pass("examples app implements original Lezer side and per-example comparisons");
+  }
 }
 
 let builtLanguageDataPromise;

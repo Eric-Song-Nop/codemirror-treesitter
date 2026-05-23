@@ -168,12 +168,9 @@ export class TreeSitterParser implements TreeConfig {
     if (!this.highlightQuery || !tree.tree) return null;
     let result = new Map<number, Tag[]>();
     let root = tree.tree.rootNode;
-    let captures =
-      root.startIndex == 0 && root.endIndex == tree.length
-        ? this.highlightQuery.captures(root, { startIndex: from, endIndex: to })
-        : this.highlightQuery
-            .captures(root)
-            .filter((capture) => capture.node.endIndex >= from && capture.node.startIndex <= to);
+    let captures = this.highlightQuery
+      .captures(root)
+      .filter((capture) => capture.node.endIndex >= from && capture.node.startIndex <= to);
     for (let capture of captures) {
       let tags = tagsForCapture(capture.name);
       if (!tags.length) continue;
