@@ -87,6 +87,7 @@ async function main() {
   await checkExamplesCoverage();
   await checkExamplesIncludeMergeAndLspClient();
   await checkExamplesComparisonImplementation();
+  await checkExamplesUseGruvboxTheme();
 
   if (failures) {
     console.error(`audit failed with ${failures} issue${failures == 1 ? "" : "s"}`);
@@ -520,6 +521,46 @@ async function checkExamplesComparisonImplementation() {
   } else {
     pass("examples app implements original Lezer side and per-example comparisons");
   }
+}
+
+async function checkExamplesUseGruvboxTheme() {
+  let pkg = JSON.parse(await readText("apps/examples/package.json"));
+  if (!pkg.dependencies?.["@codemirror-treesitter/theme-gruvbox"]) {
+    fail("apps/examples is missing the local Gruvbox theme dependency");
+  }
+
+  let config = await readText("apps/examples/vite.config.ts");
+  if (!config.includes("../../packages/theme-gruvbox/src/index.ts")) {
+    fail("apps/examples does not alias the local Gruvbox theme source");
+  }
+
+  let source = await readText("apps/examples/src/main.ts");
+  for (let snippet of [
+    'from "@codemirror-treesitter/theme-gruvbox"',
+    "gruvboxDarkTheme",
+    "gruvboxLightTheme",
+    "gruvboxDarkHighlightStyle",
+    "gruvboxLightHighlightStyle",
+    "lezerGruvboxDarkHighlightStyle",
+    "lezerGruvboxLightHighlightStyle",
+    "treeBaseExtensions",
+    "lezerBaseExtensions",
+    "data-theme-mode",
+  ]) {
+    if (!source.includes(snippet)) fail(`apps/examples Gruvbox wiring is missing ${snippet}`);
+  }
+
+  let css = await readText("apps/examples/src/style.css");
+  for (let snippet of [
+    ':root[data-theme="dark"]',
+    ':root[data-theme="light"]',
+    "--accent-orange",
+    ".theme-toggle",
+    ".editor-host",
+  ]) {
+    if (!css.includes(snippet)) fail(`apps/examples Gruvbox UI is missing ${snippet}`);
+  }
+  pass("examples app uses local Gruvbox themes for both runtimes and UI modes");
 }
 
 async function checkExamplesIncludeMergeAndLspClient() {

@@ -23,6 +23,10 @@ export default defineConfig({
         "../../packages/codemirror/src/index.ts",
         import.meta.url,
       ).pathname,
+      "@codemirror-treesitter/theme-gruvbox": new URL(
+        "../../packages/theme-gruvbox/src/index.ts",
+        import.meta.url,
+      ).pathname,
     },
   },
 });

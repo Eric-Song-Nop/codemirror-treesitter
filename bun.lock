@@ -36,6 +36,7 @@
         "@codemirror-treesitter/language-data": "workspace:*",
         "@codemirror-treesitter/lsp-client": "workspace:*",
         "@codemirror-treesitter/merge": "workspace:*",
+        "@codemirror-treesitter/theme-gruvbox": "workspace:*",
         "@codemirror/autocomplete": "^6.20.2",
         "@codemirror/commands": "^6.10.3",
         "@codemirror/lang-html": "^6.4.11",

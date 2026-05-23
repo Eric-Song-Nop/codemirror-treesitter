@@ -37,6 +37,14 @@ import {
   unifiedMergeView as treeUnifiedMergeView,
 } from "@codemirror-treesitter/merge";
 import {
+  gruvboxDarkColors,
+  gruvboxDarkHighlightStyle,
+  gruvboxDarkTheme,
+  gruvboxLightColors,
+  gruvboxLightHighlightStyle,
+  gruvboxLightTheme,
+} from "@codemirror-treesitter/theme-gruvbox";
+import {
   CompletionContext as LezerCompletionContext,
   autocompletion as lezerAutocompletion,
   insertBracket as lezerInsertBracket,
@@ -86,6 +94,7 @@ import { NodeProp as LezerNodeProp } from "@lezer/common";
 import { basicSetup as lezerBasicSetup } from "codemirror";
 
 type EngineId = "tree" | "lezer";
+type ThemeMode = "dark" | "light";
 type Status = Record<string, string>;
 type SupportMap<Support> = Map<string, Support>;
 type LoadSupport<Support> = (name: string) => Promise<Support>;
@@ -155,6 +164,8 @@ type EngineState<Support> = {
   statusList: HTMLElement;
 };
 
+type GruvboxColors = typeof gruvboxDarkColors;
+
 const treeLanguageCache = new Map<string, Promise<TreeLanguageSupport>>();
 const lezerLanguageCache = new Map<string, Promise<LezerLanguageSupport>>();
 
@@ -163,6 +174,7 @@ let activeRun = 0;
 let statusTimer = 0;
 let benchmarkRun = 0;
 let benchmarkBusy = false;
+let themeMode: ThemeMode = readStoredThemeMode();
 
 const benchmarkResults = new Map<string, BenchmarkResult>();
 const treeLanguageNames = new Set(treeLanguages.map((language) => language.name));
@@ -177,6 +189,8 @@ const lezerOnlyLanguageNames = [...lezerLanguageNames]
   .filter((name) => !treeLanguageNames.has(name))
   .sort((a, b) => a.localeCompare(b));
 
+document.documentElement.dataset.theme = themeMode;
+
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
 <main class="app-shell">
   <aside class="sidebar">
@@ -186,6 +200,10 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
         <p>Tree-sitter vs Lezer</p>
         <h1>Example Workbench</h1>
       </div>
+    </div>
+    <div class="theme-toggle" role="group" aria-label="Gruvbox theme">
+      <button id="theme-dark" type="button" data-theme-mode="dark">Dark</button>
+      <button id="theme-light" type="button" data-theme-mode="light">Light</button>
     </div>
     <nav id="examples" class="example-list" aria-label="Examples"></nav>
   </aside>
@@ -285,6 +303,7 @@ const activeBenchmark = document.querySelector<HTMLElement>("#active-benchmark")
 const suiteBenchmark = document.querySelector<HTMLElement>("#suite-benchmark")!;
 const coverageStats = document.querySelector<HTMLElement>("#coverage-stats")!;
 const languageGrid = document.querySelector<HTMLElement>("#language-grid")!;
+const themeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-theme-mode]")];
 
 const treeEngine: EngineState<TreeLanguageSupport> = {
   id: "tree",
@@ -312,6 +331,9 @@ const engines = {
   tree: treeEngine,
   lezer: lezerEngine,
 };
+
+const lezerGruvboxDarkHighlightStyle = lezerGruvboxHighlightStyle(gruvboxDarkColors);
+const lezerGruvboxLightHighlightStyle = lezerGruvboxHighlightStyle(gruvboxLightColors);
 
 const mergeOriginalDoc = `const rate = 1.2;
 
@@ -1170,8 +1192,16 @@ for (let example of examples) {
   nav.append(button);
 }
 
+for (let button of themeButtons) {
+  button.addEventListener("click", () => {
+    let next: ThemeMode = button.dataset.themeMode == "light" ? "light" : "dark";
+    setThemeMode(next, true);
+  });
+}
+
 runActiveBenchmarkButton.addEventListener("click", () => void runBenchmarks("active"));
 runSuiteBenchmarkButton.addEventListener("click", () => void runBenchmarks("suite"));
+setThemeMode(themeMode);
 renderLanguageCoverage();
 renderBenchmarkResults();
 
@@ -1185,6 +1215,122 @@ Object.assign(window, {
   __exampleComparison: () => collectComparisonSnapshot(),
   __benchmarkResults: () => collectBenchmarkSnapshot(),
 });
+
+function readStoredThemeMode(): ThemeMode {
+  try {
+    return localStorage.getItem("cm-examples-gruvbox-theme") == "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+function setThemeMode(mode: ThemeMode, rerender = false) {
+  let changed = mode != themeMode;
+  themeMode = mode;
+  document.documentElement.dataset.theme = mode;
+  for (let button of themeButtons) {
+    let active = button.dataset.themeMode == mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+  try {
+    localStorage.setItem("cm-examples-gruvbox-theme", mode);
+  } catch {
+    // Ignore storage failures in private or embedded browser contexts.
+  }
+  if (changed && rerender && activeExample) void showExample(activeExample.id);
+}
+
+function treeBaseExtensions(): Extension[] {
+  return [
+    treeBasicSetup,
+    activeGruvboxTheme(),
+    treeSyntaxHighlighting(activeTreeGruvboxHighlightStyle()),
+    EditorView.lineWrapping,
+  ];
+}
+
+function lezerBaseExtensions(): Extension[] {
+  return [
+    lezerBasicSetup,
+    activeGruvboxTheme(),
+    lezerSyntaxHighlighting(activeLezerGruvboxHighlightStyle()),
+    EditorView.lineWrapping,
+  ];
+}
+
+function activeGruvboxTheme() {
+  return themeMode == "dark" ? gruvboxDarkTheme : gruvboxLightTheme;
+}
+
+function activeTreeGruvboxHighlightStyle() {
+  return themeMode == "dark" ? gruvboxDarkHighlightStyle : gruvboxLightHighlightStyle;
+}
+
+function activeLezerGruvboxHighlightStyle() {
+  return themeMode == "dark" ? lezerGruvboxDarkHighlightStyle : lezerGruvboxLightHighlightStyle;
+}
+
+function lezerGruvboxHighlightStyle(colors: GruvboxColors) {
+  return LezerHighlightStyle.define([
+    { tag: lezerTags.keyword, color: colors.red },
+    {
+      tag: [lezerTags.name, lezerTags.deleted, lezerTags.character, lezerTags.macroName],
+      color: colors.red,
+    },
+    { tag: [lezerTags.propertyName, lezerTags.attributeName], color: colors.blue },
+    { tag: [lezerTags.function(lezerTags.variableName), lezerTags.labelName], color: colors.blue },
+    {
+      tag: [
+        lezerTags.color,
+        lezerTags.constant(lezerTags.name),
+        lezerTags.standard(lezerTags.name),
+      ],
+      color: colors.orange,
+    },
+    { tag: [lezerTags.definition(lezerTags.name), lezerTags.separator], color: colors.fg1 },
+    {
+      tag: [
+        lezerTags.typeName,
+        lezerTags.className,
+        lezerTags.number,
+        lezerTags.changed,
+        lezerTags.annotation,
+        lezerTags.modifier,
+        lezerTags.self,
+        lezerTags.namespace,
+      ],
+      color: colors.yellow,
+    },
+    {
+      tag: [
+        lezerTags.operator,
+        lezerTags.operatorKeyword,
+        lezerTags.url,
+        lezerTags.escape,
+        lezerTags.regexp,
+        lezerTags.link,
+        lezerTags.special(lezerTags.string),
+      ],
+      color: colors.aqua,
+    },
+    { tag: [lezerTags.meta, lezerTags.comment], color: colors.fg4 },
+    { tag: lezerTags.strong, fontWeight: "bold" },
+    { tag: lezerTags.emphasis, fontStyle: "italic" },
+    { tag: lezerTags.strikethrough, textDecoration: "line-through" },
+    { tag: lezerTags.link, color: colors.aqua, textDecoration: "underline" },
+    { tag: lezerTags.heading, fontWeight: "bold", color: colors.orange },
+    {
+      tag: [lezerTags.atom, lezerTags.bool, lezerTags.special(lezerTags.variableName)],
+      color: colors.purple,
+    },
+    {
+      tag: [lezerTags.processingInstruction, lezerTags.string, lezerTags.inserted],
+      color: colors.green,
+    },
+    { tag: lezerTags.invalid, color: colors.red },
+  ]);
+}
 
 async function showExample(id: string) {
   let example = examples.find((example) => example.id == id) ?? examples[0]!;
@@ -1210,13 +1356,11 @@ async function showExample(id: string) {
 
   destroyViews();
   engines.tree.view = createView(engines.tree.editor, example, [
-    treeBasicSetup,
-    EditorView.lineWrapping,
+    treeBaseExtensions(),
     example.tree.extensions(treeSupports),
   ]);
   engines.lezer.view = createView(engines.lezer.editor, example, [
-    lezerBasicSetup,
-    EditorView.lineWrapping,
+    lezerBaseExtensions(),
     example.lezer.extensions(lezerSupports),
   ]);
   renderBenchmarkResults();
@@ -1396,8 +1540,7 @@ async function benchmarkRuntime<Support>(
     load = performance.now() - loadStart;
 
     let extensions = [
-      engine.id == "tree" ? treeBasicSetup : lezerBasicSetup,
-      EditorView.lineWrapping,
+      engine.id == "tree" ? treeBaseExtensions() : lezerBaseExtensions(),
       runtime.extensions(supports),
     ];
     let stateStart = performance.now();
