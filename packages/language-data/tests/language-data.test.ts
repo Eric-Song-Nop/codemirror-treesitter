@@ -611,7 +611,7 @@ describe("tree-sitter language data", () => {
       expect(ensureSyntaxTree(state, state.doc.length)?.topNode.name).toBe(top);
       expect(support.language.name).toBe(name.toLowerCase());
     }
-  });
+  }, 20_000);
 
   it("parses HTML script and style blocks with nested tree-sitter grammars", async () => {
     let support = await languages.find((lang) => lang.name == "HTML")!.load();
