@@ -11,6 +11,10 @@ export default defineConfig({
         "../../packages/language-data/src/index.ts",
         import.meta.url,
       ).pathname,
+      "@codemirror-treesitter/theme-gruvbox": new URL(
+        "../../packages/theme-gruvbox/src/index.ts",
+        import.meta.url,
+      ).pathname,
       "@codemirror-treesitter/commands": new URL(
         "../../packages/commands/src/index.ts",
         import.meta.url,

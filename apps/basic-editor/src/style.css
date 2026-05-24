@@ -7,8 +7,8 @@
   --line: #d5dcd8;
   --accent: #0f766e;
   --accent-2: #9f482c;
-  --code-bg: #1e2422;
-  --code-ink: #e9efeb;
+  --code-bg: #fbf1c7;
+  --code-ink: #3c3836;
   --shadow: 0 22px 60px rgba(21, 31, 28, 0.16);
   color: var(--ink);
   background: var(--bg);
@@ -329,70 +329,11 @@ button {
 }
 
 .cm-md-code-fence-line {
-  color: #9fb2aa;
+  color: #7c6f64;
 }
 
 .cm-md-code-line {
   padding-left: 18px;
-}
-
-.cm-md-code-keyword {
-  color: #7dd3fc;
-  font-weight: 700;
-}
-
-.cm-md-code-string {
-  color: #a7f3d0;
-}
-
-.cm-md-code-number {
-  color: #fbbf24;
-}
-
-.cm-md-code-comment {
-  color: #8da39b;
-  font-style: italic;
-}
-
-.cm-md-code-type {
-  color: #c4b5fd;
-}
-
-.cm-md-code-property {
-  color: #f9a8d4;
-}
-
-.cm-md-code-function {
-  color: #fcd34d;
-}
-
-.cm-md-code-punctuation {
-  color: #b8c6c0;
-}
-
-.cm-md-code-heading {
-  color: #93c5fd;
-  font-weight: 800;
-}
-
-.cm-md-code-strong {
-  color: #fef3c7;
-  font-weight: 800;
-}
-
-.cm-md-code-emphasis {
-  color: #d8b4fe;
-  font-style: italic;
-}
-
-.cm-md-code-link {
-  color: #67e8f9;
-  text-decoration: underline;
-  text-decoration-color: rgba(103, 232, 249, 0.35);
-}
-
-.cm-md-code-monospace {
-  color: #fda4af;
 }
 
 .cm-md-image-preview {
