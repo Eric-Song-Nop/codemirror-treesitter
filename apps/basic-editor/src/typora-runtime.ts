@@ -42,53 +42,22 @@ type MarkdownTable = {
   rows: string[][];
 };
 
-type MarkdownLineInfo = {
-  classes: Set<string>;
-  decorations: InlineDecoration[];
-};
-
-type MarkdownTableBlock = {
-  firstLineNumber: number;
-  from: number;
-  lastLineNumber: number;
-  lineNumbers: number[];
-  table: MarkdownTable;
-  to: number;
-};
-
-type MarkdownImageBlock = {
-  alt: string;
-  from: number;
-  lineNumber: number;
-  src: string;
-  to: number;
-};
-
-type MarkdownAnalysis = {
-  codeBlocks: CodeFenceBlock[];
-  codeLines: Map<number, CodeLineState>;
-  imageBlocks: Map<number, MarkdownImageBlock>;
-  lines: Map<number, MarkdownLineInfo>;
-  tableBlocks: MarkdownTableBlock[];
-};
-
-type CodeFenceBlock = {
-  closingLine: number | null;
-  contentFrom: number;
-  contentTo: number;
-  language: string;
-  marker: "`" | "~";
-  markerLength: number;
-  openingLine: number;
-};
-
-type CodeLineState = {
-  block: CodeFenceBlock;
-  boundary: boolean;
-  inside: boolean;
+type VisitContext = {
+  activeLines: Set<number>;
+  codeFenceLanguages: CodeFenceLanguageMap;
+  plan: DecorationPlan;
+  state: EditorState;
 };
 
 type CodeFenceLanguageMap = ReadonlyMap<string, TreeSitterParser>;
+type NodeVisitor = (context: VisitContext, node: SyntaxNode) => false | void;
+
+type LineMarkers = {
+  inCode: boolean;
+  listMarker: { from: number; text: string; to: number } | null;
+  quoteTo: number | null;
+  task: { checked: boolean; from: number; to: number } | null;
+};
 
 const storageKey = "codemirror-treesitter-typora-demo-v2";
 const markdownDescription = languages.find((language) => language.name == "Markdown");
@@ -505,92 +474,112 @@ export function mountTyporaEditor(parent: HTMLElement) {
   };
 }
 
-function buildTyporaDecorations(state: EditorState) {
-  let builder = new RangeSetBuilder<Decoration>();
-  let activeLines = getActiveLines(state);
-  let analysis = analyzeMarkdownTree(state, activeLines);
-  let codeHighlights = getCodeFenceHighlights(state, analysis.codeBlocks);
-  let decoratedTables = new Set<number>();
+const visitors: Record<string, NodeVisitor> = {
+  atx_heading: visitHeading,
+  block_continuation: visitSyntax,
+  block_quote: visitLineClass("cm-md-blockquote"),
+  block_quote_marker: visitSyntax,
+  code_span: visitMark(inlineCodeMark),
+  code_span_delimiter: visitSyntax,
+  emphasis: visitMark(emphasisMark),
+  emphasis_delimiter: visitSyntax,
+  fenced_code_block: visitCodeFence,
+  image: visitImage,
+  inline: visitTyporaHighlight,
+  inline_link: visitInlineLink,
+  list_item: visitLineClass("cm-md-list-line"),
+  list_marker_dot: visitListMarker,
+  list_marker_minus: visitListMarker,
+  list_marker_parenthesis: visitListMarker,
+  list_marker_plus: visitListMarker,
+  list_marker_star: visitListMarker,
+  pipe_table: visitTable,
+  setext_heading: visitSetextHeading,
+  strikethrough: visitMark(strikeMark),
+  strong_emphasis: visitMark(strongMark),
+  task_list_marker_checked: visitTaskMarker,
+  task_list_marker_unchecked: visitTaskMarker,
+  thematic_break: visitRule,
+  uri_autolink: visitUriAutolink,
+};
 
-  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber++) {
-    let line = state.doc.line(lineNumber);
-    let active = activeLines.has(line.number);
-    let lineInfo = analysis.lines.get(line.number);
-    let decorations: InlineDecoration[] = [...(lineInfo?.decorations ?? [])];
-    let classes = ["cm-md-line"];
-    if (active) classes.push("cm-md-active-line");
-    if (lineInfo) classes.push(...lineInfo.classes);
+class DecorationPlan {
+  private lineClasses = new Map<number, Set<string>>();
+  private ranges: InlineDecoration[] = [];
+  private state: EditorState;
 
-    let imageBlock = analysis.imageBlocks.get(line.number);
-    if (imageBlock && !active) {
-      builder.add(
-        imageBlock.from,
-        imageBlock.to,
-        Decoration.replace({
-          block: true,
-          widget: new ImagePreviewWidget(imageBlock.alt, imageBlock.src),
-        }),
-      );
-      continue;
-    }
-
-    let tableBlock = analysis.tableBlocks.find(
-      (block) => block.firstLineNumber <= line.number && block.lastLineNumber >= line.number,
-    );
-    if (
-      tableBlock &&
-      !decoratedTables.has(tableBlock.firstLineNumber) &&
-      !tableBlock.lineNumbers.some((tableLineNumber) => activeLines.has(tableLineNumber))
-    ) {
-      decoratedTables.add(tableBlock.firstLineNumber);
-      builder.add(
-        tableBlock.from,
-        tableBlock.to,
-        Decoration.replace({
-          block: true,
-          widget: new TablePreviewWidget(tableBlock.table, tableBlock.from),
-        }),
-      );
-      lineNumber = tableBlock.lastLineNumber;
-      continue;
-    }
-
-    decorations.push(...(codeHighlights.get(line.number) ?? []));
-
-    builder.add(line.from, line.from, Decoration.line({ class: classes.join(" ") }));
-    decorations
-      .filter((decoration) => decoration.from < decoration.to)
-      .sort((left, right) => left.from - right.from || left.to - right.to)
-      .forEach(({ from: rangeFrom, to: rangeTo, decoration }) => {
-        builder.add(rangeFrom, rangeTo, decoration);
-      });
+  constructor(state: EditorState) {
+    this.state = state;
   }
 
-  return builder.finish();
-}
+  line(lineNumber: number, className: string) {
+    let classes = this.lineClasses.get(lineNumber);
+    if (!classes) this.lineClasses.set(lineNumber, (classes = new Set()));
+    classes.add(className);
+  }
 
-function addListMarker(
-  decorations: InlineDecoration[],
-  from: number,
-  to: number,
-  marker: string,
-  active: boolean,
-) {
-  if (active) {
-    addSyntax(decorations, from, to, active);
-  } else {
-    decorations.push({
-      from,
-      to,
-      decoration: Decoration.replace({
-        widget: new ListMarkerWidget(marker),
-      }),
+  lineClass(from: number, to: number, className: string) {
+    forEachLineInRange(this.state, from, to, (line) => this.line(line.number, className));
+  }
+
+  mark(from: number, to: number, decoration: Decoration) {
+    if (from < to) this.ranges.push({ from, to, decoration });
+  }
+
+  markByLine(from: number, to: number, decorationForLine: (lineNumber: number) => Decoration) {
+    splitRangeByLine(this.state, from, to, (lineNumber, rangeFrom, rangeTo) => {
+      this.mark(rangeFrom, rangeTo, decorationForLine(lineNumber));
     });
   }
+
+  replace(from: number, to: number, widget: WidgetType, block = false) {
+    this.mark(from, to, Decoration.replace({ block, widget }));
+  }
+
+  syntax(from: number, to: number, activeLines: Set<number>, decoration?: Decoration) {
+    this.markByLine(from, to, (lineNumber) => {
+      if (decoration) return decoration;
+      return activeLines.has(lineNumber) ? visibleSyntax : hiddenSyntax;
+    });
+  }
+
+  finish() {
+    let decorations = [...this.ranges];
+    for (let [lineNumber, classes] of this.lineClasses) {
+      let line = this.state.doc.line(lineNumber);
+      decorations.push({
+        from: line.from,
+        to: line.from,
+        decoration: Decoration.line({ class: [...classes].join(" ") }),
+      });
+    }
+
+    decorations.sort((left, right) => left.from - right.from || left.to - right.to);
+
+    let builder = new RangeSetBuilder<Decoration>();
+    for (let { from, to, decoration } of decorations) {
+      builder.add(from, to, decoration);
+    }
+    return builder.finish();
+  }
 }
 
-function addSyntax(decorations: InlineDecoration[], from: number, to: number, active: boolean) {
-  decorations.push({ from, to, decoration: active ? visibleSyntax : hiddenSyntax });
+function buildTyporaDecorations(state: EditorState) {
+  let activeLines = getActiveLines(state);
+  let context: VisitContext = {
+    activeLines,
+    codeFenceLanguages: state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages,
+    plan: new DecorationPlan(state),
+    state,
+  };
+
+  syntaxTree(state).iterate({
+    enter(node) {
+      return visitors[node.name]?.(context, node);
+    },
+  });
+
+  return context.plan.finish();
 }
 
 function getActiveLines(state: EditorState) {
@@ -599,358 +588,209 @@ function getActiveLines(state: EditorState) {
   return lines;
 }
 
-function analyzeMarkdownTree(state: EditorState, activeLines: Set<number>): MarkdownAnalysis {
-  let analysis: MarkdownAnalysis = {
-    codeBlocks: [],
-    codeLines: new Map(),
-    imageBlocks: new Map(),
-    lines: new Map(),
-    tableBlocks: [],
+function visitLineClass(className: string): NodeVisitor {
+  return (context, node) => {
+    context.plan.lineClass(node.from, node.to, className);
   };
-
-  syntaxTree(state).iterate({
-    enter(node) {
-      switch (node.name) {
-        case "fenced_code_block":
-          registerCodeFenceBlock(state, analysis, activeLines, node);
-          return false;
-        case "pipe_table":
-          registerTableBlock(state, analysis, activeLines, node);
-          return false;
-        case "atx_heading":
-          registerHeading(state, analysis, activeLines, node);
-          return;
-        case "setext_heading":
-          registerSetextHeading(state, analysis, activeLines, node);
-          return;
-        case "block_quote":
-          addLineClassForRange(state, analysis, node.from, node.to, "cm-md-blockquote");
-          return;
-        case "block_quote_marker":
-        case "block_continuation":
-          addSyntaxRange(state, analysis, activeLines, node.from, node.to);
-          return;
-        case "list_item":
-          addLineClassForRange(state, analysis, node.from, node.to, "cm-md-list-line");
-          return;
-        case "list_marker_dot":
-        case "list_marker_minus":
-        case "list_marker_parenthesis":
-        case "list_marker_plus":
-        case "list_marker_star":
-          registerListMarker(state, analysis, activeLines, node);
-          return;
-        case "task_list_marker_checked":
-        case "task_list_marker_unchecked":
-          registerTaskMarker(state, analysis, node);
-          return;
-        case "thematic_break":
-          registerRule(state, analysis, activeLines, node);
-          return false;
-        case "strong_emphasis":
-          addMarkRange(state, analysis, node.from, node.to, strongMark);
-          return;
-        case "emphasis":
-          addMarkRange(state, analysis, node.from, node.to, emphasisMark);
-          return;
-        case "strikethrough":
-          addMarkRange(state, analysis, node.from, node.to, strikeMark);
-          return;
-        case "code_span":
-          addMarkRange(state, analysis, node.from, node.to, inlineCodeMark);
-          return;
-        case "emphasis_delimiter":
-        case "code_span_delimiter":
-          addSyntaxRange(state, analysis, activeLines, node.from, node.to);
-          return;
-        case "inline_link":
-          registerInlineLink(state, analysis, activeLines, node);
-          return;
-        case "uri_autolink":
-          registerUriAutolink(state, analysis, activeLines, node);
-          return;
-        case "image":
-          registerImageNode(state, analysis, activeLines, node);
-          return;
-        default:
-          return;
-      }
-    },
-  });
-
-  registerTyporaHighlightExtension(state, analysis, activeLines);
-  return analysis;
 }
 
-function registerHeading(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-  node: SyntaxNode,
-) {
+function visitMark(decoration: Decoration): NodeVisitor {
+  return (context, node) => {
+    context.plan.mark(node.from, node.to, decoration);
+  };
+}
+
+function visitSyntax(context: VisitContext, node: SyntaxNode) {
+  context.plan.syntax(node.from, node.to, context.activeLines);
+}
+
+function visitHeading(context: VisitContext, node: SyntaxNode) {
   let marker = node.children.find((child) => child.name.startsWith("atx_h"));
   let level = marker ? Number(marker.name.at(5)) || 1 : 1;
-  addLineClassForRange(state, analysis, node.from, node.to, "cm-md-heading");
-  addLineClassForRange(state, analysis, node.from, node.to, `cm-md-heading-${level}`);
-  if (marker) addSyntaxRange(state, analysis, activeLines, marker.from, marker.to);
+  context.plan.lineClass(node.from, node.to, "cm-md-heading");
+  context.plan.lineClass(node.from, node.to, `cm-md-heading-${level}`);
+  if (marker) context.plan.syntax(marker.from, marker.to, context.activeLines);
 }
 
-function registerSetextHeading(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-  node: SyntaxNode,
-) {
+function visitSetextHeading(context: VisitContext, node: SyntaxNode) {
   let underline = node.children.find((child) => child.name.startsWith("setext_h"));
   let level = underline?.name == "setext_h2_underline" ? 2 : 1;
-  addLineClassForRange(state, analysis, node.from, node.to, "cm-md-heading");
-  addLineClassForRange(state, analysis, node.from, node.to, `cm-md-heading-${level}`);
-  if (underline) addSyntaxRange(state, analysis, activeLines, underline.from, underline.to);
+  context.plan.lineClass(node.from, node.to, "cm-md-heading");
+  context.plan.lineClass(node.from, node.to, `cm-md-heading-${level}`);
+  if (underline) context.plan.syntax(underline.from, underline.to, context.activeLines);
 }
 
-function registerListMarker(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-  node: SyntaxNode,
-) {
-  let line = state.doc.lineAt(node.from);
-  let lineInfo = ensureLineInfo(analysis, line.number);
-  lineInfo.classes.add("cm-md-list-line");
-  addListMarker(
-    lineInfo.decorations,
-    node.from,
-    node.to,
-    state.sliceDoc(node.from, node.to).trim(),
-    activeLines.has(line.number),
-  );
+function visitListMarker(context: VisitContext, node: SyntaxNode) {
+  let line = context.state.doc.lineAt(node.from);
+  context.plan.line(line.number, "cm-md-list-line");
+  if (context.activeLines.has(line.number)) {
+    context.plan.syntax(node.from, node.to, context.activeLines);
+  } else {
+    context.plan.replace(
+      node.from,
+      node.to,
+      new ListMarkerWidget(context.state.sliceDoc(node.from, node.to).trim()),
+    );
+  }
 }
 
-function registerTaskMarker(state: EditorState, analysis: MarkdownAnalysis, node: SyntaxNode) {
-  let line = state.doc.lineAt(node.from);
+function visitTaskMarker(context: VisitContext, node: SyntaxNode) {
+  let line = context.state.doc.lineAt(node.from);
   let checked = node.name == "task_list_marker_checked";
-  let lineInfo = ensureLineInfo(analysis, line.number);
-  lineInfo.classes.add("cm-md-list-line");
-  lineInfo.classes.add("cm-md-task-line");
-  if (checked) lineInfo.classes.add("is-checked");
-  lineInfo.decorations.push({
-    from: node.from,
-    to: node.to,
-    decoration: Decoration.replace({
-      widget: new TaskCheckboxWidget(checked, node.from),
-    }),
-  });
+  context.plan.line(line.number, "cm-md-list-line");
+  context.plan.line(line.number, "cm-md-task-line");
+  if (checked) context.plan.line(line.number, "is-checked");
+  context.plan.replace(node.from, node.to, new TaskCheckboxWidget(checked, node.from));
 }
 
-function registerRule(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-  node: SyntaxNode,
-) {
-  addLineClassForRange(state, analysis, node.from, node.to, "cm-md-rule-line");
-  addSyntaxRange(state, analysis, activeLines, node.from, node.to);
+function visitRule(context: VisitContext, node: SyntaxNode): false {
+  context.plan.lineClass(node.from, node.to, "cm-md-rule-line");
+  context.plan.syntax(node.from, node.to, context.activeLines);
+  return false;
 }
 
-function registerInlineLink(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-  node: SyntaxNode,
-) {
+function visitInlineLink(context: VisitContext, node: SyntaxNode) {
   let text = node.getChild("link_text");
   if (!text) return;
-  addSyntaxRange(state, analysis, activeLines, node.from, text.from);
-  addMarkRange(state, analysis, text.from, text.to, linkMark);
-  addSyntaxRange(state, analysis, activeLines, text.to, node.to);
+  context.plan.syntax(node.from, text.from, context.activeLines);
+  context.plan.mark(text.from, text.to, linkMark);
+  context.plan.syntax(text.to, node.to, context.activeLines);
 }
 
-function registerUriAutolink(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-  node: SyntaxNode,
-) {
+function visitUriAutolink(context: VisitContext, node: SyntaxNode) {
   if (node.to - node.from <= 2) return;
-  addSyntaxRange(state, analysis, activeLines, node.from, node.from + 1);
-  addMarkRange(state, analysis, node.from + 1, node.to - 1, linkMark);
-  addSyntaxRange(state, analysis, activeLines, node.to - 1, node.to);
+  context.plan.syntax(node.from, node.from + 1, context.activeLines);
+  context.plan.mark(node.from + 1, node.to - 1, linkMark);
+  context.plan.syntax(node.to - 1, node.to, context.activeLines);
 }
 
-function registerImageNode(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-  node: SyntaxNode,
-) {
+function visitImage(context: VisitContext, node: SyntaxNode): false | void {
   let description = node.getChild("image_description");
   let destination = node.getChild("link_destination");
-  let alt = description ? state.sliceDoc(description.from, description.to) : "";
-  let src = destination ? state.sliceDoc(destination.from, destination.to).trim() : "";
-  if (!src) return;
+  let alt = description ? context.state.sliceDoc(description.from, description.to) : "";
+  let src = destination ? context.state.sliceDoc(destination.from, destination.to).trim() : "";
+  if (!src) return false;
 
-  let line = state.doc.lineAt(node.from);
-  if (isOnlyVisibleContentOnLine(state, line.from, line.to, node.from, node.to)) {
-    analysis.imageBlocks.set(line.number, {
-      alt,
-      from: line.from,
-      lineNumber: line.number,
-      src: normalizeImageSource(src),
-      to: line.to,
-    });
-    return;
+  let line = context.state.doc.lineAt(node.from);
+  let active = context.activeLines.has(line.number);
+  let widget = new ImagePreviewWidget(alt, normalizeImageSource(src));
+  if (
+    !active &&
+    isOnlyVisibleContentOnLine(context.state, line.from, line.to, node.from, node.to)
+  ) {
+    context.plan.replace(line.from, line.to, widget, true);
+    return false;
   }
 
-  if (!activeLines.has(line.number)) {
-    ensureLineInfo(analysis, line.number).decorations.push({
-      from: node.from,
-      to: node.to,
-      decoration: Decoration.replace({
-        widget: new ImagePreviewWidget(alt, normalizeImageSource(src)),
-      }),
-    });
-    return;
+  if (!active) {
+    context.plan.replace(node.from, node.to, widget);
+    return false;
   }
 
   if (description) {
-    addSyntaxRange(state, analysis, activeLines, node.from, description.from);
-    addMarkRange(state, analysis, description.from, description.to, linkMark);
-    addSyntaxRange(state, analysis, activeLines, description.to, node.to);
+    context.plan.syntax(node.from, description.from, context.activeLines);
+    context.plan.mark(description.from, description.to, linkMark);
+    context.plan.syntax(description.to, node.to, context.activeLines);
   }
+  return false;
 }
 
-function registerTableBlock(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-  node: SyntaxNode,
-) {
-  let headerNode = node.getChild("pipe_table_header");
+function visitTable(context: VisitContext, node: SyntaxNode): false {
+  let table = readTableFromNode(context.state, node);
+  if (table && !rangeTouchesActiveLine(context, node.from, node.to)) {
+    context.plan.replace(node.from, node.to, new TablePreviewWidget(table, node.from), true);
+    return false;
+  }
+
   let delimiterNode = node.getChild("pipe_table_delimiter_row");
-  if (!headerNode || !delimiterNode) return;
-
-  addLineClassForRange(state, analysis, node.from, node.to, "cm-md-table-line");
-  addLineClassForRange(
-    state,
-    analysis,
-    delimiterNode.from,
-    delimiterNode.to,
-    "cm-md-table-divider",
-  );
+  context.plan.lineClass(node.from, node.to, "cm-md-table-line");
+  if (delimiterNode) {
+    context.plan.lineClass(delimiterNode.from, delimiterNode.to, "cm-md-table-divider");
+  }
   forEachDescendant(node, (child) => {
-    if (child.name == "|")
-      addSyntaxRange(state, analysis, activeLines, child.from, child.to, tablePipeMark);
+    if (child.name == "|") {
+      context.plan.syntax(child.from, child.to, context.activeLines, tablePipeMark);
+    }
   });
-
-  let header = tableCellsFromNode(state, headerNode, "pipe_table_cell");
-  let alignments = tableAlignmentsFromNode(delimiterNode);
-  if (header.length < 2 || alignments.length < 2) return;
-
-  let columnCount = Math.max(header.length, alignments.length);
-  let rows = node.children
-    .filter((child) => child.name == "pipe_table_row")
-    .map((row) =>
-      normalizeTableCells(tableCellsFromNode(state, row, "pipe_table_cell"), columnCount),
-    );
-  let firstLineNumber = state.doc.lineAt(node.from).number;
-  let lastLineNumber = state.doc.lineAt(Math.max(node.from, node.to - 1)).number;
-  analysis.tableBlocks.push({
-    firstLineNumber,
-    from: node.from,
-    lastLineNumber,
-    lineNumbers: lineNumbersInRange(state, node.from, node.to),
-    table: {
-      alignments: normalizeTableAlignments(alignments, columnCount),
-      header: normalizeTableCells(header, columnCount),
-      rows,
-    },
-    to: node.to,
-  });
+  return false;
 }
 
-function registerCodeFenceBlock(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-  node: SyntaxNode,
-) {
+function visitCodeFence(context: VisitContext, node: SyntaxNode): false {
   let delimiters = node.children.filter((child) => child.name == "fenced_code_block_delimiter");
   let openingDelimiter = delimiters[0];
-  if (!openingDelimiter) return;
+  if (!openingDelimiter) return false;
 
   let closingDelimiter = delimiters[1] ?? null;
-  let infoString = node.getChild("info_string");
-  let languageNode = infoString?.getChild("language") ?? infoString;
   let content = node.getChild("code_fence_content");
-  let markerText = state.sliceDoc(openingDelimiter.from, openingDelimiter.to);
-  let marker: "`" | "~" = markerText.startsWith("~") ? "~" : "`";
-  let block: CodeFenceBlock = {
-    closingLine: closingDelimiter ? state.doc.lineAt(closingDelimiter.from).number : null,
-    contentFrom: content?.from ?? openingDelimiter.to,
-    contentTo: content?.to ?? closingDelimiter?.from ?? node.to,
-    language: languageNode
-      ? normalizeFenceLanguage(state.sliceDoc(languageNode.from, languageNode.to))
-      : "",
-    marker,
-    markerLength: markerText.length,
-    openingLine: state.doc.lineAt(openingDelimiter.from).number,
-  };
 
-  analysis.codeBlocks.push(block);
-  analysis.codeLines.set(block.openingLine, { block, boundary: true, inside: true });
-  addLineClass(analysis, block.openingLine, "cm-md-code-fence-line");
-  addSyntaxRange(state, analysis, activeLines, openingDelimiter.from, openingDelimiter.to);
+  context.plan.line(
+    context.state.doc.lineAt(openingDelimiter.from).number,
+    "cm-md-code-fence-line",
+  );
+  context.plan.syntax(openingDelimiter.from, openingDelimiter.to, context.activeLines);
 
   if (content && content.from < content.to) {
-    for (let lineNumber of lineNumbersInRange(state, content.from, content.to)) {
-      analysis.codeLines.set(lineNumber, { block, boundary: false, inside: true });
-      addLineClass(analysis, lineNumber, "cm-md-code-line");
-    }
+    forEachLineInRange(context.state, content.from, content.to, (line) => {
+      context.plan.line(line.number, "cm-md-code-line");
+    });
+    addCodeFenceHighlights(
+      context,
+      content.from,
+      content.to,
+      readFenceLanguage(context.state, node),
+    );
   }
 
   if (closingDelimiter) {
-    let closingLine = state.doc.lineAt(closingDelimiter.from).number;
-    analysis.codeLines.set(closingLine, { block, boundary: true, inside: true });
-    addLineClass(analysis, closingLine, "cm-md-code-fence-line");
-    addSyntaxRange(state, analysis, activeLines, closingDelimiter.from, closingDelimiter.to);
+    context.plan.line(
+      context.state.doc.lineAt(closingDelimiter.from).number,
+      "cm-md-code-fence-line",
+    );
+    context.plan.syntax(closingDelimiter.from, closingDelimiter.to, context.activeLines);
   }
+  return false;
 }
 
-function registerTyporaHighlightExtension(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-) {
-  syntaxTree(state).iterate({
-    enter(node) {
-      if (node.name == "fenced_code_block") return false;
-      if (node.name != "inline" || !node.parent) return;
-      let parentName = node.parent.name;
-      if (parentName != "paragraph" && parentName != "atx_heading") return;
-      addTyporaHighlightRanges(state, analysis, activeLines, node.from, node.to);
-    },
-  });
+function visitTyporaHighlight(context: VisitContext, node: SyntaxNode) {
+  let parentName = node.parent?.name;
+  if (parentName != "paragraph" && parentName != "atx_heading") return;
+  addTyporaHighlightRanges(context, node.from, node.to);
 }
 
-function addTyporaHighlightRanges(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-  from: number,
-  to: number,
-) {
-  let text = state.sliceDoc(from, to);
+function addTyporaHighlightRanges(context: VisitContext, from: number, to: number) {
+  let text = context.state.sliceDoc(from, to);
   let searchFrom = 0;
   while (searchFrom < text.length) {
     let open = text.indexOf("==", searchFrom);
     if (open < 0) return;
     let close = text.indexOf("==", open + 2);
     if (close < 0) return;
-    addSyntaxRange(state, analysis, activeLines, from + open, from + open + 2);
-    addMarkRange(state, analysis, from + open + 2, from + close, highlightMark);
-    addSyntaxRange(state, analysis, activeLines, from + close, from + close + 2);
+    context.plan.syntax(from + open, from + open + 2, context.activeLines);
+    context.plan.mark(from + open + 2, from + close, highlightMark);
+    context.plan.syntax(from + close, from + close + 2, context.activeLines);
     searchFrom = close + 2;
   }
+}
+
+function readTableFromNode(state: EditorState, node: SyntaxNode): MarkdownTable | null {
+  let headerNode = node.getChild("pipe_table_header");
+  let delimiterNode = node.getChild("pipe_table_delimiter_row");
+  if (!headerNode || !delimiterNode) return null;
+
+  let header = tableCellsFromNode(state, headerNode, "pipe_table_cell");
+  let alignments = tableAlignmentsFromNode(delimiterNode);
+  if (header.length < 2 || alignments.length < 2) return null;
+
+  let columnCount = Math.max(header.length, alignments.length);
+  return {
+    alignments: normalizeTableAlignments(alignments, columnCount),
+    header: normalizeTableCells(header, columnCount),
+    rows: node.children
+      .filter((child) => child.name == "pipe_table_row")
+      .map((row) =>
+        normalizeTableCells(tableCellsFromNode(state, row, "pipe_table_cell"), columnCount),
+      ),
+  };
 }
 
 function tableCellsFromNode(state: EditorState, node: SyntaxNode, cellName: string) {
@@ -979,6 +819,13 @@ function tableAlignmentsFromNode(node: SyntaxNode) {
     });
 }
 
+function readFenceLanguage(state: EditorState, node: SyntaxNode) {
+  let infoString = node.getChild("info_string");
+  let languageNode = infoString?.getChild("language") ?? infoString;
+  if (!languageNode) return "";
+  return normalizeFenceLanguage(state.sliceDoc(languageNode.from, languageNode.to));
+}
+
 function normalizeFenceLanguage(language: string) {
   let token = firstToken(language.trim());
   if (token.startsWith("{")) token = token.slice(1);
@@ -994,83 +841,60 @@ function firstToken(value: string) {
   return value;
 }
 
-function lineNumbersInRange(state: EditorState, from: number, to: number) {
-  let lines: number[] = [];
-  if (from >= to) return lines;
-  let line = state.doc.lineAt(from);
-  let lastLine = state.doc.lineAt(Math.max(from, to - 1)).number;
-  for (let lineNumber = line.number; lineNumber <= lastLine; lineNumber++) lines.push(lineNumber);
-  return lines;
-}
-
-function addLineClassForRange(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  from: number,
-  to: number,
-  className: string,
+function addCodeFenceHighlights(
+  context: VisitContext,
+  contentFrom: number,
+  contentTo: number,
+  language: string,
 ) {
-  for (let lineNumber of lineNumbersInRange(state, from, to))
-    addLineClass(analysis, lineNumber, className);
-}
+  let parser = context.codeFenceLanguages.get(language);
+  if (!parser || contentFrom >= contentTo) return;
 
-function addLineClass(analysis: MarkdownAnalysis, lineNumber: number, className: string) {
-  ensureLineInfo(analysis, lineNumber).classes.add(className);
-}
-
-function addSyntaxRange(
-  state: EditorState,
-  analysis: MarkdownAnalysis,
-  activeLines: Set<number>,
-  from: number,
-  to: number,
-  decoration?: Decoration,
-) {
-  addRangeDecoration(state, analysis, from, to, (lineNumber) => {
-    if (decoration) return decoration;
-    return activeLines.has(lineNumber) ? visibleSyntax : hiddenSyntax;
+  let source = context.state.sliceDoc(contentFrom, contentTo);
+  let tree = parser.parse(Text.of(source.split("\n")));
+  highlightTree(tree, codeFenceHighlightStyle, (from, to, className) => {
+    context.plan.markByLine(contentFrom + from, contentFrom + to, () =>
+      Decoration.mark({ class: className }),
+    );
   });
 }
 
-function addMarkRange(
+function forEachLineInRange(
   state: EditorState,
-  analysis: MarkdownAnalysis,
   from: number,
   to: number,
-  decoration: Decoration,
+  visit: (line: { from: number; number: number; to: number }) => void,
 ) {
-  addRangeDecoration(state, analysis, from, to, () => decoration);
+  if (from >= to) return;
+  let firstLine = state.doc.lineAt(from).number;
+  let lastLine = state.doc.lineAt(Math.max(from, to - 1)).number;
+  for (let lineNumber = firstLine; lineNumber <= lastLine; lineNumber++) {
+    visit(state.doc.line(lineNumber));
+  }
 }
 
-function addRangeDecoration(
+function splitRangeByLine(
   state: EditorState,
-  analysis: MarkdownAnalysis,
   from: number,
   to: number,
-  decorationForLine: (lineNumber: number) => Decoration,
+  visit: (lineNumber: number, from: number, to: number) => void,
 ) {
   let cursor = from;
   while (cursor < to) {
     let line = state.doc.lineAt(cursor);
     let rangeTo = Math.min(to, line.to);
-    if (cursor < rangeTo) {
-      ensureLineInfo(analysis, line.number).decorations.push({
-        from: cursor,
-        to: rangeTo,
-        decoration: decorationForLine(line.number),
-      });
-    }
+    if (cursor < rangeTo) visit(line.number, cursor, rangeTo);
     cursor = line.to < to ? line.to + 1 : to;
   }
 }
 
-function ensureLineInfo(analysis: MarkdownAnalysis, lineNumber: number) {
-  let found = analysis.lines.get(lineNumber);
-  if (!found) {
-    found = { classes: new Set(), decorations: [] };
-    analysis.lines.set(lineNumber, found);
+function rangeTouchesActiveLine(context: VisitContext, from: number, to: number) {
+  let firstLine = context.state.doc.lineAt(from).number;
+  let lastLine = context.state.doc.lineAt(Math.max(from, to - 1)).number;
+  for (let lineNumber of context.activeLines) {
+    if (lineNumber >= firstLine && lineNumber <= lastLine) return true;
   }
-  return found;
+  return false;
 }
 
 function isOnlyVisibleContentOnLine(
@@ -1097,74 +921,14 @@ function isWhitespace(code: number) {
   return code == 9 || code == 10 || code == 13 || code == 32;
 }
 
-function getCodeFenceHighlights(state: EditorState, blocks: CodeFenceBlock[]) {
-  let highlights = new Map<number, InlineDecoration[]>();
-  let languages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
-
-  for (let block of blocks) {
-    let parser = languages.get(block.language);
-    if (!parser || block.contentFrom >= block.contentTo) continue;
-
-    let source = state.sliceDoc(block.contentFrom, block.contentTo);
-    let tree = parser.parse(Text.of(source.split("\n")));
-    highlightTree(tree, codeFenceHighlightStyle, (from, to, className) => {
-      addCodeHighlight(
-        highlights,
-        state,
-        block.contentFrom + from,
-        block.contentFrom + to,
-        className,
-      );
-    });
-  }
-
-  return highlights;
-}
-
-function addCodeHighlight(
-  highlights: Map<number, InlineDecoration[]>,
-  state: EditorState,
-  from: number,
-  to: number,
-  className: string,
-) {
-  if (from >= to) return;
-
-  let cursor = from;
-  while (cursor < to) {
-    let line = state.doc.lineAt(cursor);
-    let rangeTo = Math.min(to, line.to);
-    if (cursor < rangeTo) {
-      let decorations = highlights.get(line.number);
-      if (!decorations) {
-        decorations = [];
-        highlights.set(line.number, decorations);
-      }
-      decorations.push({
-        from: cursor,
-        to: rangeTo,
-        decoration: Decoration.mark({ class: className }),
-      });
-    }
-    cursor = line.to < to ? line.to + 1 : to;
-  }
-}
-
 function readLineMarkers(state: EditorState, line: { from: number; number: number; to: number }) {
-  let result: {
-    inCode: boolean;
-    listMarker: { from: number; text: string; to: number } | null;
-    quoteTo: number | null;
-    task: { checked: boolean; from: number; to: number } | null;
-  } = {
-    inCode: false,
+  let result: LineMarkers = {
+    inCode: lineIsInsideCodeFence(state, line),
     listMarker: null,
     quoteTo: null,
     task: null,
   };
 
-  let analysis = analyzeMarkdownTree(state, new Set([line.number]));
-  result.inCode = analysis.codeLines.has(line.number);
   if (result.inCode) return result;
 
   syntaxTree(state).iterate({
@@ -1204,6 +968,29 @@ function readLineMarkers(state: EditorState, line: { from: number; number: numbe
   });
 
   return result;
+}
+
+function lineIsInsideCodeFence(
+  state: EditorState,
+  line: { from: number; number: number; to: number },
+) {
+  let tree = syntaxTree(state);
+  let positions = new Set([line.from, line.to > line.from ? line.to - 1 : line.from]);
+  for (let position of positions) {
+    let node = tree.resolveInner(position, 1);
+    if (hasAncestor(node, "fenced_code_block")) return true;
+    node = tree.resolveInner(position, -1);
+    if (hasAncestor(node, "fenced_code_block")) return true;
+  }
+  return false;
+}
+
+function hasAncestor(node: SyntaxNode | null, name: string) {
+  while (node) {
+    if (node.name == name) return true;
+    node = node.parent;
+  }
+  return false;
 }
 
 function continueMarkdownBlock(view: EditorView) {
