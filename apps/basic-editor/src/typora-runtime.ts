@@ -28,7 +28,6 @@ import {
   type Command,
   type DecorationSet,
 } from "@codemirror/view";
-import { useEffect, useRef } from "react";
 import heroUrl from "./assets/hero.png";
 
 type InlineDecoration = {
@@ -92,7 +91,6 @@ type CodeLineState = {
 type CodeFenceLanguageMap = ReadonlyMap<string, TreeSitterParser>;
 
 const storageKey = "codemirror-treesitter-typora-demo-v2";
-const markdownCompartment = new Compartment();
 const markdownDescription = languages.find((language) => language.name == "Markdown");
 const emptyCodeFenceLanguages: CodeFenceLanguageMap = new Map();
 
@@ -454,71 +452,57 @@ async function loadCodeFenceLanguages() {
   return languageMap;
 }
 
-export function TyporaEditor() {
-  let editorRef = useRef<HTMLDivElement | null>(null);
+export function mountTyporaEditor(parent: HTMLElement) {
+  let markdownCompartment = new Compartment();
+  let view = new EditorView({
+    parent,
+    state: EditorState.create({
+      doc: loadInitialDoc(),
+      extensions: [
+        typoraMarkdownExtensions(),
+        markdownCompartment.of([]),
+        minimalSetup,
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) saveDoc(update.state.doc.toString());
+        }),
+      ],
+    }),
+  });
 
-  useEffect(() => {
-    let parent = editorRef.current;
-    if (!parent) return;
+  view.focus();
 
-    let view = new EditorView({
-      parent,
-      state: EditorState.create({
-        doc: loadInitialDoc(),
-        extensions: [
-          typoraMarkdownExtensions(),
-          markdownCompartment.of([]),
-          minimalSetup,
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged) saveDoc(update.state.doc.toString());
-          }),
-        ],
-      }),
-    });
-
-    view.focus();
-
-    let cancelled = false;
-    if (!markdownDescription) {
-      console.error("Markdown language support is unavailable");
-    } else {
-      void markdownDescription
-        .load()
-        .then((support) => {
-          if (cancelled) return;
-          view.dispatch({
-            effects: markdownCompartment.reconfigure(support.extension),
-          });
-        })
-        .catch((error: unknown) => {
-          console.error(error);
-        });
-    }
-
-    void loadCodeFenceLanguages()
-      .then((languageMap) => {
-        if (cancelled || !languageMap.size) return;
+  let cancelled = false;
+  if (!markdownDescription) {
+    console.error("Markdown language support is unavailable");
+  } else {
+    void markdownDescription
+      .load()
+      .then((support) => {
+        if (cancelled) return;
         view.dispatch({
-          effects: setCodeFenceLanguages.of(languageMap),
+          effects: markdownCompartment.reconfigure(support.extension),
         });
       })
       .catch((error: unknown) => {
         console.error(error);
       });
+  }
 
-    return () => {
-      cancelled = true;
-      view.destroy();
-    };
-  }, []);
+  void loadCodeFenceLanguages()
+    .then((languageMap) => {
+      if (cancelled || !languageMap.size) return;
+      view.dispatch({
+        effects: setCodeFenceLanguages.of(languageMap),
+      });
+    })
+    .catch((error: unknown) => {
+      console.error(error);
+    });
 
-  return (
-    <main className="editor-shell" aria-label="Markdown editor demo">
-      <div className="paper">
-        <div ref={editorRef} className="editor-mount" />
-      </div>
-    </main>
-  );
+  return () => {
+    cancelled = true;
+    view.destroy();
+  };
 }
 
 function buildTyporaDecorations(state: EditorState) {
