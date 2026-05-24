@@ -11,15 +11,14 @@ import { closeBrackets, closeBracketsKeymap } from "@codemirror-treesitter/autoc
 import { minimalSetup } from "@codemirror-treesitter/basic-setup";
 import { indentWithTab } from "@codemirror-treesitter/commands";
 import {
-  HighlightStyle,
   syntaxTree,
   TreeSitterLanguage,
   type TreeSitterParser,
   highlightTree,
-  tags,
   type SyntaxNode,
 } from "@codemirror-treesitter/language";
 import { languages } from "@codemirror-treesitter/language-data";
+import { gruvboxLightHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
 import {
   Decoration,
   EditorView,
@@ -77,36 +76,9 @@ const codeFenceLanguagesField = StateField.define<CodeFenceLanguageMap>({
   },
 });
 
-const codeFenceHighlightStyle = HighlightStyle.define([
-  {
-    tag: [tags.keyword, tags.definitionKeyword, tags.controlKeyword, tags.moduleKeyword],
-    class: "cm-md-code-keyword",
-  },
-  {
-    tag: [tags.string, tags.docString, tags.character, tags.attributeValue],
-    class: "cm-md-code-string",
-  },
-  {
-    tag: [tags.number, tags.integer, tags.float, tags.bool, tags.null, tags.atom],
-    class: "cm-md-code-number",
-  },
-  {
-    tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment],
-    class: "cm-md-code-comment",
-  },
-  { tag: [tags.typeName, tags.tagName, tags.className], class: "cm-md-code-type" },
-  { tag: [tags.propertyName, tags.attributeName, tags.labelName], class: "cm-md-code-property" },
-  {
-    tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.macroName],
-    class: "cm-md-code-function",
-  },
-  { tag: [tags.operator, tags.punctuation, tags.bracket], class: "cm-md-code-punctuation" },
-  { tag: [tags.heading, tags.heading1, tags.heading2, tags.heading3], class: "cm-md-code-heading" },
-  { tag: [tags.strong], class: "cm-md-code-strong" },
-  { tag: [tags.emphasis], class: "cm-md-code-emphasis" },
-  { tag: [tags.link, tags.url], class: "cm-md-code-link" },
-  { tag: [tags.monospace], class: "cm-md-code-monospace" },
-]);
+const codeFenceHighlightModule = gruvboxLightHighlightStyle.module
+  ? EditorView.styleModule.of(gruvboxLightHighlightStyle.module)
+  : [];
 
 const initialMarkdown = `# Typora-style field note
 
@@ -429,6 +401,7 @@ export function mountTyporaEditor(parent: HTMLElement) {
       doc: loadInitialDoc(),
       extensions: [
         typoraMarkdownExtensions(),
+        codeFenceHighlightModule,
         markdownCompartment.of([]),
         minimalSetup,
         EditorView.updateListener.of((update) => {
@@ -852,7 +825,7 @@ function addCodeFenceHighlights(
 
   let source = context.state.sliceDoc(contentFrom, contentTo);
   let tree = parser.parse(Text.of(source.split("\n")));
-  highlightTree(tree, codeFenceHighlightStyle, (from, to, className) => {
+  highlightTree(tree, gruvboxLightHighlightStyle, (from, to, className) => {
     context.plan.markByLine(contentFrom + from, contentFrom + to, () =>
       Decoration.mark({ class: className }),
     );
