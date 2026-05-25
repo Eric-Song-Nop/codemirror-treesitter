@@ -1,7 +1,7 @@
-import { EditorState, RangeSetBuilder, Text } from "@codemirror/state";
+import { EditorState, type Extension, RangeSetBuilder, RangeValue, Text } from "@codemirror/state";
 import { highlightTree, syntaxTree, type SyntaxNode } from "@codemirror-treesitter/language";
 import { gruvboxLightHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
-import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
+import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import {
   codeFenceLanguagesField,
   emptyCodeFenceLanguages,
@@ -42,23 +42,35 @@ const tablePipeMark = Decoration.mark({ class: "cm-md-table-pipe" });
 
 const codeFenceHighlightCache = new WeakMap<Text, Map<string, InlineDecoration[]>>();
 
-export const liveMdDecorations = EditorView.decorations.compute(
+/**
+ * Rebuilds decorations from the tree-sitter syntax tree whenever the
+ * document content or selection changes.
+ *
+ * Dependencies:
+ * - `"doc"` — re-parses tree-sitter and rebuilds all decorations
+ * - `"selection"` — updates activeLines to show/hide syntax markers
+ * - `codeFenceLanguagesField` — injects syntax highlighting for code
+ *   fences once language parsers finish loading
+ */
+export const liveMdDecorations: Extension = EditorView.decorations.compute(
   ["doc", "selection", codeFenceLanguagesField],
-  (state) => buildLiveMdDecorations(state),
+  (state) => buildLiveMdPlan(state, visitors).finish(),
 );
 
 const visitors: Record<string, NodeVisitor> = {
   atx_heading: visitHeading,
   block_continuation: visitSyntax,
-  block_quote: visitLineClass("cm-md-blockquote"),
+  block_quote: visitBlockQuote,
   block_quote_marker: visitSyntax,
   code_span: visitMark(inlineCodeMark),
   code_span_delimiter: visitSyntax,
+  document: visitDocument,
   emphasis: visitMark(emphasisMark),
   emphasis_delimiter: visitSyntax,
   fenced_code_block: visitCodeFence,
   image: visitImage,
   inline_link: visitInlineLink,
+  list: visitList,
   list_item: visitLineClass("cm-md-list-line"),
   list_marker_dot: visitListMarker,
   list_marker_minus: visitListMarker,
@@ -66,6 +78,7 @@ const visitors: Record<string, NodeVisitor> = {
   list_marker_plus: visitListMarker,
   list_marker_star: visitListMarker,
   pipe_table: visitTable,
+  section: visitSection,
   setext_heading: visitSetextHeading,
   strikethrough: visitMark(strikeMark),
   strong_emphasis: visitMark(strongMark),
@@ -75,7 +88,27 @@ const visitors: Record<string, NodeVisitor> = {
   uri_autolink: visitUriAutolink,
 };
 
+const atomicVisitors: Record<string, NodeVisitor> = {
+  block_quote: visitBlockQuote,
+  document: visitDocument,
+  list: visitList,
+  section: visitSection,
+};
+
+export const liveMdAtomicRanges: Extension = EditorView.atomicRanges.of((view) =>
+  buildLiveMdPlan(view.state, atomicVisitors).finishAtomicRanges(),
+);
+
+class AtomicRange extends RangeValue {
+  eq(other: RangeValue) {
+    return other instanceof AtomicRange;
+  }
+}
+
+const paragraphBreakAtom = new AtomicRange();
+
 class DecorationPlan {
+  private atomicRanges: Array<{ from: number; to: number }> = [];
   private lineClasses = new Map<number, Set<string>>();
   private ranges: InlineDecoration[] = [];
   private state: EditorState;
@@ -92,6 +125,10 @@ class DecorationPlan {
 
   lineClass(from: number, to: number, className: string) {
     forEachLineInRange(this.state, from, to, (line) => this.line(line.number, className));
+  }
+
+  atom(from: number, to: number) {
+    if (from < to) this.atomicRanges.push({ from, to });
   }
 
   mark(from: number, to: number, decoration: Decoration) {
@@ -134,9 +171,19 @@ class DecorationPlan {
     }
     return builder.finish();
   }
+
+  finishAtomicRanges() {
+    this.atomicRanges.sort((left, right) => left.from - right.from || left.to - right.to);
+
+    let builder = new RangeSetBuilder<RangeValue>();
+    for (let { from, to } of this.atomicRanges) {
+      builder.add(from, to, paragraphBreakAtom);
+    }
+    return builder.finish();
+  }
 }
 
-function buildLiveMdDecorations(state: EditorState): DecorationSet {
+function buildLiveMdPlan(state: EditorState, nodeVisitors: Record<string, NodeVisitor>) {
   let activeLines = getActiveLines(state);
   let context: VisitContext = {
     activeLines,
@@ -147,11 +194,11 @@ function buildLiveMdDecorations(state: EditorState): DecorationSet {
 
   syntaxTree(state).iterate({
     enter(node) {
-      return visitors[node.name]?.(context, node);
+      return nodeVisitors[node.name]?.(context, node);
     },
   });
 
-  return context.plan.finish();
+  return context.plan;
 }
 
 function getActiveLines(state: EditorState) {
@@ -160,6 +207,111 @@ function getActiveLines(state: EditorState) {
     lines.add(state.doc.lineAt(range.head).number);
   }
   return lines;
+}
+
+function isBlockNode(node: SyntaxNode) {
+  switch (node.name) {
+    case "atx_heading":
+    case "block_quote":
+    case "fenced_code_block":
+    case "list":
+    case "paragraph":
+    case "pipe_table":
+    case "setext_heading":
+    case "thematic_break":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function isDocumentChildNode(node: SyntaxNode) {
+  return node.name == "section" || isBlockNode(node);
+}
+
+function compressGaps(
+  context: VisitContext,
+  siblings: SyntaxNode[],
+  previousFrom: (context: VisitContext, node: SyntaxNode) => number = blockBreakFrom,
+  containerTo?: number,
+) {
+  for (let index = 1; index < siblings.length; index++) {
+    let previous = siblings[index - 1];
+    let current = siblings[index];
+    markParagraphBreakRun(context, previousFrom(context, previous), current.from);
+  }
+
+  let last = siblings.at(-1);
+  if (last && containerTo != null) {
+    markParagraphBreakRun(context, previousFrom(context, last), containerTo);
+  }
+}
+
+function visitDocument(context: VisitContext, node: SyntaxNode) {
+  compressGaps(context, node.children.filter(isDocumentChildNode), blockBreakFrom, node.to);
+}
+
+function visitSection(context: VisitContext, node: SyntaxNode) {
+  compressGaps(context, node.children.filter(isBlockNode), blockBreakFrom, node.to);
+}
+
+function visitList(context: VisitContext, node: SyntaxNode) {
+  compressGaps(
+    context,
+    node.children.filter((child) => child.name == "list_item"),
+    blockContainerBreakFrom,
+    node.to,
+  );
+}
+
+function visitBlockQuote(context: VisitContext, node: SyntaxNode) {
+  context.plan.lineClass(node.from, node.to, "cm-md-blockquote");
+  compressGaps(context, node.children.filter(isBlockNode), blockBreakFrom, node.to);
+}
+
+function blockBreakFrom(context: VisitContext, node: SyntaxNode): number {
+  if (node.to <= node.from) return node.to;
+  let before = node.to - 1;
+  if (context.state.sliceDoc(before, node.to) != "\n") return node.to;
+  return context.state.doc.lineAt(before).to;
+}
+
+function blockContainerBreakFrom(context: VisitContext, node: SyntaxNode) {
+  let blocks = node.children.filter(isBlockNode);
+  return blocks.length ? blockBreakFrom(context, blocks[blocks.length - 1]) : node.to;
+}
+
+function markParagraphBreakRun(context: VisitContext, from: number, to: number) {
+  if (from >= to || !isWhitespaceOnly(context.state.sliceDoc(from, to))) return;
+
+  let newlinePositions: number[] = [];
+  let source = context.state.sliceDoc(from, to);
+  for (let index = 0; index < source.length; index++) {
+    if (source.charCodeAt(index) == 10) newlinePositions.push(from + index);
+  }
+
+  let separatorCount = Math.floor(newlinePositions.length / 2);
+  if (!separatorCount) return;
+
+  let blankLines: number[] = [];
+  forEachLineInRange(context.state, from, to, (line) => {
+    if (line.from > from && isWhitespaceOnly(context.state.sliceDoc(line.from, line.to))) {
+      blankLines.push(line.number);
+    }
+  });
+
+  for (let index = 0; index < separatorCount; index++) {
+    context.plan.atom(newlinePositions[index * 2], newlinePositions[index * 2 + 1] + 1);
+
+    let separatorLine = blankLines[index * 2];
+    if (separatorLine == null) return;
+    context.plan.line(separatorLine, "cm-md-block-separator");
+
+    let fillLine = blankLines[index * 2 + 1];
+    if (fillLine != null && index < separatorCount - 1) {
+      context.plan.line(fillLine, "cm-md-block-separator-fill");
+    }
+  }
 }
 
 function visitLineClass(className: string): NodeVisitor {
