@@ -6,9 +6,11 @@
     "paths": {
       "@codemirror-treesitter/language": ["./packages/language/src/index.ts"],
       "@codemirror-treesitter/language-data": ["./packages/language-data/src/index.ts"],
+      "@codemirror-treesitter/theme-gruvbox": ["./packages/theme-gruvbox/src/index.ts"],
       "@codemirror-treesitter/commands": ["./packages/commands/src/index.ts"],
       "@codemirror-treesitter/autocomplete": ["./packages/autocomplete/src/index.ts"],
-      "@codemirror-treesitter/basic-setup": ["./packages/codemirror/src/index.ts"]
+      "@codemirror-treesitter/basic-setup": ["./packages/codemirror/src/index.ts"],
+      "@codemirror-treesitter/typora-runtime": ["./packages/typora-runtime/src/index.ts"]
     },
     "allowImportingTsExtensions": true,
     "esModuleInterop": true

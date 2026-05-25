@@ -89,6 +89,7 @@ async function main() {
   await checkExamplesComparisonImplementation();
   await checkExamplesUseGruvboxTheme();
   await checkExamplesBenchmarkIsTabbed();
+  await checkBasicEditorBenchmark();
 
   if (failures) {
     console.error(`audit failed with ${failures} issue${failures == 1 ? "" : "s"}`);
@@ -584,6 +585,79 @@ async function checkExamplesBenchmarkIsTabbed() {
     if (!css.includes(snippet)) fail(`apps/examples benchmark tab CSS is missing ${snippet}`);
   }
   pass("examples app keeps benchmarks as a top-level examples navigation item");
+}
+
+async function checkBasicEditorBenchmark() {
+  let basicPkg = JSON.parse(await readText("apps/basic-editor/package.json"));
+  if (basicPkg.scripts?.benchmark) fail("apps/basic-editor should not own benchmark scripts");
+  if (!basicPkg.dependencies?.["@codemirror-treesitter/typora-runtime"]) {
+    fail("apps/basic-editor should depend on the shared Typora runtime package");
+  }
+
+  let basicMain = await readText("apps/basic-editor/src/main.tsx");
+  for (let snippet of ["typora-benchmark", "installTyporaBenchmark"]) {
+    if (basicMain.includes(snippet))
+      fail(`basic-editor should not import benchmark code: ${snippet}`);
+  }
+
+  let runtimePkg = JSON.parse(await readText("packages/typora-runtime/package.json"));
+  if (runtimePkg.name != "@codemirror-treesitter/typora-runtime") {
+    fail("shared Typora runtime package has the wrong package name");
+  }
+
+  let runtime = await readText("packages/typora-runtime/src/index.ts");
+  for (let snippet of ["createTyporaEditor", "mountTyporaEditor", "createInitialMarkdown"]) {
+    if (!runtime.includes(snippet)) fail(`shared Typora runtime is missing ${snippet}`);
+  }
+
+  let runtimeCss = await readText("packages/typora-runtime/src/style.css");
+  for (let snippet of [".typora-codemirror", ".cm-md-code-line", ".cm-md-table-preview"]) {
+    if (!runtimeCss.includes(snippet)) fail(`shared Typora runtime CSS is missing ${snippet}`);
+  }
+  for (let snippet of ["body", ".editor-shell", ".typora-benchmark-panel"]) {
+    if (runtimeCss.includes(snippet)) fail(`shared Typora runtime CSS should not own ${snippet}`);
+  }
+
+  let benchmarkPkg = JSON.parse(await readText("apps/typora-benchmark/package.json"));
+  if (!benchmarkPkg.scripts?.benchmark?.includes("?benchmark=run")) {
+    fail("apps/typora-benchmark is missing a benchmark run script");
+  }
+  if (!benchmarkPkg.dependencies?.["@codemirror-treesitter/typora-runtime"]) {
+    fail("apps/typora-benchmark should depend on the shared Typora runtime package");
+  }
+
+  let benchmarkHtml = await readText("apps/typora-benchmark/index.html");
+  if (!benchmarkHtml.includes('/src/main.ts"')) {
+    fail("apps/typora-benchmark index.html should load src/main.ts");
+  }
+
+  let benchmark = await readText("apps/typora-benchmark/src/main.ts");
+  for (let snippet of [
+    'type BenchmarkGroup = "clipboard" | "delete" | "edit" | "render" | "selection"',
+    'id: "render-large-scroll"',
+    'id: "edit-prose-typing"',
+    'id: "delete-blocks"',
+    'id: "clipboard-copy-paste"',
+    'id: "selection-navigation"',
+    "ensureSyntaxTree",
+    "publishBenchmarkResult",
+    '"typora-benchmark-result"',
+    "Copy JSON",
+    "persist: false",
+  ]) {
+    if (!benchmark.includes(snippet)) fail(`typora benchmark suite is missing ${snippet}`);
+  }
+
+  let css = await readText("apps/typora-benchmark/src/style.css");
+  for (let snippet of [
+    ".typora-benchmark-host",
+    ".typora-benchmark-panel",
+    ".typora-benchmark-actions",
+  ]) {
+    if (!css.includes(snippet)) fail(`typora benchmark CSS is missing ${snippet}`);
+  }
+
+  pass("basic editor and Typora benchmark app are split across the shared runtime");
 }
 
 async function checkExamplesIncludeMergeAndLspClient() {

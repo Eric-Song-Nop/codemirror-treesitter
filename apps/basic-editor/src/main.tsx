@@ -1,7 +1,9 @@
+import "@codemirror-treesitter/typora-runtime/style.css";
 import "./style.css";
 import { createRoot } from "react-dom/client";
 import { useEffect, useRef } from "react";
-import { mountTyporaEditor } from "./typora-runtime";
+import { createInitialMarkdown, mountTyporaEditor } from "@codemirror-treesitter/typora-runtime";
+import heroUrl from "./assets/hero.png";
 
 function TyporaEditor() {
   let editorRef = useRef<HTMLDivElement | null>(null);
@@ -9,7 +11,9 @@ function TyporaEditor() {
   useEffect(() => {
     let parent = editorRef.current;
     if (!parent) return;
-    return mountTyporaEditor(parent);
+    return mountTyporaEditor(parent, {
+      initialDoc: createInitialMarkdown(heroUrl),
+    });
   }, []);
 
   return (
