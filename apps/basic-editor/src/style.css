@@ -1,64 +1,29 @@
-:root {
-  --bg: #edf1f0;
-  --paper: #fffdfa;
-  --paper-soft: #f7f4ee;
-  --ink: #202523;
-  --muted: #66706c;
-  --line: #d5dcd8;
-  --accent: #0f766e;
-  --accent-2: #9f482c;
-  --code-bg: #fbf1c7;
-  --code-ink: #3c3836;
-  --shadow: 0 22px 60px rgba(21, 31, 28, 0.16);
-  color: var(--ink);
-  background: var(--bg);
-  font-family: "Avenir Next", "Gill Sans", ui-sans-serif, system-ui, sans-serif;
-}
-
 * {
   box-sizing: border-box;
 }
 
 body {
-  margin: 0;
   min-width: 320px;
   min-height: 100svh;
-  background: var(--bg);
-}
-
-.editor-shell {
-  min-height: 100svh;
+  margin: 0;
   display: grid;
-  place-items: center;
-  padding: clamp(14px, 3vw, 32px);
+  padding: clamp(10px, 3vw, 32px);
+  background: #edf1f0;
 }
 
-.paper {
-  min-width: 0;
+typora-editor {
   width: min(100%, 980px);
-  height: min(920px, calc(100svh - 28px));
-  min-height: min(720px, calc(100svh - 28px));
-  display: grid;
+  height: min(920px, calc(100svh - 20px));
+  min-height: min(720px, calc(100svh - 20px));
+  margin: auto;
   overflow: hidden;
   border: 1px solid rgba(47, 66, 59, 0.18);
   border-radius: 8px;
-  background: var(--paper);
-  box-shadow: var(--shadow);
-}
-
-.editor-mount {
-  min-width: 0;
-  min-height: 0;
-  display: grid;
+  box-shadow: 0 22px 60px rgba(21, 31, 28, 0.16);
 }
 
 @media (max-width: 560px) {
-  .editor-shell {
-    padding: 10px;
-  }
-
-  .paper {
-    height: calc(100svh - 20px);
+  typora-editor {
     min-height: 0;
   }
 }

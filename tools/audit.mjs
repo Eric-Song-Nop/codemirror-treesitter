@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -593,10 +593,31 @@ async function checkBasicEditorBenchmark() {
   if (!basicPkg.dependencies?.["@codemirror-treesitter/typora-runtime"]) {
     fail("apps/basic-editor should depend on the shared Typora runtime package");
   }
+  for (let dependency of ["react", "react-dom"]) {
+    if (basicPkg.dependencies?.[dependency] || basicPkg.devDependencies?.[dependency]) {
+      fail(`apps/basic-editor should not depend on ${dependency}`);
+    }
+  }
 
-  let basicMain = await readText("apps/basic-editor/src/main.tsx");
-  for (let snippet of ["typora-benchmark", "installTyporaBenchmark"]) {
-    if (basicMain.includes(snippet))
+  let basicHtml = await readText("apps/basic-editor/index.html");
+  if (await exists("apps/basic-editor/src/main.ts")) {
+    fail("apps/basic-editor should not need a TypeScript bootstrap file");
+  }
+  if (!basicHtml.includes("<typora-editor")) {
+    fail("apps/basic-editor should dogfood the literal <typora-editor> tag");
+  }
+  for (let snippet of ["typora-editor", "@codemirror-treesitter/typora-runtime/register"]) {
+    if (!basicHtml.includes(snippet)) fail(`basic-editor should use the web component: ${snippet}`);
+  }
+  for (let snippet of [
+    "typora-benchmark",
+    "installTyporaBenchmark",
+    "react-dom",
+    "react",
+    "defineTyporaEditor",
+    "createInitialMarkdown",
+  ]) {
+    if (basicHtml.includes(snippet))
       fail(`basic-editor should not import benchmark code: ${snippet}`);
   }
 
@@ -604,18 +625,65 @@ async function checkBasicEditorBenchmark() {
   if (runtimePkg.name != "@codemirror-treesitter/typora-runtime") {
     fail("shared Typora runtime package has the wrong package name");
   }
+  for (let dependency of ["react", "react-dom"]) {
+    if (runtimePkg.dependencies?.[dependency] || runtimePkg.devDependencies?.[dependency]) {
+      fail(`shared Typora runtime should not depend on ${dependency}`);
+    }
+  }
+  for (let exportPath of [".", "./fixtures", "./register"]) {
+    if (!runtimePkg.exports?.[exportPath]) {
+      fail(`shared Typora runtime package is missing ${exportPath} export`);
+    }
+  }
 
   let runtime = await readText("packages/typora-runtime/src/index.ts");
-  for (let snippet of ["createTyporaEditor", "mountTyporaEditor", "createInitialMarkdown"]) {
+  for (let snippet of [
+    "createTyporaEditor",
+    "defineTyporaEditor",
+    "TyporaEditorElement",
+    "typoraMarkdown",
+  ]) {
     if (!runtime.includes(snippet)) fail(`shared Typora runtime is missing ${snippet}`);
   }
+  let runtimeRegister = await readText("packages/typora-runtime/src/register.ts");
+  if (!runtimeRegister.includes("defineTyporaEditor()")) {
+    fail("shared Typora runtime register entry should define the default element");
+  }
+  if (runtime.includes("createInitialMarkdown")) {
+    fail("shared Typora runtime root should not export demo fixtures");
+  }
+  if (runtime.includes("react")) fail("shared Typora runtime root should not import React");
+
+  let fixture = await readText("packages/typora-runtime/src/fixtures/index.ts");
+  if (!fixture.includes("createInitialMarkdown")) {
+    fail("Typora demo fixture export is missing createInitialMarkdown");
+  }
+  if (fixture.includes("==highlight"))
+    fail("Typora fixture should not depend on regex highlight syntax");
 
   let runtimeCss = await readText("packages/typora-runtime/src/style.css");
-  for (let snippet of [".typora-codemirror", ".cm-md-code-line", ".cm-md-table-preview"]) {
+  for (let snippet of [
+    ":host",
+    "--typora-bg",
+    "--typora-text",
+    ".typora-codemirror .cm-md-code-line",
+    ".typora-codemirror .cm-md-table-preview",
+  ]) {
     if (!runtimeCss.includes(snippet)) fail(`shared Typora runtime CSS is missing ${snippet}`);
   }
-  for (let snippet of ["body", ".editor-shell", ".typora-benchmark-panel"]) {
+  for (let snippet of ["body {", ".editor-shell", ".typora-benchmark-panel"]) {
     if (runtimeCss.includes(snippet)) fail(`shared Typora runtime CSS should not own ${snippet}`);
+  }
+  if (runtimeCss.includes("cm-md-highlight"))
+    fail("shared Typora runtime CSS should not expose removed highlight styling");
+
+  let runtimeDecorations = await readText("packages/typora-runtime/src/core/decorations.ts");
+  if (
+    runtimeDecorations.includes('indexOf("==")') ||
+    runtimeDecorations.includes("cm-md-highlight") ||
+    runtimeDecorations.includes("TyporaHighlight")
+  ) {
+    fail("shared Typora runtime should not scan for highlight delimiters");
   }
 
   let benchmarkPkg = JSON.parse(await readText("apps/typora-benchmark/package.json"));
@@ -634,6 +702,8 @@ async function checkBasicEditorBenchmark() {
   let benchmark = await readText("apps/typora-benchmark/src/main.ts");
   for (let snippet of [
     'type BenchmarkGroup = "clipboard" | "delete" | "edit" | "render" | "selection"',
+    "defineTyporaEditor",
+    "typora-editor",
     'id: "render-large-scroll"',
     'id: "edit-prose-typing"',
     'id: "delete-blocks"',
@@ -643,10 +713,14 @@ async function checkBasicEditorBenchmark() {
     "publishBenchmarkResult",
     '"typora-benchmark-result"',
     "Copy JSON",
-    "persist: false",
   ]) {
     if (!benchmark.includes(snippet)) fail(`typora benchmark suite is missing ${snippet}`);
   }
+  if (benchmark.includes("typora-runtime/style.css")) {
+    fail("typora benchmark should rely on shadow-root runtime styles");
+  }
+  if (benchmark.includes("==highlight"))
+    fail("typora benchmark should not depend on regex highlight syntax");
 
   let css = await readText("apps/typora-benchmark/src/style.css");
   for (let snippet of [
@@ -917,6 +991,15 @@ async function collectFiles(start, include) {
 
 async function readText(file) {
   return readFile(path.join(root, file), "utf8");
+}
+
+async function exists(file) {
+  try {
+    await access(path.join(root, file));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function fetchText(url) {

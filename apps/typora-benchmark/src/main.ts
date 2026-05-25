@@ -1,12 +1,11 @@
-import "@codemirror-treesitter/typora-runtime/style.css";
 import "./style.css";
 import { EditorSelection } from "@codemirror/state";
 import { ensureSyntaxTree } from "@codemirror-treesitter/language";
 import {
-  createInitialMarkdown,
-  createTyporaEditor,
-  type TyporaEditorHandle,
+  defineTyporaEditor,
+  type TyporaEditorElement,
 } from "@codemirror-treesitter/typora-runtime";
+import { createInitialMarkdown } from "@codemirror-treesitter/typora-runtime/fixtures";
 import type { EditorView } from "@codemirror/view";
 
 type BenchmarkGroup = "clipboard" | "delete" | "edit" | "render" | "selection";
@@ -59,7 +58,7 @@ type BenchmarkCase = {
 };
 
 type BenchmarkSession = {
-  handle: TyporaEditorHandle;
+  editor: TyporaEditorElement;
   host: HTMLElement;
 };
 
@@ -234,6 +233,8 @@ let lastBenchmarkResult: TyporaBenchmarkResult | null = null;
 let layoutProbe = 0;
 let clipboardBuffer = "";
 
+defineTyporaEditor();
+
 export function installTyporaBenchmark() {
   window.__typoraBenchmark = {
     last: () => lastBenchmarkResult,
@@ -274,7 +275,7 @@ export async function runTyporaBenchmark(
 
 async function runBenchmarkCase(benchmarkCase: BenchmarkCase): Promise<TyporaBenchmarkCaseResult> {
   let session = await createBenchmarkSession(benchmarkCase.doc);
-  let { view } = session.handle;
+  let view = benchmarkView(session);
   let metrics: TyporaBenchmarkMetric[] = [];
 
   try {
@@ -292,7 +293,6 @@ async function runBenchmarkCase(benchmarkCase: BenchmarkCase): Promise<TyporaBen
       stats: collectEditorStats(view),
     };
   } finally {
-    session.handle.destroy();
     session.host.remove();
   }
 }
@@ -300,23 +300,29 @@ async function runBenchmarkCase(benchmarkCase: BenchmarkCase): Promise<TyporaBen
 async function createBenchmarkSession(doc: string): Promise<BenchmarkSession> {
   let host = document.createElement("div");
   host.className = "typora-benchmark-host";
-  document.body.append(host);
 
-  let handle = createTyporaEditor(host, {
-    doc,
-    focus: true,
-    persist: false,
-  });
-  return { handle, host };
+  let editor = document.createElement("typora-editor") as TyporaEditorElement;
+  editor.value = doc;
+  editor.setAttribute("autofocus", "");
+  host.append(editor);
+  document.body.append(host);
+  return { editor, host };
 }
 
 async function measureColdRender(session: BenchmarkSession, label: string) {
   let start = performance.now();
-  await session.handle.ready;
-  forceFullParse(session.handle.view);
+  await session.editor.ready;
+  let view = benchmarkView(session);
+  forceFullParse(view);
   await nextFrame();
-  readLayout(session.handle.view);
+  readLayout(view);
   return metric(`${label}: load, parse, and layout`, [performance.now() - start]);
+}
+
+function benchmarkView(session: BenchmarkSession) {
+  let { view } = session.editor;
+  if (!view) throw new Error("Typora benchmark editor view is not mounted");
+  return view;
 }
 
 async function measureStep(view: EditorView, step: BenchmarkStep) {
@@ -582,7 +588,7 @@ function buildBenchmarkMarkdown(sections: number) {
     blocks.push(
       `## Benchmark Section ${section}`,
       "",
-      `Paragraph ${section} mixes **strong text**, _emphasis_, [links](https://example.com/${section}), \`inline code\`, and ==highlight markers== so decoration work stays representative.`,
+      `Paragraph ${section} mixes **strong text**, _emphasis_, [links](https://example.com/${section}), and \`inline code\` so decoration work stays representative.`,
       "",
       `> Quote ${section} keeps nested Markdown active with **bold**, _italic_, and a [reference](https://codemirror.net/).`,
       "",

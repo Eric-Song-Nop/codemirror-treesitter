@@ -10,6 +10,14 @@
       "@codemirror-treesitter/commands": ["./packages/commands/src/index.ts"],
       "@codemirror-treesitter/autocomplete": ["./packages/autocomplete/src/index.ts"],
       "@codemirror-treesitter/basic-setup": ["./packages/codemirror/src/index.ts"],
+      "@codemirror-treesitter/merge": ["./packages/merge/src/index.ts"],
+      "@codemirror-treesitter/lsp-client": ["./packages/lsp-client/src/index.ts"],
+      "@codemirror-treesitter/typora-runtime/fixtures": [
+        "./packages/typora-runtime/src/fixtures/index.ts"
+      ],
+      "@codemirror-treesitter/typora-runtime/register": [
+        "./packages/typora-runtime/src/register.ts"
+      ],
       "@codemirror-treesitter/typora-runtime": ["./packages/typora-runtime/src/index.ts"]
     },
     "allowImportingTsExtensions": true,

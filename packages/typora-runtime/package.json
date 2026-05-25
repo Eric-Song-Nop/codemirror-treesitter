@@ -9,11 +9,24 @@
   ],
   "type": "module",
   "sideEffects": [
+    "./dist/register.mjs",
+    "./src/register.ts",
     "./src/style.css"
   ],
   "types": "./dist/index.d.mts",
   "exports": {
-    ".": "./dist/index.mjs",
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./fixtures": {
+      "types": "./dist/fixtures/index.d.mts",
+      "import": "./dist/fixtures/index.mjs"
+    },
+    "./register": {
+      "types": "./dist/register.d.mts",
+      "import": "./dist/register.mjs"
+    },
     "./style.css": "./src/style.css",
     "./package.json": "./package.json"
   },
@@ -34,6 +47,7 @@
   },
   "devDependencies": {
     "@typescript/native-preview": "7.0.0-dev.20260509.2",
+    "happy-dom": "^20.0.11",
     "typescript": "^6.0.3",
     "vite-plus": "catalog:"
   }
