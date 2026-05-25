@@ -1,5 +1,5 @@
 export function createInitialMarkdown(imageUrl = "") {
-  return `# Typora-style field note
+  return `# LiveMD field note
 
 The editor keeps Markdown as the source while the page reads like composed text. It uses **Tree-sitter Markdown** for the CodeMirror language layer, then applies local editing affordances on top.
 
@@ -16,7 +16,7 @@ ${imageUrl ? `![A writing surface](${imageUrl})` : ""}
 - [x] Render Markdown blocks in place
 - [x] Keep Tree-sitter parsing active
 - [ ] Tighten edge cases around nested inline spans
-- [ ] Compare more Typora behaviors
+- [ ] Compare more LiveMD behaviors
 
 1. Keep ordered lists moving.
 2. Preserve the author's source text.
@@ -54,6 +54,6 @@ const note: Note = { title: "Tree-sitter Markdown", done: false };
 > Recursive source should still receive Markdown token colors.
 
 - [ ] **Nested** source remains editable as plain fenced text.
-\`\`\`
+\`\`\`\n
 `;
 }

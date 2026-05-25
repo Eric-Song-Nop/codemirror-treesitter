@@ -40,7 +40,7 @@ export default defineConfig({
 
 function rawCssTextPlugin() {
   return {
-    name: "typora-runtime-raw-css",
+    name: "live-md-raw-css",
     resolveId(source: string, importer?: string) {
       if (!source.endsWith(".css?raw")) return null;
       let cssSource = source.slice(0, -"?raw".length);

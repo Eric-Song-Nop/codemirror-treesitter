@@ -11,7 +11,7 @@ type LineMarkers = {
   task: { checked: boolean; from: number; to: number } | null;
 };
 
-export const typoraKeymap = keymap.of([
+export const liveMdKeymap = keymap.of([
   { key: "Enter", run: continueMarkdownBlock },
   { key: "Mod-b", run: surroundSelection("**", "**", "strong text") },
   { key: "Mod-i", run: surroundSelection("_", "_", "emphasis") },

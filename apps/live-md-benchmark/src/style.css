@@ -32,7 +32,7 @@ button {
   font: inherit;
 }
 
-.typora-benchmark-host {
+.live-md-benchmark-host {
   position: fixed;
   top: 0;
   left: 0;
@@ -43,7 +43,7 @@ button {
   pointer-events: none;
 }
 
-.typora-benchmark-panel {
+.live-md-benchmark-panel {
   width: min(760px, calc(100vw - 32px));
   max-height: min(720px, calc(100svh - 32px));
   display: grid;
@@ -58,19 +58,19 @@ button {
   font-family: "Avenir Next", "Gill Sans", ui-sans-serif, system-ui, sans-serif;
 }
 
-.typora-benchmark-toolbar {
+.live-md-benchmark-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.typora-benchmark-actions {
+.live-md-benchmark-actions {
   display: flex;
   gap: 8px;
 }
 
-.typora-benchmark-toolbar button {
+.live-md-benchmark-toolbar button {
   min-height: 32px;
   padding: 0 12px;
   border: 1px solid rgba(15, 118, 110, 0.3);
@@ -80,18 +80,18 @@ button {
   cursor: pointer;
 }
 
-.typora-benchmark-toolbar button:disabled {
+.live-md-benchmark-toolbar button:disabled {
   cursor: wait;
   opacity: 0.62;
 }
 
-.typora-benchmark-panel p {
+.live-md-benchmark-panel p {
   margin: 0;
   color: var(--muted);
   font-size: 13px;
 }
 
-.typora-benchmark-panel pre {
+.live-md-benchmark-panel pre {
   min-height: 360px;
   max-height: 560px;
   margin: 0;

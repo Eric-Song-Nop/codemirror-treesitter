@@ -1,8 +1,8 @@
 import { EditorView } from "@codemirror/view";
-import { createTyporaEditor, type TyporaEditorController } from "../core/editor.js";
-import { installTyporaStyles } from "./styles.js";
+import { createLiveMdEditor, type LiveMdEditorController } from "../core/editor.js";
+import { installLiveMdStyles } from "./styles.js";
 
-export class TyporaEditorElement extends HTMLElement {
+export class LiveMdEditorElement extends HTMLElement {
   static observedAttributes = [
     "autofocus",
     "default-value",
@@ -11,7 +11,7 @@ export class TyporaEditorElement extends HTMLElement {
     "readonly",
   ];
 
-  private controller: TyporaEditorController | null = null;
+  private controller: LiveMdEditorController | null = null;
   private dirtySinceChange = false;
   private explicitValue = false;
   private mount: HTMLDivElement;
@@ -24,10 +24,10 @@ export class TyporaEditorElement extends HTMLElement {
   constructor() {
     super();
     this.shadow = this.attachShadow({ mode: "open" });
-    installTyporaStyles(this.shadow);
+    installLiveMdStyles(this.shadow);
 
     this.mount = document.createElement("div");
-    this.mount.className = "typora-editor-root";
+    this.mount.className = "live-md-editor-root";
     this.mount.setAttribute("part", "editor");
     this.shadow.append(this.mount);
   }
@@ -36,9 +36,9 @@ export class TyporaEditorElement extends HTMLElement {
     if (this.controller) return;
 
     let initialValue = this.explicitValue ? this.storedValue : this.defaultValue;
-    let controller: TyporaEditorController;
+    let controller: LiveMdEditorController;
     try {
-      controller = createTyporaEditor({
+      controller = createLiveMdEditor({
         autofocus: this.hasAttribute("autofocus"),
         defaultValue: initialValue,
         onBlur: () => this.dispatchPendingChange(),
@@ -52,7 +52,7 @@ export class TyporaEditorElement extends HTMLElement {
       });
     } catch (error: unknown) {
       this.ready = Promise.reject(error);
-      this.dispatchTyporaError(error);
+      this.dispatchLiveMdError(error);
       return;
     }
 
@@ -61,7 +61,7 @@ export class TyporaEditorElement extends HTMLElement {
       .then(() => {
         if (this.controller != controller) return;
         this.dispatchEvent(
-          new CustomEvent("typora-ready", {
+          new CustomEvent("live-md-ready", {
             bubbles: true,
             composed: true,
             detail: { view: this.view },
@@ -69,7 +69,7 @@ export class TyporaEditorElement extends HTMLElement {
         );
       })
       .catch((error: unknown) => {
-        if (this.controller == controller) this.dispatchTyporaError(error);
+        if (this.controller == controller) this.dispatchLiveMdError(error);
         throw error;
       });
   }
@@ -188,9 +188,9 @@ export class TyporaEditorElement extends HTMLElement {
     );
   }
 
-  private dispatchTyporaError(error: unknown) {
+  private dispatchLiveMdError(error: unknown) {
     this.dispatchEvent(
-      new CustomEvent("typora-error", {
+      new CustomEvent("live-md-error", {
         bubbles: true,
         composed: true,
         detail: { error },
@@ -199,13 +199,13 @@ export class TyporaEditorElement extends HTMLElement {
   }
 }
 
-export function defineTyporaEditor(tagName = "typora-editor") {
+export function defineLiveMdEditor(tagName = "live-md-editor") {
   if (!globalThis.customElements) {
     throw new Error("Custom elements are not available in this environment");
   }
   if (!customElements.get(tagName)) {
     let constructor =
-      tagName == "typora-editor" ? TyporaEditorElement : class extends TyporaEditorElement {};
+      tagName == "live-md-editor" ? LiveMdEditorElement : class extends LiveMdEditorElement {};
     customElements.define(tagName, constructor);
   }
 }

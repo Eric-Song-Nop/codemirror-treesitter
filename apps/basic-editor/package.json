@@ -9,7 +9,7 @@
     "preview": "vp preview"
   },
   "dependencies": {
-    "@codemirror-treesitter/typora-runtime": "workspace:*"
+    "@codemirror-treesitter/live-md": "workspace:*"
   },
   "devDependencies": {
     "vite-plus": "catalog:"

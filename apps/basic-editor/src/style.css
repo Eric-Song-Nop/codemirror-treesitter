@@ -11,7 +11,7 @@ body {
   background: #edf1f0;
 }
 
-typora-editor {
+live-md-editor {
   width: min(100%, 980px);
   height: min(920px, calc(100svh - 20px));
   min-height: min(720px, calc(100svh - 20px));
@@ -23,7 +23,7 @@ typora-editor {
 }
 
 @media (max-width: 560px) {
-  typora-editor {
+  live-md-editor {
     min-height: 0;
   }
 }

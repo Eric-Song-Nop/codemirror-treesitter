@@ -27,12 +27,12 @@ export default defineConfig({
         "../../packages/codemirror/src/index.ts",
         import.meta.url,
       ).pathname,
-      "@codemirror-treesitter/typora-runtime/fixtures": new URL(
-        "../../packages/typora-runtime/src/fixtures/index.ts",
+      "@codemirror-treesitter/live-md/fixtures": new URL(
+        "../../packages/live-md/src/fixtures/index.ts",
         import.meta.url,
       ).pathname,
-      "@codemirror-treesitter/typora-runtime": new URL(
-        "../../packages/typora-runtime/src/index.ts",
+      "@codemirror-treesitter/live-md": new URL(
+        "../../packages/live-md/src/index.ts",
         import.meta.url,
       ).pathname,
     },
