@@ -1,7 +1,7 @@
 {
-  "name": "@codemirror-treesitter/typora-runtime",
+  "name": "@codemirror-treesitter/live-md",
   "version": "0.0.0",
-  "description": "Typora-style Markdown editor runtime built on the local tree-sitter CodeMirror packages",
+  "description": "LiveMD Markdown editor runtime built on the local tree-sitter CodeMirror packages",
   "license": "MIT",
   "files": [
     "dist",

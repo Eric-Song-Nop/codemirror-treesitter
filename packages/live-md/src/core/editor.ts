@@ -1,7 +1,7 @@
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { minimalSetup } from "@codemirror-treesitter/basic-setup";
 import { EditorView, placeholder as placeholderExtension, type ViewUpdate } from "@codemirror/view";
-import { typoraMarkdown } from "./extension.js";
+import { liveMarkdown } from "./extension.js";
 import {
   codeFenceHighlightModule,
   loadCodeFenceLanguages,
@@ -9,20 +9,20 @@ import {
   setCodeFenceLanguages,
 } from "./languages.js";
 
-export type TyporaEditorChange = {
+export type LiveMdEditorChange = {
   update: ViewUpdate;
   value: string;
   view: EditorView;
 };
 
-export type TyporaEditorOptions = {
+export type LiveMdEditorOptions = {
   autofocus?: boolean;
   defaultValue?: string;
   doc?: string;
   extensions?: Extension[];
   focus?: boolean;
   onBlur?: (view: EditorView) => void;
-  onChange?: (change: TyporaEditorChange) => void;
+  onChange?: (change: LiveMdEditorChange) => void;
   parent: Element | DocumentFragment;
   persistKey?: string | null;
   placeholder?: string;
@@ -31,7 +31,7 @@ export type TyporaEditorOptions = {
   value?: string;
 };
 
-export type TyporaEditorController = {
+export type LiveMdEditorController = {
   destroy: () => void;
   ready: Promise<void>;
   setPersistKey: (persistKey: null | string) => void;
@@ -42,9 +42,9 @@ export type TyporaEditorController = {
   view: EditorView;
 };
 
-export type TyporaEditorHandle = TyporaEditorController;
+export type LiveMdEditorHandle = LiveMdEditorController;
 
-export function createTyporaEditor(options: TyporaEditorOptions): TyporaEditorController {
+export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorController {
   let markdownCompartment = new Compartment();
   let placeholderCompartment = new Compartment();
   let readOnlyCompartment = new Compartment();
@@ -60,7 +60,7 @@ export function createTyporaEditor(options: TyporaEditorOptions): TyporaEditorCo
     state: EditorState.create({
       doc: initialValue,
       extensions: [
-        typoraMarkdown(),
+        liveMarkdown(),
         codeFenceHighlightModule,
         markdownCompartment.of([]),
         placeholderCompartment.of(placeholderValue(options.placeholder)),
@@ -100,7 +100,7 @@ export function createTyporaEditor(options: TyporaEditorOptions): TyporaEditorCo
     });
   });
 
-  let controller: TyporaEditorController = {
+  let controller: LiveMdEditorController = {
     destroy() {
       cancelled = true;
       view.destroy();
@@ -141,7 +141,7 @@ export function createTyporaEditor(options: TyporaEditorOptions): TyporaEditorCo
   return controller;
 }
 
-function initialEditorValue(options: TyporaEditorOptions, persistKey: null | string) {
+function initialEditorValue(options: LiveMdEditorOptions, persistKey: null | string) {
   if (options.value != null) return options.value;
   if (options.doc != null) return options.doc;
   let fallback = options.defaultValue ?? "";

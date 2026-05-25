@@ -1,16 +1,13 @@
 import "./style.css";
 import { EditorSelection } from "@codemirror/state";
 import { ensureSyntaxTree } from "@codemirror-treesitter/language";
-import {
-  defineTyporaEditor,
-  type TyporaEditorElement,
-} from "@codemirror-treesitter/typora-runtime";
-import { createInitialMarkdown } from "@codemirror-treesitter/typora-runtime/fixtures";
+import { defineLiveMdEditor, type LiveMdEditorElement } from "@codemirror-treesitter/live-md";
+import { createInitialMarkdown } from "@codemirror-treesitter/live-md/fixtures";
 import type { EditorView } from "@codemirror/view";
 
 type BenchmarkGroup = "clipboard" | "delete" | "edit" | "render" | "selection";
 
-export type TyporaBenchmarkMetric = {
+export type LiveMdBenchmarkMetric = {
   avg: number;
   label: string;
   max: number;
@@ -21,26 +18,26 @@ export type TyporaBenchmarkMetric = {
   unit: "ms";
 };
 
-export type TyporaBenchmarkCaseResult = {
+export type LiveMdBenchmarkCaseResult = {
   bytes: number;
   group: BenchmarkGroup;
   id: string;
   label: string;
   lines: number;
-  metrics: TyporaBenchmarkMetric[];
+  metrics: LiveMdBenchmarkMetric[];
   stats: Record<string, number>;
 };
 
-export type TyporaBenchmarkResult = {
-  cases: TyporaBenchmarkCaseResult[];
+export type LiveMdBenchmarkResult = {
+  cases: LiveMdBenchmarkCaseResult[];
   groups: Record<string, { avg: number; max: number; p95: number }>;
   startedAt: string;
   totalMs: number;
   userAgent: string;
 };
 
-export type TyporaBenchmarkOptions = {
-  onCase?: (result: TyporaBenchmarkCaseResult) => void;
+export type LiveMdBenchmarkOptions = {
+  onCase?: (result: LiveMdBenchmarkCaseResult) => void;
 };
 
 type BenchmarkStep = {
@@ -58,18 +55,18 @@ type BenchmarkCase = {
 };
 
 type BenchmarkSession = {
-  editor: TyporaEditorElement;
+  editor: LiveMdEditorElement;
   host: HTMLElement;
 };
 
-type TyporaBenchmarkApi = {
-  last: () => TyporaBenchmarkResult | null;
-  run: (options?: TyporaBenchmarkOptions) => Promise<TyporaBenchmarkResult>;
+type LiveMdBenchmarkApi = {
+  last: () => LiveMdBenchmarkResult | null;
+  run: (options?: LiveMdBenchmarkOptions) => Promise<LiveMdBenchmarkResult>;
 };
 
 declare global {
   interface Window {
-    __typoraBenchmark?: TyporaBenchmarkApi;
+    __liveMdBenchmark?: LiveMdBenchmarkApi;
   }
 }
 
@@ -77,7 +74,7 @@ const mediumDoc = createInitialMarkdown();
 const largeDoc = buildBenchmarkMarkdown(72);
 const editDoc = buildBenchmarkMarkdown(24);
 const pasteDoc = buildBenchmarkMarkdown(10);
-const benchmarkResultElementId = "typora-benchmark-result";
+const benchmarkResultElementId = "live-md-benchmark-result";
 const benchmarkCases: BenchmarkCase[] = [
   {
     doc: mediumDoc,
@@ -118,7 +115,7 @@ const benchmarkCases: BenchmarkCase[] = [
       {
         iterations: 48,
         label: "single character input",
-        run: typeIntoFirstParagraph("typora benchmark input "),
+        run: typeIntoFirstParagraph("live-md benchmark input "),
       },
     ],
   },
@@ -229,16 +226,16 @@ const benchmarkCases: BenchmarkCase[] = [
   },
 ];
 
-let lastBenchmarkResult: TyporaBenchmarkResult | null = null;
+let lastBenchmarkResult: LiveMdBenchmarkResult | null = null;
 let layoutProbe = 0;
 let clipboardBuffer = "";
 
-defineTyporaEditor();
+defineLiveMdEditor();
 
-export function installTyporaBenchmark() {
-  window.__typoraBenchmark = {
+export function installLiveMdBenchmark() {
+  window.__liveMdBenchmark = {
     last: () => lastBenchmarkResult,
-    run: runTyporaBenchmark,
+    run: runLiveMdBenchmark,
   };
 
   let params = new URLSearchParams(window.location.search);
@@ -247,12 +244,12 @@ export function installTyporaBenchmark() {
   if (autoRun) void runPanelBenchmark(panel);
 }
 
-export async function runTyporaBenchmark(
-  options: TyporaBenchmarkOptions = {},
-): Promise<TyporaBenchmarkResult> {
+export async function runLiveMdBenchmark(
+  options: LiveMdBenchmarkOptions = {},
+): Promise<LiveMdBenchmarkResult> {
   let startedAt = new Date().toISOString();
   let suiteStart = performance.now();
-  let cases: TyporaBenchmarkCaseResult[] = [];
+  let cases: LiveMdBenchmarkCaseResult[] = [];
 
   for (let benchmarkCase of benchmarkCases) {
     let result = await runBenchmarkCase(benchmarkCase);
@@ -261,7 +258,7 @@ export async function runTyporaBenchmark(
     await nextFrame();
   }
 
-  let result: TyporaBenchmarkResult = {
+  let result: LiveMdBenchmarkResult = {
     cases,
     groups: summarizeGroups(cases),
     startedAt,
@@ -273,10 +270,10 @@ export async function runTyporaBenchmark(
   return lastBenchmarkResult;
 }
 
-async function runBenchmarkCase(benchmarkCase: BenchmarkCase): Promise<TyporaBenchmarkCaseResult> {
+async function runBenchmarkCase(benchmarkCase: BenchmarkCase): Promise<LiveMdBenchmarkCaseResult> {
   let session = await createBenchmarkSession(benchmarkCase.doc);
   let view = benchmarkView(session);
-  let metrics: TyporaBenchmarkMetric[] = [];
+  let metrics: LiveMdBenchmarkMetric[] = [];
 
   try {
     metrics.push(await measureColdRender(session, benchmarkCase.label));
@@ -299,9 +296,9 @@ async function runBenchmarkCase(benchmarkCase: BenchmarkCase): Promise<TyporaBen
 
 async function createBenchmarkSession(doc: string): Promise<BenchmarkSession> {
   let host = document.createElement("div");
-  host.className = "typora-benchmark-host";
+  host.className = "live-md-benchmark-host";
 
-  let editor = document.createElement("typora-editor") as TyporaEditorElement;
+  let editor = document.createElement("live-md-editor") as LiveMdEditorElement;
   editor.value = doc;
   editor.setAttribute("autofocus", "");
   host.append(editor);
@@ -321,7 +318,7 @@ async function measureColdRender(session: BenchmarkSession, label: string) {
 
 function benchmarkView(session: BenchmarkSession) {
   let { view } = session.editor;
-  if (!view) throw new Error("Typora benchmark editor view is not mounted");
+  if (!view) throw new Error("LiveMD benchmark editor view is not mounted");
   return view;
 }
 
@@ -537,7 +534,7 @@ function bounceRatio(iteration: number, count: number) {
     : 1 - (iteration - midpoint) / Math.max(1, count - midpoint - 1);
 }
 
-function metric(label: string, samples: number[]): TyporaBenchmarkMetric {
+function metric(label: string, samples: number[]): LiveMdBenchmarkMetric {
   let sorted = [...samples].sort((left, right) => left - right);
   return {
     avg: samples.reduce((sum, value) => sum + value, 0) / samples.length,
@@ -556,7 +553,7 @@ function percentile(sorted: number[], ratio: number) {
   return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * ratio))] ?? 0;
 }
 
-function summarizeGroups(cases: TyporaBenchmarkCaseResult[]) {
+function summarizeGroups(cases: LiveMdBenchmarkCaseResult[]) {
   let groups: Record<string, { avg: number; max: number; p95: number }> = {};
   for (let group of [
     "render",
@@ -583,7 +580,7 @@ function summarizeGroups(cases: TyporaBenchmarkCaseResult[]) {
 }
 
 function buildBenchmarkMarkdown(sections: number) {
-  let blocks = ["# Typora Benchmark Corpus", ""];
+  let blocks = ["# LiveMD Benchmark Corpus", ""];
   for (let section = 1; section <= sections; section++) {
     blocks.push(
       `## Benchmark Section ${section}`,
@@ -638,12 +635,12 @@ function alphabetBlock(repeats: number) {
 
 function mountBenchmarkPanel() {
   let panel = document.createElement("aside");
-  panel.className = "typora-benchmark-panel";
+  panel.className = "live-md-benchmark-panel";
   panel.dataset.benchmarkStatus = "idle";
   panel.innerHTML = `
-    <div class="typora-benchmark-toolbar">
-      <strong>Typora benchmark</strong>
-      <div class="typora-benchmark-actions">
+    <div class="live-md-benchmark-toolbar">
+      <strong>LiveMD benchmark</strong>
+      <div class="live-md-benchmark-actions">
         <button type="button" data-benchmark-run>Run</button>
         <button type="button" data-benchmark-copy disabled>Copy JSON</button>
       </div>
@@ -675,7 +672,7 @@ async function runPanelBenchmark(panel: HTMLElement) {
   output.textContent = "";
   status.textContent = "Running";
   try {
-    let result = await runTyporaBenchmark({
+    let result = await runLiveMdBenchmark({
       onCase(caseResult) {
         status.textContent = `Measured ${caseResult.label}`;
         output.textContent = renderBenchmarkSummary({
@@ -706,11 +703,11 @@ async function copyBenchmarkJson(panel: HTMLElement) {
     await navigator.clipboard.writeText(JSON.stringify(result, null, 2));
     status.textContent = `Copied JSON for ${result.cases.length} cases`;
   } catch {
-    status.textContent = "JSON report is available in #typora-benchmark-result";
+    status.textContent = "JSON report is available in #live-md-benchmark-result";
   }
 }
 
-function publishBenchmarkResult(result: TyporaBenchmarkResult) {
+function publishBenchmarkResult(result: LiveMdBenchmarkResult) {
   let output = document.getElementById(benchmarkResultElementId);
   if (!output) {
     output = document.createElement("script");
@@ -721,7 +718,7 @@ function publishBenchmarkResult(result: TyporaBenchmarkResult) {
   output.textContent = JSON.stringify(result);
 }
 
-function emptyBenchmarkResult(): TyporaBenchmarkResult {
+function emptyBenchmarkResult(): LiveMdBenchmarkResult {
   return {
     cases: [],
     groups: {},
@@ -731,7 +728,7 @@ function emptyBenchmarkResult(): TyporaBenchmarkResult {
   };
 }
 
-function renderBenchmarkSummary(result: TyporaBenchmarkResult) {
+function renderBenchmarkSummary(result: LiveMdBenchmarkResult) {
   let lines = result.cases.flatMap((caseResult) => {
     return [
       `${caseResult.group}/${caseResult.id}`,
@@ -756,4 +753,4 @@ function nextFrame() {
   return Promise.resolve();
 }
 
-installTyporaBenchmark();
+installLiveMdBenchmark();

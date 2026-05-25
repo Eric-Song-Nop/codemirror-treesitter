@@ -22,18 +22,16 @@ export const workspaceAliases = {
     "packages/theme-gruvbox/src/index.ts",
     import.meta.url,
   ).pathname,
-  "@codemirror-treesitter/typora-runtime/fixtures": new URL(
-    "packages/typora-runtime/src/fixtures/index.ts",
+  "@codemirror-treesitter/live-md/fixtures": new URL(
+    "packages/live-md/src/fixtures/index.ts",
     import.meta.url,
   ).pathname,
-  "@codemirror-treesitter/typora-runtime/register": new URL(
-    "packages/typora-runtime/src/register.ts",
+  "@codemirror-treesitter/live-md/register": new URL(
+    "packages/live-md/src/register.ts",
     import.meta.url,
   ).pathname,
-  "@codemirror-treesitter/typora-runtime": new URL(
-    "packages/typora-runtime/src/index.ts",
-    import.meta.url,
-  ).pathname,
+  "@codemirror-treesitter/live-md": new URL("packages/live-md/src/index.ts", import.meta.url)
+    .pathname,
 };
 
 export default defineConfig({

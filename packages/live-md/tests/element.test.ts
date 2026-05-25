@@ -3,10 +3,10 @@
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
-  defineTyporaEditor,
-  TyporaEditorElement,
-  typoraMarkdown,
-  type TyporaEditorElement as TyporaEditorElementType,
+  defineLiveMdEditor,
+  LiveMdEditorElement,
+  liveMarkdown,
+  type LiveMdEditorElement as LiveMdEditorElementType,
 } from "../src/index.js";
 
 let tagId = 0;
@@ -29,18 +29,18 @@ afterEach(() => {
   }
 });
 
-describe("typora editor web component", () => {
+describe("liveMd editor web component", () => {
   it("register entry defines the default element", async () => {
     await import("../src/register.js");
 
-    expect(customElements.get("typora-editor")).toBe(TyporaEditorElement);
+    expect(customElements.get("live-md-editor")).toBe(LiveMdEditorElement);
   });
 
-  it("dispatches typora-ready when async editor support is loaded", async () => {
+  it("dispatches live-md-ready when async editor support is loaded", async () => {
     let tag = defineTestElement();
-    let editor = document.createElement(tag) as TyporaEditorElementType;
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
     let ready = vi.fn();
-    editor.addEventListener("typora-ready", ready);
+    editor.addEventListener("live-md-ready", ready);
 
     document.body.append(editor);
     await editor.ready;
@@ -50,10 +50,10 @@ describe("typora editor web component", () => {
     expect(event.detail.view).toBe(editor.view);
   });
 
-  it("dispatches typora-error when async editor support fails", async () => {
+  it("dispatches live-md-error when async editor support fails", async () => {
     let tag = defineTestElement();
-    let editor = document.createElement(tag) as TyporaEditorElementType;
-    let errorEvent = waitForEvent<CustomEvent>(editor, "typora-error");
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
+    let errorEvent = waitForEvent<CustomEvent>(editor, "live-md-error");
     vi.spyOn(EditorView.prototype, "dispatch").mockImplementationOnce(() => {
       throw new Error("language dispatch failed");
     });
@@ -68,15 +68,15 @@ describe("typora editor web component", () => {
 
   it("registers a custom element with an open shadow root", async () => {
     let tag = defineTestElement();
-    let editor = document.createElement(tag) as TyporaEditorElementType;
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
     editor.defaultValue = "# Hello";
     document.body.append(editor);
 
     await editor.ready;
 
-    expect(editor).toBeInstanceOf(TyporaEditorElement);
+    expect(editor).toBeInstanceOf(LiveMdEditorElement);
     expect(editor.shadowRoot).toBeTruthy();
-    expect(editor.shadowRoot?.querySelector(".typora-editor-root")).toBeTruthy();
+    expect(editor.shadowRoot?.querySelector(".live-md-editor-root")).toBeTruthy();
     expect(editor.view).toBeTruthy();
     expect(editor.value).toBe("# Hello");
   });
@@ -96,7 +96,7 @@ describe("typora editor web component", () => {
 
   it("uses light DOM text as the initial default value", async () => {
     let tag = defineTestElement();
-    let editor = document.createElement(tag) as TyporaEditorElementType;
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
     editor.textContent = `
       # Light DOM
 
@@ -186,33 +186,33 @@ describe("typora editor web component", () => {
     let editor = mountTestEditor("styled");
     await editor.ready;
 
-    expect(document.head.querySelector("style[data-typora-runtime]")).toBeNull();
+    expect(document.head.querySelector("style[data-live-md-runtime]")).toBeNull();
     expect(document.querySelector(".cm-md-heading")).toBeNull();
     expect(hasShadowRuntimeStyles(editor)).toBe(true);
   });
 
   it("exports the reusable CodeMirror extension", () => {
-    expect(typoraMarkdown()).toBeTruthy();
+    expect(liveMarkdown()).toBeTruthy();
   });
 });
 
 function defineTestElement() {
-  let tag = `typora-editor-test-${++tagId}`;
-  defineTyporaEditor(tag);
+  let tag = `live-md-editor-test-${++tagId}`;
+  defineLiveMdEditor(tag);
   return tag;
 }
 
 function mountTestEditor(defaultValue: string) {
   let tag = defineTestElement();
-  let editor = document.createElement(tag) as TyporaEditorElementType;
+  let editor = document.createElement(tag) as LiveMdEditorElementType;
   editor.defaultValue = defaultValue;
   document.body.append(editor);
   return editor;
 }
 
-function hasShadowRuntimeStyles(editor: TyporaEditorElementType) {
+function hasShadowRuntimeStyles(editor: LiveMdEditorElementType) {
   return Boolean(
-    editor.shadowRoot?.querySelector("style[data-typora-runtime]") ||
+    editor.shadowRoot?.querySelector("style[data-live-md-runtime]") ||
     editor.shadowRoot?.adoptedStyleSheets.length,
   );
 }

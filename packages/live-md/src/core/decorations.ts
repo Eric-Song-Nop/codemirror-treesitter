@@ -42,9 +42,9 @@ const tablePipeMark = Decoration.mark({ class: "cm-md-table-pipe" });
 
 const codeFenceHighlightCache = new WeakMap<Text, Map<string, InlineDecoration[]>>();
 
-export const typoraDecorations = EditorView.decorations.compute(
+export const liveMdDecorations = EditorView.decorations.compute(
   ["doc", "selection", codeFenceLanguagesField],
-  (state) => buildTyporaDecorations(state),
+  (state) => buildLiveMdDecorations(state),
 );
 
 const visitors: Record<string, NodeVisitor> = {
@@ -136,7 +136,7 @@ class DecorationPlan {
   }
 }
 
-function buildTyporaDecorations(state: EditorState): DecorationSet {
+function buildLiveMdDecorations(state: EditorState): DecorationSet {
   let activeLines = getActiveLines(state);
   let context: VisitContext = {
     activeLines,

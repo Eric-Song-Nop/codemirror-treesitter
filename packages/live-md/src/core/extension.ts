@@ -1,33 +1,33 @@
 import { EditorState, type Extension } from "@codemirror/state";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror-treesitter/autocomplete";
 import { EditorView, keymap, placeholder as placeholderExtension } from "@codemirror/view";
-import { typoraKeymap } from "./commands.js";
-import { typoraDecorations } from "./decorations.js";
+import { liveMdKeymap } from "./commands.js";
+import { liveMdDecorations } from "./decorations.js";
 import { codeFenceLanguagesField } from "./languages.js";
 
-export type TyporaMarkdownOptions = {
+export type LiveMarkdownOptions = {
   ariaLabel?: string;
   className?: string;
   placeholder?: string;
   spellcheck?: boolean;
 };
 
-export function typoraMarkdown(options: TyporaMarkdownOptions = {}): Extension {
+export function liveMarkdown(options: LiveMarkdownOptions = {}): Extension {
   let extensions: Extension[] = [
-    typoraKeymap,
+    liveMdKeymap,
     closeBrackets(),
     keymap.of(closeBracketsKeymap),
     EditorView.lineWrapping,
     EditorState.allowMultipleSelections.of(true),
     codeFenceLanguagesField,
     EditorView.contentAttributes.of({
-      "aria-label": options.ariaLabel ?? "Typora-style Markdown editor",
+      "aria-label": options.ariaLabel ?? "LiveMD Markdown editor",
       spellcheck: String(options.spellcheck ?? true),
     }),
     EditorView.editorAttributes.of({
-      class: options.className ?? "typora-codemirror",
+      class: options.className ?? "live-md-codemirror",
     }),
-    typoraDecorations,
+    liveMdDecorations,
   ];
 
   if (options.placeholder) extensions.push(placeholderExtension(options.placeholder));
