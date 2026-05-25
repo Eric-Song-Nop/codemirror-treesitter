@@ -1,8 +1,7 @@
 // @vitest-environment happy-dom
 
 import { EditorState } from "@codemirror/state";
-import { highlightTree, syntaxTree } from "@codemirror-treesitter/language";
-import { EditorView } from "@codemirror/view";
+import { syntaxTree } from "@codemirror-treesitter/language";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { createLiveMdEditor } from "../src/core/editor.js";
 import { loadMarkdownExtension } from "../src/core/languages.js";
@@ -27,7 +26,7 @@ afterEach(() => {
 describe("code fence at end of document", () => {
   it("tree-sitter should include closing delimiter for code fence at EOF", async () => {
     let markdown = await loadMarkdownExtension();
-    
+
     // Test without trailing newline
     let stateNoNewline = EditorState.create({
       doc: "```ts\nconst x = 1;\n```",
@@ -60,7 +59,9 @@ describe("code fence at end of document", () => {
         if (node.name === "fenced_code_block") {
           console.log("NO NEWLINE fenced_code_block children:");
           for (let child of node.children) {
-            console.log(`  ${child.name}: "${stateNoNewline.sliceDoc(child.from, child.to)}" (${child.from}-${child.to})`);
+            console.log(
+              `  ${child.name}: "${stateNoNewline.sliceDoc(child.from, child.to)}" (${child.from}-${child.to})`,
+            );
           }
         }
       },
@@ -78,7 +79,9 @@ describe("code fence at end of document", () => {
         if (node.name === "fenced_code_block") {
           console.log("WITH NEWLINE fenced_code_block children:");
           for (let child of node.children) {
-            console.log(`  ${child.name}: "${stateWithNewline.sliceDoc(child.from, child.to)}" (${child.from}-${child.to})`);
+            console.log(
+              `  ${child.name}: "${stateWithNewline.sliceDoc(child.from, child.to)}" (${child.from}-${child.to})`,
+            );
           }
         }
       },
@@ -104,9 +107,7 @@ describe("code fence at end of document", () => {
     let spans = contentDOM.querySelectorAll("span");
 
     // Find spans containing ```
-    let backtickSpans = Array.from(spans).filter((span) =>
-      span.textContent?.includes("`"),
-    );
+    let backtickSpans = Array.from(spans).filter((span) => span.textContent?.includes("`"));
 
     console.log("NO NEWLINE spans with backticks:");
     backtickSpans.forEach((span) => {
@@ -140,9 +141,7 @@ describe("code fence at end of document", () => {
     let spans = contentDOM.querySelectorAll("span");
 
     // Find spans containing ```
-    let backtickSpans = Array.from(spans).filter((span) =>
-      span.textContent?.includes("`"),
-    );
+    let backtickSpans = Array.from(spans).filter((span) => span.textContent?.includes("`"));
 
     console.log("WITH NEWLINE spans with backticks:");
     backtickSpans.forEach((span) => {
@@ -156,6 +155,8 @@ describe("code fence at end of document", () => {
     });
 
     expect(codeFenceSpans.length).toBeGreaterThanOrEqual(2); // opening + closing
-    expect(codeFenceSpans.some((span) => span.classList.contains("cm-md-syntax-hidden"))).toBe(true);
+    expect(codeFenceSpans.some((span) => span.classList.contains("cm-md-syntax-hidden"))).toBe(
+      true,
+    );
   });
 });

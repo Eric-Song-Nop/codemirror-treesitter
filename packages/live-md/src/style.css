@@ -92,6 +92,31 @@
   white-space: nowrap;
 }
 
+.live-md-codemirror .cm-md-block-separator {
+  height: 0.55em;
+  min-height: 0;
+  padding: 0;
+  line-height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.live-md-codemirror .cm-md-block-separator-fill {
+  height: 0;
+  min-height: 0;
+  padding: 0;
+  line-height: 0;
+  font-size: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .live-md-codemirror .cm-md-heading {
   font-family: var(--live-md-font-ui);
   font-weight: 800;

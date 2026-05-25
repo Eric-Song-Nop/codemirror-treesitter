@@ -12,7 +12,7 @@ type LineMarkers = {
 };
 
 export const liveMdKeymap = keymap.of([
-  { key: "Enter", run: continueMarkdownBlock },
+  { key: "Enter", run: continueMarkdownBlock, shift: insertMarkdownSoftBreak },
   { key: "Mod-b", run: surroundSelection("**", "**", "strong text") },
   { key: "Mod-i", run: surroundSelection("_", "_", "emphasis") },
   { key: "Mod-e", run: surroundSelection("`", "`", "code") },
@@ -109,18 +109,22 @@ function continueMarkdownBlock(view: EditorView) {
     }
   }
 
-  if (markers.task && markers.listMarker) {
+  if (markers.task && markers.listMarker && cursor >= markers.task.to) {
     let prefix = state.sliceDoc(line.from, markers.listMarker.from);
     return insertContinuation(view, cursor, `${prefix}${nextMarker(markers.listMarker.text)}[ ] `);
   }
 
-  if (markers.listMarker) {
+  if (markers.listMarker && cursor >= markers.listMarker.to) {
     let prefix = state.sliceDoc(line.from, markers.listMarker.from);
     return insertContinuation(view, cursor, `${prefix}${nextMarker(markers.listMarker.text)}`);
   }
 
-  if (markers.quoteTo) {
+  if (markers.quoteTo && cursor >= markers.quoteTo) {
     return insertContinuation(view, cursor, state.sliceDoc(line.from, markers.quoteTo));
+  }
+
+  if (cursor == line.to && !isWhitespaceOnly(state.sliceDoc(line.from, line.to))) {
+    return insertParagraphBreak(view, cursor);
   }
 
   return false;
@@ -143,6 +147,26 @@ function insertContinuation(view: EditorView, cursor: number, prefix: string) {
     scrollIntoView: true,
     userEvent: "input.markdownNewline",
   });
+  return true;
+}
+
+function insertParagraphBreak(view: EditorView, cursor: number) {
+  view.dispatch({
+    changes: { from: cursor, insert: "\n\n" },
+    selection: { anchor: cursor + 2 },
+    scrollIntoView: true,
+    userEvent: "input.markdownParagraphBreak",
+  });
+  return true;
+}
+
+function insertMarkdownSoftBreak(view: EditorView) {
+  view.dispatch(
+    view.state.update(view.state.replaceSelection(view.state.lineBreak), {
+      scrollIntoView: true,
+      userEvent: "input.markdownSoftBreak",
+    }),
+  );
   return true;
 }
 

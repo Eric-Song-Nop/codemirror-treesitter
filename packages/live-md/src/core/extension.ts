@@ -2,7 +2,7 @@ import { EditorState, type Extension } from "@codemirror/state";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror-treesitter/autocomplete";
 import { EditorView, keymap, placeholder as placeholderExtension } from "@codemirror/view";
 import { liveMdKeymap } from "./commands.js";
-import { liveMdDecorations } from "./decorations.js";
+import { liveMdAtomicRanges, liveMdDecorations } from "./decorations.js";
 import { codeFenceLanguagesField } from "./languages.js";
 
 export type LiveMarkdownOptions = {
@@ -28,6 +28,7 @@ export function liveMarkdown(options: LiveMarkdownOptions = {}): Extension {
       class: options.className ?? "live-md-codemirror",
     }),
     liveMdDecorations,
+    liveMdAtomicRanges,
   ];
 
   if (options.placeholder) extensions.push(placeholderExtension(options.placeholder));
