@@ -6,6 +6,7 @@ import {
   StateEffect,
   StateField,
   Text,
+  type Extension,
 } from "@codemirror/state";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror-treesitter/autocomplete";
 import { minimalSetup } from "@codemirror-treesitter/basic-setup";
@@ -27,7 +28,6 @@ import {
   type Command,
   type DecorationSet,
 } from "@codemirror/view";
-import heroUrl from "./assets/hero.png";
 
 type InlineDecoration = {
   from: number;
@@ -58,7 +58,22 @@ type LineMarkers = {
   task: { checked: boolean; from: number; to: number } | null;
 };
 
-const storageKey = "codemirror-treesitter-typora-demo-v2";
+export type TyporaEditorHandle = {
+  destroy: () => void;
+  ready: Promise<void>;
+  view: EditorView;
+};
+
+export type TyporaEditorOptions = {
+  doc?: string;
+  extensions?: Extension[];
+  focus?: boolean;
+  initialDoc?: string;
+  persist?: boolean;
+  storageKey?: string;
+};
+
+const defaultStorageKey = "codemirror-treesitter-typora-demo-v2";
 const markdownDescription = languages.find((language) => language.name == "Markdown");
 const emptyCodeFenceLanguages: CodeFenceLanguageMap = new Map();
 
@@ -80,7 +95,8 @@ const codeFenceHighlightModule = gruvboxLightHighlightStyle.module
   ? EditorView.styleModule.of(gruvboxLightHighlightStyle.module)
   : [];
 
-const initialMarkdown = `# Typora-style field note
+export function createInitialMarkdown(imageUrl = "") {
+  return `# Typora-style field note
 
 The editor keeps Markdown as the source while the page reads like composed text. It uses **Tree-sitter Markdown** for the CodeMirror language layer, then applies local editing affordances on top.
 
@@ -90,7 +106,7 @@ The editor keeps Markdown as the source while the page reads like composed text.
 
 Use _emphasis_, **strong text**, ~~removed words~~, ==highlighted phrases==, \`inline code\`, and [project links](https://viteplus.dev/) in the same writing flow.
 
-![A writing surface](${heroUrl})
+${imageUrl ? `![A writing surface](${imageUrl})` : ""}
 
 ## Working list
 
@@ -137,6 +153,7 @@ const note: Note = { title: "Tree-sitter Markdown", done: false };
 - [ ] **Nested** source remains editable as plain fenced text.
 \`\`\`
 `;
+}
 
 const visibleSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-active" });
 const hiddenSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-hidden" });
@@ -393,31 +410,39 @@ async function loadCodeFenceLanguages() {
   return languageMap;
 }
 
-export function mountTyporaEditor(parent: HTMLElement) {
+export function createTyporaEditor(
+  parent: HTMLElement,
+  options: TyporaEditorOptions = {},
+): TyporaEditorHandle {
   let markdownCompartment = new Compartment();
+  let persist = options.persist ?? true;
+  let storageKey = options.storageKey ?? defaultStorageKey;
+  let initialDoc = options.initialDoc ?? createInitialMarkdown();
   let view = new EditorView({
     parent,
     state: EditorState.create({
-      doc: loadInitialDoc(),
+      doc: options.doc ?? loadInitialDoc(storageKey, initialDoc),
       extensions: [
         typoraMarkdownExtensions(),
         codeFenceHighlightModule,
         markdownCompartment.of([]),
         minimalSetup,
+        ...(options.extensions ?? []),
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) saveDoc(update.state.doc.toString());
+          if (persist && update.docChanged) saveDoc(storageKey, update.state.doc.toString());
         }),
       ],
     }),
   });
 
-  view.focus();
+  if (options.focus ?? true) view.focus();
 
   let cancelled = false;
+  let markdownReady = Promise.resolve();
   if (!markdownDescription) {
     console.error("Markdown language support is unavailable");
   } else {
-    void markdownDescription
+    markdownReady = markdownDescription
       .load()
       .then((support) => {
         if (cancelled) return;
@@ -430,7 +455,7 @@ export function mountTyporaEditor(parent: HTMLElement) {
       });
   }
 
-  void loadCodeFenceLanguages()
+  let codeFenceReady = loadCodeFenceLanguages()
     .then((languageMap) => {
       if (cancelled || !languageMap.size) return;
       view.dispatch({
@@ -441,10 +466,21 @@ export function mountTyporaEditor(parent: HTMLElement) {
       console.error(error);
     });
 
-  return () => {
-    cancelled = true;
-    view.destroy();
+  let ready = Promise.all([markdownReady, codeFenceReady]).then(() => undefined);
+
+  return {
+    destroy() {
+      cancelled = true;
+      view.destroy();
+    },
+    ready,
+    view,
   };
+}
+
+export function mountTyporaEditor(parent: HTMLElement, options: TyporaEditorOptions = {}) {
+  let editor = createTyporaEditor(parent, options);
+  return editor.destroy;
 }
 
 const visitors: Record<string, NodeVisitor> = {
@@ -1103,15 +1139,15 @@ function toggleTaskOnCurrentLine(view: EditorView) {
   return true;
 }
 
-function loadInitialDoc() {
+function loadInitialDoc(storageKey: string, fallback: string) {
   try {
-    return window.localStorage.getItem(storageKey) || initialMarkdown;
+    return window.localStorage.getItem(storageKey) || fallback;
   } catch {
-    return initialMarkdown;
+    return fallback;
   }
 }
 
-function saveDoc(doc: string) {
+function saveDoc(storageKey: string, doc: string) {
   try {
     window.localStorage.setItem(storageKey, doc);
   } catch {

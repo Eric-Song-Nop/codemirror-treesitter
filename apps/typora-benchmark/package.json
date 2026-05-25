@@ -1,21 +1,21 @@
 {
-  "name": "basic-editor",
+  "name": "typora-benchmark",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vp dev",
+    "benchmark": "vp dev --host 127.0.0.1 --open /?benchmark=run",
     "build": "tsc && vp build",
     "preview": "vp preview"
   },
   "dependencies": {
+    "@codemirror-treesitter/language": "workspace:*",
     "@codemirror-treesitter/typora-runtime": "workspace:*",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.43.0"
   },
   "devDependencies": {
-    "@types/react": "^19.2.15",
-    "@types/react-dom": "^19.2.3",
     "typescript": "~6.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:"
