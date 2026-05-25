@@ -5,19 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
-    "build": "tsc && vp build",
+    "build": "vp build",
     "preview": "vp preview"
   },
   "dependencies": {
-    "@codemirror-treesitter/typora-runtime": "workspace:*",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "@codemirror-treesitter/typora-runtime": "workspace:*"
   },
   "devDependencies": {
-    "@types/react": "^19.2.15",
-    "@types/react-dom": "^19.2.3",
-    "typescript": "~6.0.2",
-    "vite": "catalog:",
     "vite-plus": "catalog:"
   }
 }

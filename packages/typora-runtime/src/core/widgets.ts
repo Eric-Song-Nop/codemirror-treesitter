@@ -1,0 +1,185 @@
+import { Decoration, EditorView, WidgetType } from "@codemirror/view";
+import { isAsciiDigit } from "./util.js";
+
+export type MarkdownTable = {
+  alignments: Array<"center" | "default" | "left" | "right">;
+  header: string[];
+  rows: string[][];
+};
+
+export class TaskCheckboxWidget extends WidgetType {
+  private checked: boolean;
+  private markerFrom: number;
+
+  constructor(checked: boolean, markerFrom: number) {
+    super();
+    this.checked = checked;
+    this.markerFrom = markerFrom;
+  }
+
+  eq(other: TaskCheckboxWidget) {
+    return other.checked == this.checked && other.markerFrom == this.markerFrom;
+  }
+
+  toDOM(view: EditorView) {
+    let button = document.createElement("button");
+    button.type = "button";
+    button.className = this.checked ? "cm-md-task-toggle is-checked" : "cm-md-task-toggle";
+    button.setAttribute("aria-label", this.checked ? "Mark task incomplete" : "Mark task complete");
+    button.setAttribute("aria-checked", String(this.checked));
+    button.setAttribute("role", "checkbox");
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      view.dispatch({
+        changes: {
+          from: this.markerFrom + 1,
+          to: this.markerFrom + 2,
+          insert: this.checked ? " " : "x",
+        },
+        userEvent: "input.task",
+      });
+      view.focus();
+    });
+    return button;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+export class ListMarkerWidget extends WidgetType {
+  private marker: string;
+
+  constructor(marker: string) {
+    super();
+    this.marker = marker;
+  }
+
+  eq(other: ListMarkerWidget) {
+    return other.marker == this.marker;
+  }
+
+  toDOM() {
+    let marker = document.createElement("span");
+    let ordered = isAsciiDigit(this.marker.charCodeAt(0));
+    marker.className = ordered ? "cm-md-list-marker is-ordered" : "cm-md-list-marker";
+    marker.textContent = ordered ? this.marker : "\u2022";
+    return marker;
+  }
+}
+
+export class ImagePreviewWidget extends WidgetType {
+  private alt: string;
+  private src: string;
+
+  constructor(alt: string, src: string) {
+    super();
+    this.alt = alt;
+    this.src = src;
+  }
+
+  eq(other: ImagePreviewWidget) {
+    return other.alt == this.alt && other.src == this.src;
+  }
+
+  toDOM() {
+    let figure = document.createElement("figure");
+    figure.className = "cm-md-image-preview";
+
+    let image = document.createElement("img");
+    image.alt = this.alt;
+    image.src = this.src;
+    figure.append(image);
+
+    if (this.alt) {
+      let caption = document.createElement("figcaption");
+      caption.textContent = this.alt;
+      figure.append(caption);
+    }
+
+    return figure;
+  }
+}
+
+export class TablePreviewWidget extends WidgetType {
+  private sourceFrom: number;
+  private table: MarkdownTable;
+  private tableKey: string;
+
+  constructor(table: MarkdownTable, sourceFrom: number) {
+    super();
+    this.table = table;
+    this.sourceFrom = sourceFrom;
+    this.tableKey = JSON.stringify(table);
+  }
+
+  eq(other: TablePreviewWidget) {
+    return other.tableKey == this.tableKey && other.sourceFrom == this.sourceFrom;
+  }
+
+  toDOM(view: EditorView) {
+    let wrapper = document.createElement("div");
+    wrapper.className = "cm-md-table-preview";
+    wrapper.tabIndex = 0;
+    wrapper.setAttribute("role", "button");
+    wrapper.setAttribute("aria-label", "Edit Markdown table");
+    wrapper.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
+    wrapper.addEventListener("click", () => {
+      view.dispatch({
+        selection: { anchor: this.sourceFrom },
+        scrollIntoView: true,
+        userEvent: "select.tablePreview",
+      });
+      view.focus();
+    });
+
+    let table = document.createElement("table");
+    let thead = document.createElement("thead");
+    let headerRow = document.createElement("tr");
+    this.table.header.forEach((cell, index) => {
+      let heading = document.createElement("th");
+      heading.textContent = cell;
+      applyTableAlignment(heading, this.table.alignments[index]);
+      headerRow.append(heading);
+    });
+    thead.append(headerRow);
+    table.append(thead);
+
+    let tbody = document.createElement("tbody");
+    this.table.rows.forEach((row) => {
+      let tableRow = document.createElement("tr");
+      row.forEach((cell, index) => {
+        let value = document.createElement("td");
+        value.textContent = cell;
+        applyTableAlignment(value, this.table.alignments[index]);
+        tableRow.append(value);
+      });
+      tbody.append(tableRow);
+    });
+    table.append(tbody);
+    wrapper.append(table);
+
+    return wrapper;
+  }
+}
+
+export function replaceWithWidget(from: number, to: number, widget: WidgetType, block = false) {
+  return {
+    decoration: Decoration.replace({ block, widget }),
+    from,
+    to,
+  };
+}
+
+function applyTableAlignment(
+  element: HTMLTableCellElement,
+  alignment: "center" | "default" | "left" | "right" = "default",
+) {
+  if (alignment != "default") element.style.textAlign = alignment;
+}

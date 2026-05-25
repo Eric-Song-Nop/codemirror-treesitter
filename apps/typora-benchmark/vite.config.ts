@@ -27,8 +27,8 @@ export default defineConfig({
         "../../packages/codemirror/src/index.ts",
         import.meta.url,
       ).pathname,
-      "@codemirror-treesitter/typora-runtime/style.css": new URL(
-        "../../packages/typora-runtime/src/style.css",
+      "@codemirror-treesitter/typora-runtime/fixtures": new URL(
+        "../../packages/typora-runtime/src/fixtures/index.ts",
         import.meta.url,
       ).pathname,
       "@codemirror-treesitter/typora-runtime": new URL(

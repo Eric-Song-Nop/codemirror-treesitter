@@ -3,11 +3,38 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/src/style.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Typora Markdown Demo</title>
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <!-- prettier-ignore -->
+    <typora-editor autofocus>
+      # Typora-style field note
+
+      The editor keeps Markdown as the source while the page reads like composed text.
+
+      > Drafting should feel quiet. Markup can stay available without shouting over the prose.
+
+      ## Inline rhythm
+
+      Use _emphasis_, **strong text**, ~~removed words~~, `inline code`, and [project links](https://viteplus.dev/) in the same writing flow.
+
+      - [x] Render Markdown blocks in place
+      - [x] Keep Tree-sitter parsing active
+      - [ ] Compare more Typora behaviors
+
+      ```ts
+      type Note = {
+        title: string;
+        done: boolean;
+      };
+      ```
+
+      text
+    </typora-editor>
+    <script type="module">
+      import "@codemirror-treesitter/typora-runtime/register";
+    </script>
   </body>
 </html>

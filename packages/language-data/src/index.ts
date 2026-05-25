@@ -33,8 +33,11 @@ const packageRawAsset =
 
 const localAsset =
   (url: URL): AssetLoader =>
-  async () =>
-    url.protocol == "file:" ? url.pathname : url.href;
+  async () => {
+    if (url.protocol == "file:") return url.pathname;
+    if (!isBrowserLike()) return viteFsPath(url) ?? url.href;
+    return url.href;
+  };
 
 let nodeRequire: NodeRequire | null = null;
 
@@ -59,6 +62,24 @@ function isBrowserLike() {
   return (
     typeof globalThis.location == "object" &&
     typeof (globalThis as typeof globalThis & { document?: unknown }).document == "object"
+  );
+}
+
+function viteFsPath(url: URL) {
+  if (url.pathname.startsWith("/@fs/")) return decodeURIComponent(url.pathname.slice(4));
+  let cwd = (
+    globalThis as typeof globalThis & { process?: { cwd?: () => string } }
+  ).process?.cwd?.();
+  if (cwd && isViteLocalhost(url) && url.pathname.startsWith("/")) {
+    return `${cwd}${decodeURIComponent(url.pathname)}`;
+  }
+  return null;
+}
+
+function isViteLocalhost(url: URL) {
+  return (
+    (url.protocol == "http:" || url.protocol == "https:") &&
+    (url.hostname == "localhost" || url.hostname == "127.0.0.1" || url.hostname == "[::1]")
   );
 }
 

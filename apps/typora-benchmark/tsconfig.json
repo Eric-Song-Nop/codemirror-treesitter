@@ -3,7 +3,6 @@
     "target": "es2023",
     "module": "esnext",
     "lib": ["ES2023", "DOM"],
-    "jsx": "react-jsx",
     "types": ["vite-plus/client"],
     "skipLibCheck": true,
 
@@ -11,6 +10,9 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "paths": {
+      "@codemirror-treesitter/typora-runtime/fixtures": [
+        "../../packages/typora-runtime/src/fixtures/index.ts"
+      ],
       "@codemirror-treesitter/typora-runtime": ["../../packages/typora-runtime/src/index.ts"]
     },
     "verbatimModuleSyntax": true,
