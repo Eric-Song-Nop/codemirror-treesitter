@@ -162,7 +162,8 @@ function placeholderValue(value: string | undefined): Extension {
 
 function loadPersistedValue(storageKey: string, fallback: string) {
   try {
-    return globalThis.localStorage?.getItem(storageKey) || fallback;
+    let persistedValue = globalThis.localStorage?.getItem(storageKey);
+    return persistedValue == null ? fallback : persistedValue;
   } catch {
     return fallback;
   }
