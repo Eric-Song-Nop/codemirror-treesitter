@@ -33,6 +33,8 @@ export class TaskCheckboxWidget extends WidgetType {
     });
     button.addEventListener("click", (event) => {
       event.preventDefault();
+      if (view.state.readOnly) return;
+
       view.dispatch({
         changes: {
           from: this.markerFrom + 1,
