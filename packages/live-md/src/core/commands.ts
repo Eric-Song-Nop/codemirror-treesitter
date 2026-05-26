@@ -84,6 +84,8 @@ function lineIsInsideCodeFence(state: EditorState, line: DocLine) {
 }
 
 function continueMarkdownBlock(view: EditorView) {
+  if (view.state.readOnly) return true;
+
   let { state } = view;
   if (state.selection.ranges.length != 1 || !state.selection.main.empty) return false;
 
@@ -131,6 +133,8 @@ function continueMarkdownBlock(view: EditorView) {
 }
 
 function clearMarkdownContinuation(view: EditorView, from: number, to: number) {
+  if (view.state.readOnly) return true;
+
   view.dispatch({
     changes: { from, to, insert: "" },
     selection: { anchor: from },
@@ -141,6 +145,8 @@ function clearMarkdownContinuation(view: EditorView, from: number, to: number) {
 }
 
 function insertContinuation(view: EditorView, cursor: number, prefix: string) {
+  if (view.state.readOnly) return true;
+
   view.dispatch({
     changes: { from: cursor, insert: `\n${prefix}` },
     selection: { anchor: cursor + prefix.length + 1 },
@@ -151,6 +157,8 @@ function insertContinuation(view: EditorView, cursor: number, prefix: string) {
 }
 
 function insertParagraphBreak(view: EditorView, cursor: number) {
+  if (view.state.readOnly) return true;
+
   view.dispatch({
     changes: { from: cursor, insert: "\n\n" },
     selection: { anchor: cursor + 2 },
@@ -161,6 +169,8 @@ function insertParagraphBreak(view: EditorView, cursor: number) {
 }
 
 function insertMarkdownSoftBreak(view: EditorView) {
+  if (view.state.readOnly) return true;
+
   view.dispatch(
     view.state.update(view.state.replaceSelection(view.state.lineBreak), {
       scrollIntoView: true,
@@ -187,6 +197,8 @@ function nextMarker(marker: string) {
 
 function surroundSelection(open: string, close: string, placeholder: string): Command {
   return (view) => {
+    if (view.state.readOnly) return true;
+
     let transaction = view.state.changeByRange((range) => {
       if (range.empty) {
         let insert = `${open}${placeholder}${close}`;
@@ -212,6 +224,8 @@ function surroundSelection(open: string, close: string, placeholder: string): Co
 }
 
 function insertMarkdownLink(view: EditorView) {
+  if (view.state.readOnly) return true;
+
   let transaction = view.state.changeByRange((range) => {
     let label = range.empty ? "link" : view.state.sliceDoc(range.from, range.to);
     let insert = `[${label}](https://example.com)`;
@@ -226,6 +240,8 @@ function insertMarkdownLink(view: EditorView) {
 }
 
 function toggleTaskOnCurrentLine(view: EditorView) {
+  if (view.state.readOnly) return true;
+
   let line = view.state.doc.lineAt(view.state.selection.main.head);
   let task = readLineMarkers(view.state, line).task;
   if (!task) return false;
