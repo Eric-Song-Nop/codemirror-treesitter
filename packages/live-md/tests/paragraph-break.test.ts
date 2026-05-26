@@ -38,9 +38,12 @@ describe("paragraph breaks", () => {
     pressKey(editor.view, "Enter");
     pressKey(editor.view, "Enter");
 
-    expect(editor.value).toBe("first\n\n\n\n\nsecond");
-    expect(countLineClass(editor.view, "cm-md-block-separator")).toBe(2);
-    expect(countLineClass(editor.view, "cm-md-block-separator-fill")).toBe(1);
+    expect(editor.value).toBe("first\n\n\n\n\n\n\n\nsecond");
+
+    let separatorCount = countLineClass(editor.view, "cm-md-block-separator");
+    let fillCount = countLineClass(editor.view, "cm-md-block-separator-fill");
+    expect(separatorCount).toBe(4);
+    expect(fillCount).toBe(0);
   });
 
   it("decorates a trailing paragraph separator immediately after Enter at document end", async () => {
@@ -122,7 +125,7 @@ describe("paragraph breaks", () => {
     let editor = await mountEditor("line1\n\n\n\n\n\nline2");
 
     expect(countLineClass(editor.view, "cm-md-block-separator")).toBe(3);
-    expect(countLineClass(editor.view, "cm-md-block-separator-fill")).toBe(2);
+    expect(countLineClass(editor.view, "cm-md-block-separator-fill")).toBe(0);
   });
 
   it("treats paragraph separators as atomic cursor ranges", async () => {

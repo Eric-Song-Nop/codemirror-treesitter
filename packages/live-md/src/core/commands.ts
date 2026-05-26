@@ -125,7 +125,7 @@ function continueMarkdownBlock(view: EditorView) {
     return insertContinuation(view, cursor, state.sliceDoc(line.from, markers.quoteTo));
   }
 
-  if (cursor == line.to && !isWhitespaceOnly(state.sliceDoc(line.from, line.to))) {
+  if (cursor == line.to) {
     return insertParagraphBreak(view, cursor);
   }
 
