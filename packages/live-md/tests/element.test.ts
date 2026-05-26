@@ -11,9 +11,13 @@ import {
 
 let tagId = 0;
 let locationDescriptor: PropertyDescriptor | undefined;
+let localStorageDescriptor: PropertyDescriptor | undefined;
+let localStorageStubbed = false;
 
 beforeEach(() => {
   locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
+  localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  localStorageStubbed = false;
   Object.defineProperty(globalThis, "location", {
     configurable: true,
     value: undefined,
@@ -26,6 +30,13 @@ afterEach(() => {
   vi.restoreAllMocks();
   if (locationDescriptor) {
     Object.defineProperty(globalThis, "location", locationDescriptor);
+  }
+  if (localStorageStubbed) {
+    if (localStorageDescriptor) {
+      Object.defineProperty(globalThis, "localStorage", localStorageDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "localStorage");
+    }
   }
 });
 
@@ -153,6 +164,24 @@ describe("liveMd editor web component", () => {
     expect(setItem).not.toHaveBeenCalled();
   });
 
+  it("uses a persisted empty value instead of the default value", async () => {
+    let storage = installTestLocalStorage([["live-md-empty", ""]]);
+    let editor = mountPersistedTestEditor("fallback", "live-md-empty");
+    await editor.ready;
+
+    expect(storage.getItem).toHaveBeenCalledWith("live-md-empty");
+    expect(editor.value).toBe("");
+  });
+
+  it("uses the default value when no persisted value exists", async () => {
+    let storage = installTestLocalStorage();
+    let editor = mountPersistedTestEditor("fallback", "live-md-missing");
+    await editor.ready;
+
+    expect(storage.getItem).toHaveBeenCalledWith("live-md-missing");
+    expect(editor.value).toBe("fallback");
+  });
+
   it("keeps multiple editors independent", async () => {
     let first = mountTestEditor("first");
     let second = mountTestEditor("second");
@@ -208,6 +237,32 @@ function mountTestEditor(defaultValue: string) {
   editor.defaultValue = defaultValue;
   document.body.append(editor);
   return editor;
+}
+
+function mountPersistedTestEditor(defaultValue: string, persistKey: string) {
+  let tag = defineTestElement();
+  let editor = document.createElement(tag) as LiveMdEditorElementType;
+  editor.defaultValue = defaultValue;
+  editor.persistKey = persistKey;
+  document.body.append(editor);
+  return editor;
+}
+
+function installTestLocalStorage(entries: [string, string][] = []) {
+  let values = new Map(entries);
+  let storage = {
+    clear: vi.fn(() => values.clear()),
+    getItem: vi.fn((key: string) => values.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      values.set(key, value);
+    }),
+  } as Pick<Storage, "clear" | "getItem" | "setItem">;
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
+  localStorageStubbed = true;
+  return storage;
 }
 
 function hasShadowRuntimeStyles(editor: LiveMdEditorElementType) {
