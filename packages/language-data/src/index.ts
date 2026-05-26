@@ -496,6 +496,7 @@ type LanguageSpec = {
   alias?: readonly string[];
   extensions?: readonly string[];
   filename?: RegExp;
+  implicitFinalNewline?: boolean;
   wasm: AssetLoader;
   languageData?: { [name: string]: unknown };
   props?: readonly NodePropSource[];
@@ -1371,7 +1372,9 @@ async function load(spec: LanguageSpec) {
     spec.highlightQuery?.(),
     spec.nested?.(),
   ]);
-  let parser = await TreeSitterParser.load(wasm);
+  let parser = await TreeSitterParser.load(wasm, {
+    implicitFinalNewline: spec.implicitFinalNewline,
+  });
   let language = TreeSitterLanguage.define({
     name: spec.name.toLowerCase(),
     parser,
@@ -1386,7 +1389,9 @@ async function load(spec: LanguageSpec) {
 
 async function nestedParser(spec: LanguageSpec) {
   let [wasm, highlightQuery] = await Promise.all([spec.wasm(), spec.highlightQuery?.()]);
-  let parser = await TreeSitterParser.load(wasm);
+  let parser = await TreeSitterParser.load(wasm, {
+    implicitFinalNewline: spec.implicitFinalNewline,
+  });
   return TreeSitterLanguage.define({
     name: spec.name.toLowerCase(),
     parser,
@@ -1942,6 +1947,7 @@ export const languages = [
   desc({
     name: "Markdown",
     extensions: ["md", "markdown", "mkd"],
+    implicitFinalNewline: true,
     wasm: markdownWasm,
     languageData: markdownData,
     highlightQuery: markdownHighlights,

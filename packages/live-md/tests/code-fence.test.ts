@@ -52,42 +52,29 @@ describe("code fence at end of document", () => {
 
     expect(fencedBlocks).toHaveLength(1);
 
-    // Debug: print tree structure for EOF code fence
-    let tree2 = syntaxTree(stateNoNewline);
-    tree2.iterate({
-      enter(node) {
-        if (node.name === "fenced_code_block") {
-          console.log("NO NEWLINE fenced_code_block children:");
-          for (let child of node.children) {
-            console.log(
-              `  ${child.name}: "${stateNoNewline.sliceDoc(child.from, child.to)}" (${child.from}-${child.to})`,
-            );
-          }
-        }
-      },
-    });
-
     // Test with trailing newline
     let stateWithNewline = EditorState.create({
       doc: "```ts\nconst x = 1;\n```\n",
       extensions: [markdown],
     });
 
-    let tree3 = syntaxTree(stateWithNewline);
-    tree3.iterate({
+    let fencedBlocksWithNewline: Array<{ delimiters: number; hasContent: boolean }> = [];
+    syntaxTree(stateWithNewline).iterate({
       enter(node) {
         if (node.name === "fenced_code_block") {
-          console.log("WITH NEWLINE fenced_code_block children:");
-          for (let child of node.children) {
-            console.log(
-              `  ${child.name}: "${stateWithNewline.sliceDoc(child.from, child.to)}" (${child.from}-${child.to})`,
-            );
-          }
+          let delimiters = node.children.filter(
+            (child) => child.name === "fenced_code_block_delimiter",
+          );
+          fencedBlocksWithNewline.push({
+            delimiters: delimiters.length,
+            hasContent: node.getChild("code_fence_content") !== null,
+          });
         }
       },
     });
 
     expect(fencedBlocks[0]).toEqual({ delimiters: 2, hasContent: true });
+    expect(fencedBlocksWithNewline[0]).toEqual({ delimiters: 2, hasContent: true });
   });
 
   it("closing delimiter should be hidden when cursor is not on that line (no trailing newline)", async () => {
@@ -102,26 +89,15 @@ describe("code fence at end of document", () => {
 
     await editor.ready;
 
-    // Get all elements with the closing ``` text
-    let contentDOM = editor.view.contentDOM;
-    let spans = contentDOM.querySelectorAll("span");
-
-    // Find spans containing ```
-    let backtickSpans = Array.from(spans).filter((span) => span.textContent?.includes("`"));
-
-    console.log("NO NEWLINE spans with backticks:");
-    backtickSpans.forEach((span) => {
-      console.log(`  class="${span.className}" text="${span.textContent}"`);
-    });
-
-    // The closing ``` should have cm-md-syntax-hidden class
-    let closingSpan = backtickSpans.find((span) => {
-      let text = span.textContent || "";
-      return text.includes("```") && !text.includes("ts");
-    });
+    let closingLine = editor.view.contentDOM.querySelectorAll(".cm-line").item(2);
+    let closingSpan = Array.from(closingLine.querySelectorAll("span")).find((span) =>
+      span.textContent?.includes("```"),
+    );
 
     expect(closingSpan).toBeTruthy();
     expect(closingSpan?.classList.contains("cm-md-syntax-hidden")).toBe(true);
+    expect(closingLine.classList.contains("cm-md-code-fence-line")).toBe(true);
+    expect(closingLine.classList.contains("cm-md-code-line")).toBe(false);
   });
 
   it("closing delimiter should be hidden when cursor is not on that line (with trailing newline)", async () => {
@@ -136,27 +112,14 @@ describe("code fence at end of document", () => {
 
     await editor.ready;
 
-    // Get all elements with the closing ``` text
-    let contentDOM = editor.view.contentDOM;
-    let spans = contentDOM.querySelectorAll("span");
-
-    // Find spans containing ```
-    let backtickSpans = Array.from(spans).filter((span) => span.textContent?.includes("`"));
-
-    console.log("WITH NEWLINE spans with backticks:");
-    backtickSpans.forEach((span) => {
-      console.log(`  class="${span.className}" text="${span.textContent}"`);
-    });
-
-    // Find all spans that contain ``` and assert at least one is hidden
-    let codeFenceSpans = backtickSpans.filter((span) => {
-      let text = span.textContent || "";
-      return text.includes("```") && !text.includes("ts");
-    });
-
-    expect(codeFenceSpans.length).toBeGreaterThanOrEqual(2); // opening + closing
-    expect(codeFenceSpans.some((span) => span.classList.contains("cm-md-syntax-hidden"))).toBe(
-      true,
+    let closingLine = editor.view.contentDOM.querySelectorAll(".cm-line").item(2);
+    let closingSpan = Array.from(closingLine.querySelectorAll("span")).find((span) =>
+      span.textContent?.includes("```"),
     );
+
+    expect(closingSpan).toBeTruthy();
+    expect(closingSpan?.classList.contains("cm-md-syntax-hidden")).toBe(true);
+    expect(closingLine.classList.contains("cm-md-code-fence-line")).toBe(true);
+    expect(closingLine.classList.contains("cm-md-code-line")).toBe(false);
   });
 });

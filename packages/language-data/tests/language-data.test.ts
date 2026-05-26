@@ -733,6 +733,21 @@ describe("tree-sitter language data", () => {
     ).toBe(true);
   });
 
+  it("parses Markdown closing code fences at EOF", async () => {
+    let support = await languages.find((lang) => lang.name == "Markdown")!.load();
+    let doc = "```ts\nconst x = 1;\n```";
+    let state = EditorState.create({ doc, extensions: [support.extension] });
+    let delimiters = 0;
+
+    syntaxTree(state).iterate({
+      enter(node) {
+        if (node.name == "fenced_code_block_delimiter") delimiters++;
+      },
+    });
+
+    expect(delimiters).toBe(2);
+  });
+
   it("reuses unchanged tree-sitter nodes after document changes", async () => {
     let support = await languages.find((lang) => lang.name == "JavaScript")!.load();
     let state = EditorState.create({
