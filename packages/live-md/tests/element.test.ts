@@ -151,6 +151,189 @@ describe("liveMd editor web component", () => {
     expect(editor.value).toBe("doc!");
   });
 
+  it("exposes textarea-compatible selection properties", async () => {
+    let editor = mountTestEditor("abcdef");
+    let select = vi.fn();
+    editor.addEventListener("select", select);
+    await editor.ready;
+
+    expect(editor.selectionStart).toBe(0);
+    expect(editor.selectionEnd).toBe(0);
+
+    editor.setSelectionRange(1, 4);
+
+    expect(editor.selectionStart).toBe(1);
+    expect(editor.selectionEnd).toBe(4);
+    expect(editor.view?.state.selection.main.from).toBe(1);
+    expect(editor.view?.state.selection.main.to).toBe(4);
+    expect(select).toHaveBeenCalledTimes(1);
+
+    editor.selectionStart = 3;
+
+    expect(editor.selectionStart).toBe(3);
+    expect(editor.selectionEnd).toBe(4);
+    expect(select).toHaveBeenCalledTimes(2);
+
+    editor.selectionEnd = 2;
+
+    expect(editor.selectionStart).toBe(2);
+    expect(editor.selectionEnd).toBe(2);
+    expect(select).toHaveBeenCalledTimes(3);
+
+    editor.setSelectionRange(-5, 999);
+
+    expect(editor.selectionStart).toBe(0);
+    expect(editor.selectionEnd).toBe(editor.value.length);
+    expect(select).toHaveBeenCalledTimes(4);
+
+    editor.setSelectionRange(5, 2);
+
+    expect(editor.selectionStart).toBe(2);
+    expect(editor.selectionEnd).toBe(2);
+    expect(select).toHaveBeenCalledTimes(5);
+  });
+
+  it("selects the full value", async () => {
+    let editor = mountTestEditor("select me");
+    let select = vi.fn();
+    editor.addEventListener("select", select);
+    await editor.ready;
+
+    editor.select();
+
+    expect(editor.selectionStart).toBe(0);
+    expect(editor.selectionEnd).toBe(editor.value.length);
+    expect(editor.view?.state.selection.main.from).toBe(0);
+    expect(editor.view?.state.selection.main.to).toBe(editor.value.length);
+    expect(select).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces direct CodeMirror selection changes", async () => {
+    let editor = mountTestEditor("abcdef");
+    await editor.ready;
+    let select = vi.fn();
+    editor.addEventListener("select", select);
+
+    editor.view?.dispatch({ selection: { anchor: 2, head: 5 } });
+
+    expect(editor.selectionStart).toBe(2);
+    expect(editor.selectionEnd).toBe(5);
+    expect(select).toHaveBeenCalledTimes(1);
+
+    editor.view?.dispatch({ selection: { anchor: 2, head: 5 } });
+
+    expect(select).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not emit select when document edits remap the cursor", async () => {
+    let editor = mountTestEditor("abcdef");
+    await editor.ready;
+    let select = vi.fn();
+    editor.addEventListener("select", select);
+
+    editor.setSelectionRange(3, 3);
+    select.mockClear();
+
+    editor.view?.dispatch({
+      changes: { from: 0, insert: "x" },
+      userEvent: "input.test",
+    });
+
+    expect(editor.value).toBe("xabcdef");
+    expect(editor.selectionStart).toBe(4);
+    expect(editor.selectionEnd).toBe(4);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("does not emit select when programmatic value updates reset the cursor", async () => {
+    let editor = mountTestEditor("abcdef");
+    await editor.ready;
+    let select = vi.fn();
+    editor.addEventListener("select", select);
+
+    editor.setSelectionRange(2, 5);
+    select.mockClear();
+
+    editor.value = "xyz";
+
+    expect(editor.value).toBe("xyz");
+    expect(editor.selectionStart).toBe(0);
+    expect(editor.selectionEnd).toBe(0);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("preserves pending selection across disconnects", async () => {
+    let tag = defineTestElement();
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
+    editor.defaultValue = "abcdef";
+    editor.setSelectionRange(2, 5);
+
+    document.body.append(editor);
+    await editor.ready;
+
+    expect(editor.selectionStart).toBe(2);
+    expect(editor.selectionEnd).toBe(5);
+
+    editor.remove();
+    expect(editor.view).toBeNull();
+
+    editor.setSelectionRange(1, 3);
+    document.body.append(editor);
+    await editor.ready;
+
+    expect(editor.selectionStart).toBe(1);
+    expect(editor.selectionEnd).toBe(3);
+  });
+
+  it("tracks dirty by comparing against the clean value", async () => {
+    let tag = defineTestElement();
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
+    editor.value = "clean";
+    document.body.append(editor);
+    await editor.ready;
+
+    expect(editor.dirty).toBe(false);
+
+    editor.view?.dispatch({
+      changes: { from: editor.value.length, insert: "!" },
+      userEvent: "input.test",
+    });
+
+    expect(editor.value).toBe("clean!");
+    expect(editor.dirty).toBe(true);
+
+    editor.view?.dispatch({
+      changes: { from: "clean".length, to: "clean!".length },
+      userEvent: "input.test",
+    });
+
+    expect(editor.value).toBe("clean");
+    expect(editor.dirty).toBe(false);
+
+    editor.value = "programmatic";
+
+    expect(editor.dirty).toBe(true);
+
+    editor.markClean();
+
+    expect(editor.dirty).toBe(false);
+
+    editor.view?.dispatch({
+      changes: { from: editor.value.length, insert: "!" },
+      userEvent: "input.test",
+    });
+
+    expect(editor.dirty).toBe(true);
+
+    editor.view?.dispatch({
+      changes: { from: "programmatic".length, to: "programmatic!".length },
+      userEvent: "input.test",
+    });
+
+    expect(editor.value).toBe("programmatic");
+    expect(editor.dirty).toBe(false);
+  });
+
   it("does not write localStorage unless persist-key is set", async () => {
     let setItem = vi.spyOn(Storage.prototype, "setItem");
     let editor = mountTestEditor("doc");
