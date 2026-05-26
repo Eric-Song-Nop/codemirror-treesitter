@@ -306,11 +306,6 @@ function markParagraphBreakRun(context: VisitContext, from: number, to: number) 
     let separatorLine = blankLines[index * 2];
     if (separatorLine == null) return;
     context.plan.line(separatorLine, "cm-md-block-separator");
-
-    let fillLine = blankLines[index * 2 + 1];
-    if (fillLine != null && index < separatorCount - 1) {
-      context.plan.line(fillLine, "cm-md-block-separator-fill");
-    }
   }
 }
 
