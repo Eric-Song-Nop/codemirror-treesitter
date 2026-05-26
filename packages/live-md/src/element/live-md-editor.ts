@@ -1,4 +1,4 @@
-import { EditorView } from "@codemirror/view";
+import { EditorView, type ViewUpdate } from "@codemirror/view";
 import { createLiveMdEditor, type LiveMdEditorController } from "../core/editor.js";
 import { installLiveMdStyles } from "./styles.js";
 
@@ -12,11 +12,14 @@ export class LiveMdEditorElement extends HTMLElement {
   ];
 
   private controller: LiveMdEditorController | null = null;
+  private cleanValue: string | null = null;
   private dirtySinceChange = false;
   private explicitValue = false;
   private mount: HTMLDivElement;
   private shadow: ShadowRoot;
   private storedDefaultValue: string | null = null;
+  private storedSelectionEnd = 0;
+  private storedSelectionStart = 0;
   private storedValue = "";
 
   ready: Promise<void> = Promise.resolve();
@@ -49,6 +52,7 @@ export class LiveMdEditorElement extends HTMLElement {
         readOnly: this.readOnly,
         root: this.shadow,
         value: this.explicitValue ? this.storedValue : undefined,
+        extensions: [EditorView.updateListener.of((update) => this.handleEditorSelection(update))],
       });
     } catch (error: unknown) {
       this.ready = Promise.reject(error);
@@ -57,6 +61,8 @@ export class LiveMdEditorElement extends HTMLElement {
     }
 
     this.controller = controller;
+    if (this.cleanValue == null) this.cleanValue = controller.value;
+    this.applyStoredSelection();
     this.ready = controller.ready
       .then(() => {
         if (this.controller != controller) return;
@@ -77,6 +83,7 @@ export class LiveMdEditorElement extends HTMLElement {
   disconnectedCallback() {
     if (!this.controller) return;
     this.storedValue = this.controller.value;
+    this.storeCurrentSelection();
     this.explicitValue = true;
     this.controller.destroy();
     this.controller = null;
@@ -87,7 +94,10 @@ export class LiveMdEditorElement extends HTMLElement {
     switch (name) {
       case "default-value":
         this.storedDefaultValue = newValue;
-        if (!this.controller && !this.explicitValue) this.storedValue = this.defaultValue;
+        if (!this.controller && !this.explicitValue) {
+          this.storedValue = this.defaultValue;
+          this.clampStoredSelection();
+        }
         break;
       case "persist-key":
         this.controller?.setPersistKey(this.persistKey);
@@ -114,7 +124,10 @@ export class LiveMdEditorElement extends HTMLElement {
   set defaultValue(value: string) {
     this.storedDefaultValue = String(value);
     this.setAttribute("default-value", this.storedDefaultValue);
-    if (!this.controller && !this.explicitValue) this.storedValue = this.storedDefaultValue;
+    if (!this.controller && !this.explicitValue) {
+      this.storedValue = this.storedDefaultValue;
+      this.clampStoredSelection();
+    }
   }
 
   get persistKey() {
@@ -156,11 +169,41 @@ export class LiveMdEditorElement extends HTMLElement {
   set value(value: string) {
     this.explicitValue = true;
     this.storedValue = String(value);
-    this.controller?.setValue(this.storedValue);
+    if (this.controller) {
+      this.controller.setValue(this.storedValue);
+    } else {
+      this.clampStoredSelection();
+    }
   }
 
   get view(): EditorView | null {
     return this.controller?.view ?? null;
+  }
+
+  get dirty() {
+    return this.cleanValue != null && this.value != this.cleanValue;
+  }
+
+  get selectionStart() {
+    return this.currentSelection().start;
+  }
+
+  set selectionStart(value: number) {
+    let start = normalizeSelectionPosition(value, this.value.length);
+    let end = this.selectionEnd;
+    if (start > end) end = start;
+    this.setSelectionRange(start, end);
+  }
+
+  get selectionEnd() {
+    return this.currentSelection().end;
+  }
+
+  set selectionEnd(value: number) {
+    let end = normalizeSelectionPosition(value, this.value.length);
+    let start = this.selectionStart;
+    if (end < start) start = end;
+    this.setSelectionRange(start, end);
   }
 
   override focus() {
@@ -169,6 +212,31 @@ export class LiveMdEditorElement extends HTMLElement {
 
   override blur() {
     this.view?.contentDOM.blur();
+  }
+
+  markClean() {
+    this.cleanValue = this.value;
+  }
+
+  setSelectionRange(start: number, end: number) {
+    let selection = normalizeSelectionRange(start, end, this.value.length);
+    if (!this.controller) {
+      this.updateStoredSelection(selection.start, selection.end, true);
+      return;
+    }
+
+    let main = this.controller.view.state.selection.main;
+    if (main.from == selection.start && main.to == selection.end) return;
+
+    this.controller.view.dispatch({
+      scrollIntoView: true,
+      selection: { anchor: selection.start, head: selection.end },
+      userEvent: "select",
+    });
+  }
+
+  select() {
+    this.setSelectionRange(0, this.value.length);
   }
 
   private handleEditorInput(value: string) {
@@ -197,6 +265,67 @@ export class LiveMdEditorElement extends HTMLElement {
       }),
     );
   }
+
+  private handleEditorSelection(update: ViewUpdate) {
+    if (!update.docChanged && !update.selectionSet) return;
+    let main = update.state.selection.main;
+    this.updateStoredSelection(main.from, main.to, update.selectionSet && !update.docChanged);
+  }
+
+  private applyStoredSelection() {
+    if (!this.controller) return;
+    let selection = normalizeSelectionRange(
+      this.storedSelectionStart,
+      this.storedSelectionEnd,
+      this.controller.value.length,
+    );
+    this.storedSelectionStart = selection.start;
+    this.storedSelectionEnd = selection.end;
+
+    let main = this.controller.view.state.selection.main;
+    if (main.from == selection.start && main.to == selection.end) return;
+
+    this.controller.view.dispatch({
+      selection: { anchor: selection.start, head: selection.end },
+      userEvent: "select.restore",
+    });
+  }
+
+  private clampStoredSelection() {
+    let selection = normalizeSelectionRange(
+      this.storedSelectionStart,
+      this.storedSelectionEnd,
+      this.storedValue.length,
+    );
+    this.storedSelectionStart = selection.start;
+    this.storedSelectionEnd = selection.end;
+  }
+
+  private currentSelection() {
+    if (this.controller) {
+      let main = this.controller.view.state.selection.main;
+      return { end: main.to, start: main.from };
+    }
+    return normalizeSelectionRange(
+      this.storedSelectionStart,
+      this.storedSelectionEnd,
+      this.storedValue.length,
+    );
+  }
+
+  private storeCurrentSelection() {
+    let main = this.controller?.view.state.selection.main;
+    if (!main) return;
+    this.storedSelectionStart = main.from;
+    this.storedSelectionEnd = main.to;
+  }
+
+  private updateStoredSelection(start: number, end: number, emit: boolean) {
+    if (this.storedSelectionStart == start && this.storedSelectionEnd == end) return;
+    this.storedSelectionStart = start;
+    this.storedSelectionEnd = end;
+    if (emit) this.dispatchEvent(createSelectEvent());
+  }
 }
 
 export function defineLiveMdEditor(tagName = "live-md-editor") {
@@ -221,6 +350,29 @@ function createInputEvent() {
     bubbles: true,
     composed: true,
   });
+}
+
+function createSelectEvent() {
+  return new Event("select", {
+    bubbles: true,
+    composed: true,
+  });
+}
+
+function normalizeSelectionRange(start: number, end: number, length: number) {
+  let normalizedStart = normalizeSelectionPosition(start, length);
+  let normalizedEnd = normalizeSelectionPosition(end, length);
+  if (normalizedEnd < normalizedStart) normalizedStart = normalizedEnd;
+  return { end: normalizedEnd, start: normalizedStart };
+}
+
+function normalizeSelectionPosition(value: number, length: number) {
+  let position = Number(value);
+  if (Number.isNaN(position)) return 0;
+  if (position == Infinity) return length;
+  if (position == -Infinity) return 0;
+  position = Math.trunc(position);
+  return Math.min(length, Math.max(0, position));
 }
 
 function normalizeLightDomMarkdown(text: string) {
