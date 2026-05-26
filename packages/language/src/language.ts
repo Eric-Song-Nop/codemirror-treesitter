@@ -70,6 +70,7 @@ export interface Sublanguage {
 export const sublanguageProp = new NodeProp<Sublanguage[]>();
 
 export interface TreeSitterParserConfig {
+  implicitFinalNewline?: boolean;
   props?: readonly NodePropSource[];
   styleTags?: Record<string, Tag | readonly Tag[]>;
   highlightQuery?: string;
@@ -99,6 +100,7 @@ export class TreeSitterParser implements TreeConfig {
     readonly highlightQuerySource: string | null = null,
     readonly nestedParsers: readonly NestedParserSource[] = [],
     private readonly skipUntil: Promise<unknown> | null = null,
+    private readonly implicitFinalNewline = false,
   ) {
     this.styleTags = new Map(
       Object.entries(styleTags).map(([name, value]) => [
@@ -129,6 +131,8 @@ export class TreeSitterParser implements TreeConfig {
       config.styleTags,
       config.highlightQuery ?? null,
       config.nested,
+      null,
+      config.implicitFinalNewline ?? false,
     );
   }
 
@@ -139,6 +143,8 @@ export class TreeSitterParser implements TreeConfig {
       config.styleTags,
       config.highlightQuery ?? null,
       config.nested,
+      null,
+      config.implicitFinalNewline ?? false,
     );
   }
 
@@ -154,6 +160,7 @@ export class TreeSitterParser implements TreeConfig {
       config.highlightQuery ?? this.highlightQuerySource,
       config.nested ? this.nestedParsers.concat(config.nested) : this.nestedParsers,
       this.skipUntil,
+      config.implicitFinalNewline ?? this.implicitFinalNewline,
     ).withStyleTags(config.styleTags);
   }
 
@@ -170,6 +177,7 @@ export class TreeSitterParser implements TreeConfig {
       this.highlightQuerySource,
       this.nestedParsers,
       this.skipUntil,
+      this.implicitFinalNewline,
     );
   }
 
@@ -250,8 +258,10 @@ export class TreeSitterParser implements TreeConfig {
     includedRanges?: readonly DocRange[],
   ): TSTree | null {
     if (this.isSkippingParser) return null;
+    let appendFinalNewline = this.shouldAppendFinalNewline(doc);
     return parser.parse(
       (index) => {
+        if (appendFinalNewline && index == doc.length) return "\n";
         if (index >= doc.length) return undefined;
         return doc.sliceString(index, Math.min(doc.length, index + 4096));
       },
@@ -332,6 +342,9 @@ export class TreeSitterParser implements TreeConfig {
 
   editWrappedTree(tree: Tree, changes: ChangeDesc, oldDoc: Text, newDoc: Text): Tree {
     if (!tree.tree || changes.empty) return tree;
+    if (this.shouldAppendFinalNewline(oldDoc) != this.shouldAppendFinalNewline(newDoc)) {
+      return Tree.empty;
+    }
     let nested = tree.nested
       .map((nest): NestedTree | null => {
         if (!nest.tree.tree) return null;
@@ -346,6 +359,10 @@ export class TreeSitterParser implements TreeConfig {
       })
       .filter((value): value is NestedTree => value != null);
     return new Tree(this.editTree(tree.tree, changes, oldDoc, newDoc), this, newDoc.length, nested);
+  }
+
+  private shouldAppendFinalNewline(doc: Text) {
+    return this.implicitFinalNewline && doc.length > 0 && !docEndsWithLineBreak(doc);
   }
 }
 
@@ -379,6 +396,11 @@ function addTags(result: Tag[], tags: readonly Tag[]) {
 function pointAt(doc: Text, pos: number): Point {
   let line = doc.lineAt(pos);
   return { row: line.number - 1, column: pos - line.from };
+}
+
+function docEndsWithLineBreak(doc: Text) {
+  let last = doc.sliceString(doc.length - 1, doc.length);
+  return last == "\n" || last == "\r";
 }
 
 function toTSRange(doc: Text, range: DocRange): TSRange {

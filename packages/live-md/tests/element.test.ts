@@ -22,7 +22,7 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.replaceChildren();
-  localStorage.clear();
+  globalThis.localStorage?.clear();
   vi.restoreAllMocks();
   if (locationDescriptor) {
     Object.defineProperty(globalThis, "location", locationDescriptor);
