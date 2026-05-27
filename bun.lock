@@ -68,6 +68,20 @@
         "vite-plus": "catalog:",
       },
     },
+    "apps/live-md-loro-demo": {
+      "name": "live-md-loro-demo",
+      "version": "0.0.0",
+      "dependencies": {
+        "@codemirror-treesitter/live-md": "workspace:*",
+        "@codemirror-treesitter/live-md-loro": "workspace:*",
+        "@codemirror/view": "^6.43.0",
+        "loro-crdt": "^1.12.3",
+      },
+      "devDependencies": {
+        "vite": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
     "packages/autocomplete": {
       "name": "@codemirror-treesitter/autocomplete",
       "version": "0.0.0",
@@ -217,6 +231,23 @@
         "vite-plus": "catalog:",
       },
     },
+    "packages/live-md-loro": {
+      "name": "@codemirror-treesitter/live-md-loro",
+      "version": "0.0.0",
+      "dependencies": {
+        "@codemirror-treesitter/live-md": "workspace:*",
+        "@codemirror/state": "^6.6.0",
+        "@codemirror/view": "^6.43.0",
+        "loro-codemirror": "github:loro-dev/loro-codemirror#ed809e304dd83f7df9ad72343a2c0d6ea652a62f",
+        "loro-crdt": "^1.12.3",
+      },
+      "devDependencies": {
+        "@typescript/native-preview": "7.0.0-dev.20260509.2",
+        "happy-dom": "^20.0.11",
+        "typescript": "^6.0.3",
+        "vite-plus": "catalog:",
+      },
+    },
     "packages/lsp-client": {
       "name": "@codemirror-treesitter/lsp-client",
       "version": "0.0.0",
@@ -290,6 +321,8 @@
     "@codemirror-treesitter/language-data": ["@codemirror-treesitter/language-data@workspace:packages/language-data"],
 
     "@codemirror-treesitter/live-md": ["@codemirror-treesitter/live-md@workspace:packages/live-md"],
+
+    "@codemirror-treesitter/live-md-loro": ["@codemirror-treesitter/live-md-loro@workspace:packages/live-md-loro"],
 
     "@codemirror-treesitter/lsp-client": ["@codemirror-treesitter/lsp-client@workspace:packages/lsp-client"],
 
@@ -819,7 +852,13 @@
 
     "live-md-benchmark": ["live-md-benchmark@workspace:apps/live-md-benchmark"],
 
+    "live-md-loro-demo": ["live-md-loro-demo@workspace:apps/live-md-loro-demo"],
+
     "lodash-es": ["lodash-es@4.18.1", "", {}, "sha512-J8xewKD/Gk22OZbhpOVSwcs60zhd95ESDwezOFuA3/099925PdHJ7OFHNTGtajL3AlZkykD32HykiMo+BIBI8A=="],
+
+    "loro-codemirror": ["loro-codemirror@github:loro-dev/loro-codemirror#ed809e3", { "peerDependencies": { "@codemirror/state": "^6.0.0", "@codemirror/view": "^6.7.0", "loro-crdt": "^1.8.2" } }, "loro-dev-loro-codemirror-ed809e3", "sha512-z0pvzhAWhki1TCYQb4GQV4B8FktQ44TyYHbLYzKdXXGRgvAf41+Vl6RYfaXryvgckMdmw0SaNv67/kT9AxBf7Q=="],
+
+    "loro-crdt": ["loro-crdt@1.12.3", "", {}, "sha512-ZCeW0e/bo2lP4/zxSlVrJlMrX3hq9tXpeANbBDkdVS0bxoPHYx5Za3yS/A1+aWEFPJpzzI3Eac4K20cL9+BtXw=="],
 
     "lru-cache": ["lru-cache@7.18.3", "", {}, "sha512-jumlc0BIUrS3qJGgIkWZsyfAM7NCWiBcCDhnd+3NNM5KbBmLTgHVfWBcg6W+rLUsIpzpERPsvwUP7CckAQSOoA=="],
 

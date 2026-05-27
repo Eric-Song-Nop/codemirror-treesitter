@@ -98,6 +98,7 @@ this repository replace the language-aware layers above those primitives.
 | `packages/merge`         | `@codemirror-treesitter/merge`         | Diff, split merge view, unified merge view, chunks, and accept/reject commands.                                                                              |
 | `packages/lsp-client`    | `@codemirror-treesitter/lsp-client`    | Language Server Protocol client, plugin, workspace mapping, diagnostics, completions, hover, formatting, rename, definition, references, and signature help. |
 | `packages/live-md`       | `@codemirror-treesitter/live-md`       | Live Markdown editor runtime, web component, registration entry, fixtures, and CSS export.                                                                   |
+| `packages/live-md-loro`  | `@codemirror-treesitter/live-md-loro`  | Optional Loro collaboration bindings for LiveMD documents, presence, and collaborative undo.                                                                 |
 
 Each package directory has its own README with its local responsibilities,
 public entry points, and relationship to the rest of the workspace.
@@ -120,17 +121,18 @@ the element anywhere in your HTML.
 
 ### Properties
 
-| Property         | Type                 | Description                                      |
-| ---------------- | -------------------- | ------------------------------------------------ |
-| `value`          | `string`             | Current Markdown content (read/write).           |
-| `defaultValue`   | `string`             | Initial content (read/write).                    |
-| `persistKey`     | `string \| null`     | localStorage key (read/write).                   |
-| `placeholder`    | `string`             | Placeholder text (read/write).                   |
-| `readOnly`       | `boolean`            | Whether editor is read-only (read/write).        |
-| `dirty`          | `boolean`            | Whether content has changed since `markClean()`. |
-| `selectionStart` | `number`             | Selection anchor position.                       |
-| `selectionEnd`   | `number`             | Selection head position.                         |
-| `view`           | `EditorView \| null` | The underlying CodeMirror `EditorView` instance. |
+| Property         | Type                 | Description                                                |
+| ---------------- | -------------------- | ---------------------------------------------------------- |
+| `value`          | `string`             | Current Markdown content (read/write).                     |
+| `defaultValue`   | `string`             | Initial content (read/write).                              |
+| `persistKey`     | `string \| null`     | localStorage key (read/write).                             |
+| `placeholder`    | `string`             | Placeholder text (read/write).                             |
+| `readOnly`       | `boolean`            | Whether editor is read-only (read/write).                  |
+| `dirty`          | `boolean`            | Whether content has changed since `markClean()`.           |
+| `selectionStart` | `number`             | Selection anchor position.                                 |
+| `selectionEnd`   | `number`             | Selection head position.                                   |
+| `view`           | `EditorView \| null` | The underlying CodeMirror `EditorView` instance.           |
+| `extensions`     | `Extension`          | Optional CodeMirror extensions configured from JavaScript. |
 
 ### Methods
 
@@ -171,10 +173,40 @@ the element anywhere in your HTML.
   examples, package coverage, and benchmark metrics.
 - `apps/live-md-benchmark`: LiveMD performance benchmark harness for rendering,
   editing, deletion, clipboard, and selection workflows.
+- `apps/live-md-loro-demo`: Two-peer LiveMD collaboration demo with simulated
+  latency, offline queueing, and Loro snapshot resync.
 - `tools/audit.mjs`: Repository audit that checks package names, Lezer-free
   guarantees, public export parity, command and autocomplete stubs, basic setup
   parity, language-data metadata/load coverage, example coverage, merge/LSP
   usage, and benchmark app wiring.
+
+## Optional Loro Collaboration
+
+Install `@codemirror-treesitter/live-md-loro` when a LiveMD editor should bind
+to a Loro CRDT document. The default LiveMD package does not import Loro.
+
+```ts
+import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
+import { liveMdLoroCollaboration } from "@codemirror-treesitter/live-md-loro";
+import { LoroDoc } from "loro-crdt";
+
+const doc = new LoroDoc();
+doc.getText("markdown").insert(0, "# Shared document");
+doc.commit();
+
+createLiveMdEditor({
+  parent: document.body,
+  extensions: [liveMdLoroCollaboration({ doc })],
+});
+```
+
+Web Component users opt in through the JavaScript-only `extensions` property:
+
+```ts
+const editor = document.createElement("live-md-editor");
+editor.extensions = [liveMdLoroCollaboration({ doc })];
+document.body.append(editor);
+```
 
 ## Implementation Notes
 

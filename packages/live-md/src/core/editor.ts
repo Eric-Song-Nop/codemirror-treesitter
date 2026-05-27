@@ -19,7 +19,7 @@ export type LiveMdEditorOptions = {
   autofocus?: boolean;
   defaultValue?: string;
   doc?: string;
-  extensions?: Extension[];
+  extensions?: Extension;
   focus?: boolean;
   onBlur?: (view: EditorView) => void;
   onChange?: (change: LiveMdEditorChange) => void;
@@ -34,6 +34,7 @@ export type LiveMdEditorOptions = {
 export type LiveMdEditorController = {
   destroy: () => void;
   ready: Promise<void>;
+  setExtensions: (extensions: Extension) => void;
   setPersistKey: (persistKey: null | string) => void;
   setPlaceholder: (placeholder: string) => void;
   setReadOnly: (readOnly: boolean) => void;
@@ -46,6 +47,7 @@ export type LiveMdEditorHandle = LiveMdEditorController;
 
 export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorController {
   let markdownCompartment = new Compartment();
+  let extensionsCompartment = new Compartment();
   let placeholderCompartment = new Compartment();
   let readOnlyCompartment = new Compartment();
   let cancelled = false;
@@ -66,7 +68,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
         placeholderCompartment.of(placeholderValue(options.placeholder)),
         readOnlyCompartment.of(readOnlyExtensions(options.readOnly ?? false)),
         minimalSetup,
-        ...(options.extensions ?? []),
+        extensionsCompartment.of(options.extensions ?? []),
         EditorView.domEventHandlers({
           blur() {
             options.onBlur?.(view);
@@ -106,6 +108,11 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       view.destroy();
     },
     ready: Promise.all([markdownReady, codeFenceReady]).then(() => undefined),
+    setExtensions(extensions) {
+      view.dispatch({
+        effects: extensionsCompartment.reconfigure(extensions),
+      });
+    },
     setPersistKey(nextPersistKey) {
       persistKey = normalizePersistKey(nextPersistKey);
     },

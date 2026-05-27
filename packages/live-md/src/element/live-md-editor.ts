@@ -1,3 +1,4 @@
+import type { Extension } from "@codemirror/state";
 import { EditorView, type ViewUpdate } from "@codemirror/view";
 import { createLiveMdEditor, type LiveMdEditorController } from "../core/editor.js";
 import { installLiveMdStyles } from "./styles.js";
@@ -17,6 +18,7 @@ export class LiveMdEditorElement extends HTMLElementBase {
   private controller: LiveMdEditorController | null = null;
   private cleanValue: string | null = null;
   private dirtySinceChange = false;
+  private editorExtensions: Extension = [];
   private explicitValue = false;
   private mount: HTMLDivElement;
   private shadow: ShadowRoot;
@@ -55,7 +57,7 @@ export class LiveMdEditorElement extends HTMLElementBase {
         readOnly: this.readOnly,
         root: this.shadow,
         value: this.explicitValue ? this.storedValue : undefined,
-        extensions: [EditorView.updateListener.of((update) => this.handleEditorSelection(update))],
+        extensions: this.currentExtensions(),
       });
     } catch (error: unknown) {
       this.ready = Promise.reject(error);
@@ -182,6 +184,15 @@ export class LiveMdEditorElement extends HTMLElementBase {
 
   get view(): EditorView | null {
     return this.controller?.view ?? null;
+  }
+
+  get extensions(): Extension {
+    return this.editorExtensions;
+  }
+
+  set extensions(value: Extension | null | undefined) {
+    this.editorExtensions = value ?? [];
+    this.controller?.setExtensions(this.currentExtensions());
   }
 
   get dirty() {
@@ -315,6 +326,13 @@ export class LiveMdEditorElement extends HTMLElementBase {
       this.storedSelectionEnd,
       this.storedValue.length,
     );
+  }
+
+  private currentExtensions(): Extension {
+    return [
+      this.editorExtensions,
+      EditorView.updateListener.of((update) => this.handleEditorSelection(update)),
+    ];
   }
 
   private storeCurrentSelection() {

@@ -379,6 +379,57 @@ describe("liveMd editor web component", () => {
     expect(second.value).toBe("second");
   });
 
+  it("accepts optional CodeMirror extensions from a property", async () => {
+    let tag = defineTestElement();
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
+    let observed = vi.fn();
+    editor.defaultValue = "doc";
+    editor.extensions = [
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) observed(update.state.doc.toString());
+      }),
+    ];
+    document.body.append(editor);
+    await editor.ready;
+
+    editor.view?.dispatch({
+      changes: { from: editor.value.length, insert: "!" },
+      userEvent: "input.test",
+    });
+
+    expect(observed).toHaveBeenCalledWith("doc!");
+  });
+
+  it("reconfigures optional CodeMirror extensions while mounted", async () => {
+    let editor = mountTestEditor("doc");
+    let first = vi.fn();
+    let second = vi.fn();
+    await editor.ready;
+
+    editor.extensions = [
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) first();
+      }),
+    ];
+    editor.view?.dispatch({
+      changes: { from: editor.value.length, insert: "!" },
+      userEvent: "input.test",
+    });
+
+    editor.extensions = [
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) second();
+      }),
+    ];
+    editor.view?.dispatch({
+      changes: { from: editor.value.length, insert: "?" },
+      userEvent: "input.test",
+    });
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
   it("cleans up on disconnect and remounts with the current value", async () => {
     let editor = mountTestEditor("before");
     await editor.ready;
