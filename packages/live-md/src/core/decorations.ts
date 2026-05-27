@@ -178,6 +178,7 @@ const liveMdFeatures: readonly LiveMdNodeFeature[] = [
     "line",
   ),
   feature(["pipe_table"], visitTable, "node"),
+  feature(["paragraph"], undefined, "line"),
   feature(["section"], visitSection, "container"),
   feature(["setext_heading"], visitSetextHeading, "block"),
   feature(["strikethrough"], visitMark(strikeMark)),

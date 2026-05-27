@@ -23,6 +23,17 @@ describe("LiveMD dirty range expansion", () => {
     ]);
   });
 
+  it("uses touched line scope for plain paragraph text edits", async () => {
+    let doc = "first paragraph\n\nsecond paragraph\nthird line";
+    let state = await markdownState(doc);
+    let dirtyFrom = doc.indexOf("third");
+    let dirtyLine = state.doc.lineAt(dirtyFrom);
+
+    expect(expand([{ from: dirtyFrom, reasons: ["text"], to: dirtyFrom + 1 }], state)).toEqual([
+      { from: dirtyLine.from, reasons: ["text"], to: dirtyLine.to },
+    ]);
+  });
+
   it("uses feature line scope for code fence content edits", async () => {
     let doc = "```ts\nlet a = 1;\n```\n\n```ts\nlet b = 2;\n```\n";
     let state = await markdownState(doc);
