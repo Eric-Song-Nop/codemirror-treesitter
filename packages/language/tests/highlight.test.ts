@@ -19,6 +19,7 @@ import {
 } from "../src/index.js";
 import { __testHighlightTree } from "../src/highlight.js";
 import { tagsForCapture } from "../src/tags.js";
+import { SyntaxNode } from "../src/tree.js";
 import javascriptHighlights from "tree-sitter-javascript/queries/highlights.scm?raw";
 import cssHighlights from "tree-sitter-css/queries/highlights.scm?raw";
 import htmlHighlights from "tree-sitter-html/queries/highlights.scm?raw";
@@ -224,6 +225,37 @@ describe("highlight tags", () => {
 
     expect(classAt("demo")).toContain("fn");
     expect(classAt("MAX_VALUE")).toContain("const");
+  });
+
+  it("does not materialize every sibling for ranged highlighting", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    let javascript = TreeSitterLanguage.define({
+      name: "javascript",
+      parser: await javascriptParser,
+    });
+    let doc = Array.from({ length: 80 }, (_, index) => `let value${index} = ${index};`).join("\n");
+    let state = EditorState.create({ doc, extensions: [javascript.extension] });
+    let from = doc.indexOf("value70");
+    let to = from + "value70".length;
+    let highlighter = tagHighlighter([{ tag: tags.variableName, class: "var" }]);
+    let materializedChildren = 0;
+    let descriptor = Object.getOwnPropertyDescriptor(SyntaxNode.prototype, "children")!;
+
+    Object.defineProperty(SyntaxNode.prototype, "children", {
+      configurable: true,
+      get(this: SyntaxNode) {
+        let children = descriptor.get!.call(this) as SyntaxNode[];
+        materializedChildren += children.length;
+        return children;
+      },
+    });
+    try {
+      __testHighlightTree(syntaxTree(state), [highlighter], from, to);
+    } finally {
+      Object.defineProperty(SyntaxNode.prototype, "children", descriptor);
+    }
+
+    expect(materializedChildren).toBeLessThan(40);
   });
 
   it("supports Lezer-compatible styleTags rules and code highlighting", async () => {

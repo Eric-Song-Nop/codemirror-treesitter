@@ -337,7 +337,7 @@ class HighlightBuilder {
 
     let rangeFrom = Math.max(from, node.from);
     let rangeTo = Math.min(to, node.to);
-    for (let child of sortedChildren(node)) {
+    for (let child of sortedChildren(node, rangeFrom, rangeTo)) {
       if (child.to <= rangeFrom) continue;
       if (child.from >= rangeTo) break;
       let childStyle = styleForNode(child, this.queryTags);
@@ -386,24 +386,48 @@ function styleForNode(
   return nodeTags.length ? { tags: nodeTags, opaque: false, inherit: false } : null;
 }
 
-function sortedChildren(node: SyntaxNode): SyntaxNode[] {
-  let children = node.children.slice();
-  let nested = directNested(node);
+function sortedChildren(node: SyntaxNode, from: number, to: number): SyntaxNode[] {
+  let children: SyntaxNode[] = [];
+  for (let child = firstHighlightChild(node, from); child && child.from < to; ) {
+    children.push(child);
+    child = child.nextSibling;
+  }
+  let nested = directNested(node, from, to);
   if (nested.length) children.push(...nested.map((nest) => nest.tree.topNode));
   return children.sort((a, b) => a.from - b.from || a.to - b.to);
 }
 
-function directNested(node: SyntaxNode): NestedTree[] {
-  let nested = node.tree.nested.filter((nest) => nestedInsideNode(nest, node));
-  if (!nested.length) return [];
-  return nested.filter(
-    (nest) =>
-      !node.children.some((child) => nestedInsideNode(nest, child) && child.to > child.from),
+function firstHighlightChild(node: SyntaxNode, from: number): SyntaxNode | null {
+  let index = from > node.from ? from - 1 : from;
+  let child = node.firstChildForIndex(index);
+  while (child && child.to <= from) child = child.nextSibling;
+  return child;
+}
+
+function directNested(node: SyntaxNode, from: number, to: number): NestedTree[] {
+  let nested = node.tree.nested.filter(
+    (nest) => nestedInsideNode(nest, node) && nestedOverlapsRange(nest, from, to),
   );
+  if (!nested.length) return [];
+  return nested.filter((nest) => !nestedInsideDirectChild(nest, node));
+}
+
+function nestedInsideDirectChild(nest: NestedTree, node: SyntaxNode) {
+  for (let range of nest.ranges) {
+    for (let child = firstHighlightChild(node, range.from); child && child.from < range.to; ) {
+      if (range.from >= child.from && range.to <= child.to && child.to > child.from) return true;
+      child = child.nextSibling;
+    }
+  }
+  return false;
 }
 
 function nestedInsideNode(nest: NestedTree, node: SyntaxNode) {
   return nest.ranges.some((range) => range.from >= node.from && range.to <= node.to);
+}
+
+function nestedOverlapsRange(nest: NestedTree, from: number, to: number) {
+  return nest.ranges.some((range) => range.from < to && range.to > from);
 }
 
 export function __testHighlightTree(
