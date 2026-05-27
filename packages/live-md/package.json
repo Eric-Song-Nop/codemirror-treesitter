@@ -44,7 +44,8 @@
     "@codemirror-treesitter/theme-gruvbox": "workspace:*",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.43.0",
-    "katex": "^0.17.0"
+    "katex": "^0.17.0",
+    "mermaid": "^10.9.4"
   },
   "devDependencies": {
     "@typescript/native-preview": "7.0.0-dev.20260509.2",

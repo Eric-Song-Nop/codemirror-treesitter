@@ -15,6 +15,16 @@ $$
 \\int_0^1 x^2\\,dx = \\frac{1}{3}
 $$
 
+A note can carry a small workflow diagram:
+
+\`\`\`mermaid
+flowchart LR
+  draft[Draft] --> parse[Tree-sitter parse]
+  parse --> preview[Live preview]
+  preview --> edit[Edit source]
+  edit --> draft
+\`\`\`
+
 ${imageUrl ? `![A writing surface](${imageUrl})` : ""}
 
 ## Working list
