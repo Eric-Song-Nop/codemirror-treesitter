@@ -55,6 +55,27 @@ describe("LiveMD dirty range expansion", () => {
     ]);
   });
 
+  it("uses touched line scope for text-only edits in list item block gaps", async () => {
+    let doc = "- first\n\n  second\n  third";
+    let state = await markdownState(doc);
+    let dirtyFrom = doc.indexOf("\n\n  second") + 1;
+    let dirtyLine = state.doc.lineAt(dirtyFrom);
+
+    expect(expand([{ from: dirtyFrom, reasons: ["text"], to: dirtyFrom + 1 }], state)).toEqual([
+      { from: dirtyLine.from, reasons: ["text"], to: dirtyFrom + 1 },
+    ]);
+  });
+
+  it("keeps syntax edits in list item block gaps scoped to the list item", async () => {
+    let doc = "- first\n\n  second\n  third";
+    let state = await markdownState(doc);
+    let dirtyFrom = doc.indexOf("\n\n  second") + 1;
+
+    expect(expand([{ from: dirtyFrom, reasons: ["syntax"], to: dirtyFrom + 1 }], state)).toEqual([
+      { from: 0, reasons: ["syntax"], to: doc.length + 1 },
+    ]);
+  });
+
   for (let markdownCase of [
     {
       doc: "<div>\ncontent\n</div>\n\nnext",

@@ -232,7 +232,9 @@ function isTextOnly(range: LiveMdDirtyRange) {
 }
 
 function scopeForTextOnlyRange(range: LiveMdDirtyRange, scope: LiveMdScope) {
-  if (isTextOnly(range) && (scope == "container" || scope == "document")) return "line";
+  if (isTextOnly(range) && (scope == "block" || scope == "container" || scope == "document")) {
+    return "line";
+  }
   return scope;
 }
 
