@@ -4,9 +4,8 @@ import { workspaceAliasSubset } from "../../vite.shared.ts";
 export default defineConfig({
   resolve: {
     alias: workspaceAliasSubset([
-      "@codemirror-treesitter/language",
-      "@codemirror-treesitter/commands",
       "@codemirror-treesitter/autocomplete",
+      "@codemirror-treesitter/language",
     ]),
   },
   pack: {

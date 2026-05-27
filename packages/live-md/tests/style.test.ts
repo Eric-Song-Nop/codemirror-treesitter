@@ -3,8 +3,10 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { build } from "vite-plus";
 import { describe, expect, it } from "vite-plus/test";
+import { liveMdRawCssPlugin } from "../vite-plugin.ts";
 
 const workspaceRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const liveMdSourceRoot = join(workspaceRoot, "packages/live-md/src");
 
 describe("public LiveMD stylesheet", () => {
   it("bundles KaTeX rules and fonts for programmatic editors", async () => {
@@ -50,7 +52,54 @@ describe("public LiveMD stylesheet", () => {
   });
 });
 
+describe("web component shadow stylesheet", () => {
+  it("inlines KaTeX font URLs when LiveMD is consumed through source aliases", async () => {
+    let root = await mkdtemp(join(workspaceRoot, ".tmp-live-md-source-style-"));
+
+    try {
+      await writeFile(
+        join(root, "index.ts"),
+        'import "@codemirror-treesitter/live-md/register";\n',
+      );
+
+      let result = await build({
+        root,
+        publicDir: false,
+        logLevel: "silent",
+        plugins: [liveMdRawCssPlugin()],
+        resolve: {
+          alias: {
+            "@codemirror-treesitter/live-md/register": join(liveMdSourceRoot, "register.ts"),
+            "@codemirror-treesitter/live-md": join(liveMdSourceRoot, "index.ts"),
+          },
+        },
+        build: {
+          assetsInlineLimit: 0,
+          minify: false,
+          rollupOptions: {
+            input: join(root, "index.ts"),
+          },
+          write: false,
+        },
+      });
+      let javascript = collectBuildOutputs(result)
+        .filter((output) => output.type == "chunk")
+        .map((output) => String(output.code))
+        .join("\n");
+
+      expect(javascript).toContain(".katex .katex-mathml");
+      expect(javascript).toContain("data:font/woff2;base64");
+      expect(javascript).toContain(".live-md-codemirror .cm-md-latex-inline .katex");
+      expect(javascript).not.toContain("url(fonts/KaTeX_");
+      expect(javascript).not.toContain('@import "katex/dist/katex.css"');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 type BuildOutput = {
+  code?: unknown;
   fileName: string;
   source?: unknown;
   type: string;
