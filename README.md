@@ -1,10 +1,19 @@
 # CodeMirror Tree-sitter
 
+CodeMirror Tree-sitter is a Lezer-free CodeMirror 6 workspace backed by
+Tree-sitter (`web-tree-sitter`). It reimplements the editor-facing CodeMirror
+packages that normally depend on Lezer and publishes them under the
+`@codemirror-treesitter/*` scope so they can be installed beside the official
+`@codemirror/*` packages.
+
+The repository also contains LiveMD, a Tree-sitter-powered Markdown editor that
+ships as both a web component and a programmatic editor API.
+
 ## Quickstart
 
 ```html
 <body>
-  <live-md-editor autofocus placeholder="Start writing…"></live-md-editor>
+  <live-md-editor autofocus placeholder="Start writing..."></live-md-editor>
   <script type="module">
     import "@codemirror-treesitter/live-md/register";
   </script>
@@ -12,8 +21,9 @@
 ```
 
 A single import registers the `<live-md-editor>` web component with
-Tree-sitter–powered Markdown parsing, syntax highlighting, and Gruvbox theming.
-See the [Web Component](#web-component) section for the full API.
+Tree-sitter-powered Markdown parsing, syntax highlighting, live Markdown
+decorations, and Gruvbox theming. See the [Web Component](#web-component)
+section for the full API.
 
 Alternatively use the programmatic API:
 
@@ -23,34 +33,78 @@ import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
 const editor = createLiveMdEditor({ parent: document.body });
 ```
 
----
+## What This Project Implements
 
-Lezer-free CodeMirror 6 packages backed by Tree-sitter (`web-tree-sitter`).
-This workspace reimplements the editor-facing pieces needed to run CodeMirror
-while keeping the packages under a separate `@codemirror-treesitter/*` scope so
-they can be installed beside the official `@codemirror/*` packages.
+- A Tree-sitter-backed replacement for the CodeMirror language layer, including
+  `Language`, `LanguageSupport`, `LRLanguage`, `ParseContext`, syntax tree
+  wrappers, language data facets, mixed-language parsing, highlighting,
+  indentation, folding, bracket matching, bidi isolates, and stream-parser
+  compatibility.
+- A language-data registry that mirrors CodeMirror language metadata while
+  lazily loading Tree-sitter WASM grammars and highlight queries.
+- Lezer-free implementations of CodeMirror commands, autocompletion, close
+  brackets, basic setup, merge views, LSP integration, and Gruvbox themes.
+- LiveMD, a Markdown editor runtime built from the local Tree-sitter packages,
+  exposed through `createLiveMdEditor()`, `liveMarkdown()`, and
+  `<live-md-editor>`.
+- Validation tooling and comparison apps that check public export parity,
+  package dependency boundaries, language-data coverage, example coverage, and
+  runtime behavior against official CodeMirror/Lezer packages.
 
-The implementation packages intentionally do not depend on Lezer. The examples
-app depends on the official CodeMirror / Lezer packages for side-by-side
-comparison.
+The implementation packages intentionally do not depend on Lezer. The example
+app depends on the official CodeMirror and Lezer packages only to compare local
+behavior with upstream behavior side by side.
+
+## Architecture
+
+The workspace keeps the official CodeMirror editor primitives where Lezer is
+not part of the contract: `@codemirror/state`, `@codemirror/view`,
+`@codemirror/search`, and `@codemirror/lint` are used directly. The packages in
+this repository replace the language-aware layers above those primitives.
+
+1. **Tree-sitter language runtime**:
+   `@codemirror-treesitter/language` adapts `web-tree-sitter` into CodeMirror's
+   language interfaces. It owns parser scheduling, incremental parsing,
+   syntax-tree wrappers, nested parsing, syntax highlighting, indentation,
+   folding, bracket matching, bidi isolation, and stream-parser support.
+2. **Language registry**:
+   `@codemirror-treesitter/language-data` builds `LanguageDescription` entries
+   on top of the language runtime. Each entry knows its aliases, filename and
+   extension metadata, WASM grammar loader, optional highlight query, language
+   data, and nested parser setup.
+3. **Editor feature packages**:
+   `commands`, `autocomplete`, `merge`, and `lsp-client` reimplement the
+   CodeMirror feature packages that need syntax information. They depend on the
+   local language runtime instead of `@codemirror/language` or Lezer.
+4. **Assembly and styling**:
+   `basic-setup` assembles a CodeMirror setup from the local feature packages,
+   and `theme-gruvbox` provides editor themes and highlight styles using the
+   local highlight tags.
+5. **Product surface**:
+   `live-md` composes the local packages into a Markdown editor with live block
+   widgets, code-fence highlighting, KaTeX and Mermaid rendering, Shadow DOM web
+   component integration, persistence, selection APIs, and benchmark fixtures.
 
 ## Packages
 
-| Package                                | Scope                                                                                                                                                                                                                                                                                                                                             |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@codemirror-treesitter/language`      | Tree-sitter parser integration plus the CodeMirror language surface: `Language`, `LanguageSupport`, `LanguageDescription`, `LRLanguage`, `ParseContext`, syntax tree access, tree/node/cursor wrappers, language data facets, mixed-language parsing, highlighting, indentation, folding, bracket matching, bidi isolation, and `StreamLanguage`. |
-| `@codemirror-treesitter/language-data` | CodeMirror language metadata backed by lazy Tree-sitter WASM and highlight-query loading. The built package currently exposes 146 language entries and mirrors upstream aliases, extensions, and filename matching.                                                                                                                               |
-| `@codemirror-treesitter/commands`      | Reimplementation of `@codemirror/commands`: cursor movement, selection, multiple cursors, deletion, line moving/copying, indentation, tab focus mode, commenting, history, and the standard/default/emacs/history keymaps.                                                                                                                        |
-| `@codemirror-treesitter/autocomplete`  | Autocomplete and close-bracket infrastructure: completion contexts/sources/results, tooltip rendering, filtering, snippets, word completion, close brackets, and bracket-pair deletion.                                                                                                                                                           |
-| `@codemirror-treesitter/basic-setup`   | `basicSetup` and `minimalSetup` assembled from the Tree-sitter packages, with extension and keymap ordering checked against upstream `codemirror`.                                                                                                                                                                                                |
-| `@codemirror-treesitter/theme-gruvbox` | Gruvbox dark and light editor themes, highlight styles, combined extensions, and reusable color palettes.                                                                                                                                                                                                                                         |
-| `@codemirror-treesitter/merge`         | Diff and merge views for CodeMirror: `MergeView`, `unifiedMergeView`, `acceptChunk`, `rejectChunk`, and `presentableDiff`.                                                                                                                                                                                                                        |
-| `@codemirror-treesitter/lsp-client`    | Language Server Protocol client: completions, hover, diagnostics, formatting, rename, go-to-definition, references, and signature help.                                                                                                                                                                                                           |
-| `@codemirror-treesitter/live-md`       | Live Markdown editor as both a `<live-md-editor>` web component and a `createLiveMdEditor()` programmatic API, built on the Tree-sitter CodeMirror stack.                                                                                                                                                                                         |
+| Directory                | Package                                | Role                                                                                                                                                         |
+| ------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/language`      | `@codemirror-treesitter/language`      | Tree-sitter parser integration and CodeMirror-compatible language infrastructure.                                                                            |
+| `packages/language-data` | `@codemirror-treesitter/language-data` | Lazy language metadata, Tree-sitter WASM loading, highlight-query loading, and mixed-language parser wiring.                                                 |
+| `packages/commands`      | `@codemirror-treesitter/commands`      | Cursor movement, selection, deletion, indentation, commenting, history, and keymaps.                                                                         |
+| `packages/autocomplete`  | `@codemirror-treesitter/autocomplete`  | Completion contexts, sources, results, tooltip UI, filtering, snippets, word completion, and close brackets.                                                 |
+| `packages/codemirror`    | `@codemirror-treesitter/basic-setup`   | `basicSetup` and `minimalSetup` assembled from the local Tree-sitter packages.                                                                               |
+| `packages/theme-gruvbox` | `@codemirror-treesitter/theme-gruvbox` | Gruvbox dark/light editor themes, highlight styles, combined extensions, and palettes.                                                                       |
+| `packages/merge`         | `@codemirror-treesitter/merge`         | Diff, split merge view, unified merge view, chunks, and accept/reject commands.                                                                              |
+| `packages/lsp-client`    | `@codemirror-treesitter/lsp-client`    | Language Server Protocol client, plugin, workspace mapping, diagnostics, completions, hover, formatting, rename, definition, references, and signature help. |
+| `packages/live-md`       | `@codemirror-treesitter/live-md`       | Live Markdown editor runtime, web component, registration entry, fixtures, and CSS export.                                                                   |
+
+Each package directory has its own README with its local responsibilities,
+public entry points, and relationship to the rest of the workspace.
 
 ## Web Component
 
-The `<live-md-editor>` custom element wraps a Tree-sitter–backed CodeMirror
+The `<live-md-editor>` custom element wraps a Tree-sitter-backed CodeMirror
 Markdown editor in Shadow DOM. Import the register entry point once, then use
 the element anywhere in your HTML.
 
@@ -62,21 +116,21 @@ the element anywhere in your HTML.
 | `default-value` | string  | Initial Markdown content (reads light-DOM `textContent` if not set). |
 | `persist-key`   | string  | localStorage key for persisting editor content.                      |
 | `placeholder`   | string  | Placeholder text when the editor is empty.                           |
-| `readonly`      | boolean | Disable editing (content remains selectable/readable).               |
+| `readonly`      | boolean | Disable editing while keeping content selectable/readable.           |
 
 ### Properties
 
-| Property         | Type           | Description                                      |
-| ---------------- | -------------- | ------------------------------------------------ |
-| `value`          | `string`       | Current Markdown content (read/write).           |
-| `defaultValue`   | `string`       | Initial content (read/write).                    |
-| `persistKey`     | `string\|null` | localStorage key (read/write).                   |
-| `placeholder`    | `string`       | Placeholder text (read/write).                   |
-| `readOnly`       | `boolean`      | Whether editor is read-only (read/write).        |
-| `dirty`          | `boolean`      | Whether content has changed since `markClean()`. |
-| `selectionStart` | `number`       | Selection anchor position.                       |
-| `selectionEnd`   | `number`       | Selection head position.                         |
-| `view`           | `EditorView`   | The underlying CodeMirror `EditorView` instance. |
+| Property         | Type                 | Description                                      |
+| ---------------- | -------------------- | ------------------------------------------------ |
+| `value`          | `string`             | Current Markdown content (read/write).           |
+| `defaultValue`   | `string`             | Initial content (read/write).                    |
+| `persistKey`     | `string \| null`     | localStorage key (read/write).                   |
+| `placeholder`    | `string`             | Placeholder text (read/write).                   |
+| `readOnly`       | `boolean`            | Whether editor is read-only (read/write).        |
+| `dirty`          | `boolean`            | Whether content has changed since `markClean()`. |
+| `selectionStart` | `number`             | Selection anchor position.                       |
+| `selectionEnd`   | `number`             | Selection head position.                         |
+| `view`           | `EditorView \| null` | The underlying CodeMirror `EditorView` instance. |
 
 ### Methods
 
@@ -92,11 +146,11 @@ the element anywhere in your HTML.
 
 | Event           | Detail      | Description                                            |
 | --------------- | ----------- | ------------------------------------------------------ |
-| `input`         | —           | Fires on every content change (bubbles, `InputEvent`). |
-| `change`        | —           | Debounced change fired after blur.                     |
+| `input`         | -           | Fires on every content change (bubbles, `InputEvent`). |
+| `change`        | -           | Debounced change fired after blur.                     |
 | `live-md-ready` | `{ view }`  | Fires when the editor finishes initializing.           |
 | `live-md-error` | `{ error }` | Fires if editor initialization fails.                  |
-| `select`        | —           | Fires when the selection changes.                      |
+| `select`        | -           | Fires when the selection changes.                      |
 
 ### CSS Custom Properties
 
@@ -109,15 +163,18 @@ the element anywhere in your HTML.
 
 ## Apps and Tools
 
-- **`apps/basic-editor`** — Minimal Tree-sitter–only editor loading
-  `@codemirror-treesitter/live-md/register` as a single `<live-md-editor>` tag.
-- **`apps/examples`** — Side-by-side workbench comparing Tree-sitter and official
-  CodeMirror/Lezer behavior on parser-relevant examples, with behavior and
-  latency reports.
-- **`apps/live-md-benchmark`** — LiveMD performance benchmarks.
-- **`tools/audit.mjs`** — Checks package naming, Lezer-free guarantees, public
-  export parity, command stubs, basic setup parity, language-data metadata/load
-  coverage, and example coverage.
+- `apps/basic-editor`: Minimal Tree-sitter-only editor that loads
+  `@codemirror-treesitter/live-md/register` and renders one
+  `<live-md-editor>` element.
+- `apps/examples`: Side-by-side workbench comparing the local Tree-sitter
+  implementation with official CodeMirror/Lezer behavior on parser-relevant
+  examples, package coverage, and benchmark metrics.
+- `apps/live-md-benchmark`: LiveMD performance benchmark harness for rendering,
+  editing, deletion, clipboard, and selection workflows.
+- `tools/audit.mjs`: Repository audit that checks package names, Lezer-free
+  guarantees, public export parity, command and autocomplete stubs, basic setup
+  parity, language-data metadata/load coverage, example coverage, merge/LSP
+  usage, and benchmark app wiring.
 
 ## Implementation Notes
 
@@ -149,20 +206,24 @@ Use Vite+ from the workspace root:
 
 ```bash
 vp install
-vp run ready
+vp check
 vp run -r test
 vp run -r build
 vp run audit
 ```
 
-`vp run ready` runs the full local validation path: check, recursive tests,
-recursive builds, and the audit script.
+The root script `vp run ready` runs the full local validation path:
+
+```bash
+vp run ready
+```
 
 Run the apps from their workspace directories:
 
 ```bash
 cd apps/basic-editor && vp dev
-cd apps/examples     && vp dev
+cd apps/examples && vp dev
+cd apps/live-md-benchmark && vp dev
 ```
 
 ## Parity Targets
@@ -175,6 +236,9 @@ workspace reimplements, not identical internals. The audit enforces:
 - `@codemirror-treesitter/commands` exports every public name from upstream
   `@codemirror/commands`, `comment`, and `history`, and does not leave known
   no-op command placeholders.
+- `@codemirror-treesitter/autocomplete` exports every public name from upstream
+  `@codemirror/autocomplete`, and does not leave known completion-context
+  placeholders.
 - `@codemirror-treesitter/basic-setup` matches upstream `basicSetup` and
   `minimalSetup` extension sequences and basic keymap ordering.
 - `@codemirror-treesitter/language-data` mirrors upstream language metadata and
@@ -182,5 +246,8 @@ workspace reimplements, not identical internals. The audit enforces:
 - `@codemirror-treesitter/theme-gruvbox` exports both dark and light Gruvbox
   themes and imports syntax highlighting from the local Tree-sitter language
   package.
+- `@codemirror-treesitter/merge` and
+  `@codemirror-treesitter/lsp-client` expose upstream-compatible public
+  surfaces and use the local Tree-sitter language/highlighting packages.
 - Parser-relevant official examples are either implemented in `apps/examples`
   or explicitly classified as out of scope.
