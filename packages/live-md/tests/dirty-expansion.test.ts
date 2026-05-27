@@ -50,6 +50,16 @@ describe("LiveMD dirty range expansion", () => {
       name: "link reference definitions",
       target: "example",
     },
+    {
+      doc: "---\ntitle: One\n---\n\nnext",
+      name: "YAML metadata blocks",
+      target: "One",
+    },
+    {
+      doc: '+++\ntitle = "One"\n+++\n\nnext',
+      name: "TOML metadata blocks",
+      target: "One",
+    },
   ]) {
     it(`uses touched line scope for undecorated ${markdownCase.name}`, async () => {
       let state = await markdownState(markdownCase.doc);
