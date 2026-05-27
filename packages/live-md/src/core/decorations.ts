@@ -7,7 +7,12 @@ import {
   StateField,
   Text,
 } from "@codemirror/state";
-import { highlightTree, syntaxTree, type SyntaxNode } from "@codemirror-treesitter/language";
+import {
+  highlightTree,
+  syntaxTree,
+  syntaxTreeChangedRanges,
+  type SyntaxNode,
+} from "@codemirror-treesitter/language";
 import { gruvboxLightHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import {
@@ -86,7 +91,7 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
       previousActiveLines: transaction.selection ? Array.from(value.activeLines) : undefined,
       startState: transaction.startState,
       state: transaction.state,
-      syntaxChangedRanges: [],
+      syntaxChangedRanges: syntaxTreeChangedRanges(transaction),
     });
     let expandedDirtyRanges = expandLiveMdDirtyRanges({
       ranges: dirtyRanges,

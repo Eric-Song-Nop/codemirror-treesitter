@@ -21,6 +21,7 @@ export {
   styleTags,
   sublanguageProp,
   syntaxParserRunning,
+  syntaxTreeChangedRanges,
   syntaxTree,
   syntaxTreeAvailable,
   tagHighlighter,

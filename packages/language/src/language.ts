@@ -600,6 +600,26 @@ export function syntaxTreeAvailable(state: EditorState, upto = state.doc.length)
   return state.field(Language.state, false)?.context.isDone(upto) || false;
 }
 
+export function syntaxTreeChangedRanges(transaction: Transaction): readonly DocRange[] {
+  if (!transaction.docChanged) return [];
+  let startLanguage = transaction.startState.facet(language);
+  let nextLanguage = transaction.state.facet(language);
+  if (!startLanguage || !nextLanguage) return [];
+  if (startLanguage != nextLanguage) return [{ from: 0, to: transaction.state.doc.length }];
+
+  let oldTree = syntaxTree(transaction.startState);
+  let newTree = syntaxTree(transaction.state);
+  if (!oldTree.tree || !newTree.tree) return [{ from: 0, to: transaction.state.doc.length }];
+
+  let editedOldTree = nextLanguage.parser.editWrappedTree(
+    oldTree,
+    transaction.changes,
+    transaction.startState.doc,
+    transaction.state.doc,
+  );
+  return normalizeRanges(collectChangedRanges(editedOldTree, newTree));
+}
+
 export function forceParsing(view: EditorView, upto = view.viewport.to, timeout = 100): boolean {
   let tree = ensureSyntaxTree(view.state, upto, timeout);
   if (tree && tree != syntaxTree(view.state)) view.dispatch({});
@@ -946,6 +966,36 @@ const parseWorker = ViewPlugin.fromClass(
 
 function idleTime(deadline?: IdleDeadline) {
   return deadline && !isInputPending ? Math.max(Work.MinSlice, deadline.timeRemaining() - 5) : 1e9;
+}
+
+function collectChangedRanges(oldTree: Tree, newTree: Tree): DocRange[] {
+  let ranges: DocRange[] = oldTree.tree
+    ? oldTree.tree
+        .getChangedRanges(newTree.tree!)
+        .map((range) => ({ from: range.startIndex, to: range.endIndex }))
+    : [{ from: 0, to: newTree.length }];
+
+  let matchedOldNested = new Set<NestedTree>();
+  for (let newNested of newTree.nested) {
+    let oldNested = oldTree.nested.find(
+      (candidate) =>
+        candidate.parser == newNested.parser &&
+        candidate.ranges.some((oldRange) =>
+          newNested.ranges.some((range) => oldRange.from <= range.to && oldRange.to >= range.from),
+        ),
+    );
+    if (oldNested) {
+      matchedOldNested.add(oldNested);
+      ranges.push(...collectChangedRanges(oldNested.tree, newNested.tree));
+    } else {
+      ranges.push(...newNested.ranges);
+    }
+  }
+
+  for (let oldNested of oldTree.nested) {
+    if (!matchedOldNested.has(oldNested)) ranges.push(...oldNested.ranges);
+  }
+  return ranges;
 }
 
 export const language = Facet.define<Language, Language | null>({

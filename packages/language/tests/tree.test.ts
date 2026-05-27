@@ -10,6 +10,7 @@ import {
   ensureSyntaxTree,
   languageDataProp,
   matchBrackets,
+  syntaxTreeChangedRanges,
   syntaxTree,
   syntaxTreeAvailable,
 } from "../src/index.js";
@@ -512,6 +513,19 @@ describe("tree-sitter tree wrapper", () => {
     expect(
       changed.some((range) => range.startIndex < middleTo && range.endIndex > middleFrom),
     ).toBe(false);
+  });
+
+  it("reports syntax changed ranges separately from same-shape text edits", async () => {
+    let state = await javascriptState("let foo = 1;\n");
+    let rename = state.update({
+      changes: { from: 4, to: 7, insert: "bar" },
+    });
+    let structural = state.update({
+      changes: { from: 4, to: 7, insert: "function f() {}" },
+    });
+
+    expect(syntaxTreeChangedRanges(rename)).toEqual([]);
+    expect(syntaxTreeChangedRanges(structural)).toEqual([{ from: 0, to: 24 }]);
   });
 
   it("parses and reuses multiple disjoint nested ranges", async () => {

@@ -63,6 +63,16 @@ describe("LiveMD analysis snapshot", () => {
     ]);
   });
 
+  it("records syntax dirty ranges for Markdown structure changes", async () => {
+    let state = await markdownAnalysisState("plain\nnext");
+    let transaction = state.update({
+      changes: { from: 0, insert: "# " },
+    });
+    let analysis = transaction.state.field(liveMdAnalysis);
+
+    expect(analysis.dirtyRanges.some((range) => range.reasons.includes("syntax"))).toBe(true);
+  });
+
   it("patches selection-only updates without rebuilding untouched line decorations", async () => {
     let doc = "- first\n- second\n- third";
     let state = await markdownAnalysisState(doc, 2);
