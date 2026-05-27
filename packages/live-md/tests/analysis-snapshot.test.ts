@@ -94,6 +94,23 @@ describe("LiveMD analysis snapshot", () => {
     expect(after).toHaveLength(before.length);
     expect(after[0]).toBe(before[0]);
   });
+
+  it("patches document edits without rebuilding untouched mapped line decorations", async () => {
+    let doc = "- first\n- second\n- third";
+    let state = await markdownAnalysisState(doc, 2);
+    let before = lineDecorations(state, state.doc.line(2).from);
+
+    expect(before.length).toBeGreaterThan(0);
+
+    let transaction = state.update({
+      changes: { from: 2, to: "first".length + 2, insert: "FIRST!" },
+    });
+    let after = lineDecorations(transaction.state, transaction.state.doc.line(2).from);
+
+    expect(transaction.state.doc.line(2).from).toBe(state.doc.line(2).from + 1);
+    expect(after).toHaveLength(before.length);
+    expect(after[0]).toBe(before[0]);
+  });
 });
 
 function analysisState(doc: string, selection = 0) {

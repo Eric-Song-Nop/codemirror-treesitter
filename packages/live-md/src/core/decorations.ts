@@ -1,4 +1,5 @@
 import {
+  type ChangeDesc,
   EditorState,
   type Range,
   RangeSet,
@@ -98,10 +99,11 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
       registry: liveMdFeatureRegistry,
       state: transaction.state,
     });
-    if (!transaction.docChanged && transaction.selection && !codeFenceLanguageUpdate) {
+    if (!codeFenceLanguageUpdate) {
       return patchLiveMdAnalysis(
         value,
         transaction.state,
+        transaction.changes,
         dirtyRanges,
         expandedDirtyRanges,
         activeLines,
@@ -276,6 +278,7 @@ function buildLiveMdAnalysis(
 function patchLiveMdAnalysis(
   previous: LiveMdAnalysis,
   state: EditorState,
+  changes: ChangeDesc,
   dirtyRanges: readonly LiveMdDirtyRange[],
   expandedDirtyRanges: readonly LiveMdDirtyRange[],
   activeLines: Set<number>,
@@ -285,13 +288,13 @@ function patchLiveMdAnalysis(
   return {
     activeLines,
     atomicRanges: patchRangeSet(
-      previous.atomicRanges,
+      previous.atomicRanges.map(changes),
       expandedDirtyRanges,
       plan.finishAtomicRangeValues(),
     ),
     codeFenceLanguages,
     decorations: patchRangeSet(
-      previous.decorations,
+      previous.decorations.map(changes),
       expandedDirtyRanges,
       plan.finishDecorationRanges(),
     ),
@@ -354,9 +357,10 @@ function touchesAnyDirtyRange(from: number, to: number, dirtyRanges: readonly Li
 }
 
 function rangesTouch(from: number, to: number, rangeFrom: number, rangeTo: number) {
-  return from == to || rangeFrom == rangeTo
-    ? from <= rangeTo && to >= rangeFrom
-    : from < rangeTo && to > rangeFrom;
+  if (from == to && rangeFrom == rangeTo) return from == rangeFrom;
+  if (from == to) return from >= rangeFrom && from < rangeTo;
+  if (rangeFrom == rangeTo) return from <= rangeFrom && to >= rangeFrom;
+  return from < rangeTo && to > rangeFrom;
 }
 
 function feature(
