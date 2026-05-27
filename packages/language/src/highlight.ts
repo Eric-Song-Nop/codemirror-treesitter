@@ -1,4 +1,11 @@
-import { EditorState, Facet, Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
+import {
+  EditorState,
+  Facet,
+  Prec,
+  RangeSetBuilder,
+  type Extension,
+  type Range,
+} from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -7,8 +14,14 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { StyleModule, type StyleSpec } from "style-mod";
-import { Language, languageDataProp, syntaxTree } from "./language.js";
-import { type NestedTree, type NodeType, type SyntaxNode, type Tree } from "./tree.js";
+import { Language, languageDataProp, syntaxTree, syntaxTreeChangedRanges } from "./language.js";
+import {
+  type DocRange,
+  type NestedTree,
+  type NodeType,
+  type SyntaxNode,
+  type Tree,
+} from "./tree.js";
 import { getStyleTags, tagHighlighter, tags, type Highlighter, type Tag } from "./tags.js";
 
 export class HighlightStyle implements Highlighter {
@@ -153,33 +166,141 @@ class TreeHighlighter {
     ) {
       this.decorations = this.decorations.map(update.changes);
       this.decoratedTo = decoratedToMapped;
-    } else if (tree != this.tree || update.viewportChanged || styleChange) {
+    } else if (
+      update.viewportChanged ||
+      styleChange ||
+      tree.type != this.tree.type ||
+      !canPatchHighlight(update)
+    ) {
       this.tree = tree;
       this.decorations = this.buildDeco(update.view, highlighters);
+      this.decoratedTo = viewport.to;
+    } else if (tree != this.tree || update.docChanged) {
+      let dirtyRanges = highlightDirtyRanges(update);
+      this.tree = tree;
+      this.decorations = patchDecorations(
+        this.decorations.map(update.changes),
+        dirtyRanges,
+        this.buildDecoRanges(update.view, highlighters, dirtyRanges),
+      );
       this.decoratedTo = viewport.to;
     }
   }
 
   buildDeco(view: EditorView, highlighters: readonly Highlighter[] | null) {
-    if (!highlighters || !this.tree.length) return Decoration.none;
+    let ranges = this.buildDecoRanges(view, highlighters, view.visibleRanges);
     let builder = new RangeSetBuilder<Decoration>();
-    for (let { from, to } of view.visibleRanges) {
+    for (let range of ranges) builder.add(range.from, range.to, range.value);
+    return builder.finish();
+  }
+
+  buildDecoRanges(
+    view: EditorView,
+    highlighters: readonly Highlighter[] | null,
+    ranges: readonly DocRange[],
+  ): readonly Range<Decoration>[] {
+    if (!highlighters || !this.tree.length) return [];
+    let decorations: Range<Decoration>[] = [];
+    for (let { from, to } of clipToVisibleRanges(ranges, view.visibleRanges)) {
       highlightTree(
         this.tree,
         highlighters,
         (from, to, style) => {
-          builder.add(
-            from,
-            to,
-            this.markCache[style] || (this.markCache[style] = Decoration.mark({ class: style })),
+          decorations.push(
+            (
+              this.markCache[style] || (this.markCache[style] = Decoration.mark({ class: style }))
+            ).range(from, to),
           );
         },
         from,
         to,
       );
     }
-    return builder.finish();
+    return decorations;
   }
+}
+
+function canPatchHighlight(update: ViewUpdate) {
+  return update.transactions.length == 1;
+}
+
+function highlightDirtyRanges(update: ViewUpdate): readonly DocRange[] {
+  let transaction = update.transactions[0];
+  if (!transaction) return [];
+  let ranges: DocRange[] = [];
+  update.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    addTouchedLineRange(update.state, ranges, fromB, toB);
+  });
+  for (let range of syntaxTreeChangedRanges(transaction)) {
+    addTouchedLineRange(update.state, ranges, range.from, range.to);
+  }
+  return mergeDocRanges(ranges);
+}
+
+function addTouchedLineRange(
+  state: EditorState,
+  ranges: DocRange[],
+  rangeFrom: number,
+  rangeTo: number,
+) {
+  let from = clamp(rangeFrom, 0, state.doc.length);
+  let to = clamp(rangeTo, 0, state.doc.length);
+  let firstLine = state.doc.lineAt(from);
+  let lastLine = state.doc.lineAt(Math.max(from, to - 1));
+  ranges.push({ from: firstLine.from, to: lastLine.to });
+}
+
+function mergeDocRanges(ranges: readonly DocRange[]) {
+  let sorted = ranges.slice().sort((left, right) => left.from - right.from || left.to - right.to);
+  let merged: DocRange[] = [];
+  for (let range of sorted) {
+    let last = merged[merged.length - 1];
+    if (last && range.from <= last.to) {
+      last.to = Math.max(last.to, range.to);
+    } else {
+      merged.push({ from: range.from, to: range.to });
+    }
+  }
+  return merged;
+}
+
+function patchDecorations(
+  current: DecorationSet,
+  dirtyRanges: readonly DocRange[],
+  additions: readonly Range<Decoration>[],
+) {
+  let next = current;
+  for (let range of dirtyRanges) {
+    next = next.update({
+      filter: (from, to) => !rangesTouch(from, to, range.from, range.to),
+      filterFrom: range.from,
+      filterTo: range.to,
+    });
+  }
+  return additions.length ? next.update({ add: additions, sort: true }) : next;
+}
+
+function clipToVisibleRanges(ranges: readonly DocRange[], visibleRanges: readonly DocRange[]) {
+  let clipped: DocRange[] = [];
+  for (let range of ranges) {
+    for (let visible of visibleRanges) {
+      let from = Math.max(range.from, visible.from);
+      let to = Math.min(range.to, visible.to);
+      if (from <= to) clipped.push({ from, to });
+    }
+  }
+  return mergeDocRanges(clipped);
+}
+
+function rangesTouch(from: number, to: number, rangeFrom: number, rangeTo: number) {
+  if (from == to && rangeFrom == rangeTo) return from == rangeFrom;
+  if (from == to) return from >= rangeFrom && from < rangeTo;
+  if (rangeFrom == rangeTo) return from <= rangeFrom && to >= rangeFrom;
+  return from < rangeTo && to > rangeFrom;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 const treeHighlighter = Prec.high(
