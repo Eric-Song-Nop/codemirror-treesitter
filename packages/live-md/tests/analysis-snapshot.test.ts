@@ -165,6 +165,40 @@ describe("LiveMD analysis snapshot", () => {
     expect(after[1]).toBe(before[1]);
   });
 
+  it("reuses the previous code fence tree when reparsing edited code highlights", async () => {
+    let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
+    let oldTrees: unknown[] = [];
+    let state = await markdownAnalysisState(doc);
+    let languages = new Map(await loadCodeFenceLanguages());
+    let tsParser = languages.get("ts");
+    if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
+    languages.set(
+      "ts",
+      new Proxy(tsParser, {
+        get(target, property, receiver) {
+          if (property == "parse") {
+            return (...args: Parameters<typeof target.parse>) => {
+              oldTrees.push(args[1] ?? null);
+              return target.parse(...args);
+            };
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+    );
+    state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
+    oldTrees.length = 0;
+
+    let editFrom = doc.indexOf("a = 1");
+    let transaction = state.update({
+      changes: { from: editFrom, to: editFrom + 1, insert: "aa" },
+    });
+    transaction.state.field(liveMdAnalysis);
+
+    expect(oldTrees).toHaveLength(1);
+    expect(oldTrees[0]).not.toBe(null);
+  });
+
   it("does not reparse code fence highlights for selection-only code line updates", async () => {
     let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
     let parseCalls = 0;

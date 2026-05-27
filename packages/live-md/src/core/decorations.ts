@@ -1,5 +1,6 @@
 import {
   type ChangeDesc,
+  ChangeSet,
   EditorState,
   type Range,
   RangeSet,
@@ -13,6 +14,7 @@ import {
   syntaxTree,
   syntaxTreeChangedRanges,
   type SyntaxNode,
+  type Tree,
 } from "@codemirror-treesitter/language";
 import { gruvboxLightHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
@@ -48,12 +50,26 @@ type VisitContext = {
   activeLines: Set<number>;
   codeFenceLanguages: CodeFenceLanguageMap;
   dirtyReasons: readonly LiveMdDirtyReason[] | null;
+  previousCodeFenceHighlights: readonly CodeFenceHighlightTree[];
+  changes: ChangeDesc | null;
   plan: DecorationPlan;
   state: EditorState;
 };
 
 type NodeVisitor = (context: VisitContext, node: SyntaxNode) => false | void;
 type LiveMdNodeFeature = LiveMdFeature<VisitContext, SyntaxNode>;
+
+type CodeFenceParser =
+  CodeFenceLanguageMap extends ReadonlyMap<string, infer Parser> ? Parser : never;
+
+type CodeFenceHighlightTree = {
+  contentFrom: number;
+  contentTo: number;
+  language: string;
+  parser: CodeFenceParser;
+  sourceText: Text;
+  tree: Tree;
+};
 
 const visibleSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-active" });
 const hiddenSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-hidden" });
@@ -67,6 +83,7 @@ const tablePipeMark = Decoration.mark({ class: "cm-md-table-pipe" });
 type LiveMdAnalysis = {
   activeLines: ReadonlySet<number>;
   atomicRanges: RangeSet<RangeValue>;
+  codeFenceHighlightTrees: readonly CodeFenceHighlightTree[];
   codeFenceLanguages: CodeFenceLanguageMap;
   decorations: DecorationSet;
   dirtyRanges: readonly LiveMdDirtyRange[];
@@ -179,6 +196,7 @@ const paragraphBreakAtom = new AtomicRange();
 
 class DecorationPlan {
   private atomicRanges: Array<{ from: number; to: number }> = [];
+  private codeFenceHighlightTrees: CodeFenceHighlightTree[] = [];
   private lineClasses = new Map<number, Set<string>>();
   private ranges: InlineDecoration[] = [];
   private state: EditorState;
@@ -199,6 +217,10 @@ class DecorationPlan {
 
   atom(from: number, to: number) {
     if (from < to) this.atomicRanges.push({ from, to });
+  }
+
+  codeFenceHighlight(tree: CodeFenceHighlightTree) {
+    this.codeFenceHighlightTrees.push(tree);
   }
 
   mark(from: number, to: number, decoration: Decoration) {
@@ -248,6 +270,10 @@ class DecorationPlan {
     return this.atomicRanges.map(({ from, to }) => paragraphBreakAtom.range(from, to));
   }
 
+  finishCodeFenceHighlightTrees() {
+    return this.codeFenceHighlightTrees;
+  }
+
   private finishDecorationSpecs() {
     let decorations = [...this.ranges];
     for (let [lineNumber, classes] of this.lineClasses) {
@@ -275,6 +301,7 @@ function buildLiveMdAnalysis(
   return {
     activeLines,
     atomicRanges: plan.finishAtomicRanges(),
+    codeFenceHighlightTrees: plan.finishCodeFenceHighlightTrees(),
     codeFenceLanguages,
     decorations: plan.finish(),
     dirtyRanges,
@@ -291,13 +318,26 @@ function patchLiveMdAnalysis(
   activeLines: Set<number>,
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
-  let plan = buildLiveMdPlan(state, activeLines, codeFenceLanguages, expandedDirtyRanges);
+  let plan = buildLiveMdPlan(
+    state,
+    activeLines,
+    codeFenceLanguages,
+    expandedDirtyRanges,
+    previous.codeFenceHighlightTrees,
+    changes,
+  );
   return {
     activeLines,
     atomicRanges: patchRangeSet(
       previous.atomicRanges.map(changes),
       expandedDirtyRanges,
       plan.finishAtomicRangeValues(),
+    ),
+    codeFenceHighlightTrees: mergeCodeFenceHighlightTrees(
+      previous.codeFenceHighlightTrees,
+      changes,
+      expandedDirtyRanges,
+      plan.finishCodeFenceHighlightTrees(),
     ),
     codeFenceLanguages,
     decorations: patchRangeSet(
@@ -315,11 +355,15 @@ function buildLiveMdPlan(
   activeLines: Set<number>,
   codeFenceLanguages: CodeFenceLanguageMap,
   ranges?: readonly LiveMdDirtyRange[],
+  previousCodeFenceHighlights: readonly CodeFenceHighlightTree[] = [],
+  changes: ChangeDesc | null = null,
 ) {
   let context: VisitContext = {
     activeLines,
     codeFenceLanguages,
     dirtyReasons: null,
+    previousCodeFenceHighlights,
+    changes,
     plan: new DecorationPlan(state),
     state,
   };
@@ -363,6 +407,25 @@ function patchRangeSet<T extends RangeValue>(
   }
   let added = additions.filter((range) => touchesAnyDirtyRange(range.from, range.to, dirtyRanges));
   return added.length ? next.update({ add: added, sort: true }) : next;
+}
+
+function mergeCodeFenceHighlightTrees(
+  previous: readonly CodeFenceHighlightTree[],
+  changes: ChangeDesc,
+  dirtyRanges: readonly LiveMdDirtyRange[],
+  additions: readonly CodeFenceHighlightTree[],
+) {
+  if (!dirtyRanges.length) return previous;
+  let preserved = previous
+    .map((tree) => ({
+      ...tree,
+      contentFrom: changes.mapPos(tree.contentFrom, 1),
+      contentTo: changes.mapPos(tree.contentTo, -1),
+    }))
+    .filter((tree) => !touchesAnyDirtyRange(tree.contentFrom, tree.contentTo, dirtyRanges));
+  return [...preserved, ...additions].sort(
+    (left, right) => left.contentFrom - right.contentFrom || left.contentTo - right.contentTo,
+  );
 }
 
 function touchesAnyDirtyRange(from: number, to: number, dirtyRanges: readonly LiveMdDirtyRange[]) {
@@ -804,13 +867,88 @@ function addCodeFenceHighlights(
 
   let source = context.state.sliceDoc(contentFrom, contentTo);
   let sourceText = Text.of(source.split("\n"));
-  let tree = parser.parse(sourceText);
+  let previous = previousCodeFenceHighlight(context, contentFrom, contentTo, language, parser);
+  let oldTree = previous
+    ? editedPreviousCodeFenceTree(context, previous, contentFrom, contentTo, sourceText)
+    : null;
+  let tree = parser.parse(sourceText, oldTree);
+  context.plan.codeFenceHighlight({
+    contentFrom,
+    contentTo,
+    language,
+    parser,
+    sourceText,
+    tree,
+  });
   highlightTree(tree, gruvboxLightHighlightStyle, (from, to, className) => {
     let decoration = Decoration.mark({ class: className });
     splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {
       context.plan.mark(contentFrom + rangeFrom, contentFrom + rangeTo, decoration);
     });
   });
+}
+
+function previousCodeFenceHighlight(
+  context: VisitContext,
+  contentFrom: number,
+  contentTo: number,
+  language: string,
+  parser: CodeFenceParser,
+) {
+  for (let previous of context.previousCodeFenceHighlights) {
+    if (previous.language != language || previous.parser != parser) continue;
+    let mappedFrom = context.changes?.mapPos(previous.contentFrom, 1) ?? previous.contentFrom;
+    let mappedTo = context.changes?.mapPos(previous.contentTo, -1) ?? previous.contentTo;
+    if (rangesTouch(mappedFrom, mappedTo, contentFrom, contentTo)) return previous;
+  }
+  return null;
+}
+
+function editedPreviousCodeFenceTree(
+  context: VisitContext,
+  previous: CodeFenceHighlightTree,
+  contentFrom: number,
+  contentTo: number,
+  sourceText: Text,
+) {
+  if (!context.changes) return previous.tree;
+  let contentChanges = codeFenceContentChanges(context, previous, contentFrom, contentTo);
+  if (!contentChanges) return null;
+  return previous.parser.editWrappedTree(
+    previous.tree,
+    contentChanges,
+    previous.sourceText,
+    sourceText,
+  );
+}
+
+function codeFenceContentChanges(
+  context: VisitContext,
+  previous: CodeFenceHighlightTree,
+  contentFrom: number,
+  contentTo: number,
+) {
+  if (!context.changes) return ChangeSet.empty(previous.sourceText.length);
+  let specs: Array<{ from: number; insert: string; to: number }> = [];
+  let usable = true;
+  context.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    let oldInside = fromA >= previous.contentFrom && toA <= previous.contentTo;
+    let newInside = fromB >= contentFrom && toB <= contentTo;
+    let touchesOldContent =
+      oldInside || rangesTouch(fromA, toA, previous.contentFrom, previous.contentTo);
+    let touchesNewContent = newInside || rangesTouch(fromB, toB, contentFrom, contentTo);
+    if (!touchesOldContent && !touchesNewContent) return;
+    if (!oldInside || !newInside) {
+      usable = false;
+      return;
+    }
+    specs.push({
+      from: fromA - previous.contentFrom,
+      insert: context.state.sliceDoc(fromB, toB),
+      to: toA - previous.contentFrom,
+    });
+  });
+  return usable ? ChangeSet.of(specs, previous.sourceText.length) : null;
 }
 
 function splitTextRangeByLine(
