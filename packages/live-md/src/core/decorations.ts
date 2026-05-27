@@ -160,6 +160,7 @@ const liveMdFeatures: readonly LiveMdNodeFeature[] = [
   feature(["emphasis"], visitMark(emphasisMark)),
   feature(["emphasis_delimiter"], visitSyntax),
   feature(["fenced_code_block"], visitCodeFence, "node"),
+  feature(["html_block", "indented_code_block", "link_reference_definition"], undefined, "line"),
   feature(["image"], visitImage, "line"),
   feature(["inline_link"], visitInlineLink),
   feature(["latex_block"], visitLatex, "node"),

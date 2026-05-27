@@ -34,6 +34,34 @@ describe("LiveMD dirty range expansion", () => {
     ]);
   });
 
+  for (let markdownCase of [
+    {
+      doc: "<div>\ncontent\n</div>\n\nnext",
+      name: "html blocks",
+      target: "content",
+    },
+    {
+      doc: "    first\n    second\n\nnext",
+      name: "indented code blocks",
+      target: "second",
+    },
+    {
+      doc: "[id]: https://example.com\n\nnext",
+      name: "link reference definitions",
+      target: "example",
+    },
+  ]) {
+    it(`uses touched line scope for undecorated ${markdownCase.name}`, async () => {
+      let state = await markdownState(markdownCase.doc);
+      let dirtyFrom = markdownCase.doc.indexOf(markdownCase.target);
+      let dirtyLine = state.doc.lineAt(dirtyFrom);
+
+      expect(expand([{ from: dirtyFrom, reasons: ["text"], to: dirtyFrom + 1 }], state)).toEqual([
+        { from: dirtyLine.from, reasons: ["text"], to: dirtyLine.to },
+      ]);
+    });
+  }
+
   it("uses feature line scope for code fence content edits", async () => {
     let doc = "```ts\nlet a = 1;\n```\n\n```ts\nlet b = 2;\n```\n";
     let state = await markdownState(doc);
