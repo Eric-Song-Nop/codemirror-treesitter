@@ -580,6 +580,7 @@ const Work = {
 } as const;
 
 let currentContext: ParseContext | null = null;
+const syntaxTreeChangedRangeCache = new WeakMap<Transaction, readonly DocRange[]>();
 
 export function syntaxTree(state: EditorState): Tree {
   return state.field(Language.state, false)?.tree ?? Tree.empty;
@@ -601,6 +602,14 @@ export function syntaxTreeAvailable(state: EditorState, upto = state.doc.length)
 }
 
 export function syntaxTreeChangedRanges(transaction: Transaction): readonly DocRange[] {
+  let cached = syntaxTreeChangedRangeCache.get(transaction);
+  if (cached) return cached;
+  let ranges = computeSyntaxTreeChangedRanges(transaction);
+  syntaxTreeChangedRangeCache.set(transaction, ranges);
+  return ranges;
+}
+
+function computeSyntaxTreeChangedRanges(transaction: Transaction): readonly DocRange[] {
   let startLanguage = transaction.startState.facet(language);
   let nextLanguage = transaction.state.facet(language);
   if (startLanguage != nextLanguage) return [{ from: 0, to: transaction.state.doc.length }];

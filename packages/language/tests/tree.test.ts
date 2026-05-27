@@ -529,6 +529,42 @@ describe("tree-sitter tree wrapper", () => {
     expect(syntaxTreeChangedRanges(structural)).toEqual([{ from: 0, to: 24 }]);
   });
 
+  it("caches syntax changed ranges per transaction", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    let parser = await javascriptParser;
+    let language = TreeSitterLanguage.define({ name: "javascript", parser });
+    let editCalls = 0;
+    let originalEditWrappedTree = language.parser.editWrappedTree.bind(language.parser);
+
+    Object.defineProperty(language.parser, "editWrappedTree", {
+      configurable: true,
+      value: (...args: Parameters<TreeSitterParser["editWrappedTree"]>) => {
+        editCalls++;
+        return originalEditWrappedTree(...args);
+      },
+    });
+    try {
+      let state = EditorState.create({
+        doc: "let foo = 1;\n",
+        extensions: [language.extension],
+      });
+      let transaction = state.update({
+        changes: { from: 4, to: 7, insert: "function f() {}" },
+      });
+      syntaxTree(transaction.state);
+      editCalls = 0;
+
+      expect(syntaxTreeChangedRanges(transaction)).toEqual([{ from: 0, to: 24 }]);
+      expect(syntaxTreeChangedRanges(transaction)).toEqual([{ from: 0, to: 24 }]);
+      expect(editCalls).toBe(1);
+    } finally {
+      Object.defineProperty(language.parser, "editWrappedTree", {
+        configurable: true,
+        value: originalEditWrappedTree,
+      });
+    }
+  });
+
   it("reports full syntax dirty ranges when parsing becomes available without text edits", async () => {
     javascriptParser ??= TreeSitterParser.load(javascriptWasm);
     let parser = await javascriptParser;
