@@ -45,6 +45,8 @@ describe("public LiveMD stylesheet", () => {
       expect(css).toContain('font-family: "KaTeX_Main"');
       expect(css).toContain(".live-md-codemirror .cm-md-latex-inline .katex");
       expect(css).toContain(".live-md-codemirror .cm-md-mermaid");
+      expect(css).toContain("--live-md-mermaid-accent");
+      expect(css).toContain("--live-md-mermaid-font");
       expect(css).not.toContain('@import "katex/dist/katex.css"');
       expect(fontAssets.length).toBeGreaterThan(0);
     } finally {
@@ -92,6 +94,8 @@ describe("web component shadow stylesheet", () => {
       expect(javascript).toContain("data:font/woff2;base64");
       expect(javascript).toContain(".live-md-codemirror .cm-md-latex-inline .katex");
       expect(javascript).toContain(".live-md-codemirror .cm-md-mermaid");
+      expect(javascript).toContain("--live-md-mermaid-accent");
+      expect(javascript).toContain("--live-md-mermaid-font");
       expect(javascript).not.toContain("url(fonts/KaTeX_");
       expect(javascript).not.toContain('@import "katex/dist/katex.css"');
     } finally {

@@ -32,6 +32,31 @@ describe("mermaid rendering", () => {
     expect(editor.view.contentDOM.textContent).not.toContain("```mermaid");
   });
 
+  it("renders supported diagrams with beautiful-mermaid", async () => {
+    let doc = "```mermaid\nflowchart TD\n  A[Start] --> B{Decision}\n```\n\nnext";
+    let editor = await mountEditor(doc, "next");
+    let widget = editor.view.contentDOM.querySelector<HTMLElement>(".cm-md-mermaid");
+
+    expect(widget).toBeTruthy();
+    let svg = await waitForMermaidSvg(widget!);
+
+    expect(svg.getAttribute("style")).toContain("--live-md-mermaid-accent");
+    expect(svg.outerHTML).toContain("Start");
+    expect(svg.outerHTML).toContain("--live-md-mermaid-font");
+    expect(svg.outerHTML).not.toContain("fonts.googleapis.com");
+  });
+
+  it("falls back to the official Mermaid renderer for unsupported beautiful-mermaid syntax", async () => {
+    let doc = "```mermaid\ngraph LR; A --> B\n```\n\nnext";
+    let editor = await mountEditor(doc, "next");
+    let widget = editor.view.contentDOM.querySelector<HTMLElement>(".cm-md-mermaid");
+
+    expect(widget).toBeTruthy();
+    let svg = await waitForMermaidSvg(widget!);
+
+    expect(svg.id).toMatch(/^cm-md-mermaid-/);
+  });
+
   it("supports the mmd fence alias", async () => {
     let editor = await mountEditor("```mmd\nflowchart TD\n  A --> B\n```\n\nnext", "next");
 
@@ -57,4 +82,13 @@ async function mountEditor(doc: string, selectText: string): Promise<LiveMdEdito
   await editor.ready;
   editor.view.dispatch({ selection: { anchor: doc.indexOf(selectText) } });
   return editor;
+}
+
+async function waitForMermaidSvg(widget: HTMLElement) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    let svg = widget.querySelector<SVGElement>("svg");
+    if (svg) return svg;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("Expected Mermaid preview to render an SVG");
 }
