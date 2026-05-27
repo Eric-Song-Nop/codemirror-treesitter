@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { __testLiveMdFeatureRegistry } from "../src/core/decorations.js";
 import { __testCreateLiveMdFeatureRegistry, type LiveMdFeature } from "../src/core/features.js";
 
 type TestContext = {
@@ -61,6 +62,12 @@ describe("LiveMD feature registry", () => {
     expect(registry.invalidatedNodes("codeFenceLanguages")).toEqual(["fenced_code_block"]);
     expect(registry.invalidatedNodes("other")).toEqual(["image"]);
     expect(registry.invalidatedNodes("unknown")).toEqual([]);
+  });
+
+  it("keeps code fence language invalidation scoped to fence content", () => {
+    expect(__testLiveMdFeatureRegistry.invalidatedNodes("codeFenceLanguages")).toEqual([
+      "code_fence_content",
+    ]);
   });
 });
 

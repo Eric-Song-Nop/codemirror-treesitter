@@ -90,39 +90,42 @@ describe("LiveMD dirty range collection", () => {
     let transaction = state.update({
       changes: { from: 10, to: 11, insert: "b" },
     });
+    let contentLine = transaction.state.doc.lineAt(transaction.state.doc.toString().indexOf("let"));
 
     expect(
       __testCollectLiveMdDirtyRanges({
         changes: transaction.changes,
-        sourceRanges: [{ from: 0, reason: "codeFenceLanguages", to: transaction.state.doc.length }],
+        sourceRanges: [
+          { from: contentLine.from, reason: "codeFenceLanguages", to: contentLine.to + 1 },
+        ],
         startState: state,
         state: transaction.state,
         syntaxChangedRanges: [],
       }),
     ).toEqual([
       {
-        from: 0,
+        from: contentLine.from,
         reasons: ["text", "codeFenceLanguages"],
-        to: transaction.state.doc.length,
+        to: contentLine.to + 1,
       },
     ]);
   });
 
   it("collects syntax node dirty ranges for code fence language invalidation", async () => {
     let doc = "```ts\nlet a = 1;\n```\n\nplain\n\n```ts\nlet b = 2;\n```\n";
-    let firstFenceTo = doc.indexOf("\n\n") + 1;
-    let secondFenceFrom = doc.lastIndexOf("```ts");
     let state = await markdownState(doc);
+    let firstContentLine = state.doc.lineAt(doc.indexOf("let a"));
+    let secondContentLine = state.doc.lineAt(doc.indexOf("let b"));
 
     expect(
       collectSyntaxNodeDirtyRanges({
-        nodes: ["fenced_code_block"],
+        nodes: ["code_fence_content"],
         reason: "codeFenceLanguages",
         state,
       }),
     ).toEqual([
-      { from: 0, reason: "codeFenceLanguages", to: firstFenceTo },
-      { from: secondFenceFrom, reason: "codeFenceLanguages", to: doc.length },
+      { from: firstContentLine.from, reason: "codeFenceLanguages", to: firstContentLine.to + 1 },
+      { from: secondContentLine.from, reason: "codeFenceLanguages", to: secondContentLine.to + 1 },
     ]);
   });
 
@@ -134,13 +137,12 @@ describe("LiveMD dirty range collection", () => {
       changes: { from: dirtyFrom, to: dirtyFrom + 3, insert: "two" },
     });
     let nextDoc = transaction.state.doc.toString();
-    let fenceFrom = nextDoc.indexOf("```ts");
-    let fenceTo = nextDoc.indexOf("\n\nplain") + 1;
+    let contentLine = transaction.state.doc.lineAt(nextDoc.indexOf("let a"));
 
     expect(
       analyzeLiveMdDirtyRanges({
         changes: transaction.changes,
-        invalidations: [{ nodes: ["fenced_code_block"], reason: "codeFenceLanguages" }],
+        invalidations: [{ nodes: ["code_fence_content"], reason: "codeFenceLanguages" }],
         registry: __testLiveMdFeatureRegistry,
         startState: state,
         state: transaction.state,
@@ -149,11 +151,11 @@ describe("LiveMD dirty range collection", () => {
     ).toEqual({
       dirtyRanges: [
         { from: dirtyFrom, reasons: ["text"], to: dirtyFrom + 3 },
-        { from: fenceFrom, reasons: ["codeFenceLanguages"], to: fenceTo },
+        { from: contentLine.from, reasons: ["codeFenceLanguages"], to: contentLine.to + 1 },
       ],
       expandedDirtyRanges: [
         { from: 0, reasons: ["text"], to: "![alt](two.png)".length },
-        { from: fenceFrom, reasons: ["codeFenceLanguages"], to: fenceTo },
+        { from: contentLine.from, reasons: ["codeFenceLanguages"], to: contentLine.to + 1 },
       ],
     });
   });
