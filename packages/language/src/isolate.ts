@@ -4,6 +4,7 @@ import {
   RangeSetBuilder,
   type ChangeSet,
   type Extension,
+  type Range,
   type Text,
 } from "@codemirror/state";
 import {
@@ -14,8 +15,9 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
+import { changedLineRanges, patchRangeSet } from "./incremental.js";
 import { syntaxTree } from "./language.js";
-import { NodeProp, Tree } from "./tree.js";
+import { type DocRange, NodeProp, Tree } from "./tree.js";
 
 function buildForLine(line: string) {
   return line.length <= 4096 && /[\u0590-\u05f4\u0600-\u06ff\u0700-\u08ac\ufb50-\ufdff]/.test(line);
@@ -73,15 +75,19 @@ const isolateMarks = ViewPlugin.fromClass(
       if (!always && !this.hasRTL) return;
 
       let tree = syntaxTree(update.state);
-      if (
-        always != this.always ||
-        tree != this.tree ||
-        update.docChanged ||
-        update.viewportChanged
-      ) {
+      if (always != this.always || update.viewportChanged || !canPatchIsolates(update)) {
         this.tree = tree;
         this.always = always;
         this.decorations = buildDeco(update.view, tree, always);
+      } else if (tree != this.tree || update.docChanged) {
+        let dirtyRanges = changedLineRanges(update);
+        this.tree = tree;
+        this.always = always;
+        this.decorations = patchRangeSet(
+          this.decorations.map(update.changes),
+          dirtyRanges,
+          buildDecoRanges(update.view, tree, always, dirtyRanges),
+        );
       }
     }
   },
@@ -99,8 +105,19 @@ const isolateMarks = ViewPlugin.fromClass(
 );
 
 function buildDeco(view: EditorView, tree: Tree, always: boolean) {
+  let ranges = buildDecoRanges(view, tree, always, view.visibleRanges);
   let deco = new RangeSetBuilder<Decoration>();
-  let ranges: readonly { from: number; to: number }[] = view.visibleRanges;
+  for (let range of ranges) deco.add(range.from, range.to, range.value);
+  return deco.finish();
+}
+
+function buildDecoRanges(
+  view: EditorView,
+  tree: Tree,
+  always: boolean,
+  ranges: readonly DocRange[],
+) {
+  let decorations: Range<Decoration>[] = [];
   if (!always) ranges = clipRTLLines(ranges, view.state.doc);
   for (let { from, to } of ranges) {
     tree.iterate({
@@ -108,11 +125,15 @@ function buildDeco(view: EditorView, tree: Tree, always: boolean) {
       to,
       enter: (node) => {
         let iso = node.type.prop(NodeProp.isolate);
-        if (iso) deco.add(node.from, node.to, marks[iso]);
+        if (iso) decorations.push(marks[iso].range(node.from, node.to));
       },
     });
   }
-  return deco.finish();
+  return decorations;
+}
+
+function canPatchIsolates(update: ViewUpdate) {
+  return update.transactions.length == 1;
 }
 
 function clipRTLLines(ranges: readonly { from: number; to: number }[], doc: Text) {

@@ -134,6 +134,25 @@ describe("readonly LiveMD edit commands", () => {
 
     expect(editor.value).toBe("- [x] task");
   });
+
+  it("toggles task checkbox widgets after earlier edits move the marker", async () => {
+    let editor = await mountEditor("intro\n- [ ] task");
+
+    editor.view.dispatch({ changes: { from: 0, insert: "new " } });
+    clickTaskCheckbox(editor.view);
+
+    expect(editor.value).toBe("new intro\n- [x] task");
+  });
+
+  it("selects the current table source after earlier edits move the preview", async () => {
+    let doc = "intro\n\n| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n";
+    let editor = await mountEditor(doc);
+
+    editor.view.dispatch({ changes: { from: 0, insert: "new " } });
+    clickTablePreview(editor.view);
+
+    expect(editor.view.state.selection.main.head).toBe(editor.value.indexOf("| Name"));
+  });
 });
 
 async function mountEditor(
@@ -182,4 +201,10 @@ function clickTaskCheckbox(view: EditorView) {
   let checkbox = view.dom.querySelector<HTMLButtonElement>(".cm-md-task-toggle");
   expect(checkbox).toBeTruthy();
   checkbox?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+}
+
+function clickTablePreview(view: EditorView) {
+  let preview = view.dom.querySelector<HTMLElement>(".cm-md-table-preview");
+  expect(preview).toBeTruthy();
+  preview?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 }

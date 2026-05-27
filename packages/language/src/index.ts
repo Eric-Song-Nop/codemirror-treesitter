@@ -21,6 +21,7 @@ export {
   styleTags,
   sublanguageProp,
   syntaxParserRunning,
+  syntaxTreeChangedRanges,
   syntaxTree,
   syntaxTreeAvailable,
   tagHighlighter,
@@ -82,6 +83,16 @@ export {
   syntaxHighlighting,
   type TagStyle,
 } from "./highlight.js";
+
+export {
+  addTouchedLineRange,
+  changedLineRanges,
+  clipToRanges,
+  lineRangesForChanges,
+  mergeDocRanges,
+  patchRangeSet,
+  rangesTouch,
+} from "./incremental.js";
 
 export {
   bracketMatching,

@@ -1,4 +1,4 @@
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
 import {
   ParseContext,
@@ -10,10 +10,12 @@ import {
   ensureSyntaxTree,
   languageDataProp,
   matchBrackets,
+  syntaxTreeChangedRanges,
   syntaxTree,
   syntaxTreeAvailable,
 } from "../src/index.js";
 import { __testResolveWasmPath } from "../src/language.js";
+import { SyntaxNode } from "../src/tree.js";
 import type { Tree } from "../src/index.js";
 import type { NodeIterator } from "../src/tree.js";
 
@@ -514,6 +516,95 @@ describe("tree-sitter tree wrapper", () => {
     ).toBe(false);
   });
 
+  it("reports syntax changed ranges separately from same-shape text edits", async () => {
+    let state = await javascriptState("let foo = 1;\n");
+    let rename = state.update({
+      changes: { from: 4, to: 7, insert: "bar" },
+    });
+    let structural = state.update({
+      changes: { from: 4, to: 7, insert: "function f() {}" },
+    });
+
+    expect(syntaxTreeChangedRanges(rename)).toEqual([]);
+    expect(syntaxTreeChangedRanges(structural)).toEqual([{ from: 0, to: 24 }]);
+  });
+
+  it("caches syntax changed ranges per transaction", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    let parser = await javascriptParser;
+    let language = TreeSitterLanguage.define({ name: "javascript", parser });
+    let editCalls = 0;
+    let originalEditWrappedTree = language.parser.editWrappedTree.bind(language.parser);
+
+    Object.defineProperty(language.parser, "editWrappedTree", {
+      configurable: true,
+      value: (...args: Parameters<TreeSitterParser["editWrappedTree"]>) => {
+        editCalls++;
+        return originalEditWrappedTree(...args);
+      },
+    });
+    try {
+      let state = EditorState.create({
+        doc: "let foo = 1;\n",
+        extensions: [language.extension],
+      });
+      let transaction = state.update({
+        changes: { from: 4, to: 7, insert: "function f() {}" },
+      });
+      syntaxTree(transaction.state);
+      editCalls = 0;
+
+      expect(syntaxTreeChangedRanges(transaction)).toEqual([{ from: 0, to: 24 }]);
+      expect(syntaxTreeChangedRanges(transaction)).toEqual([{ from: 0, to: 24 }]);
+      expect(editCalls).toBe(1);
+    } finally {
+      Object.defineProperty(language.parser, "editWrappedTree", {
+        configurable: true,
+        value: originalEditWrappedTree,
+      });
+    }
+  });
+
+  it("reports full syntax dirty ranges when parsing becomes available without text edits", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    let parser = await javascriptParser;
+    let compartment = new Compartment();
+    let javascript = TreeSitterLanguage.define({ name: "javascript", parser });
+    let doc = "let value = 1;\n";
+    let state = EditorState.create({ doc, extensions: [compartment.of([])] });
+    let transaction = state.update({
+      effects: compartment.reconfigure(javascript.extension),
+    });
+
+    expect(transaction.docChanged).toBe(false);
+    expect(syntaxTreeChangedRanges(transaction)).toEqual([{ from: 0, to: doc.length }]);
+  });
+
+  it("does not materialize every sibling for ranged tree iteration", async () => {
+    let doc = Array.from({ length: 80 }, (_, index) => `let value${index} = ${index};`).join("\n");
+    let state = await javascriptState(doc);
+    let from = doc.indexOf("value70");
+    let to = from + "value70".length;
+    let materializedChildren = 0;
+    let descriptor = Object.getOwnPropertyDescriptor(SyntaxNode.prototype, "children")!;
+
+    Object.defineProperty(SyntaxNode.prototype, "children", {
+      configurable: true,
+      get(this: SyntaxNode) {
+        let children = descriptor.get!.call(this) as SyntaxNode[];
+        materializedChildren += children.length;
+        return children;
+      },
+    });
+    try {
+      syntaxTree(state).iterate({ from, to, enter: () => undefined });
+    } finally {
+      Object.defineProperty(SyntaxNode.prototype, "children", descriptor);
+    }
+
+    expect(materializedChildren).toBeLessThan(40);
+  });
+
   it("parses and reuses multiple disjoint nested ranges", async () => {
     let doc =
       "<main><script>let first = 1;</script><p>text</p><script>let second = 2;</script></main>";
@@ -594,6 +685,25 @@ describe("tree-sitter tree wrapper", () => {
       },
     });
     expect(filtered).toEqual(["second"]);
+  });
+
+  it("iterates nested nodes when a range starts before a later mounted range", async () => {
+    let doc = "<main><script>let first = 1;</script><script>let second = 2;</script></main>";
+    let { state } = await mixedHtmlState(doc);
+    let tree = syntaxTree(state);
+    let secondScript = doc.lastIndexOf("<script>");
+    let second = doc.indexOf("second");
+    let identifiers: string[] = [];
+
+    tree.iterate({
+      from: secondScript,
+      to: second + "second".length,
+      enter(node) {
+        if (node.name == "identifier") identifiers.push(node.text);
+      },
+    });
+
+    expect(identifiers).toEqual(["second"]);
   });
 
   it("supports balanced enter and leave traversal callbacks", async () => {

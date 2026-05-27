@@ -532,7 +532,13 @@ async function checkExamplesUseGruvboxTheme() {
   }
 
   let config = await readText("apps/examples/vite.config.ts");
-  if (!config.includes("../../packages/theme-gruvbox/src/index.ts")) {
+  let sharedConfig = await readText("vite.shared.ts");
+  let aliasesGruvboxTheme =
+    config.includes("../../packages/theme-gruvbox/src/index.ts") ||
+    (config.includes("workspaceAliases") &&
+      sharedConfig.includes('"@codemirror-treesitter/theme-gruvbox"') &&
+      sharedConfig.includes("packages/theme-gruvbox/src/index.ts"));
+  if (!aliasesGruvboxTheme) {
     fail("apps/examples does not alias the local Gruvbox theme source");
   }
 
