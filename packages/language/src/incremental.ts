@@ -73,7 +73,10 @@ export function patchRangeSet<T extends RangeValue>(
       filterTo: range.to,
     });
   }
-  return additions.length ? next.update({ add: additions, sort: true }) : next;
+  let added = additions.filter((addition) =>
+    dirtyRanges.some((range) => rangesTouch(addition.from, addition.to, range.from, range.to)),
+  );
+  return added.length ? next.update({ add: added, sort: true }) : next;
 }
 
 export function clipToRanges(ranges: readonly DocRange[], bounds: readonly DocRange[]) {

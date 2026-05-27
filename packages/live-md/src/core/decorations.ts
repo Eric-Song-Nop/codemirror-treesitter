@@ -2,7 +2,6 @@ import {
   type ChangeDesc,
   ChangeSet,
   EditorState,
-  type Range,
   RangeSet,
   RangeSetBuilder,
   RangeValue,
@@ -11,6 +10,8 @@ import {
 } from "@codemirror/state";
 import {
   highlightTree,
+  patchRangeSet,
+  rangesTouch,
   syntaxTree,
   syntaxTreeChangedRanges,
   type SyntaxNode,
@@ -391,24 +392,6 @@ function buildLiveMdPlan(
   return context.plan;
 }
 
-function patchRangeSet<T extends RangeValue>(
-  current: RangeSet<T>,
-  dirtyRanges: readonly LiveMdDirtyRange[],
-  additions: readonly Range<T>[],
-): RangeSet<T> {
-  if (!dirtyRanges.length) return current;
-  let next = current;
-  for (let range of dirtyRanges) {
-    next = next.update({
-      filter: (rangeFrom, rangeTo) => !rangesTouch(rangeFrom, rangeTo, range.from, range.to),
-      filterFrom: range.from,
-      filterTo: range.to,
-    });
-  }
-  let added = additions.filter((range) => touchesAnyDirtyRange(range.from, range.to, dirtyRanges));
-  return added.length ? next.update({ add: added, sort: true }) : next;
-}
-
 function mergeCodeFenceHighlightTrees(
   previous: readonly CodeFenceHighlightTree[],
   changes: ChangeDesc,
@@ -430,13 +413,6 @@ function mergeCodeFenceHighlightTrees(
 
 function touchesAnyDirtyRange(from: number, to: number, dirtyRanges: readonly LiveMdDirtyRange[]) {
   return dirtyRanges.some((range) => rangesTouch(from, to, range.from, range.to));
-}
-
-function rangesTouch(from: number, to: number, rangeFrom: number, rangeTo: number) {
-  if (from == to && rangeFrom == rangeTo) return from == rangeFrom;
-  if (from == to) return from >= rangeFrom && from < rangeTo;
-  if (rangeFrom == rangeTo) return from <= rangeFrom && to >= rangeFrom;
-  return from < rangeTo && to > rangeFrom;
 }
 
 function feature(

@@ -85,6 +85,16 @@ export {
 } from "./highlight.js";
 
 export {
+  addTouchedLineRange,
+  changedLineRanges,
+  clipToRanges,
+  lineRangesForChanges,
+  mergeDocRanges,
+  patchRangeSet,
+  rangesTouch,
+} from "./incremental.js";
+
+export {
   bracketMatching,
   bracketMatchingHandle,
   matchBrackets,
