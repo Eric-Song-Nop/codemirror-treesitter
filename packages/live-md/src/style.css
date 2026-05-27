@@ -12,6 +12,15 @@
   --live-md-font-body: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --live-md-font-ui: "Avenir Next", "Gill Sans", ui-sans-serif, system-ui, sans-serif;
   --live-md-font-code: "SFMono-Regular", "Cascadia Code", ui-monospace, monospace;
+  --live-md-mermaid-bg: var(--live-md-bg);
+  --live-md-mermaid-text: var(--live-md-text);
+  --live-md-mermaid-muted: var(--live-md-muted);
+  --live-md-mermaid-line: var(--live-md-muted);
+  --live-md-mermaid-accent: var(--live-md-accent);
+  --live-md-mermaid-border: var(--live-md-border);
+  --live-md-mermaid-surface: var(--live-md-bg);
+  --live-md-mermaid-font: var(--live-md-font-ui);
+  --live-md-mermaid-mono-font: var(--live-md-font-code);
   display: block;
   min-width: 0;
   min-height: 0;
