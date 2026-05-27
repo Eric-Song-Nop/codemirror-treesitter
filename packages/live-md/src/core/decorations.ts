@@ -14,6 +14,7 @@ import {
   emptyCodeFenceLanguages,
   type CodeFenceLanguageMap,
 } from "./languages.js";
+import { createLiveMdFeatureRegistry, type LiveMdFeature, type LiveMdScope } from "./features.js";
 import { forEachLineInRange, isWhitespace, isWhitespaceOnly, splitRangeByLine } from "./util.js";
 import {
   ImagePreviewWidget,
@@ -39,6 +40,7 @@ type VisitContext = {
 };
 
 type NodeVisitor = (context: VisitContext, node: SyntaxNode) => false | void;
+type LiveMdNodeFeature = LiveMdFeature<VisitContext, SyntaxNode>;
 
 const visibleSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-active" });
 const hiddenSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-hidden" });
@@ -78,38 +80,45 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
   },
 });
 
-const visitors: Record<string, NodeVisitor> = {
-  atx_heading: visitHeading,
-  block_continuation: visitSyntax,
-  block_quote: visitBlockQuote,
-  block_quote_marker: visitSyntax,
-  code_span: visitMark(inlineCodeMark),
-  code_span_delimiter: visitSyntax,
-  document: visitDocument,
-  emphasis: visitMark(emphasisMark),
-  emphasis_delimiter: visitSyntax,
-  fenced_code_block: visitCodeFence,
-  image: visitImage,
-  inline_link: visitInlineLink,
-  latex_block: visitLatex,
-  latex_span_delimiter: visitSyntax,
-  list: visitList,
-  list_item: visitLineClass("cm-md-list-line"),
-  list_marker_dot: visitListMarker,
-  list_marker_minus: visitListMarker,
-  list_marker_parenthesis: visitListMarker,
-  list_marker_plus: visitListMarker,
-  list_marker_star: visitListMarker,
-  pipe_table: visitTable,
-  section: visitSection,
-  setext_heading: visitSetextHeading,
-  strikethrough: visitMark(strikeMark),
-  strong_emphasis: visitMark(strongMark),
-  task_list_marker_checked: visitTaskMarker,
-  task_list_marker_unchecked: visitTaskMarker,
-  thematic_break: visitRule,
-  uri_autolink: visitUriAutolink,
-};
+const liveMdFeatures: readonly LiveMdNodeFeature[] = [
+  feature(["atx_heading"], visitHeading, "line"),
+  feature(["block_continuation"], visitSyntax, "line"),
+  feature(["block_quote"], visitBlockQuote, "container"),
+  feature(["block_quote_marker"], visitSyntax, "line"),
+  feature(["code_span"], visitMark(inlineCodeMark)),
+  feature(["code_span_delimiter"], visitSyntax),
+  feature(["document"], visitDocument, "document"),
+  feature(["emphasis"], visitMark(emphasisMark)),
+  feature(["emphasis_delimiter"], visitSyntax),
+  feature(["fenced_code_block"], visitCodeFence, "node"),
+  feature(["image"], visitImage, "line"),
+  feature(["inline_link"], visitInlineLink),
+  feature(["latex_block"], visitLatex, "node"),
+  feature(["latex_span_delimiter"], visitSyntax),
+  feature(["list"], visitList, "container"),
+  feature(["list_item"], visitLineClass("cm-md-list-line"), "block"),
+  feature(
+    [
+      "list_marker_dot",
+      "list_marker_minus",
+      "list_marker_parenthesis",
+      "list_marker_plus",
+      "list_marker_star",
+    ],
+    visitListMarker,
+    "line",
+  ),
+  feature(["pipe_table"], visitTable, "node"),
+  feature(["section"], visitSection, "container"),
+  feature(["setext_heading"], visitSetextHeading, "block"),
+  feature(["strikethrough"], visitMark(strikeMark)),
+  feature(["strong_emphasis"], visitMark(strongMark)),
+  feature(["task_list_marker_checked", "task_list_marker_unchecked"], visitTaskMarker, "line"),
+  feature(["thematic_break"], visitRule, "line"),
+  feature(["uri_autolink"], visitUriAutolink),
+];
+
+const liveMdFeatureRegistry = createLiveMdFeatureRegistry(liveMdFeatures);
 
 class AtomicRange extends RangeValue {
   eq(other: RangeValue) {
@@ -214,11 +223,19 @@ function buildLiveMdPlan(state: EditorState) {
 
   syntaxTree(state).iterate({
     enter(node) {
-      return visitors[node.name]?.(context, node);
+      return liveMdFeatureRegistry.enter(context, node);
     },
   });
 
   return context.plan;
+}
+
+function feature(
+  nodes: readonly string[],
+  enter: NodeVisitor,
+  scope?: LiveMdScope,
+): LiveMdNodeFeature {
+  return { enter, nodes, scope };
 }
 
 function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) {
