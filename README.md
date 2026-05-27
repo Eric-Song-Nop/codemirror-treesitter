@@ -39,14 +39,14 @@ comparison.
 | Package                                | Scope                                                                                                                                                                                                                                                                                                                                             |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@codemirror-treesitter/language`      | Tree-sitter parser integration plus the CodeMirror language surface: `Language`, `LanguageSupport`, `LanguageDescription`, `LRLanguage`, `ParseContext`, syntax tree access, tree/node/cursor wrappers, language data facets, mixed-language parsing, highlighting, indentation, folding, bracket matching, bidi isolation, and `StreamLanguage`. |
-| `@codemirror-treesitter/language-data` | CodeMirror language metadata backed by lazy Tree-sitter WASM and highlight-query loading. The built package currently exposes 146 language entries and mirrors upstream aliases, extensions, and filename matching.                                                                                                                                |
-| `@codemirror-treesitter/commands`      | Reimplementation of `@codemirror/commands`: cursor movement, selection, multiple cursors, deletion, line moving/copying, indentation, tab focus mode, commenting, history, and the standard/default/emacs/history keymaps.                                                                                                                         |
+| `@codemirror-treesitter/language-data` | CodeMirror language metadata backed by lazy Tree-sitter WASM and highlight-query loading. The built package currently exposes 146 language entries and mirrors upstream aliases, extensions, and filename matching.                                                                                                                               |
+| `@codemirror-treesitter/commands`      | Reimplementation of `@codemirror/commands`: cursor movement, selection, multiple cursors, deletion, line moving/copying, indentation, tab focus mode, commenting, history, and the standard/default/emacs/history keymaps.                                                                                                                        |
 | `@codemirror-treesitter/autocomplete`  | Autocomplete and close-bracket infrastructure: completion contexts/sources/results, tooltip rendering, filtering, snippets, word completion, close brackets, and bracket-pair deletion.                                                                                                                                                           |
 | `@codemirror-treesitter/basic-setup`   | `basicSetup` and `minimalSetup` assembled from the Tree-sitter packages, with extension and keymap ordering checked against upstream `codemirror`.                                                                                                                                                                                                |
-| `@codemirror-treesitter/theme-gruvbox` | Gruvbox dark and light editor themes, highlight styles, combined extensions, and reusable color palettes.                                                                                                                                                                                                                                          |
+| `@codemirror-treesitter/theme-gruvbox` | Gruvbox dark and light editor themes, highlight styles, combined extensions, and reusable color palettes.                                                                                                                                                                                                                                         |
 | `@codemirror-treesitter/merge`         | Diff and merge views for CodeMirror: `MergeView`, `unifiedMergeView`, `acceptChunk`, `rejectChunk`, and `presentableDiff`.                                                                                                                                                                                                                        |
 | `@codemirror-treesitter/lsp-client`    | Language Server Protocol client: completions, hover, diagnostics, formatting, rename, go-to-definition, references, and signature help.                                                                                                                                                                                                           |
-| `@codemirror-treesitter/live-md`       | Live Markdown editor as both a `<live-md-editor>` web component and a `createLiveMdEditor()` programmatic API, built on the Tree-sitter CodeMirror stack.                                                                                                                                                                                          |
+| `@codemirror-treesitter/live-md`       | Live Markdown editor as both a `<live-md-editor>` web component and a `createLiveMdEditor()` programmatic API, built on the Tree-sitter CodeMirror stack.                                                                                                                                                                                         |
 
 ## Web Component
 
@@ -56,56 +56,56 @@ the element anywhere in your HTML.
 
 ### Attributes
 
-| Attribute      | Type      | Description                                                     |
-| -------------- | --------- | --------------------------------------------------------------- |
-| `autofocus`    | boolean   | Focus the editor when it connects to the DOM.                   |
-| `default-value`| string    | Initial Markdown content (reads light-DOM `textContent` if not set). |
-| `persist-key`  | string    | localStorage key for persisting editor content.                 |
-| `placeholder`  | string    | Placeholder text when the editor is empty.                      |
-| `readonly`     | boolean   | Disable editing (content remains selectable/readable).          |
+| Attribute       | Type    | Description                                                          |
+| --------------- | ------- | -------------------------------------------------------------------- |
+| `autofocus`     | boolean | Focus the editor when it connects to the DOM.                        |
+| `default-value` | string  | Initial Markdown content (reads light-DOM `textContent` if not set). |
+| `persist-key`   | string  | localStorage key for persisting editor content.                      |
+| `placeholder`   | string  | Placeholder text when the editor is empty.                           |
+| `readonly`      | boolean | Disable editing (content remains selectable/readable).               |
 
 ### Properties
 
-| Property         | Type          | Description                                     |
-| ---------------- | ------------- | ----------------------------------------------- |
-| `value`          | `string`      | Current Markdown content (read/write).          |
-| `defaultValue`   | `string`      | Initial content (read/write).                   |
-| `persistKey`     | `string\|null`| localStorage key (read/write).                  |
-| `placeholder`    | `string`      | Placeholder text (read/write).                  |
-| `readOnly`       | `boolean`     | Whether editor is read-only (read/write).       |
-| `dirty`          | `boolean`     | Whether content has changed since `markClean()`.|
-| `selectionStart` | `number`      | Selection anchor position.                      |
-| `selectionEnd`   | `number`      | Selection head position.                        |
-| `view`           | `EditorView`  | The underlying CodeMirror `EditorView` instance.|
+| Property         | Type           | Description                                      |
+| ---------------- | -------------- | ------------------------------------------------ |
+| `value`          | `string`       | Current Markdown content (read/write).           |
+| `defaultValue`   | `string`       | Initial content (read/write).                    |
+| `persistKey`     | `string\|null` | localStorage key (read/write).                   |
+| `placeholder`    | `string`       | Placeholder text (read/write).                   |
+| `readOnly`       | `boolean`      | Whether editor is read-only (read/write).        |
+| `dirty`          | `boolean`      | Whether content has changed since `markClean()`. |
+| `selectionStart` | `number`       | Selection anchor position.                       |
+| `selectionEnd`   | `number`       | Selection head position.                         |
+| `view`           | `EditorView`   | The underlying CodeMirror `EditorView` instance. |
 
 ### Methods
 
-| Method                          | Description                                   |
-| ------------------------------- | --------------------------------------------- |
-| `focus()`                       | Focus the editor.                             |
-| `blur()`                        | Blur the editor.                              |
-| `markClean()`                   | Mark current content as clean (resets `dirty`).|
-| `setSelectionRange(start, end)` | Programmatically set the selection range.     |
-| `select()`                      | Select all content.                           |
+| Method                          | Description                                     |
+| ------------------------------- | ----------------------------------------------- |
+| `focus()`                       | Focus the editor.                               |
+| `blur()`                        | Blur the editor.                                |
+| `markClean()`                   | Mark current content as clean (resets `dirty`). |
+| `setSelectionRange(start, end)` | Programmatically set the selection range.       |
+| `select()`                      | Select all content.                             |
 
 ### Events
 
-| Event             | Detail              | Description                                          |
-| ----------------- | ------------------- | ---------------------------------------------------- |
-| `input`           | —                   | Fires on every content change (bubbles, `InputEvent`).|
-| `change`          | —                   | Debounced change fired after blur.                   |
-| `live-md-ready`   | `{ view }`          | Fires when the editor finishes initializing.         |
-| `live-md-error`   | `{ error }`         | Fires if editor initialization fails.                |
-| `select`          | —                   | Fires when the selection changes.                    |
+| Event           | Detail      | Description                                            |
+| --------------- | ----------- | ------------------------------------------------------ |
+| `input`         | —           | Fires on every content change (bubbles, `InputEvent`). |
+| `change`        | —           | Debounced change fired after blur.                     |
+| `live-md-ready` | `{ view }`  | Fires when the editor finishes initializing.           |
+| `live-md-error` | `{ error }` | Fires if editor initialization fails.                  |
+| `select`        | —           | Fires when the selection changes.                      |
 
 ### CSS Custom Properties
 
-| Property              | Description        |
-| --------------------- | ------------------ |
-| `--live-md-bg`        | Background color.  |
-| `--live-md-text`      | Text color.        |
-| `--live-md-accent`    | Accent color.      |
-| `--live-md-selection` | Selection color.   |
+| Property              | Description       |
+| --------------------- | ----------------- |
+| `--live-md-bg`        | Background color. |
+| `--live-md-text`      | Text color.       |
+| `--live-md-accent`    | Accent color.     |
+| `--live-md-selection` | Selection color.  |
 
 ## Apps and Tools
 

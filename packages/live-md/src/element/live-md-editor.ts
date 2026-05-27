@@ -2,7 +2,10 @@ import { EditorView, type ViewUpdate } from "@codemirror/view";
 import { createLiveMdEditor, type LiveMdEditorController } from "../core/editor.js";
 import { installLiveMdStyles } from "./styles.js";
 
-export class LiveMdEditorElement extends HTMLElement {
+const HTMLElementBase: typeof HTMLElement =
+  globalThis.HTMLElement ?? (class {} as typeof HTMLElement);
+
+export class LiveMdEditorElement extends HTMLElementBase {
   static observedAttributes = [
     "autofocus",
     "default-value",
@@ -60,6 +63,7 @@ export class LiveMdEditorElement extends HTMLElement {
       return;
     }
 
+    installLiveMdStyles(this.shadow);
     this.controller = controller;
     if (this.cleanValue == null) this.cleanValue = controller.value;
     this.applyStoredSelection();

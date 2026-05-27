@@ -1,6 +1,8 @@
 import { defineConfig } from "vite-plus";
-import { workspaceAliases } from "../../vite.config.ts";
+import { liveMdRawCssPlugin } from "../../packages/live-md/vite-plugin.ts";
+import { workspaceAliases } from "../../vite.shared.ts";
 
 export default defineConfig({
+  plugins: [liveMdRawCssPlugin()],
   resolve: { alias: workspaceAliases },
 });

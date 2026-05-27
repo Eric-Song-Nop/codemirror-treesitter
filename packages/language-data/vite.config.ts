@@ -1,11 +1,9 @@
 import { defineConfig } from "vite-plus";
+import { workspaceAliasSubset } from "../../vite.shared.ts";
 
 export default defineConfig({
   resolve: {
-    alias: {
-      "@codemirror-treesitter/language": new URL("../language/src/index.ts", import.meta.url)
-        .pathname,
-    },
+    alias: workspaceAliasSubset(["@codemirror-treesitter/language"]),
   },
   pack: {
     copy: "src/wasm",
@@ -14,11 +12,4 @@ export default defineConfig({
     },
     exports: true,
   },
-  lint: {
-    options: {
-      typeAware: true,
-      typeCheck: true,
-    },
-  },
-  fmt: {},
 });

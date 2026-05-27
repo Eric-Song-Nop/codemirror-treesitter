@@ -1,10 +1,27 @@
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
+import katex, { type KatexOptions } from "katex";
 import { isAsciiDigit } from "./util.js";
 
 export type MarkdownTable = {
   alignments: Array<"center" | "default" | "left" | "right">;
   header: string[];
   rows: string[][];
+};
+
+const latexOptions: KatexOptions = {
+  maxExpand: 1000,
+  maxSize: 12,
+  output: "htmlAndMathml",
+  strict: "warn",
+  throwOnError: false,
+  trust: false,
+};
+
+export type LatexFormula = {
+  block: boolean;
+  displayMode: boolean;
+  source: string;
+  tex: string;
 };
 
 export class TaskCheckboxWidget extends WidgetType {
@@ -46,6 +63,55 @@ export class TaskCheckboxWidget extends WidgetType {
       view.focus();
     });
     return button;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+export class LatexWidget extends WidgetType {
+  private block: boolean;
+  private displayMode: boolean;
+  private source: string;
+  private tex: string;
+
+  constructor(formula: LatexFormula) {
+    super();
+    this.block = formula.block;
+    this.displayMode = formula.displayMode;
+    this.source = formula.source;
+    this.tex = formula.tex;
+  }
+
+  eq(other: LatexWidget) {
+    return (
+      other.block == this.block &&
+      other.displayMode == this.displayMode &&
+      other.source == this.source &&
+      other.tex == this.tex
+    );
+  }
+
+  toDOM() {
+    let element = document.createElement(this.block ? "div" : "span");
+    element.className = this.displayMode
+      ? "cm-md-latex cm-md-latex-display"
+      : "cm-md-latex cm-md-latex-inline";
+    element.dataset.source = this.source;
+
+    try {
+      element.innerHTML = katex.renderToString(this.tex, {
+        ...latexOptions,
+        displayMode: this.displayMode,
+      });
+    } catch (error) {
+      element.classList.add("is-error");
+      element.textContent = this.source;
+      if (error instanceof Error) element.title = error.message;
+    }
+
+    return element;
   }
 
   ignoreEvent() {

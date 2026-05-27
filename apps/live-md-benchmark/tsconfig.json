@@ -1,27 +1,10 @@
 {
+  "extends": "../../tsconfig.app.json",
   "compilerOptions": {
-    "target": "es2023",
-    "module": "esnext",
-    "lib": ["ES2023", "DOM"],
-    "types": ["vite-plus/client"],
-    "skipLibCheck": true,
-
-    /* Bundler mode */
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
     "paths": {
       "@codemirror-treesitter/live-md/fixtures": ["../../packages/live-md/src/fixtures/index.ts"],
       "@codemirror-treesitter/live-md": ["../../packages/live-md/src/index.ts"]
-    },
-    "verbatimModuleSyntax": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-
-    /* Linting */
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
+    }
   },
   "include": ["src"]
 }

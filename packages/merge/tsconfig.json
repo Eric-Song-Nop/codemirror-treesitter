@@ -1,20 +1,9 @@
 {
+  "extends": "../../tsconfig.package.json",
   "compilerOptions": {
-    "target": "es2023",
-    "lib": ["ES2023", "DOM"],
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
-    "moduleDetection": "force",
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "declaration": true,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
-    "esModuleInterop": true,
-    "isolatedModules": true,
-    "verbatimModuleSyntax": true,
-    "skipLibCheck": true
+    "paths": {
+      "@codemirror-treesitter/language": ["../language/src/index.ts"]
+    }
   },
   "include": ["src", "tests"]
 }

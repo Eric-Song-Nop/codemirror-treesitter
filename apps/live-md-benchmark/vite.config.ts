@@ -1,40 +1,8 @@
 import { defineConfig } from "vite-plus";
+import { liveMdRawCssPlugin } from "../../packages/live-md/vite-plugin.ts";
+import { workspaceAliases } from "../../vite.shared.ts";
 
 export default defineConfig({
-  resolve: {
-    alias: {
-      "@codemirror-treesitter/language": new URL(
-        "../../packages/language/src/index.ts",
-        import.meta.url,
-      ).pathname,
-      "@codemirror-treesitter/language-data": new URL(
-        "../../packages/language-data/src/index.ts",
-        import.meta.url,
-      ).pathname,
-      "@codemirror-treesitter/theme-gruvbox": new URL(
-        "../../packages/theme-gruvbox/src/index.ts",
-        import.meta.url,
-      ).pathname,
-      "@codemirror-treesitter/commands": new URL(
-        "../../packages/commands/src/index.ts",
-        import.meta.url,
-      ).pathname,
-      "@codemirror-treesitter/autocomplete": new URL(
-        "../../packages/autocomplete/src/index.ts",
-        import.meta.url,
-      ).pathname,
-      "@codemirror-treesitter/basic-setup": new URL(
-        "../../packages/codemirror/src/index.ts",
-        import.meta.url,
-      ).pathname,
-      "@codemirror-treesitter/live-md/fixtures": new URL(
-        "../../packages/live-md/src/fixtures/index.ts",
-        import.meta.url,
-      ).pathname,
-      "@codemirror-treesitter/live-md": new URL(
-        "../../packages/live-md/src/index.ts",
-        import.meta.url,
-      ).pathname,
-    },
-  },
+  plugins: [liveMdRawCssPlugin()],
+  resolve: { alias: workspaceAliases },
 });
