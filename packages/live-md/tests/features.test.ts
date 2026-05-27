@@ -47,6 +47,8 @@ describe("LiveMD feature registry", () => {
     expect(registry.scopeFor("image")).toBe("line");
     expect(registry.scopeFor("fenced_code_block")).toBe("node");
     expect(registry.scopeFor("unknown")).toBe("node");
+    expect(registry.hasNode("image")).toBe(true);
+    expect(registry.hasNode("unknown")).toBe(false);
   });
 });
 

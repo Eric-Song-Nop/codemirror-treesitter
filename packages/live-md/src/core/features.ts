@@ -8,6 +8,7 @@ export type LiveMdFeature<Context, Node extends { name: string }> = {
 
 export type LiveMdFeatureRegistry<Context, Node extends { name: string }> = {
   enter: (context: Context, node: Node) => false | void;
+  hasNode: (nodeName: string) => boolean;
   scopeFor: (nodeName: string) => LiveMdScope;
 };
 
@@ -34,6 +35,9 @@ export function createLiveMdFeatureRegistry<Context, Node extends { name: string
         if (feature.enter?.(context, node) === false) stopped = true;
       }
       return stopped ? false : undefined;
+    },
+    hasNode(nodeName) {
+      return byNode.has(nodeName);
     },
     scopeFor(nodeName) {
       return scopes.get(nodeName) ?? "node";

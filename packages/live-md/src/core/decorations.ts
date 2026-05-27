@@ -133,6 +133,7 @@ const liveMdFeatures: readonly LiveMdNodeFeature[] = [
 ];
 
 const liveMdFeatureRegistry = createLiveMdFeatureRegistry(liveMdFeatures);
+export const __testLiveMdFeatureRegistry = liveMdFeatureRegistry;
 
 class AtomicRange extends RangeValue {
   eq(other: RangeValue) {
