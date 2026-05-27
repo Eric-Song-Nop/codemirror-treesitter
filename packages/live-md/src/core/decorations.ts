@@ -28,6 +28,7 @@ import {
   analyzeLiveMdDirtyRanges,
   type LiveMdDirtyRange,
   type LiveMdDirtyReason,
+  type LiveMdDirtySourceRange,
 } from "./dirty-ranges.js";
 import { createLiveMdFeatureRegistry, type LiveMdFeature, type LiveMdScope } from "./features.js";
 import { forEachLineInRange, isWhitespace, isWhitespaceOnly, splitRangeByLine } from "./util.js";
@@ -53,6 +54,7 @@ type VisitContext = {
   codeFenceLanguages: CodeFenceLanguageMap;
   dirtyRange: LiveMdDirtyRange | null;
   dirtyReasons: readonly LiveMdDirtyReason[] | null;
+  plannedCodeFenceHighlightKeys: Set<string>;
   previousCodeFenceHighlights: readonly CodeFenceHighlightTree[];
   changes: ChangeDesc | null;
   plan: DecorationPlan;
@@ -72,6 +74,21 @@ type CodeFenceHighlightTree = {
   parser: CodeFenceParser;
   sourceText: Text;
   tree: Tree;
+};
+
+type CodeFenceSyntaxChanges = {
+  highlights: readonly CodeFenceHighlightTree[];
+  sourceRanges: readonly LiveMdDirtySourceRange[];
+};
+
+type CodeFenceContentChangeResult = {
+  changes: ChangeSet;
+  touched: boolean;
+};
+
+const emptyCodeFenceSyntaxChanges: CodeFenceSyntaxChanges = {
+  highlights: [],
+  sourceRanges: [],
 };
 
 const visibleSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-active" });
@@ -111,6 +128,14 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
     ) {
       return value;
     }
+    let codeFenceSyntaxChanges =
+      transaction.docChanged && !codeFenceLanguageUpdate
+        ? analyzeCodeFenceSyntaxChanges(
+            transaction.state,
+            transaction.changes,
+            value.codeFenceHighlightTrees,
+          )
+        : emptyCodeFenceSyntaxChanges;
     let activeLines = getActiveLines(transaction.state);
     let { dirtyRanges, expandedDirtyRanges } = analyzeLiveMdDirtyRanges({
       activeLines: transaction.selection ? Array.from(activeLines) : undefined,
@@ -125,6 +150,7 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
         : undefined,
       previousActiveLines: transaction.selection ? Array.from(value.activeLines) : undefined,
       registry: liveMdFeatureRegistry,
+      sourceRanges: codeFenceSyntaxChanges.sourceRanges,
       startState: transaction.startState,
       state: transaction.state,
       syntaxChangedRanges,
@@ -136,6 +162,7 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
       dirtyRanges,
       expandedDirtyRanges,
       activeLines,
+      codeFenceSyntaxChanges.highlights,
     );
   },
   provide(field) {
@@ -346,6 +373,7 @@ function patchLiveMdAnalysis(
   dirtyRanges: readonly LiveMdDirtyRange[],
   expandedDirtyRanges: readonly LiveMdDirtyRange[],
   activeLines: Set<number>,
+  precomputedCodeFenceHighlights: readonly CodeFenceHighlightTree[] = [],
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
   let plan = buildLiveMdPlan(
@@ -355,6 +383,7 @@ function patchLiveMdAnalysis(
     expandedDirtyRanges,
     previous.codeFenceHighlightTrees,
     changes,
+    precomputedCodeFenceHighlights,
   );
   return {
     activeLines,
@@ -387,13 +416,15 @@ function buildLiveMdPlan(
   ranges?: readonly LiveMdDirtyRange[],
   previousCodeFenceHighlights: readonly CodeFenceHighlightTree[] = [],
   changes: ChangeDesc | null = null,
+  precomputedCodeFenceHighlights: readonly CodeFenceHighlightTree[] = [],
 ) {
   let context: VisitContext = {
     activeLines,
-    codeFenceHighlightCache: new Map(),
+    codeFenceHighlightCache: codeFenceHighlightCache(precomputedCodeFenceHighlights),
     codeFenceLanguages,
     dirtyRange: null,
     dirtyReasons: null,
+    plannedCodeFenceHighlightKeys: new Set(),
     previousCodeFenceHighlights,
     changes,
     plan: new DecorationPlan(state),
@@ -455,6 +486,63 @@ function codeFenceHighlightInvalidatingRange(range: LiveMdDirtyRange) {
 
 function touchesAnyDirtyRange(from: number, to: number, dirtyRanges: readonly LiveMdDirtyRange[]) {
   return dirtyRanges.some((range) => rangesTouch(from, to, range.from, range.to));
+}
+
+function analyzeCodeFenceSyntaxChanges(
+  state: EditorState,
+  changes: ChangeDesc,
+  previousHighlights: readonly CodeFenceHighlightTree[],
+): CodeFenceSyntaxChanges {
+  if (!previousHighlights.length) return emptyCodeFenceSyntaxChanges;
+
+  let highlights: CodeFenceHighlightTree[] = [];
+  let sourceRanges: LiveMdDirtySourceRange[] = [];
+  for (let previous of previousHighlights) {
+    let contentFrom = changes.mapPos(previous.contentFrom, 1);
+    let contentTo = changes.mapPos(previous.contentTo, -1);
+    if (contentFrom >= contentTo) continue;
+
+    let contentChanges = codeFenceContentChangeResult(
+      changes,
+      state,
+      previous,
+      contentFrom,
+      contentTo,
+    );
+    if (!contentChanges || !contentChanges.touched) continue;
+
+    let sourceText = codeFenceSourceText(state, contentFrom, contentTo);
+    let oldTree = previous.parser.editWrappedTree(
+      previous.tree,
+      contentChanges.changes,
+      previous.sourceText,
+      sourceText,
+    );
+    let tree = previous.parser.parse(sourceText, oldTree);
+    let highlight = {
+      ...previous,
+      contentFrom,
+      contentTo,
+      sourceText,
+      tree,
+    };
+    highlights.push(highlight);
+    let changedRanges = oldTree.tree
+      ? oldTree.tree.getChangedRanges(tree.tree!)
+      : [{ startIndex: 0, endIndex: tree.length }];
+    if (!changedRanges.length) continue;
+
+    let rangeFrom = Math.min(...changedRanges.map((range) => range.startIndex));
+    sourceRanges.push({
+      from: contentFrom + rangeFrom,
+      reason: "syntax",
+      to: codeFenceContentDirtyTo(state, contentTo),
+    });
+  }
+
+  return highlights.length || sourceRanges.length
+    ? { highlights, sourceRanges }
+    : emptyCodeFenceSyntaxChanges;
 }
 
 function feature(
@@ -912,10 +1000,12 @@ function getCodeFenceHighlight(
 
   let key = codeFenceHighlightKey(contentFrom, contentTo, language);
   let cached = context.codeFenceHighlightCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    recordCodeFenceHighlight(context, key, cached);
+    return cached;
+  }
 
-  let source = context.state.sliceDoc(contentFrom, contentTo);
-  let sourceText = Text.of(source.split("\n"));
+  let sourceText = codeFenceSourceText(context.state, contentFrom, contentTo);
   let previous = previousCodeFenceHighlight(context, contentFrom, contentTo, language, parser);
   let oldTree = previous
     ? editedPreviousCodeFenceTree(context, previous, contentFrom, contentTo, sourceText)
@@ -930,12 +1020,40 @@ function getCodeFenceHighlight(
     tree,
   };
   context.codeFenceHighlightCache.set(key, highlight);
-  context.plan.codeFenceHighlight(highlight);
+  recordCodeFenceHighlight(context, key, highlight);
   return highlight;
+}
+
+function recordCodeFenceHighlight(
+  context: VisitContext,
+  key: string,
+  highlight: CodeFenceHighlightTree,
+) {
+  if (context.plannedCodeFenceHighlightKeys.has(key)) return;
+  context.plannedCodeFenceHighlightKeys.add(key);
+  context.plan.codeFenceHighlight(highlight);
+}
+
+function codeFenceHighlightCache(highlights: readonly CodeFenceHighlightTree[]) {
+  return new Map(
+    highlights.map((highlight) => [
+      codeFenceHighlightKey(highlight.contentFrom, highlight.contentTo, highlight.language),
+      highlight,
+    ]),
+  );
 }
 
 function codeFenceHighlightKey(contentFrom: number, contentTo: number, language: string) {
   return `${contentFrom}:${contentTo}:${language}`;
+}
+
+function codeFenceSourceText(state: EditorState, contentFrom: number, contentTo: number) {
+  return Text.of(state.sliceDoc(contentFrom, contentTo).split("\n"));
+}
+
+function codeFenceContentDirtyTo(state: EditorState, contentTo: number) {
+  if (contentTo <= 0) return contentTo;
+  return state.sliceDoc(contentTo - 1, contentTo) == "\n" ? contentTo - 1 : contentTo;
 }
 
 function codeFenceHighlightRange(context: VisitContext, contentFrom: number, sourceLength: number) {
@@ -986,27 +1104,52 @@ function codeFenceContentChanges(
   contentFrom: number,
   contentTo: number,
 ) {
-  if (!context.changes) return ChangeSet.empty(previous.sourceText.length);
+  return (
+    codeFenceContentChangeResult(context.changes, context.state, previous, contentFrom, contentTo)
+      ?.changes ?? null
+  );
+}
+
+function codeFenceContentChangeResult(
+  changes: ChangeDesc | null,
+  state: EditorState,
+  previous: CodeFenceHighlightTree,
+  contentFrom: number,
+  contentTo: number,
+): CodeFenceContentChangeResult | null {
+  if (!changes) {
+    return {
+      changes: ChangeSet.empty(previous.sourceText.length),
+      touched: false,
+    };
+  }
   let specs: Array<{ from: number; insert: string; to: number }> = [];
+  let touched = false;
   let usable = true;
-  context.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
     let oldInside = fromA >= previous.contentFrom && toA <= previous.contentTo;
     let newInside = fromB >= contentFrom && toB <= contentTo;
     let touchesOldContent =
       oldInside || rangesTouch(fromA, toA, previous.contentFrom, previous.contentTo);
     let touchesNewContent = newInside || rangesTouch(fromB, toB, contentFrom, contentTo);
     if (!touchesOldContent && !touchesNewContent) return;
+    touched = true;
     if (!oldInside || !newInside) {
       usable = false;
       return;
     }
     specs.push({
       from: fromA - previous.contentFrom,
-      insert: context.state.sliceDoc(fromB, toB),
+      insert: state.sliceDoc(fromB, toB),
       to: toA - previous.contentFrom,
     });
   });
-  return usable ? ChangeSet.of(specs, previous.sourceText.length) : null;
+  return usable
+    ? {
+        changes: ChangeSet.of(specs, previous.sourceText.length),
+        touched,
+      }
+    : null;
 }
 
 function splitTextRangeByLine(
