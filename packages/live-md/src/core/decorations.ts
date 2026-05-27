@@ -42,8 +42,6 @@ const inlineCodeMark = Decoration.mark({ class: "cm-md-inline-code" });
 const linkMark = Decoration.mark({ class: "cm-md-link" });
 const tablePipeMark = Decoration.mark({ class: "cm-md-table-pipe" });
 
-const codeFenceHighlightCache = new WeakMap<Text, Map<string, InlineDecoration[]>>();
-
 /**
  * Rebuilds decorations from the tree-sitter syntax tree whenever the
  * document content or selection changes.
@@ -607,50 +605,14 @@ function addCodeFenceHighlights(
   if (!parser || contentFrom >= contentTo) return;
 
   let source = context.state.sliceDoc(contentFrom, contentTo);
-  let ranges = getCodeFenceHighlightRanges(
-    context.state.doc,
-    contentFrom,
-    contentTo,
-    language,
-    source,
-    () => {
-      let sourceText = Text.of(source.split("\n"));
-      let tree = parser.parse(sourceText);
-      let parsedRanges: InlineDecoration[] = [];
-      highlightTree(tree, gruvboxLightHighlightStyle, (from, to, className) => {
-        splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {
-          parsedRanges.push({
-            from: rangeFrom,
-            to: rangeTo,
-            decoration: Decoration.mark({ class: className }),
-          });
-        });
-      });
-      return parsedRanges;
-    },
-  );
-
-  for (let range of ranges) {
-    context.plan.mark(contentFrom + range.from, contentFrom + range.to, range.decoration);
-  }
-}
-
-function getCodeFenceHighlightRanges(
-  doc: Text,
-  contentFrom: number,
-  contentTo: number,
-  language: string,
-  source: string,
-  parse: () => InlineDecoration[],
-) {
-  let key = `${contentFrom}:${contentTo}:${language}:${source}`;
-  let docCache = codeFenceHighlightCache.get(doc);
-  if (!docCache) codeFenceHighlightCache.set(doc, (docCache = new Map()));
-  let cached = docCache.get(key);
-  if (cached) return cached;
-  let ranges = parse();
-  docCache.set(key, ranges);
-  return ranges;
+  let sourceText = Text.of(source.split("\n"));
+  let tree = parser.parse(sourceText);
+  highlightTree(tree, gruvboxLightHighlightStyle, (from, to, className) => {
+    let decoration = Decoration.mark({ class: className });
+    splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {
+      context.plan.mark(contentFrom + rangeFrom, contentFrom + rangeTo, decoration);
+    });
+  });
 }
 
 function splitTextRangeByLine(
