@@ -14,7 +14,11 @@ import {
   emptyCodeFenceLanguages,
   type CodeFenceLanguageMap,
 } from "./languages.js";
-import { collectLiveMdDirtyRanges, type LiveMdDirtyRange } from "./dirty-ranges.js";
+import {
+  collectLiveMdDirtyRanges,
+  expandLiveMdDirtyRanges,
+  type LiveMdDirtyRange,
+} from "./dirty-ranges.js";
 import { createLiveMdFeatureRegistry, type LiveMdFeature, type LiveMdScope } from "./features.js";
 import { forEachLineInRange, isWhitespace, isWhitespaceOnly, splitRangeByLine } from "./util.js";
 import {
@@ -58,11 +62,12 @@ type LiveMdAnalysis = {
   codeFenceLanguages: CodeFenceLanguageMap;
   decorations: DecorationSet;
   dirtyRanges: readonly LiveMdDirtyRange[];
+  expandedDirtyRanges: readonly LiveMdDirtyRange[];
 };
 
 export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
   create(state) {
-    return buildLiveMdAnalysis(state, []);
+    return buildLiveMdAnalysis(state, [], []);
   },
   update(value, transaction) {
     let codeFenceLanguageUpdate = codeFenceLanguagesChanged(
@@ -82,7 +87,12 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
       state: transaction.state,
       syntaxChangedRanges: [],
     });
-    return buildLiveMdAnalysis(transaction.state, dirtyRanges, activeLines);
+    let expandedDirtyRanges = expandLiveMdDirtyRanges({
+      ranges: dirtyRanges,
+      registry: liveMdFeatureRegistry,
+      state: transaction.state,
+    });
+    return buildLiveMdAnalysis(transaction.state, dirtyRanges, expandedDirtyRanges, activeLines);
   },
   provide(field) {
     return [
@@ -222,6 +232,7 @@ class DecorationPlan {
 function buildLiveMdAnalysis(
   state: EditorState,
   dirtyRanges: readonly LiveMdDirtyRange[],
+  expandedDirtyRanges: readonly LiveMdDirtyRange[],
   activeLines = getActiveLines(state),
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
@@ -232,6 +243,7 @@ function buildLiveMdAnalysis(
     codeFenceLanguages,
     decorations: plan.finish(),
     dirtyRanges,
+    expandedDirtyRanges,
   };
 }
 

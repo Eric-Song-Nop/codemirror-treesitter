@@ -1,7 +1,11 @@
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
 import { liveMdAnalysis } from "../src/core/decorations.js";
-import { codeFenceLanguagesField, setCodeFenceLanguages } from "../src/core/languages.js";
+import {
+  codeFenceLanguagesField,
+  loadMarkdownExtension,
+  setCodeFenceLanguages,
+} from "../src/core/languages.js";
 
 describe("LiveMD analysis snapshot", () => {
   it("records text dirty ranges while continuing to rebuild the full analysis", () => {
@@ -40,6 +44,23 @@ describe("LiveMD analysis snapshot", () => {
       { from: 0, reasons: ["codeFenceLanguages"], to: transaction.state.doc.length },
     ]);
   });
+
+  it("records expanded dirty ranges using Markdown feature scopes", async () => {
+    let doc = "![alt](one.png)\nnext";
+    let state = await markdownAnalysisState(doc);
+    let dirtyFrom = doc.indexOf("one");
+    let transaction = state.update({
+      changes: { from: dirtyFrom, to: dirtyFrom + 3, insert: "two" },
+    });
+    let analysis = transaction.state.field(liveMdAnalysis);
+
+    expect(analysis.dirtyRanges).toEqual([
+      { from: dirtyFrom, reasons: ["text"], to: dirtyFrom + 3 },
+    ]);
+    expect(analysis.expandedDirtyRanges).toEqual([
+      { from: 0, reasons: ["text"], to: "![alt](two.png)".length },
+    ]);
+  });
 });
 
 function analysisState(doc: string, selection = 0) {
@@ -47,5 +68,12 @@ function analysisState(doc: string, selection = 0) {
     doc,
     selection: { anchor: selection },
     extensions: [codeFenceLanguagesField, liveMdAnalysis],
+  });
+}
+
+async function markdownAnalysisState(doc: string) {
+  return EditorState.create({
+    doc,
+    extensions: [codeFenceLanguagesField, liveMdAnalysis, await loadMarkdownExtension()],
   });
 }
