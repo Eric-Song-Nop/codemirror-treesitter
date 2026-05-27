@@ -157,9 +157,39 @@ describe("LiveMD analysis snapshot", () => {
       changes: { from: editFrom, to: editFrom + 1, insert: "aa" },
     });
     let analysis = transaction.state.field(liveMdAnalysis);
+    let editedLine = transaction.state.doc.lineAt(editFrom);
     let after = decorationsFrom(transaction.state, secondFenceFrom + 1);
 
-    expect(analysis.expandedDirtyRanges).toEqual([{ from: 0, reasons: ["text"], to: 22 }]);
+    expect(analysis.expandedDirtyRanges).toEqual([
+      { from: editedLine.from, reasons: ["text"], to: editedLine.to },
+    ]);
+    expect(after).toHaveLength(before.length);
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
+  });
+
+  it("patches code fence content edits without rebuilding untouched lines in the same fence", async () => {
+    let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
+    let state = await markdownAnalysisState(doc);
+    state = state.update({
+      effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()),
+    }).state;
+    let secondLineFrom = state.doc.lineAt(doc.indexOf("let b")).from;
+    let before = decorationsFrom(state, secondLineFrom);
+
+    expect(before.length).toBeGreaterThan(1);
+
+    let editFrom = doc.indexOf("a = 1");
+    let transaction = state.update({
+      changes: { from: editFrom, to: editFrom + 1, insert: "aa" },
+    });
+    let analysis = transaction.state.field(liveMdAnalysis);
+    let editedLine = transaction.state.doc.lineAt(editFrom);
+    let after = decorationsFrom(transaction.state, secondLineFrom + 1);
+
+    expect(analysis.expandedDirtyRanges).toEqual([
+      { from: editedLine.from, reasons: ["text"], to: editedLine.to },
+    ]);
     expect(after).toHaveLength(before.length);
     expect(after[0]).toBe(before[0]);
     expect(after[1]).toBe(before[1]);

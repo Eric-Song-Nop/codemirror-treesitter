@@ -23,13 +23,24 @@ describe("LiveMD dirty range expansion", () => {
     ]);
   });
 
-  it("uses feature node scope for fenced code edits", async () => {
+  it("uses feature line scope for code fence content edits", async () => {
     let doc = "```ts\nlet a = 1;\n```\n\n```ts\nlet b = 2;\n```\n";
     let state = await markdownState(doc);
     let dirtyFrom = doc.indexOf("a = 1");
-    let firstFenceTo = doc.indexOf("\n\n") + 1;
+    let dirtyLine = state.doc.lineAt(dirtyFrom);
 
     expect(expand([{ from: dirtyFrom, reasons: ["text"], to: dirtyFrom + 1 }], state)).toEqual([
+      { from: dirtyLine.from, reasons: ["text"], to: dirtyLine.to },
+    ]);
+  });
+
+  it("uses feature node scope for code fence metadata edits", async () => {
+    let doc = "```ts\nlet a = 1;\n```\n\n```ts\nlet b = 2;\n```\n";
+    let state = await markdownState(doc);
+    let dirtyFrom = doc.indexOf("ts");
+    let firstFenceTo = doc.indexOf("\n\n") + 1;
+
+    expect(expand([{ from: dirtyFrom, reasons: ["text"], to: dirtyFrom + 2 }], state)).toEqual([
       { from: 0, reasons: ["text"], to: firstFenceTo },
     ]);
   });

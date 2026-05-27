@@ -49,7 +49,9 @@ type InlineDecoration = {
 
 type VisitContext = {
   activeLines: Set<number>;
+  codeFenceHighlightCache: Map<string, CodeFenceHighlightTree>;
   codeFenceLanguages: CodeFenceLanguageMap;
+  dirtyRange: LiveMdDirtyRange | null;
   dirtyReasons: readonly LiveMdDirtyReason[] | null;
   previousCodeFenceHighlights: readonly CodeFenceHighlightTree[];
   changes: ChangeDesc | null;
@@ -153,6 +155,7 @@ const liveMdFeatures: readonly LiveMdNodeFeature[] = [
   feature(["block_quote_marker"], visitSyntax, "line"),
   feature(["code_span"], visitMark(inlineCodeMark)),
   feature(["code_span_delimiter"], visitSyntax),
+  feature(["code_fence_content"], undefined, "line"),
   feature(["document"], visitDocument, "document"),
   feature(["emphasis"], visitMark(emphasisMark)),
   feature(["emphasis_delimiter"], visitSyntax),
@@ -361,7 +364,9 @@ function buildLiveMdPlan(
 ) {
   let context: VisitContext = {
     activeLines,
+    codeFenceHighlightCache: new Map(),
     codeFenceLanguages,
+    dirtyRange: null,
     dirtyReasons: null,
     previousCodeFenceHighlights,
     changes,
@@ -381,9 +386,11 @@ function buildLiveMdPlan(
   };
   if (ranges) {
     for (let range of ranges) {
+      context.dirtyRange = range;
       context.dirtyReasons = range.reasons;
       iterate(range.from, range.to);
     }
+    context.dirtyRange = null;
     context.dirtyReasons = null;
   } else {
     iterate();
@@ -417,7 +424,7 @@ function touchesAnyDirtyRange(from: number, to: number, dirtyRanges: readonly Li
 
 function feature(
   nodes: readonly string[],
-  enter: NodeVisitor,
+  enter?: NodeVisitor,
   scope?: LiveMdScope,
   invalidatedBy?: readonly string[],
 ): LiveMdNodeFeature {
@@ -838,8 +845,39 @@ function addCodeFenceHighlights(
   contentTo: number,
   language: string,
 ) {
+  let highlight = getCodeFenceHighlight(context, contentFrom, contentTo, language);
+  if (!highlight) return;
+
+  let { sourceText, tree } = highlight;
+  let range = codeFenceHighlightRange(context, contentFrom, sourceText.length);
+  if (!range) return;
+
+  highlightTree(
+    tree,
+    gruvboxLightHighlightStyle,
+    (from, to, className) => {
+      let decoration = Decoration.mark({ class: className });
+      splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {
+        context.plan.mark(contentFrom + rangeFrom, contentFrom + rangeTo, decoration);
+      });
+    },
+    range.from,
+    range.to,
+  );
+}
+
+function getCodeFenceHighlight(
+  context: VisitContext,
+  contentFrom: number,
+  contentTo: number,
+  language: string,
+) {
   let parser = context.codeFenceLanguages.get(language);
-  if (!parser || contentFrom >= contentTo) return;
+  if (!parser || contentFrom >= contentTo) return null;
+
+  let key = codeFenceHighlightKey(contentFrom, contentTo, language);
+  let cached = context.codeFenceHighlightCache.get(key);
+  if (cached) return cached;
 
   let source = context.state.sliceDoc(contentFrom, contentTo);
   let sourceText = Text.of(source.split("\n"));
@@ -848,20 +886,29 @@ function addCodeFenceHighlights(
     ? editedPreviousCodeFenceTree(context, previous, contentFrom, contentTo, sourceText)
     : null;
   let tree = parser.parse(sourceText, oldTree);
-  context.plan.codeFenceHighlight({
+  let highlight = {
     contentFrom,
     contentTo,
     language,
     parser,
     sourceText,
     tree,
-  });
-  highlightTree(tree, gruvboxLightHighlightStyle, (from, to, className) => {
-    let decoration = Decoration.mark({ class: className });
-    splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {
-      context.plan.mark(contentFrom + rangeFrom, contentFrom + rangeTo, decoration);
-    });
-  });
+  };
+  context.codeFenceHighlightCache.set(key, highlight);
+  context.plan.codeFenceHighlight(highlight);
+  return highlight;
+}
+
+function codeFenceHighlightKey(contentFrom: number, contentTo: number, language: string) {
+  return `${contentFrom}:${contentTo}:${language}`;
+}
+
+function codeFenceHighlightRange(context: VisitContext, contentFrom: number, sourceLength: number) {
+  let range = context.dirtyRange;
+  if (!range) return { from: 0, to: sourceLength };
+  let from = Math.max(0, range.from - contentFrom);
+  let to = Math.min(sourceLength, range.to - contentFrom);
+  return from < to ? { from, to } : null;
 }
 
 function previousCodeFenceHighlight(
