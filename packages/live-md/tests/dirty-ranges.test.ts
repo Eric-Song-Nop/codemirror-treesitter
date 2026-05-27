@@ -6,7 +6,11 @@ import {
   type DocRange,
 } from "@codemirror-treesitter/language";
 import { describe, expect, it } from "vite-plus/test";
-import { __testCollectLiveMdDirtyRanges } from "../src/core/dirty-ranges.js";
+import {
+  __testCollectLiveMdDirtyRanges,
+  collectSyntaxNodeDirtyRanges,
+} from "../src/core/dirty-ranges.js";
+import { loadMarkdownExtension } from "../src/core/languages.js";
 
 const javascriptWasm = new URL(
   "../../../node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm",
@@ -79,7 +83,7 @@ describe("LiveMD dirty range collection", () => {
     ).toEqual([{ from: 4, reasons: ["text"], to: 4 }]);
   });
 
-  it("deduplicates text ranges covered by full code fence language invalidation", () => {
+  it("merges text ranges covered by code fence language invalidation ranges", () => {
     let state = EditorState.create({ doc: "```ts\nlet a = 1;\n```\n" });
     let transaction = state.update({
       changes: { from: 10, to: 11, insert: "b" },
@@ -88,7 +92,7 @@ describe("LiveMD dirty range collection", () => {
     expect(
       __testCollectLiveMdDirtyRanges({
         changes: transaction.changes,
-        codeFenceLanguagesChanged: true,
+        sourceRanges: [{ from: 0, reason: "codeFenceLanguages", to: transaction.state.doc.length }],
         startState: state,
         state: transaction.state,
         syntaxChangedRanges: [],
@@ -99,6 +103,24 @@ describe("LiveMD dirty range collection", () => {
         reasons: ["text", "codeFenceLanguages"],
         to: transaction.state.doc.length,
       },
+    ]);
+  });
+
+  it("collects syntax node dirty ranges for code fence language invalidation", async () => {
+    let doc = "```ts\nlet a = 1;\n```\n\nplain\n\n```ts\nlet b = 2;\n```\n";
+    let firstFenceTo = doc.indexOf("\n\n") + 1;
+    let secondFenceFrom = doc.lastIndexOf("```ts");
+    let state = await markdownState(doc);
+
+    expect(
+      collectSyntaxNodeDirtyRanges({
+        nodes: ["fenced_code_block"],
+        reason: "codeFenceLanguages",
+        state,
+      }),
+    ).toEqual([
+      { from: 0, reason: "codeFenceLanguages", to: firstFenceTo },
+      { from: secondFenceFrom, reason: "codeFenceLanguages", to: doc.length },
     ]);
   });
 
@@ -136,6 +158,13 @@ async function javascriptState(doc: string) {
     parser,
     state: EditorState.create({ doc, extensions: [language.extension] }),
   };
+}
+
+async function markdownState(doc: string) {
+  return EditorState.create({
+    doc,
+    extensions: [await loadMarkdownExtension()],
+  });
 }
 
 function changedSyntaxRanges(

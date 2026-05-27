@@ -7,8 +7,10 @@ import {
   RangeValue,
   StateField,
   Text,
+  type Transaction,
 } from "@codemirror/state";
 import {
+  type DocRange,
   highlightTree,
   syntaxTree,
   syntaxTreeChangedRanges,
@@ -23,6 +25,7 @@ import {
 } from "./languages.js";
 import {
   collectLiveMdDirtyRanges,
+  collectSyntaxNodeDirtyRanges,
   expandLiveMdDirtyRanges,
   type LiveMdDirtyRange,
 } from "./dirty-ranges.js";
@@ -81,35 +84,45 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
       transaction.startState,
       transaction.state,
     );
-    if (!transaction.docChanged && !transaction.selection && !codeFenceLanguageUpdate) {
+    let syntaxChangedRanges = liveMdSyntaxChangedRanges(transaction);
+    if (
+      !transaction.docChanged &&
+      !transaction.selection &&
+      !codeFenceLanguageUpdate &&
+      !syntaxChangedRanges.length
+    ) {
       return value;
     }
     let activeLines = getActiveLines(transaction.state);
+    let sourceRanges = codeFenceLanguageUpdate
+      ? collectSyntaxNodeDirtyRanges({
+          nodes: ["fenced_code_block"],
+          reason: "codeFenceLanguages",
+          state: transaction.state,
+        })
+      : undefined;
     let dirtyRanges = collectLiveMdDirtyRanges({
       activeLines: transaction.selection ? Array.from(activeLines) : undefined,
       changes: transaction.changes,
-      codeFenceLanguagesChanged: codeFenceLanguageUpdate,
       previousActiveLines: transaction.selection ? Array.from(value.activeLines) : undefined,
+      sourceRanges,
       startState: transaction.startState,
       state: transaction.state,
-      syntaxChangedRanges: syntaxTreeChangedRanges(transaction),
+      syntaxChangedRanges,
     });
     let expandedDirtyRanges = expandLiveMdDirtyRanges({
       ranges: dirtyRanges,
       registry: liveMdFeatureRegistry,
       state: transaction.state,
     });
-    if (!codeFenceLanguageUpdate) {
-      return patchLiveMdAnalysis(
-        value,
-        transaction.state,
-        transaction.changes,
-        dirtyRanges,
-        expandedDirtyRanges,
-        activeLines,
-      );
-    }
-    return buildLiveMdAnalysis(transaction.state, dirtyRanges, expandedDirtyRanges, activeLines);
+    return patchLiveMdAnalysis(
+      value,
+      transaction.state,
+      transaction.changes,
+      dirtyRanges,
+      expandedDirtyRanges,
+      activeLines,
+    );
   },
   provide(field) {
     return [
@@ -326,7 +339,7 @@ function buildLiveMdPlan(
       },
     });
   };
-  if (ranges?.length) {
+  if (ranges) {
     for (let range of ranges) iterate(range.from, range.to);
   } else {
     iterate();
@@ -375,6 +388,14 @@ function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) 
   return (
     startState.field(codeFenceLanguagesField, false) != state.field(codeFenceLanguagesField, false)
   );
+}
+
+function liveMdSyntaxChangedRanges(transaction: Transaction): readonly DocRange[] {
+  if (transaction.docChanged) return syntaxTreeChangedRanges(transaction);
+  if (syntaxTree(transaction.startState) != syntaxTree(transaction.state)) {
+    return [{ from: 0, to: transaction.state.doc.length }];
+  }
+  return [];
 }
 
 function getActiveLines(state: EditorState) {

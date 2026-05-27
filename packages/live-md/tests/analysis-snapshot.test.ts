@@ -1,4 +1,4 @@
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import type { Decoration } from "@codemirror/view";
 import { describe, expect, it } from "vite-plus/test";
 import { liveMdAnalysis } from "../src/core/decorations.js";
@@ -35,16 +35,29 @@ describe("LiveMD analysis snapshot", () => {
     expect(Array.from(analysis.activeLines)).toEqual([3]);
   });
 
-  it("records code fence language invalidation as one full-document dirty range", () => {
-    let state = analysisState("```ts\nlet a = 1;\n```\n");
+  it("patches code fence language updates without rebuilding untouched Markdown decorations", async () => {
+    let doc = "```ts\nlet a = 1;\n```\n\n- after";
+    let state = await markdownAnalysisState(doc);
+    let afterLine = state.doc.lineAt(doc.indexOf("- after"));
+    let before = lineDecorations(state, afterLine.from);
+
+    expect(before.length).toBeGreaterThan(0);
+
     let transaction = state.update({
-      effects: setCodeFenceLanguages.of(new Map()),
+      effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()),
     });
     let analysis = transaction.state.field(liveMdAnalysis);
+    let after = lineDecorations(transaction.state, afterLine.from);
+    let fenceTo = doc.indexOf("\n\n") + 1;
 
     expect(analysis.dirtyRanges).toEqual([
-      { from: 0, reasons: ["codeFenceLanguages"], to: transaction.state.doc.length },
+      { from: 0, reasons: ["codeFenceLanguages"], to: fenceTo },
     ]);
+    expect(analysis.expandedDirtyRanges).toEqual([
+      { from: 0, reasons: ["codeFenceLanguages"], to: fenceTo },
+    ]);
+    expect(after).toHaveLength(before.length);
+    expect(after[0]).toBe(before[0]);
   });
 
   it("records expanded dirty ranges using Markdown feature scopes", async () => {
@@ -72,6 +85,21 @@ describe("LiveMD analysis snapshot", () => {
     let analysis = transaction.state.field(liveMdAnalysis);
 
     expect(analysis.dirtyRanges.some((range) => range.reasons.includes("syntax"))).toBe(true);
+  });
+
+  it("records syntax dirty ranges when Markdown parsing becomes available", async () => {
+    let markdown = new Compartment();
+    let doc = "- first\n\n- second";
+    let state = EditorState.create({
+      doc,
+      extensions: [codeFenceLanguagesField, liveMdAnalysis, markdown.of([])],
+    });
+    let transaction = state.update({
+      effects: markdown.reconfigure(await loadMarkdownExtension()),
+    });
+    let analysis = transaction.state.field(liveMdAnalysis);
+
+    expect(analysis.dirtyRanges).toEqual([{ from: 0, reasons: ["syntax"], to: doc.length }]);
   });
 
   it("patches selection-only updates without rebuilding untouched line decorations", async () => {

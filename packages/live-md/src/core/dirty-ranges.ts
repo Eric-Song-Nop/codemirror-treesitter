@@ -10,11 +10,17 @@ export type LiveMdDirtyRange = {
   to: number;
 };
 
+export type LiveMdDirtySourceRange = {
+  from: number;
+  reason: LiveMdDirtyReason;
+  to: number;
+};
+
 export type CollectLiveMdDirtyRangesInput = {
   activeLines?: readonly number[];
   changes: ChangeDesc;
-  codeFenceLanguagesChanged?: boolean;
   previousActiveLines?: readonly number[];
+  sourceRanges?: readonly LiveMdDirtySourceRange[];
   startState: EditorState;
   state: EditorState;
   syntaxChangedRanges?: readonly DocRange[];
@@ -49,11 +55,11 @@ export function collectLiveMdDirtyRanges(input: CollectLiveMdDirtyRangesInput): 
     addLineRange(ranges, input.state, lineNumber, "selection");
   }
 
-  if (input.codeFenceLanguagesChanged) {
+  for (let range of input.sourceRanges ?? []) {
     ranges.push({
-      from: 0,
-      reasons: new Set(["codeFenceLanguages"]),
-      to: input.state.doc.length,
+      from: range.from,
+      reasons: new Set([range.reason]),
+      to: range.to,
     });
   }
 
@@ -61,6 +67,27 @@ export function collectLiveMdDirtyRanges(input: CollectLiveMdDirtyRangesInput): 
 }
 
 export const __testCollectLiveMdDirtyRanges = collectLiveMdDirtyRanges;
+
+export type CollectSyntaxNodeDirtyRangesInput = {
+  nodes: readonly string[];
+  reason: LiveMdDirtyReason;
+  state: EditorState;
+};
+
+export function collectSyntaxNodeDirtyRanges(
+  input: CollectSyntaxNodeDirtyRangesInput,
+): LiveMdDirtySourceRange[] {
+  let nodes = new Set(input.nodes);
+  let ranges: LiveMdDirtySourceRange[] = [];
+  syntaxTree(input.state).iterate({
+    enter(node) {
+      if (nodes.has(node.name)) {
+        ranges.push({ from: node.from, reason: input.reason, to: node.to });
+      }
+    },
+  });
+  return ranges;
+}
 
 export function expandLiveMdDirtyRanges(input: ExpandLiveMdDirtyRangesInput): LiveMdDirtyRange[] {
   let ranges = input.ranges.map((range) => expandDirtyRange(input.state, input.registry, range));
@@ -126,11 +153,22 @@ function expandDirtyRange(
   range: LiveMdDirtyRange,
 ): LiveMdDirtyRange {
   let match = smallestFeatureNode(state, registry, range);
-  if (!match) return { ...expandToTouchedLines(state, range), reasons: range.reasons };
-  let scope = registry.scopeFor(match.name);
+  let expanded = match
+    ? expandByScope(state, range, match, registry.scopeFor(match.name))
+    : expandToTouchedLines(state, range);
   return {
-    ...expandByScope(state, range, match, scope),
+    ...cover(range, expanded),
     reasons: range.reasons,
+  };
+}
+
+function cover(
+  range: Pick<LiveMdDirtyRange, "from" | "to">,
+  expanded: Pick<LiveMdDirtyRange, "from" | "to">,
+) {
+  return {
+    from: Math.min(range.from, expanded.from),
+    to: Math.max(range.to, expanded.to),
   };
 }
 

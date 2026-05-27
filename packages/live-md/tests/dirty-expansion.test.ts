@@ -33,6 +33,16 @@ describe("LiveMD dirty range expansion", () => {
       { from: 0, reasons: ["text"], to: firstFenceTo },
     ]);
   });
+
+  it("does not shrink dirty ranges that already cover a feature node", async () => {
+    let doc = "```ts\nlet a = 1;\n```\n\nplain";
+    let state = await markdownState(doc);
+    let firstFenceTo = doc.indexOf("\n\n") + 1;
+
+    expect(expand([{ from: 0, reasons: ["codeFenceLanguages"], to: firstFenceTo }], state)).toEqual(
+      [{ from: 0, reasons: ["codeFenceLanguages"], to: firstFenceTo }],
+    );
+  });
 });
 
 function expand(ranges: readonly LiveMdDirtyRange[], state: EditorState) {
