@@ -7,10 +7,8 @@ import {
   RangeValue,
   StateField,
   Text,
-  type Transaction,
 } from "@codemirror/state";
 import {
-  type DocRange,
   highlightTree,
   syntaxTree,
   syntaxTreeChangedRanges,
@@ -79,7 +77,7 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
       transaction.startState,
       transaction.state,
     );
-    let syntaxChangedRanges = liveMdSyntaxChangedRanges(transaction);
+    let syntaxChangedRanges = syntaxTreeChangedRanges(transaction);
     if (
       !transaction.docChanged &&
       !transaction.selection &&
@@ -381,14 +379,6 @@ function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) 
   return (
     startState.field(codeFenceLanguagesField, false) != state.field(codeFenceLanguagesField, false)
   );
-}
-
-function liveMdSyntaxChangedRanges(transaction: Transaction): readonly DocRange[] {
-  if (transaction.docChanged) return syntaxTreeChangedRanges(transaction);
-  if (syntaxTree(transaction.startState) != syntaxTree(transaction.state)) {
-    return [{ from: 0, to: transaction.state.doc.length }];
-  }
-  return [];
 }
 
 function getActiveLines(state: EditorState) {

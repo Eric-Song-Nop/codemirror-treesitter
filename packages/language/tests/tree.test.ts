@@ -1,4 +1,4 @@
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
 import {
   ParseContext,
@@ -526,6 +526,21 @@ describe("tree-sitter tree wrapper", () => {
 
     expect(syntaxTreeChangedRanges(rename)).toEqual([]);
     expect(syntaxTreeChangedRanges(structural)).toEqual([{ from: 0, to: 24 }]);
+  });
+
+  it("reports full syntax dirty ranges when parsing becomes available without text edits", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    let parser = await javascriptParser;
+    let compartment = new Compartment();
+    let javascript = TreeSitterLanguage.define({ name: "javascript", parser });
+    let doc = "let value = 1;\n";
+    let state = EditorState.create({ doc, extensions: [compartment.of([])] });
+    let transaction = state.update({
+      effects: compartment.reconfigure(javascript.extension),
+    });
+
+    expect(transaction.docChanged).toBe(false);
+    expect(syntaxTreeChangedRanges(transaction)).toEqual([{ from: 0, to: doc.length }]);
   });
 
   it("parses and reuses multiple disjoint nested ranges", async () => {

@@ -601,14 +601,17 @@ export function syntaxTreeAvailable(state: EditorState, upto = state.doc.length)
 }
 
 export function syntaxTreeChangedRanges(transaction: Transaction): readonly DocRange[] {
-  if (!transaction.docChanged) return [];
   let startLanguage = transaction.startState.facet(language);
   let nextLanguage = transaction.state.facet(language);
-  if (!startLanguage || !nextLanguage) return [];
   if (startLanguage != nextLanguage) return [{ from: 0, to: transaction.state.doc.length }];
+  if (!nextLanguage) return [];
 
   let oldTree = syntaxTree(transaction.startState);
   let newTree = syntaxTree(transaction.state);
+  if (!transaction.docChanged) {
+    return oldTree != newTree ? [{ from: 0, to: transaction.state.doc.length }] : [];
+  }
+
   if (!oldTree.tree || !newTree.tree) return [{ from: 0, to: transaction.state.doc.length }];
 
   let editedOldTree = nextLanguage.parser.editWrappedTree(
