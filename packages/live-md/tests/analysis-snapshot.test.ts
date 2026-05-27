@@ -164,6 +164,34 @@ describe("LiveMD analysis snapshot", () => {
     expect(after[0]).toBe(before[0]);
     expect(after[1]).toBe(before[1]);
   });
+
+  it("does not reparse code fence highlights for selection-only code line updates", async () => {
+    let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
+    let parseCalls = 0;
+    let state = await markdownAnalysisState(doc, doc.indexOf("let a"));
+    let languages = new Map(await loadCodeFenceLanguages());
+    let tsParser = languages.get("ts");
+    if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
+    languages.set("ts", {
+      parse(input) {
+        parseCalls++;
+        return tsParser.parse(input);
+      },
+    } as typeof tsParser);
+    state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
+    parseCalls = 0;
+
+    let transaction = state.update({
+      selection: { anchor: doc.indexOf("let b") },
+    });
+    let analysis = transaction.state.field(liveMdAnalysis);
+
+    expect(analysis.expandedDirtyRanges).toEqual([
+      { from: 6, reasons: ["selection"], to: 16 },
+      { from: 17, reasons: ["selection"], to: 27 },
+    ]);
+    expect(parseCalls).toBe(0);
+  });
 });
 
 function analysisState(doc: string, selection = 0) {

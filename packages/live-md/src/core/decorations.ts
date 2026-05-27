@@ -21,7 +21,11 @@ import {
   emptyCodeFenceLanguages,
   type CodeFenceLanguageMap,
 } from "./languages.js";
-import { analyzeLiveMdDirtyRanges, type LiveMdDirtyRange } from "./dirty-ranges.js";
+import {
+  analyzeLiveMdDirtyRanges,
+  type LiveMdDirtyRange,
+  type LiveMdDirtyReason,
+} from "./dirty-ranges.js";
 import { createLiveMdFeatureRegistry, type LiveMdFeature, type LiveMdScope } from "./features.js";
 import { forEachLineInRange, isWhitespace, isWhitespaceOnly, splitRangeByLine } from "./util.js";
 import {
@@ -43,6 +47,7 @@ type InlineDecoration = {
 type VisitContext = {
   activeLines: Set<number>;
   codeFenceLanguages: CodeFenceLanguageMap;
+  dirtyReasons: readonly LiveMdDirtyReason[] | null;
   plan: DecorationPlan;
   state: EditorState;
 };
@@ -314,6 +319,7 @@ function buildLiveMdPlan(
   let context: VisitContext = {
     activeLines,
     codeFenceLanguages,
+    dirtyReasons: null,
     plan: new DecorationPlan(state),
     state,
   };
@@ -329,7 +335,11 @@ function buildLiveMdPlan(
     });
   };
   if (ranges) {
-    for (let range of ranges) iterate(range.from, range.to);
+    for (let range of ranges) {
+      context.dirtyReasons = range.reasons;
+      iterate(range.from, range.to);
+    }
+    context.dirtyReasons = null;
   } else {
     iterate();
   }
@@ -649,12 +659,14 @@ function visitCodeFence(context: VisitContext, node: SyntaxNode): false {
     forEachLineInRange(context.state, content.from, content.to, (line) => {
       context.plan.line(line.number, "cm-md-code-line");
     });
-    addCodeFenceHighlights(
-      context,
-      content.from,
-      content.to,
-      readFenceLanguage(context.state, node),
-    );
+    if (!isSelectionOnlyVisit(context)) {
+      addCodeFenceHighlights(
+        context,
+        content.from,
+        content.to,
+        readFenceLanguage(context.state, node),
+      );
+    }
   }
 
   if (closingDelimiter) {
@@ -702,6 +714,14 @@ function latexReplacementRange(state: EditorState, node: SyntaxNode, displayMode
   }
 
   return { block: false, from: node.from, to: node.to };
+}
+
+function isSelectionOnlyVisit(context: VisitContext) {
+  return (
+    context.dirtyReasons != null &&
+    context.dirtyReasons.length > 0 &&
+    context.dirtyReasons.every((reason) => reason == "selection")
+  );
 }
 
 function readTableFromNode(state: EditorState, node: SyntaxNode): MarkdownTable | null {

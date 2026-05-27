@@ -208,6 +208,9 @@ function expandDirtyRange(
   registry: LiveMdDirtyRangeRegistry,
   range: LiveMdDirtyRange,
 ): LiveMdDirtyRange {
+  if (isSelectionOnly(range)) {
+    return { ...expandToTouchedLines(state, range), reasons: range.reasons };
+  }
   let match = smallestFeatureNode(state, registry, range);
   let expanded = match
     ? expandByScope(state, range, match, registry.scopeFor(match.name))
@@ -216,6 +219,10 @@ function expandDirtyRange(
     ...cover(range, expanded),
     reasons: range.reasons,
   };
+}
+
+function isSelectionOnly(range: LiveMdDirtyRange) {
+  return range.reasons.length > 0 && range.reasons.every((reason) => reason == "selection");
 }
 
 function cover(
