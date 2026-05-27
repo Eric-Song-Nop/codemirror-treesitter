@@ -50,6 +50,18 @@ describe("LiveMD feature registry", () => {
     expect(registry.hasNode("image")).toBe(true);
     expect(registry.hasNode("unknown")).toBe(false);
   });
+
+  it("exposes nodes affected by feature invalidations", () => {
+    let registry = __testCreateLiveMdFeatureRegistry<TestContext, TestNode>([
+      { invalidatedBy: ["codeFenceLanguages"], nodes: ["fenced_code_block"], scope: "node" },
+      { invalidatedBy: ["codeFenceLanguages"], nodes: ["fenced_code_block"], scope: "node" },
+      { invalidatedBy: ["other"], nodes: ["image"], scope: "line" },
+    ]);
+
+    expect(registry.invalidatedNodes("codeFenceLanguages")).toEqual(["fenced_code_block"]);
+    expect(registry.invalidatedNodes("other")).toEqual(["image"]);
+    expect(registry.invalidatedNodes("unknown")).toEqual([]);
+  });
 });
 
 function feature(

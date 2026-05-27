@@ -2,6 +2,7 @@ export type LiveMdScope = "block" | "container" | "document" | "line" | "node";
 
 export type LiveMdFeature<Context, Node extends { name: string }> = {
   enter?: (context: Context, node: Node) => false | void;
+  invalidatedBy?: readonly string[];
   nodes: readonly string[];
   scope?: LiveMdScope;
 };
@@ -9,6 +10,7 @@ export type LiveMdFeature<Context, Node extends { name: string }> = {
 export type LiveMdFeatureRegistry<Context, Node extends { name: string }> = {
   enter: (context: Context, node: Node) => false | void;
   hasNode: (nodeName: string) => boolean;
+  invalidatedNodes: (invalidation: string) => readonly string[];
   scopeFor: (nodeName: string) => LiveMdScope;
 };
 
@@ -16,6 +18,7 @@ export function createLiveMdFeatureRegistry<Context, Node extends { name: string
   features: readonly LiveMdFeature<Context, Node>[],
 ): LiveMdFeatureRegistry<Context, Node> {
   let byNode = new Map<string, LiveMdFeature<Context, Node>[]>();
+  let invalidatedNodes = new Map<string, string[]>();
   let scopes = new Map<string, LiveMdScope>();
   for (let feature of features) {
     for (let node of feature.nodes) {
@@ -25,6 +28,9 @@ export function createLiveMdFeatureRegistry<Context, Node extends { name: string
       let scope = feature.scope ?? "node";
       let previousScope = scopes.get(node);
       scopes.set(node, previousScope ? widerScope(previousScope, scope) : scope);
+      for (let invalidation of feature.invalidatedBy ?? []) {
+        addUnique(invalidatedNodes, invalidation, node);
+      }
     }
   }
 
@@ -39,6 +45,9 @@ export function createLiveMdFeatureRegistry<Context, Node extends { name: string
     hasNode(nodeName) {
       return byNode.has(nodeName);
     },
+    invalidatedNodes(invalidation) {
+      return invalidatedNodes.get(invalidation) ?? [];
+    },
     scopeFor(nodeName) {
       return scopes.get(nodeName) ?? "node";
     },
@@ -51,4 +60,13 @@ const scopeOrder: readonly LiveMdScope[] = ["line", "node", "block", "container"
 
 function widerScope(left: LiveMdScope, right: LiveMdScope) {
   return scopeOrder.indexOf(left) >= scopeOrder.indexOf(right) ? left : right;
+}
+
+function addUnique(map: Map<string, string[]>, key: string, value: string) {
+  let values = map.get(key);
+  if (!values) {
+    map.set(key, [value]);
+    return;
+  }
+  if (!values.includes(value)) values.push(value);
 }

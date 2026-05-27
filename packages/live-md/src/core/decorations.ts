@@ -96,7 +96,7 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
     let activeLines = getActiveLines(transaction.state);
     let sourceRanges = codeFenceLanguageUpdate
       ? collectSyntaxNodeDirtyRanges({
-          nodes: ["fenced_code_block"],
+          nodes: liveMdFeatureRegistry.invalidatedNodes("codeFenceLanguages"),
           reason: "codeFenceLanguages",
           state: transaction.state,
         })
@@ -144,7 +144,7 @@ const liveMdFeatures: readonly LiveMdNodeFeature[] = [
   feature(["document"], visitDocument, "document"),
   feature(["emphasis"], visitMark(emphasisMark)),
   feature(["emphasis_delimiter"], visitSyntax),
-  feature(["fenced_code_block"], visitCodeFence, "node"),
+  feature(["fenced_code_block"], visitCodeFence, "node", ["codeFenceLanguages"]),
   feature(["image"], visitImage, "line"),
   feature(["inline_link"], visitInlineLink),
   feature(["latex_block"], visitLatex, "node"),
@@ -380,8 +380,9 @@ function feature(
   nodes: readonly string[],
   enter: NodeVisitor,
   scope?: LiveMdScope,
+  invalidatedBy?: readonly string[],
 ): LiveMdNodeFeature {
-  return { enter, nodes, scope };
+  return { enter, invalidatedBy, nodes, scope };
 }
 
 function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) {
