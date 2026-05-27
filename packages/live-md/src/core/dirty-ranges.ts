@@ -80,7 +80,7 @@ export function collectLiveMdDirtyRanges(input: CollectLiveMdDirtyRangesInput): 
   });
 
   for (let range of input.syntaxChangedRanges ?? []) {
-    ranges.push({ from: range.from, reasons: new Set(["syntax"]), to: range.to });
+    addDirtyRange(ranges, input.state, range.from, range.to, "syntax");
   }
 
   for (let lineNumber of input.previousActiveLines ?? []) {
@@ -91,11 +91,7 @@ export function collectLiveMdDirtyRanges(input: CollectLiveMdDirtyRangesInput): 
   }
 
   for (let range of input.sourceRanges ?? []) {
-    ranges.push({
-      from: range.from,
-      reasons: new Set([range.reason]),
-      to: range.to,
-    });
+    addDirtyRange(ranges, input.state, range.from, range.to, range.reason);
   }
 
   return mergeDirtyRanges(ranges);
@@ -133,7 +129,8 @@ function collectInvalidatedSyntaxNodeDirtyRanges(
   syntaxTree(state).iterate({
     enter(node) {
       for (let reason of reasonsByNode.get(node.name) ?? []) {
-        ranges.push({ from: node.from, reason, to: node.to });
+        let range = clampRange(state, node);
+        ranges.push({ from: range.from, reason, to: range.to });
       }
     },
   });
@@ -180,6 +177,24 @@ function addLineRange(
   ranges.push({ from: line.from, reasons: new Set([reason]), to: line.to });
 }
 
+function addDirtyRange(
+  ranges: MutableDirtyRange[],
+  state: EditorState,
+  from: number,
+  to: number,
+  reason: LiveMdDirtyReason,
+) {
+  let range = clampRange(state, { from, to });
+  ranges.push({ from: range.from, reasons: new Set([reason]), to: range.to });
+}
+
+function clampRange(state: EditorState, range: Pick<LiveMdDirtyRange, "from" | "to">) {
+  return {
+    from: clamp(range.from, 0, state.doc.length),
+    to: clamp(range.to, 0, state.doc.length),
+  };
+}
+
 function mergeDirtyRanges(ranges: MutableDirtyRange[]): LiveMdDirtyRange[] {
   ranges.sort((left, right) => left.from - right.from || left.to - right.to);
   let merged: MutableDirtyRange[] = [];
@@ -217,8 +232,9 @@ function expandDirtyRange(
     match && scope
       ? expandByScope(state, range, match, scopeForTextOnlyRange(range, scope))
       : expandToTouchedLines(state, range);
+  let clamped = clampRange(state, cover(range, expanded));
   return {
-    ...cover(range, expanded),
+    ...clamped,
     reasons: range.reasons,
   };
 }

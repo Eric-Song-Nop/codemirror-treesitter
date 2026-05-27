@@ -51,7 +51,7 @@ describe("LiveMD dirty range expansion", () => {
     let dirtyFrom = doc.indexOf("\n\nsecond") + 1;
 
     expect(expand([{ from: dirtyFrom, reasons: ["syntax"], to: dirtyFrom + 1 }], state)).toEqual([
-      { from: 0, reasons: ["syntax"], to: doc.length + 1 },
+      { from: 0, reasons: ["syntax"], to: doc.length },
     ]);
   });
 
@@ -72,7 +72,7 @@ describe("LiveMD dirty range expansion", () => {
     let dirtyFrom = doc.indexOf("\n\n  second") + 1;
 
     expect(expand([{ from: dirtyFrom, reasons: ["syntax"], to: dirtyFrom + 1 }], state)).toEqual([
-      { from: 0, reasons: ["syntax"], to: doc.length + 1 },
+      { from: 0, reasons: ["syntax"], to: doc.length },
     ]);
   });
 

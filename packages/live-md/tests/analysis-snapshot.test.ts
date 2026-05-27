@@ -195,6 +195,33 @@ describe("LiveMD analysis snapshot", () => {
     expect(after[1]).toBe(before[1]);
   });
 
+  it("rebuilds code fence lines affected by nested syntax changes", async () => {
+    let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
+    let state = await markdownAnalysisState(doc);
+    state = state.update({
+      effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()),
+    }).state;
+    let secondLineFrom = state.doc.lineAt(doc.indexOf("let b")).from;
+    let before = decorationsFrom(state, secondLineFrom);
+
+    expect(before.length).toBeGreaterThan(1);
+
+    let editFrom = doc.indexOf("let a");
+    let transaction = state.update({
+      changes: { from: editFrom, insert: "/* " },
+    });
+    let analysis = transaction.state.field(liveMdAnalysis);
+    let editedLine = transaction.state.doc.lineAt(editFrom);
+    let secondLine = transaction.state.doc.lineAt(secondLineFrom + 3);
+    let after = decorationsFrom(transaction.state, secondLineFrom + 3);
+
+    expect(analysis.expandedDirtyRanges).toEqual([
+      { from: editedLine.from, reasons: ["text", "syntax"], to: secondLine.to + 1 },
+    ]);
+    expect(after.length).toBeGreaterThan(0);
+    expect(after[0]).not.toBe(before[0]);
+  });
+
   it("reuses the previous code fence tree when reparsing edited code highlights", async () => {
     let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
     let oldTrees: unknown[] = [];
