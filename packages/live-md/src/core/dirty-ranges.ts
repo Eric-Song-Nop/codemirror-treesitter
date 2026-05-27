@@ -223,14 +223,11 @@ function expandDirtyRange(
   registry: LiveMdDirtyRangeRegistry,
   range: LiveMdDirtyRange,
 ): LiveMdDirtyRange {
-  if (isSelectionOnly(range)) {
-    return { ...expandToTouchedLines(state, range), reasons: range.reasons };
-  }
   let match = smallestFeatureNode(state, registry, range);
   let scope = match ? registry.scopeFor(match.name) : null;
   let expanded =
     match && scope
-      ? expandByScope(state, range, match, scopeForTextOnlyRange(range, scope))
+      ? expandByScope(state, range, match, scopeForDirtyRange(range, scope))
       : expandToTouchedLines(state, range);
   let clamped = clampRange(state, cover(range, expanded));
   return {
@@ -251,6 +248,16 @@ function scopeForTextOnlyRange(range: LiveMdDirtyRange, scope: LiveMdScope) {
   if (isTextOnly(range) && (scope == "block" || scope == "container" || scope == "document")) {
     return "line";
   }
+  return scope;
+}
+
+function scopeForDirtyRange(range: LiveMdDirtyRange, scope: LiveMdScope) {
+  if (isSelectionOnly(range)) return scopeForSelectionOnlyRange(scope);
+  return scopeForTextOnlyRange(range, scope);
+}
+
+function scopeForSelectionOnlyRange(scope: LiveMdScope) {
+  if (scope == "block" || scope == "container" || scope == "document") return "line";
   return scope;
 }
 

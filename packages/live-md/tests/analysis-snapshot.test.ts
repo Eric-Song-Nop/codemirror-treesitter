@@ -1,8 +1,8 @@
-import { Compartment, EditorState } from "@codemirror/state";
+import { Compartment, EditorState, type TransactionSpec } from "@codemirror/state";
 import type { Decoration } from "@codemirror/view";
 import { describe, expect, it } from "vite-plus/test";
 import { SyntaxNode } from "../../language/src/tree.js";
-import { liveMdAnalysis } from "../src/core/decorations.js";
+import { __testBuildLiveMdAnalysis, liveMdAnalysis } from "../src/core/decorations.js";
 import {
   codeFenceLanguagesField,
   loadCodeFenceLanguages,
@@ -123,6 +123,86 @@ describe("LiveMD analysis snapshot", () => {
     ]);
     expect(after).toHaveLength(before.length);
     expect(after[0]).toBe(before[0]);
+  });
+
+  it("matches full analysis for selection and text updates in later blockquote inline ranges", async () => {
+    let doc = liveMdKitchenSinkDoc();
+    let cases: Array<{ name: string; spec: TransactionSpec }> = [
+      {
+        name: "selection inside strong",
+        spec: { selection: { anchor: doc.indexOf("bold") } },
+      },
+      {
+        name: "insert before inline styles",
+        spec: {
+          changes: { from: doc.indexOf("Quote") + 2, insert: "X" },
+          selection: { anchor: doc.indexOf("Quote") + 3 },
+        },
+      },
+      {
+        name: "delete before inline styles",
+        spec: {
+          changes: { from: doc.indexOf("Quote") + 2, to: doc.indexOf("Quote") + 3 },
+          selection: { anchor: doc.indexOf("Quote") + 2 },
+        },
+      },
+      {
+        name: "paste before inline styles",
+        spec: {
+          changes: { from: doc.indexOf("Quote") + 2, insert: "PASTE" },
+          selection: { anchor: doc.indexOf("Quote") + 7 },
+        },
+      },
+      {
+        name: "insert inside strong",
+        spec: {
+          changes: { from: doc.indexOf("bold") + 1, insert: "X" },
+          selection: { anchor: doc.indexOf("bold") + 2 },
+        },
+      },
+    ];
+
+    for (let testCase of cases) {
+      let state = await markdownAnalysisState(doc, doc.indexOf("After anchor"));
+      let incremental = state.update(testCase.spec).state;
+      let full = __testBuildLiveMdAnalysis(incremental);
+
+      expect(canonicalAnalysis(incremental), testCase.name).toEqual(
+        canonicalAnalysis(incremental, full),
+      );
+    }
+  });
+
+  it("matches full analysis when selection enters and leaves rendered Markdown features", async () => {
+    let doc = liveMdKitchenSinkDoc();
+    let after = doc.indexOf("After anchor");
+    let targets = [
+      ["paragraph emphasis", doc.indexOf("emphasis")],
+      ["inline latex", doc.indexOf("x^2")],
+      ["blockquote strong", doc.indexOf("bold")],
+      ["task item", doc.indexOf("todo item")],
+      ["image", doc.indexOf("Alt image")],
+      ["display latex", doc.indexOf("E = mc")],
+      ["table row", doc.indexOf("alpha")],
+      ["code fence", doc.indexOf("const answer")],
+    ] as const;
+
+    for (let [name, target] of targets) {
+      let state = await markdownAnalysisState(doc, after);
+      let focused = state.update({ selection: { anchor: target } }).state;
+      let fullFocused = __testBuildLiveMdAnalysis(focused);
+
+      expect(canonicalAnalysis(focused), `${name} focused`).toEqual(
+        canonicalAnalysis(focused, fullFocused),
+      );
+
+      let blurred = focused.update({ selection: { anchor: after } }).state;
+      let fullBlurred = __testBuildLiveMdAnalysis(blurred);
+
+      expect(canonicalAnalysis(blurred), `${name} blurred`).toEqual(
+        canonicalAnalysis(blurred, fullBlurred),
+      );
+    }
   });
 
   it("patches document edits without rebuilding untouched mapped line decorations", async () => {
@@ -460,6 +540,32 @@ async function markdownAnalysisState(doc: string, selection = 0) {
   });
 }
 
+function liveMdKitchenSinkDoc() {
+  return (
+    "# Heading One\n\n" +
+    "Paragraph with _emphasis_, **strong**, ~~strike~~, `code`, [link](https://example.com), <https://example.com>, $x^2$.\n\n" +
+    "> Quote line with **bold** and $y$.\n" +
+    "> second quote line\n\n" +
+    "- item one\n" +
+    "- [x] done item\n" +
+    "- [ ] todo item\n\n" +
+    "![Alt image](https://example.com/image.png)\n\n" +
+    "$$\n" +
+    "E = mc^2\n" +
+    "$$\n\n" +
+    "| Name | Value |\n" +
+    "| --- | ---: |\n" +
+    "| alpha | 1 |\n" +
+    "| beta | 2 |\n\n" +
+    "```ts\n" +
+    "type Note = { title: string; done: boolean };\n" +
+    "const answer = 42;\n" +
+    "console.log(answer);\n" +
+    "```\n\n" +
+    "After anchor line\n"
+  );
+}
+
 function lineDecorations(state: EditorState, pos: number) {
   let values: Decoration[] = [];
   state.field(liveMdAnalysis).decorations.between(pos, pos, (from, to, value) => {
@@ -482,4 +588,49 @@ function decorationsFrom(state: EditorState, pos: number) {
     if (from >= pos) values.push(value);
   });
   return values;
+}
+
+function canonicalAnalysis(state: EditorState, analysis = state.field(liveMdAnalysis)) {
+  let decorations: Array<{ from: number; spec: unknown; to: number }> = [];
+  analysis.decorations.between(0, state.doc.length, (from, to, value) => {
+    decorations.push({ from, spec: canonicalDecorationSpec(value.spec), to });
+  });
+  decorations.sort(compareCanonicalRange);
+
+  let atomicRanges: Array<{ from: number; to: number; value: string }> = [];
+  analysis.atomicRanges.between(0, state.doc.length, (from, to, value) => {
+    atomicRanges.push({ from, to, value: value.constructor.name });
+  });
+  atomicRanges.sort(compareCanonicalRange);
+
+  return { atomicRanges, decorations };
+}
+
+function compareCanonicalRange(
+  left: { from: number; spec?: unknown; to: number; value?: string },
+  right: { from: number; spec?: unknown; to: number; value?: string },
+) {
+  return (
+    left.from - right.from ||
+    left.to - right.to ||
+    JSON.stringify(left.spec ?? left.value).localeCompare(JSON.stringify(right.spec ?? right.value))
+  );
+}
+
+function canonicalDecorationSpec(spec: Record<string, unknown>) {
+  let widget = spec.widget;
+  if (widget && typeof widget == "object") {
+    return {
+      ...spec,
+      widget: {
+        name: widget.constructor.name,
+        props: Object.fromEntries(
+          Object.getOwnPropertyNames(widget)
+            .sort()
+            .map((name) => [name, (widget as Record<string, unknown>)[name]]),
+        ),
+      },
+    };
+  }
+  return spec;
 }

@@ -146,6 +146,28 @@ describe("LiveMD dirty range expansion", () => {
     ]);
   });
 
+  it("uses feature node scope for selection-only display latex body updates", async () => {
+    let doc = "$$\nE = mc^2\n$$\n\nnext";
+    let state = await markdownState(doc);
+    let bodyLine = state.doc.lineAt(doc.indexOf("E = mc"));
+    let latexTo = doc.indexOf("\n\nnext");
+
+    expect(
+      expand([{ from: bodyLine.from, reasons: ["selection"], to: bodyLine.to }], state),
+    ).toEqual([{ from: 0, reasons: ["selection"], to: latexTo }]);
+  });
+
+  it("uses feature node scope for selection-only table row updates", async () => {
+    let doc = "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\nnext";
+    let state = await markdownState(doc);
+    let rowLine = state.doc.lineAt(doc.indexOf("alpha"));
+    let tableTo = doc.indexOf("\n\nnext") + 1;
+
+    expect(expand([{ from: rowLine.from, reasons: ["selection"], to: rowLine.to }], state)).toEqual(
+      [{ from: 0, reasons: ["selection"], to: tableTo }],
+    );
+  });
+
   it("does not shrink dirty ranges that already cover a feature node", async () => {
     let doc = "```ts\nlet a = 1;\n```\n\nplain";
     let state = await markdownState(doc);

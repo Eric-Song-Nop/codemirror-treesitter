@@ -1,5 +1,6 @@
 import { EditorState, type ChangeDesc } from "@codemirror/state";
 import {
+  ensureSyntaxTree,
   syntaxTree,
   TreeSitterLanguage,
   TreeSitterParser,
@@ -197,10 +198,12 @@ async function javascriptState(doc: string) {
 }
 
 async function markdownState(doc: string) {
-  return EditorState.create({
+  let state = EditorState.create({
     doc,
     extensions: [await loadMarkdownExtension()],
   });
+  ensureSyntaxTree(state, doc.length, 5_000);
+  return state;
 }
 
 function changedSyntaxRanges(

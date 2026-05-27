@@ -366,6 +366,10 @@ function buildLiveMdAnalysis(
   };
 }
 
+export function __testBuildLiveMdAnalysis(state: EditorState) {
+  return buildLiveMdAnalysis(state, [], []);
+}
+
 function patchLiveMdAnalysis(
   previous: LiveMdAnalysis,
   state: EditorState,
@@ -786,7 +790,7 @@ function visitTaskMarker(context: VisitContext, node: SyntaxNode) {
   context.plan.line(line.number, "cm-md-list-line");
   context.plan.line(line.number, "cm-md-task-line");
   if (checked) context.plan.line(line.number, "is-checked");
-  context.plan.replace(node.from, node.to, new TaskCheckboxWidget(checked, node.from));
+  context.plan.replace(node.from, node.to, new TaskCheckboxWidget(checked));
 }
 
 function visitRule(context: VisitContext, node: SyntaxNode): false {
@@ -859,7 +863,7 @@ function visitLatex(context: VisitContext, node: SyntaxNode): false | void {
 function visitTable(context: VisitContext, node: SyntaxNode): false {
   let table = readTableFromNode(context.state, node);
   if (table && !rangeTouchesActiveLine(context, node.from, node.to)) {
-    context.plan.replace(node.from, node.to, new TablePreviewWidget(table, node.from), true);
+    context.plan.replace(node.from, node.to, new TablePreviewWidget(table), true);
     return false;
   }
 

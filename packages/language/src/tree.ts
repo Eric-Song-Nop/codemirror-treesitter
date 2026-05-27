@@ -243,19 +243,26 @@ export class Tree {
   iterate(spec: IterateSpec) {
     let from = spec.from ?? 0;
     let to = spec.to ?? this.length;
-    let nested = this.nested
-      .filter((nest) => nest.ranges.some((range) => range.to >= from && range.from <= to))
+    let nestedRanges = this.nested
+      .flatMap((nest, nestIndex) =>
+        nest.ranges.map((range, rangeIndex) => ({ nest, nestIndex, range, rangeIndex })),
+      )
+      .filter(({ range }) => range.to >= from && range.from <= to)
       .sort((a, b) => nestedStart(a) - nestedStart(b));
-    let emitted = new Set<NestedTree>();
-    let emitNested = (nest: NestedTree) => {
-      if (emitted.has(nest)) return;
-      emitted.add(nest);
-      nest.tree.iterate(spec);
+    let emitted = new Set<string>();
+    let emitNested = (entry: (typeof nestedRanges)[number]) => {
+      let key = `${entry.nestIndex}:${entry.rangeIndex}`;
+      if (emitted.has(key)) return;
+      emitted.add(key);
+      let rangeFrom = Math.max(from, entry.range.from);
+      let rangeTo = Math.min(to, entry.range.to);
+      if (rangeFrom > rangeTo) return;
+      entry.nest.tree.iterate({ ...spec, from: rangeFrom, to: rangeTo });
     };
     let emitNestedIn = (from: number, to: number, includeTo = true) => {
-      for (let nest of nested) {
-        let start = nestedStart(nest);
-        if (start >= from && (includeTo ? start <= to : start < to)) emitNested(nest);
+      for (let entry of nestedRanges) {
+        let start = nestedStart(entry);
+        if (start >= from && (includeTo ? start <= to : start < to)) emitNested(entry);
       }
     };
     let visit = (node: SyntaxNode) => {
@@ -273,7 +280,7 @@ export class Tree {
       spec.leave?.(node);
     };
     visit(this.topNode);
-    for (let nest of nested) emitNested(nest);
+    for (let entry of nestedRanges) emitNested(entry);
   }
 
   prop<T>(prop: NodeProp<T>): T | undefined {
@@ -288,13 +295,24 @@ export class Tree {
 function firstIteratedChild(node: SyntaxNode, from: number): SyntaxNode | null {
   let index = from > node.from ? from - 1 : from;
   let child = node.firstChildForIndex(index);
-  while (child && child.to < from) child = child.nextSibling;
-  return child;
+  while (child && child.to < from) {
+    let next = child.nextSibling;
+    if (!next) break;
+    child = next;
+  }
+  if (child && child.to >= from) return child;
+  child = node.firstChildForIndex(from);
+  while (child && child.to < from) {
+    let next = child.nextSibling;
+    if (!next) break;
+    child = next;
+  }
+  if (child && child.to >= from) return child;
+  return node.children.find((child) => child.to >= from) ?? null;
 }
 
-function nestedStart(nest: NestedTree) {
-  let start = nest.ranges[0]?.from;
-  return start ?? 0;
+function nestedStart(nest: NestedTree | { range: DocRange }) {
+  return "range" in nest ? nest.range.from : (nest.ranges[0]?.from ?? 0);
 }
 
 function rangeContains(range: DocRange, pos: number, side: -1 | 0 | 1) {

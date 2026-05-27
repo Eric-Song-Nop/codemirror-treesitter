@@ -26,16 +26,14 @@ export type LatexFormula = {
 
 export class TaskCheckboxWidget extends WidgetType {
   private checked: boolean;
-  private markerFrom: number;
 
-  constructor(checked: boolean, markerFrom: number) {
+  constructor(checked: boolean) {
     super();
     this.checked = checked;
-    this.markerFrom = markerFrom;
   }
 
   eq(other: TaskCheckboxWidget) {
-    return other.checked == this.checked && other.markerFrom == this.markerFrom;
+    return other.checked == this.checked;
   }
 
   toDOM(view: EditorView) {
@@ -52,10 +50,11 @@ export class TaskCheckboxWidget extends WidgetType {
       event.preventDefault();
       if (view.state.readOnly) return;
 
+      let markerFrom = view.posAtDOM(button);
       view.dispatch({
         changes: {
-          from: this.markerFrom + 1,
-          to: this.markerFrom + 2,
+          from: markerFrom + 1,
+          to: markerFrom + 2,
           insert: this.checked ? " " : "x",
         },
         userEvent: "input.task",
@@ -174,19 +173,17 @@ export class ImagePreviewWidget extends WidgetType {
 }
 
 export class TablePreviewWidget extends WidgetType {
-  private sourceFrom: number;
   private table: MarkdownTable;
   private tableKey: string;
 
-  constructor(table: MarkdownTable, sourceFrom: number) {
+  constructor(table: MarkdownTable) {
     super();
     this.table = table;
-    this.sourceFrom = sourceFrom;
     this.tableKey = JSON.stringify(table);
   }
 
   eq(other: TablePreviewWidget) {
-    return other.tableKey == this.tableKey && other.sourceFrom == this.sourceFrom;
+    return other.tableKey == this.tableKey;
   }
 
   toDOM(view: EditorView) {
@@ -200,7 +197,7 @@ export class TablePreviewWidget extends WidgetType {
     });
     wrapper.addEventListener("click", () => {
       view.dispatch({
-        selection: { anchor: this.sourceFrom },
+        selection: { anchor: view.posAtDOM(wrapper) },
         scrollIntoView: true,
         userEvent: "select.tablePreview",
       });

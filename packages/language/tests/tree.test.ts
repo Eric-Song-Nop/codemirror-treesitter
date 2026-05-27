@@ -687,6 +687,25 @@ describe("tree-sitter tree wrapper", () => {
     expect(filtered).toEqual(["second"]);
   });
 
+  it("iterates nested nodes when a range starts before a later mounted range", async () => {
+    let doc = "<main><script>let first = 1;</script><script>let second = 2;</script></main>";
+    let { state } = await mixedHtmlState(doc);
+    let tree = syntaxTree(state);
+    let secondScript = doc.lastIndexOf("<script>");
+    let second = doc.indexOf("second");
+    let identifiers: string[] = [];
+
+    tree.iterate({
+      from: secondScript,
+      to: second + "second".length,
+      enter(node) {
+        if (node.name == "identifier") identifiers.push(node.text);
+      },
+    });
+
+    expect(identifiers).toEqual(["second"]);
+  });
+
   it("supports balanced enter and leave traversal callbacks", async () => {
     let doc = "let value = [1, 2];\n";
     let state = await javascriptState(doc);
