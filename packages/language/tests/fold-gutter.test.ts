@@ -60,4 +60,33 @@ describe("fold gutter", () => {
 
     expect(queriedLines).toEqual([6]);
   });
+
+  it("recomputes markers for newly visible lines when edits move the viewport", () => {
+    let queriedLines: number[] = [];
+    let doc = Array.from({ length: 200 }, (_, index) => `line ${index + 1}`).join("\n");
+    let view = new EditorView({
+      parent: document.body.appendChild(document.createElement("div")),
+      state: EditorState.create({
+        doc,
+        extensions: [
+          foldGutter(),
+          foldService.of((state, lineStart, lineEnd) => {
+            queriedLines.push(lineStart);
+            return lineEnd < state.doc.length ? { from: lineEnd, to: lineEnd + 1 } : null;
+          }),
+        ],
+      }),
+    });
+    queriedLines.length = 0;
+
+    view.dispatch({
+      changes: { from: 0, insert: "inserted\n" },
+      effects: EditorView.scrollIntoView(view.state.doc.line(150).from),
+    });
+
+    let visibleLineStarts = view.viewportLineBlocks.map((line) => line.from);
+    view.destroy();
+
+    expect(queriedLines).toEqual(visibleLineStarts);
+  });
 });

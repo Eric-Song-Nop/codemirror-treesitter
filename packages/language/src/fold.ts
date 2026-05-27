@@ -476,6 +476,7 @@ export function foldGutter(config: FoldGutterConfig = {}): Extension {
 
 function shouldRebuildFoldMarkers(update: ViewUpdate, config: Required<FoldGutterConfig>) {
   return (
+    update.viewportMoved ||
     (update.viewportChanged &&
       !update.docChanged &&
       syntaxTree(update.startState) == syntaxTree(update.state)) ||
