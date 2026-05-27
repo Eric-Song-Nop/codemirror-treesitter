@@ -213,6 +213,7 @@ const paragraphBreakAtom = new AtomicRange();
 class DecorationPlan {
   private atomicRanges: Array<{ from: number; to: number }> = [];
   private codeFenceHighlightTrees: CodeFenceHighlightTree[] = [];
+  private dirtyRange: LiveMdDirtyRange | null = null;
   private lineClasses = new Map<number, Set<string>>();
   private ranges: InlineDecoration[] = [];
   private state: EditorState;
@@ -221,7 +222,14 @@ class DecorationPlan {
     this.state = state;
   }
 
+  setDirtyRange(range: LiveMdDirtyRange | null) {
+    this.dirtyRange = range;
+  }
+
   line(lineNumber: number, className: string) {
+    let line = this.state.doc.line(lineNumber);
+    if (!this.touchesDirtyRange(line.from, line.to)) return;
+
     let classes = this.lineClasses.get(lineNumber);
     if (!classes) this.lineClasses.set(lineNumber, (classes = new Set()));
     classes.add(className);
@@ -232,7 +240,7 @@ class DecorationPlan {
   }
 
   atom(from: number, to: number) {
-    if (from < to) this.atomicRanges.push({ from, to });
+    if (from < to && this.touchesDirtyRange(from, to)) this.atomicRanges.push({ from, to });
   }
 
   codeFenceHighlight(tree: CodeFenceHighlightTree) {
@@ -240,7 +248,9 @@ class DecorationPlan {
   }
 
   mark(from: number, to: number, decoration: Decoration) {
-    if (from < to) this.ranges.push({ from, to, decoration });
+    if (from < to && this.touchesDirtyRange(from, to)) {
+      this.ranges.push({ from, to, decoration });
+    }
   }
 
   markByLine(from: number, to: number, decorationForLine: (lineNumber: number) => Decoration) {
@@ -303,6 +313,10 @@ class DecorationPlan {
 
     decorations.sort((left, right) => left.from - right.from || left.to - right.to);
     return decorations;
+  }
+
+  private touchesDirtyRange(from: number, to: number) {
+    return !this.dirtyRange || rangesTouch(from, to, this.dirtyRange.from, this.dirtyRange.to);
   }
 }
 
@@ -400,10 +414,12 @@ function buildLiveMdPlan(
     for (let range of ranges) {
       context.dirtyRange = range;
       context.dirtyReasons = range.reasons;
+      context.plan.setDirtyRange(range);
       iterate(range.from, range.to);
     }
     context.dirtyRange = null;
     context.dirtyReasons = null;
+    context.plan.setDirtyRange(null);
   } else {
     iterate();
   }
