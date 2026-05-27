@@ -1,3 +1,5 @@
+@import "katex/dist/katex.css";
+
 :host {
   --live-md-bg: #fffdfa;
   --live-md-text: #202523;
