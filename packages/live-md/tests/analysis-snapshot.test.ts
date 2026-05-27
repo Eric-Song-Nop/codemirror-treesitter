@@ -1,4 +1,5 @@
 import { EditorState } from "@codemirror/state";
+import type { Decoration } from "@codemirror/view";
 import { describe, expect, it } from "vite-plus/test";
 import { liveMdAnalysis } from "../src/core/decorations.js";
 import {
@@ -61,6 +62,28 @@ describe("LiveMD analysis snapshot", () => {
       { from: 0, reasons: ["text"], to: "![alt](two.png)".length },
     ]);
   });
+
+  it("patches selection-only updates without rebuilding untouched line decorations", async () => {
+    let doc = "- first\n- second\n- third";
+    let state = await markdownAnalysisState(doc, 2);
+    let untouchedLine = state.doc.line(2);
+    let before = lineDecorations(state, untouchedLine.from);
+
+    expect(before.length).toBeGreaterThan(0);
+
+    let transaction = state.update({
+      selection: { anchor: doc.indexOf("third") },
+    });
+    let after = lineDecorations(transaction.state, transaction.state.doc.line(2).from);
+    let analysis = transaction.state.field(liveMdAnalysis);
+
+    expect(analysis.expandedDirtyRanges).toEqual([
+      { from: 0, reasons: ["selection"], to: 7 },
+      { from: 17, reasons: ["selection"], to: 24 },
+    ]);
+    expect(after).toHaveLength(before.length);
+    expect(after[0]).toBe(before[0]);
+  });
 });
 
 function analysisState(doc: string, selection = 0) {
@@ -71,9 +94,18 @@ function analysisState(doc: string, selection = 0) {
   });
 }
 
-async function markdownAnalysisState(doc: string) {
+async function markdownAnalysisState(doc: string, selection = 0) {
   return EditorState.create({
     doc,
+    selection: { anchor: selection },
     extensions: [codeFenceLanguagesField, liveMdAnalysis, await loadMarkdownExtension()],
   });
+}
+
+function lineDecorations(state: EditorState, pos: number) {
+  let values: Decoration[] = [];
+  state.field(liveMdAnalysis).decorations.between(pos, pos, (from, to, value) => {
+    if (from == pos && to == pos) values.push(value);
+  });
+  return values;
 }

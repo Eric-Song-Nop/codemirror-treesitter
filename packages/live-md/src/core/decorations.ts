@@ -1,5 +1,6 @@
 import {
   EditorState,
+  type Range,
   RangeSet,
   RangeSetBuilder,
   RangeValue,
@@ -92,6 +93,15 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
       registry: liveMdFeatureRegistry,
       state: transaction.state,
     });
+    if (!transaction.docChanged && transaction.selection && !codeFenceLanguageUpdate) {
+      return patchLiveMdAnalysis(
+        value,
+        transaction.state,
+        dirtyRanges,
+        expandedDirtyRanges,
+        activeLines,
+      );
+    }
     return buildLiveMdAnalysis(transaction.state, dirtyRanges, expandedDirtyRanges, activeLines);
   },
   provide(field) {
@@ -199,6 +209,32 @@ class DecorationPlan {
   }
 
   finish() {
+    let builder = new RangeSetBuilder<Decoration>();
+    for (let range of this.finishDecorationRanges()) {
+      builder.add(range.from, range.to, range.value);
+    }
+    return builder.finish();
+  }
+
+  finishDecorationRanges() {
+    let decorations = this.finishDecorationSpecs();
+    return decorations.map(({ from, to, decoration }) => decoration.range(from, to));
+  }
+
+  finishAtomicRanges() {
+    let builder = new RangeSetBuilder<RangeValue>();
+    for (let range of this.finishAtomicRangeValues()) {
+      builder.add(range.from, range.to, range.value);
+    }
+    return builder.finish();
+  }
+
+  finishAtomicRangeValues() {
+    this.atomicRanges.sort((left, right) => left.from - right.from || left.to - right.to);
+    return this.atomicRanges.map(({ from, to }) => paragraphBreakAtom.range(from, to));
+  }
+
+  private finishDecorationSpecs() {
     let decorations = [...this.ranges];
     for (let [lineNumber, classes] of this.lineClasses) {
       let line = this.state.doc.line(lineNumber);
@@ -210,22 +246,7 @@ class DecorationPlan {
     }
 
     decorations.sort((left, right) => left.from - right.from || left.to - right.to);
-
-    let builder = new RangeSetBuilder<Decoration>();
-    for (let { from, to, decoration } of decorations) {
-      builder.add(from, to, decoration);
-    }
-    return builder.finish();
-  }
-
-  finishAtomicRanges() {
-    this.atomicRanges.sort((left, right) => left.from - right.from || left.to - right.to);
-
-    let builder = new RangeSetBuilder<RangeValue>();
-    for (let { from, to } of this.atomicRanges) {
-      builder.add(from, to, paragraphBreakAtom);
-    }
-    return builder.finish();
+    return decorations;
   }
 }
 
@@ -247,10 +268,38 @@ function buildLiveMdAnalysis(
   };
 }
 
+function patchLiveMdAnalysis(
+  previous: LiveMdAnalysis,
+  state: EditorState,
+  dirtyRanges: readonly LiveMdDirtyRange[],
+  expandedDirtyRanges: readonly LiveMdDirtyRange[],
+  activeLines: Set<number>,
+): LiveMdAnalysis {
+  let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
+  let plan = buildLiveMdPlan(state, activeLines, codeFenceLanguages, expandedDirtyRanges);
+  return {
+    activeLines,
+    atomicRanges: patchRangeSet(
+      previous.atomicRanges,
+      expandedDirtyRanges,
+      plan.finishAtomicRangeValues(),
+    ),
+    codeFenceLanguages,
+    decorations: patchRangeSet(
+      previous.decorations,
+      expandedDirtyRanges,
+      plan.finishDecorationRanges(),
+    ),
+    dirtyRanges,
+    expandedDirtyRanges,
+  };
+}
+
 function buildLiveMdPlan(
   state: EditorState,
   activeLines: Set<number>,
   codeFenceLanguages: CodeFenceLanguageMap,
+  ranges?: readonly LiveMdDirtyRange[],
 ) {
   let context: VisitContext = {
     activeLines,
@@ -259,13 +308,50 @@ function buildLiveMdPlan(
     state,
   };
 
-  syntaxTree(state).iterate({
-    enter(node) {
-      return liveMdFeatureRegistry.enter(context, node);
-    },
-  });
+  let tree = syntaxTree(state);
+  let iterate = (from?: number, to?: number) => {
+    tree.iterate({
+      from,
+      to,
+      enter(node) {
+        return liveMdFeatureRegistry.enter(context, node);
+      },
+    });
+  };
+  if (ranges?.length) {
+    for (let range of ranges) iterate(range.from, range.to);
+  } else {
+    iterate();
+  }
 
   return context.plan;
+}
+
+function patchRangeSet<T extends RangeValue>(
+  current: RangeSet<T>,
+  dirtyRanges: readonly LiveMdDirtyRange[],
+  additions: readonly Range<T>[],
+): RangeSet<T> {
+  if (!dirtyRanges.length) return current;
+  let from = Math.min(...dirtyRanges.map((range) => range.from));
+  let to = Math.max(...dirtyRanges.map((range) => range.to));
+  return current.update({
+    add: additions.filter((range) => touchesAnyDirtyRange(range.from, range.to, dirtyRanges)),
+    filter: (rangeFrom, rangeTo) => !touchesAnyDirtyRange(rangeFrom, rangeTo, dirtyRanges),
+    filterFrom: from,
+    filterTo: to,
+    sort: true,
+  });
+}
+
+function touchesAnyDirtyRange(from: number, to: number, dirtyRanges: readonly LiveMdDirtyRange[]) {
+  return dirtyRanges.some((range) => rangesTouch(from, to, range.from, range.to));
+}
+
+function rangesTouch(from: number, to: number, rangeFrom: number, rangeTo: number) {
+  return from == to || rangeFrom == rangeTo
+    ? from <= rangeTo && to >= rangeFrom
+    : from < rangeTo && to > rangeFrom;
 }
 
 function feature(
