@@ -8,8 +8,10 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 import {
   __testCollectLiveMdDirtyRanges,
+  analyzeLiveMdDirtyRanges,
   collectSyntaxNodeDirtyRanges,
 } from "../src/core/dirty-ranges.js";
+import { __testLiveMdFeatureRegistry } from "../src/core/decorations.js";
 import { loadMarkdownExtension } from "../src/core/languages.js";
 
 const javascriptWasm = new URL(
@@ -122,6 +124,38 @@ describe("LiveMD dirty range collection", () => {
       { from: 0, reason: "codeFenceLanguages", to: firstFenceTo },
       { from: secondFenceFrom, reason: "codeFenceLanguages", to: doc.length },
     ]);
+  });
+
+  it("analyzes dirty ranges, feature invalidations, and expanded ranges through one API", async () => {
+    let doc = "![alt](one.png)\n\n```ts\nlet a = 1;\n```\n\nplain";
+    let state = await markdownState(doc);
+    let dirtyFrom = doc.indexOf("one");
+    let transaction = state.update({
+      changes: { from: dirtyFrom, to: dirtyFrom + 3, insert: "two" },
+    });
+    let nextDoc = transaction.state.doc.toString();
+    let fenceFrom = nextDoc.indexOf("```ts");
+    let fenceTo = nextDoc.indexOf("\n\nplain") + 1;
+
+    expect(
+      analyzeLiveMdDirtyRanges({
+        changes: transaction.changes,
+        invalidations: [{ nodes: ["fenced_code_block"], reason: "codeFenceLanguages" }],
+        registry: __testLiveMdFeatureRegistry,
+        startState: state,
+        state: transaction.state,
+        syntaxChangedRanges: [],
+      }),
+    ).toEqual({
+      dirtyRanges: [
+        { from: dirtyFrom, reasons: ["text"], to: dirtyFrom + 3 },
+        { from: fenceFrom, reasons: ["codeFenceLanguages"], to: fenceTo },
+      ],
+      expandedDirtyRanges: [
+        { from: 0, reasons: ["text"], to: "![alt](two.png)".length },
+        { from: fenceFrom, reasons: ["codeFenceLanguages"], to: fenceTo },
+      ],
+    });
   });
 
   it("adds old and new active lines for selection-only updates", () => {

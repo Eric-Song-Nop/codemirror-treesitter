@@ -16,6 +16,11 @@ export type LiveMdDirtySourceRange = {
   to: number;
 };
 
+export type LiveMdDirtyInvalidation = {
+  nodes: readonly string[];
+  reason: LiveMdDirtyReason;
+};
+
 export type CollectLiveMdDirtyRangesInput = {
   activeLines?: readonly number[];
   changes: ChangeDesc;
@@ -32,10 +37,40 @@ export type ExpandLiveMdDirtyRangesInput = {
   state: EditorState;
 };
 
-type LiveMdDirtyRangeRegistry = Pick<
+export type AnalyzeLiveMdDirtyRangesInput = CollectLiveMdDirtyRangesInput & {
+  invalidations?: readonly LiveMdDirtyInvalidation[];
+  registry: LiveMdDirtyRangeRegistry;
+};
+
+export type LiveMdDirtyAnalysis = {
+  dirtyRanges: LiveMdDirtyRange[];
+  expandedDirtyRanges: LiveMdDirtyRange[];
+};
+
+export type LiveMdDirtyRangeRegistry = Pick<
   LiveMdFeatureRegistry<unknown, SyntaxNode>,
   "hasNode" | "scopeFor"
 >;
+
+export function analyzeLiveMdDirtyRanges(
+  input: AnalyzeLiveMdDirtyRangesInput,
+): LiveMdDirtyAnalysis {
+  let dirtyRanges = collectLiveMdDirtyRanges({
+    ...input,
+    sourceRanges: [
+      ...(input.sourceRanges ?? []),
+      ...collectInvalidatedSyntaxNodeDirtyRanges(input.state, input.invalidations ?? []),
+    ],
+  });
+  return {
+    dirtyRanges,
+    expandedDirtyRanges: expandLiveMdDirtyRanges({
+      ranges: dirtyRanges,
+      registry: input.registry,
+      state: input.state,
+    }),
+  };
+}
 
 export function collectLiveMdDirtyRanges(input: CollectLiveMdDirtyRangesInput): LiveMdDirtyRange[] {
   let ranges: MutableDirtyRange[] = [];
@@ -77,12 +112,28 @@ export type CollectSyntaxNodeDirtyRangesInput = {
 export function collectSyntaxNodeDirtyRanges(
   input: CollectSyntaxNodeDirtyRangesInput,
 ): LiveMdDirtySourceRange[] {
-  let nodes = new Set(input.nodes);
+  return collectInvalidatedSyntaxNodeDirtyRanges(input.state, [
+    { nodes: input.nodes, reason: input.reason },
+  ]);
+}
+
+function collectInvalidatedSyntaxNodeDirtyRanges(
+  state: EditorState,
+  invalidations: readonly LiveMdDirtyInvalidation[],
+): LiveMdDirtySourceRange[] {
+  let reasonsByNode = new Map<string, LiveMdDirtyReason[]>();
+  for (let invalidation of invalidations) {
+    for (let node of invalidation.nodes) {
+      addReason(reasonsByNode, node, invalidation.reason);
+    }
+  }
+  if (!reasonsByNode.size) return [];
+
   let ranges: LiveMdDirtySourceRange[] = [];
-  syntaxTree(input.state).iterate({
+  syntaxTree(state).iterate({
     enter(node) {
-      if (nodes.has(node.name)) {
-        ranges.push({ from: node.from, reason: input.reason, to: node.to });
+      for (let reason of reasonsByNode.get(node.name) ?? []) {
+        ranges.push({ from: node.from, reason, to: node.to });
       }
     },
   });
@@ -104,6 +155,11 @@ type MutableDirtyRange = {
   from: number;
   reasons: Set<LiveMdDirtyReason>;
   to: number;
+};
+
+type SyntaxNodeIterator = {
+  next: SyntaxNodeIterator | null;
+  node: SyntaxNode;
 };
 
 const reasonOrder: readonly LiveMdDirtyReason[] = [
@@ -178,17 +234,37 @@ function smallestFeatureNode(
   range: LiveMdDirtyRange,
 ): SyntaxNode | null {
   let found: SyntaxNode | null = null;
-  syntaxTree(state).iterate({
-    from: range.from,
-    to: range.to,
-    enter(node) {
+  let seen = new Set<string>();
+  for (let boundary of dirtyBoundaries(state, range)) {
+    for (
+      let current: SyntaxNodeIterator | null = syntaxTree(state).resolveStack(
+        boundary.pos,
+        boundary.side,
+      );
+      current;
+      current = current.next
+    ) {
+      let node = current.node;
+      let key = `${node.name}:${node.from}:${node.to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       if (!registry.hasNode(node.name) || !touches(node.from, node.to, range.from, range.to)) {
-        return;
+        continue;
       }
       if (!found || node.to - node.from < found.to - found.from) found = node;
-    },
-  });
+    }
+  }
   return found;
+}
+
+function dirtyBoundaries(state: EditorState, range: Pick<LiveMdDirtyRange, "from" | "to">) {
+  let from = clamp(range.from, 0, state.doc.length);
+  let to = clamp(range.to, 0, state.doc.length);
+  if (from == to) return [{ pos: from, side: 0 as const }];
+  return [
+    { pos: from, side: 1 as const },
+    { pos: to, side: -1 as const },
+  ];
 }
 
 function expandByScope(
@@ -225,4 +301,13 @@ function touches(nodeFrom: number, nodeTo: number, rangeFrom: number, rangeTo: n
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function addReason(map: Map<string, LiveMdDirtyReason[]>, key: string, reason: LiveMdDirtyReason) {
+  let reasons = map.get(key);
+  if (!reasons) {
+    map.set(key, [reason]);
+    return;
+  }
+  if (!reasons.includes(reason)) reasons.push(reason);
 }

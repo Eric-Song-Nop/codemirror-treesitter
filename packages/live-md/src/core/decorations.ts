@@ -23,12 +23,7 @@ import {
   emptyCodeFenceLanguages,
   type CodeFenceLanguageMap,
 } from "./languages.js";
-import {
-  collectLiveMdDirtyRanges,
-  collectSyntaxNodeDirtyRanges,
-  expandLiveMdDirtyRanges,
-  type LiveMdDirtyRange,
-} from "./dirty-ranges.js";
+import { analyzeLiveMdDirtyRanges, type LiveMdDirtyRange } from "./dirty-ranges.js";
 import { createLiveMdFeatureRegistry, type LiveMdFeature, type LiveMdScope } from "./features.js";
 import { forEachLineInRange, isWhitespace, isWhitespaceOnly, splitRangeByLine } from "./util.js";
 import {
@@ -94,26 +89,22 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
       return value;
     }
     let activeLines = getActiveLines(transaction.state);
-    let sourceRanges = codeFenceLanguageUpdate
-      ? collectSyntaxNodeDirtyRanges({
-          nodes: liveMdFeatureRegistry.invalidatedNodes("codeFenceLanguages"),
-          reason: "codeFenceLanguages",
-          state: transaction.state,
-        })
-      : undefined;
-    let dirtyRanges = collectLiveMdDirtyRanges({
+    let { dirtyRanges, expandedDirtyRanges } = analyzeLiveMdDirtyRanges({
       activeLines: transaction.selection ? Array.from(activeLines) : undefined,
       changes: transaction.changes,
+      invalidations: codeFenceLanguageUpdate
+        ? [
+            {
+              nodes: liveMdFeatureRegistry.invalidatedNodes("codeFenceLanguages"),
+              reason: "codeFenceLanguages",
+            },
+          ]
+        : undefined,
       previousActiveLines: transaction.selection ? Array.from(value.activeLines) : undefined,
-      sourceRanges,
+      registry: liveMdFeatureRegistry,
       startState: transaction.startState,
       state: transaction.state,
       syntaxChangedRanges,
-    });
-    let expandedDirtyRanges = expandLiveMdDirtyRanges({
-      ranges: dirtyRanges,
-      registry: liveMdFeatureRegistry,
-      state: transaction.state,
     });
     return patchLiveMdAnalysis(
       value,
