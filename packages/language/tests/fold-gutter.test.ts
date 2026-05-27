@@ -34,4 +34,30 @@ describe("fold gutter", () => {
 
     expect(queriedLines).toEqual([0]);
   });
+
+  it("recomputes markers only for selected visible lines", () => {
+    let queriedLines: number[] = [];
+    let doc = "first\nsecond\nthird\nfourth\n";
+    let view = new EditorView({
+      parent: document.body.appendChild(document.createElement("div")),
+      state: EditorState.create({
+        doc,
+        extensions: [
+          foldGutter(),
+          foldService.of((state, lineStart, lineEnd) => {
+            queriedLines.push(lineStart);
+            return lineEnd < state.doc.length ? { from: lineEnd, to: lineEnd + 1 } : null;
+          }),
+        ],
+      }),
+    });
+    queriedLines.length = 0;
+
+    view.dispatch({
+      selection: { anchor: doc.indexOf("second") },
+    });
+    view.destroy();
+
+    expect(queriedLines).toEqual([6]);
+  });
 });

@@ -23,7 +23,13 @@ import {
   type DecorationSet,
   type KeyBinding,
 } from "@codemirror/view";
-import { changedLineRanges, patchRangeSet, rangesTouch } from "./incremental.js";
+import {
+  addTouchedLineRange,
+  changedLineRanges,
+  mergeDocRanges,
+  patchRangeSet,
+  rangesTouch,
+} from "./incremental.js";
 import { language, syntaxTree } from "./language.js";
 import { NodeProp, SyntaxNode, type NodeIterator } from "./tree.js";
 
@@ -401,8 +407,9 @@ export function foldGutter(config: FoldGutterConfig = {}): Extension {
       update(update: ViewUpdate) {
         if (shouldRebuildFoldMarkers(update, fullConfig)) {
           this.markers = this.buildMarkers(update.view);
-        } else if (update.docChanged || syntaxTree(update.startState) != syntaxTree(update.state)) {
-          let dirtyRanges = changedLineRanges(update);
+        } else {
+          let dirtyRanges = foldMarkerDirtyRanges(update);
+          if (!dirtyRanges.length) return;
           this.markers = patchRangeSet(
             this.markers.map(update.changes),
             dirtyRanges,
@@ -473,18 +480,26 @@ function shouldRebuildFoldMarkers(update: ViewUpdate, config: Required<FoldGutte
       !update.docChanged &&
       syntaxTree(update.startState) == syntaxTree(update.state)) ||
     update.startState.facet(language) != update.state.facet(language) ||
-    foldStateNeedsMarkerRebuild(update) ||
     update.transactions.length != 1 ||
     config.foldingChanged(update)
   );
 }
 
-function foldStateNeedsMarkerRebuild(update: ViewUpdate) {
-  return update.transactions.some(
-    (transaction) =>
-      transaction.selection ||
-      transaction.effects.some((effect) => effect.is(foldEffect) || effect.is(unfoldEffect)),
-  );
+function foldMarkerDirtyRanges(update: ViewUpdate) {
+  let ranges = [...changedLineRanges(update)];
+  for (let transaction of update.transactions) {
+    if (transaction.selection) {
+      for (let range of transaction.state.selection.ranges) {
+        addTouchedLineRange(update.state, ranges, range.head, range.head);
+      }
+    }
+    for (let effect of transaction.effects) {
+      if (effect.is(foldEffect) || effect.is(unfoldEffect)) {
+        addTouchedLineRange(update.state, ranges, effect.value.from, effect.value.from);
+      }
+    }
+  }
+  return mergeDocRanges(ranges);
 }
 
 function linesInRanges(view: EditorView, ranges: readonly DocRange[]) {
