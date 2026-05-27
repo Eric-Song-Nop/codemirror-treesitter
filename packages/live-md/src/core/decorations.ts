@@ -14,6 +14,7 @@ import {
   emptyCodeFenceLanguages,
   type CodeFenceLanguageMap,
 } from "./languages.js";
+import { collectLiveMdDirtyRanges, type LiveMdDirtyRange } from "./dirty-ranges.js";
 import { createLiveMdFeatureRegistry, type LiveMdFeature, type LiveMdScope } from "./features.js";
 import { forEachLineInRange, isWhitespace, isWhitespaceOnly, splitRangeByLine } from "./util.js";
 import {
@@ -52,23 +53,36 @@ const linkMark = Decoration.mark({ class: "cm-md-link" });
 const tablePipeMark = Decoration.mark({ class: "cm-md-table-pipe" });
 
 type LiveMdAnalysis = {
+  activeLines: ReadonlySet<number>;
   atomicRanges: RangeSet<RangeValue>;
+  codeFenceLanguages: CodeFenceLanguageMap;
   decorations: DecorationSet;
+  dirtyRanges: readonly LiveMdDirtyRange[];
 };
 
 export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
   create(state) {
-    return buildLiveMdAnalysis(state);
+    return buildLiveMdAnalysis(state, []);
   },
   update(value, transaction) {
-    if (
-      !transaction.docChanged &&
-      !transaction.selection &&
-      !codeFenceLanguagesChanged(transaction.startState, transaction.state)
-    ) {
+    let codeFenceLanguageUpdate = codeFenceLanguagesChanged(
+      transaction.startState,
+      transaction.state,
+    );
+    if (!transaction.docChanged && !transaction.selection && !codeFenceLanguageUpdate) {
       return value;
     }
-    return buildLiveMdAnalysis(transaction.state);
+    let activeLines = getActiveLines(transaction.state);
+    let dirtyRanges = collectLiveMdDirtyRanges({
+      activeLines: transaction.selection ? Array.from(activeLines) : undefined,
+      changes: transaction.changes,
+      codeFenceLanguagesChanged: codeFenceLanguageUpdate,
+      previousActiveLines: transaction.selection ? Array.from(value.activeLines) : undefined,
+      startState: transaction.startState,
+      state: transaction.state,
+      syntaxChangedRanges: [],
+    });
+    return buildLiveMdAnalysis(transaction.state, dirtyRanges, activeLines);
   },
   provide(field) {
     return [
@@ -204,19 +218,30 @@ class DecorationPlan {
   }
 }
 
-function buildLiveMdAnalysis(state: EditorState): LiveMdAnalysis {
-  let plan = buildLiveMdPlan(state);
+function buildLiveMdAnalysis(
+  state: EditorState,
+  dirtyRanges: readonly LiveMdDirtyRange[],
+  activeLines = getActiveLines(state),
+): LiveMdAnalysis {
+  let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
+  let plan = buildLiveMdPlan(state, activeLines, codeFenceLanguages);
   return {
+    activeLines,
     atomicRanges: plan.finishAtomicRanges(),
+    codeFenceLanguages,
     decorations: plan.finish(),
+    dirtyRanges,
   };
 }
 
-function buildLiveMdPlan(state: EditorState) {
-  let activeLines = getActiveLines(state);
+function buildLiveMdPlan(
+  state: EditorState,
+  activeLines: Set<number>,
+  codeFenceLanguages: CodeFenceLanguageMap,
+) {
   let context: VisitContext = {
     activeLines,
-    codeFenceLanguages: state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages,
+    codeFenceLanguages,
     plan: new DecorationPlan(state),
     state,
   };

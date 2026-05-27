@@ -19,9 +19,7 @@ export type CollectLiveMdDirtyRangesInput = {
   syntaxChangedRanges?: readonly DocRange[];
 };
 
-export function __testCollectLiveMdDirtyRanges(
-  input: CollectLiveMdDirtyRangesInput,
-): LiveMdDirtyRange[] {
+export function collectLiveMdDirtyRanges(input: CollectLiveMdDirtyRangesInput): LiveMdDirtyRange[] {
   let ranges: MutableDirtyRange[] = [];
 
   input.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
@@ -49,6 +47,8 @@ export function __testCollectLiveMdDirtyRanges(
 
   return mergeDirtyRanges(ranges);
 }
+
+export const __testCollectLiveMdDirtyRanges = collectLiveMdDirtyRanges;
 
 type MutableDirtyRange = {
   from: number;
