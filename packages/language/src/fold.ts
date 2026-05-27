@@ -8,6 +8,7 @@ import {
   StateField,
   combineConfig,
   type Extension,
+  type Range,
 } from "@codemirror/state";
 import {
   BlockInfo,
@@ -22,7 +23,7 @@ import {
   type DecorationSet,
   type KeyBinding,
 } from "@codemirror/view";
-import { language, syntaxTree } from "./language.js";
+import { language, syntaxTree, syntaxTreeChangedRanges } from "./language.js";
 import { NodeProp, SyntaxNode, type NodeIterator } from "./tree.js";
 
 export const foldService =
@@ -397,29 +398,37 @@ export function foldGutter(config: FoldGutterConfig = {}): Extension {
       }
 
       update(update: ViewUpdate) {
-        if (
-          update.docChanged ||
-          update.viewportChanged ||
-          update.startState.facet(language) != update.state.facet(language) ||
-          update.startState.field(foldState, false) != update.state.field(foldState, false) ||
-          syntaxTree(update.startState) != syntaxTree(update.state) ||
-          fullConfig.foldingChanged(update)
-        ) {
+        if (shouldRebuildFoldMarkers(update, fullConfig)) {
           this.markers = this.buildMarkers(update.view);
+        } else if (update.docChanged || syntaxTree(update.startState) != syntaxTree(update.state)) {
+          let dirtyRanges = foldMarkerDirtyRanges(update);
+          this.markers = patchFoldMarkers(
+            this.markers.map(update.changes),
+            dirtyRanges,
+            this.buildMarkerRanges(update.view, dirtyRanges),
+          );
         }
       }
 
       buildMarkers(view: EditorView) {
         let builder = new RangeSetBuilder<FoldMarker>();
-        for (let line of view.viewportLineBlocks) {
+        for (let range of this.buildMarkerRanges(view, view.visibleRanges)) {
+          builder.add(range.from, range.to, range.value);
+        }
+        return builder.finish();
+      }
+
+      buildMarkerRanges(view: EditorView, ranges: readonly DocRange[]) {
+        let markers: Range<FoldMarker>[] = [];
+        for (let line of linesInRanges(view, ranges)) {
           let mark = findFold(view.state, line.from, line.to)
             ? canUnfold
             : foldable(view.state, line.from, line.to)
               ? canFold
               : null;
-          if (mark) builder.add(line.from, line.from, mark);
+          if (mark) markers.push(mark.range(line.from, line.from));
         }
-        return builder.finish();
+        return markers;
       }
     },
   );
@@ -455,6 +464,103 @@ export function foldGutter(config: FoldGutterConfig = {}): Extension {
     }),
     codeFolding(),
   ];
+}
+
+function shouldRebuildFoldMarkers(update: ViewUpdate, config: Required<FoldGutterConfig>) {
+  return (
+    (update.viewportChanged &&
+      !update.docChanged &&
+      syntaxTree(update.startState) == syntaxTree(update.state)) ||
+    update.startState.facet(language) != update.state.facet(language) ||
+    foldStateNeedsMarkerRebuild(update) ||
+    update.transactions.length != 1 ||
+    config.foldingChanged(update)
+  );
+}
+
+function foldStateNeedsMarkerRebuild(update: ViewUpdate) {
+  return update.transactions.some(
+    (transaction) =>
+      transaction.selection ||
+      transaction.effects.some((effect) => effect.is(foldEffect) || effect.is(unfoldEffect)),
+  );
+}
+
+function foldMarkerDirtyRanges(update: ViewUpdate) {
+  let transaction = update.transactions[0];
+  if (!transaction) return [];
+  let ranges: DocRange[] = [];
+  update.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    addTouchedLineRange(update.state, ranges, fromB, toB);
+  });
+  for (let range of syntaxTreeChangedRanges(transaction)) {
+    addTouchedLineRange(update.state, ranges, range.from, range.to);
+  }
+  return mergeDocRanges(ranges);
+}
+
+function addTouchedLineRange(
+  state: EditorState,
+  ranges: DocRange[],
+  rangeFrom: number,
+  rangeTo: number,
+) {
+  let from = clamp(rangeFrom, 0, state.doc.length);
+  let to = clamp(rangeTo, 0, state.doc.length);
+  let firstLine = state.doc.lineAt(from);
+  let lastLine = state.doc.lineAt(Math.max(from, to - 1));
+  ranges.push({ from: firstLine.from, to: lastLine.to });
+}
+
+function mergeDocRanges(ranges: readonly DocRange[]) {
+  let sorted = ranges.slice().sort((left, right) => left.from - right.from || left.to - right.to);
+  let merged: DocRange[] = [];
+  for (let range of sorted) {
+    let last = merged[merged.length - 1];
+    if (last && range.from <= last.to) {
+      last.to = Math.max(last.to, range.to);
+    } else {
+      merged.push({ from: range.from, to: range.to });
+    }
+  }
+  return merged;
+}
+
+function patchFoldMarkers(
+  current: RangeSet<FoldMarker>,
+  dirtyRanges: readonly DocRange[],
+  additions: readonly Range<FoldMarker>[],
+) {
+  let next = current;
+  for (let range of dirtyRanges) {
+    next = next.update({
+      filter: (from, to) => !rangesTouch(from, to, range.from, range.to),
+      filterFrom: range.from,
+      filterTo: range.to,
+    });
+  }
+  return additions.length ? next.update({ add: additions, sort: true }) : next;
+}
+
+function linesInRanges(view: EditorView, ranges: readonly DocRange[]) {
+  let lines: BlockInfo[] = [];
+  for (let line of view.viewportLineBlocks) {
+    if (ranges.some((range) => rangesTouch(line.from, line.to, range.from, range.to))) {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
+function rangesTouch(from: number, to: number, rangeFrom: number, rangeTo: number) {
+  if (from == to && rangeFrom == rangeTo) return from == rangeFrom;
+  if (from == to) return from >= rangeFrom && from < rangeTo;
+  if (rangeFrom == rangeTo) return from <= rangeFrom && to >= rangeFrom;
+  return from < rangeTo && to > rangeFrom;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 const baseTheme = EditorView.baseTheme({
