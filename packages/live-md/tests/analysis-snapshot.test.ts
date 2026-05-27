@@ -256,6 +256,43 @@ describe("LiveMD analysis snapshot", () => {
     ]);
     expect(parseCalls).toBe(0);
   });
+
+  it("keeps code fence highlight trees across selection-only updates", async () => {
+    let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
+    let oldTrees: unknown[] = [];
+    let state = await markdownAnalysisState(doc, doc.indexOf("let a"));
+    let languages = new Map(await loadCodeFenceLanguages());
+    let tsParser = languages.get("ts");
+    if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
+    languages.set(
+      "ts",
+      new Proxy(tsParser, {
+        get(target, property, receiver) {
+          if (property == "parse") {
+            return (...args: Parameters<typeof target.parse>) => {
+              oldTrees.push(args[1] ?? null);
+              return target.parse(...args);
+            };
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+    );
+    state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
+    oldTrees.length = 0;
+
+    state = state.update({ selection: { anchor: doc.indexOf("let b") } }).state;
+    state.field(liveMdAnalysis);
+
+    let editFrom = doc.indexOf("a = 1");
+    let transaction = state.update({
+      changes: { from: editFrom, to: editFrom + 1, insert: "aa" },
+    });
+    transaction.state.field(liveMdAnalysis);
+
+    expect(oldTrees).toHaveLength(1);
+    expect(oldTrees[0]).not.toBe(null);
+  });
 });
 
 function analysisState(doc: string, selection = 0) {

@@ -418,16 +418,23 @@ function mergeCodeFenceHighlightTrees(
   additions: readonly CodeFenceHighlightTree[],
 ) {
   if (!dirtyRanges.length) return previous;
+  let invalidatingDirtyRanges = dirtyRanges.filter(codeFenceHighlightInvalidatingRange);
   let preserved = previous
     .map((tree) => ({
       ...tree,
       contentFrom: changes.mapPos(tree.contentFrom, 1),
       contentTo: changes.mapPos(tree.contentTo, -1),
     }))
-    .filter((tree) => !touchesAnyDirtyRange(tree.contentFrom, tree.contentTo, dirtyRanges));
+    .filter(
+      (tree) => !touchesAnyDirtyRange(tree.contentFrom, tree.contentTo, invalidatingDirtyRanges),
+    );
   return [...preserved, ...additions].sort(
     (left, right) => left.contentFrom - right.contentFrom || left.contentTo - right.contentTo,
   );
+}
+
+function codeFenceHighlightInvalidatingRange(range: LiveMdDirtyRange) {
+  return range.reasons.some((reason) => reason != "selection");
 }
 
 function touchesAnyDirtyRange(from: number, to: number, dirtyRanges: readonly LiveMdDirtyRange[]) {
