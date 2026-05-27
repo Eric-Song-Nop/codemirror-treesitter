@@ -38,6 +38,7 @@ describe("LiveMD analysis snapshot", () => {
   it("patches code fence language updates without rebuilding untouched Markdown decorations", async () => {
     let doc = "```ts\nlet a = 1;\n```\n\n- after";
     let state = await markdownAnalysisState(doc);
+    let contentLine = state.doc.lineAt(doc.indexOf("let a"));
     let afterLine = state.doc.lineAt(doc.indexOf("- after"));
     let before = lineDecorations(state, afterLine.from);
 
@@ -48,13 +49,12 @@ describe("LiveMD analysis snapshot", () => {
     });
     let analysis = transaction.state.field(liveMdAnalysis);
     let after = lineDecorations(transaction.state, afterLine.from);
-    let fenceTo = doc.indexOf("\n\n") + 1;
 
     expect(analysis.dirtyRanges).toEqual([
-      { from: 0, reasons: ["codeFenceLanguages"], to: fenceTo },
+      { from: contentLine.from, reasons: ["codeFenceLanguages"], to: contentLine.to + 1 },
     ]);
     expect(analysis.expandedDirtyRanges).toEqual([
-      { from: 0, reasons: ["codeFenceLanguages"], to: fenceTo },
+      { from: contentLine.from, reasons: ["codeFenceLanguages"], to: contentLine.to + 1 },
     ]);
     expect(after).toHaveLength(before.length);
     expect(after[0]).toBe(before[0]);
