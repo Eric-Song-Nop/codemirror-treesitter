@@ -1,7 +1,14 @@
-import { EditorState, type Extension, RangeSetBuilder, RangeValue, Text } from "@codemirror/state";
+import {
+  EditorState,
+  RangeSet,
+  RangeSetBuilder,
+  RangeValue,
+  StateField,
+  Text,
+} from "@codemirror/state";
 import { highlightTree, syntaxTree, type SyntaxNode } from "@codemirror-treesitter/language";
 import { gruvboxLightHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
-import { Decoration, EditorView, WidgetType } from "@codemirror/view";
+import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import {
   codeFenceLanguagesField,
   emptyCodeFenceLanguages,
@@ -42,20 +49,34 @@ const inlineCodeMark = Decoration.mark({ class: "cm-md-inline-code" });
 const linkMark = Decoration.mark({ class: "cm-md-link" });
 const tablePipeMark = Decoration.mark({ class: "cm-md-table-pipe" });
 
-/**
- * Rebuilds decorations from the tree-sitter syntax tree whenever the
- * document content or selection changes.
- *
- * Dependencies:
- * - `"doc"` — re-parses tree-sitter and rebuilds all decorations
- * - `"selection"` — updates activeLines to show/hide syntax markers
- * - `codeFenceLanguagesField` — injects syntax highlighting for code
- *   fences once language parsers finish loading
- */
-export const liveMdDecorations: Extension = EditorView.decorations.compute(
-  ["doc", "selection", codeFenceLanguagesField],
-  (state) => buildLiveMdPlan(state, visitors).finish(),
-);
+type LiveMdAnalysis = {
+  atomicRanges: RangeSet<RangeValue>;
+  decorations: DecorationSet;
+};
+
+export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
+  create(state) {
+    return buildLiveMdAnalysis(state);
+  },
+  update(value, transaction) {
+    if (
+      !transaction.docChanged &&
+      !transaction.selection &&
+      !codeFenceLanguagesChanged(transaction.startState, transaction.state)
+    ) {
+      return value;
+    }
+    return buildLiveMdAnalysis(transaction.state);
+  },
+  provide(field) {
+    return [
+      EditorView.decorations.from(field, (analysis) => analysis.decorations),
+      EditorView.atomicRanges.of(
+        (view) => view.state.field(field, false)?.atomicRanges ?? RangeSet.empty,
+      ),
+    ];
+  },
+});
 
 const visitors: Record<string, NodeVisitor> = {
   atx_heading: visitHeading,
@@ -89,17 +110,6 @@ const visitors: Record<string, NodeVisitor> = {
   thematic_break: visitRule,
   uri_autolink: visitUriAutolink,
 };
-
-const atomicVisitors: Record<string, NodeVisitor> = {
-  block_quote: visitBlockQuote,
-  document: visitDocument,
-  list: visitList,
-  section: visitSection,
-};
-
-export const liveMdAtomicRanges: Extension = EditorView.atomicRanges.of((view) =>
-  buildLiveMdPlan(view.state, atomicVisitors).finishAtomicRanges(),
-);
 
 class AtomicRange extends RangeValue {
   eq(other: RangeValue) {
@@ -185,7 +195,15 @@ class DecorationPlan {
   }
 }
 
-function buildLiveMdPlan(state: EditorState, nodeVisitors: Record<string, NodeVisitor>) {
+function buildLiveMdAnalysis(state: EditorState): LiveMdAnalysis {
+  let plan = buildLiveMdPlan(state);
+  return {
+    atomicRanges: plan.finishAtomicRanges(),
+    decorations: plan.finish(),
+  };
+}
+
+function buildLiveMdPlan(state: EditorState) {
   let activeLines = getActiveLines(state);
   let context: VisitContext = {
     activeLines,
@@ -196,11 +214,17 @@ function buildLiveMdPlan(state: EditorState, nodeVisitors: Record<string, NodeVi
 
   syntaxTree(state).iterate({
     enter(node) {
-      return nodeVisitors[node.name]?.(context, node);
+      return visitors[node.name]?.(context, node);
     },
   });
 
   return context.plan;
+}
+
+function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) {
+  return (
+    startState.field(codeFenceLanguagesField, false) != state.field(codeFenceLanguagesField, false)
+  );
 }
 
 function getActiveLines(state: EditorState) {
