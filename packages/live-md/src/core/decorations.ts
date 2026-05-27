@@ -345,15 +345,16 @@ function patchRangeSet<T extends RangeValue>(
   additions: readonly Range<T>[],
 ): RangeSet<T> {
   if (!dirtyRanges.length) return current;
-  let from = Math.min(...dirtyRanges.map((range) => range.from));
-  let to = Math.max(...dirtyRanges.map((range) => range.to));
-  return current.update({
-    add: additions.filter((range) => touchesAnyDirtyRange(range.from, range.to, dirtyRanges)),
-    filter: (rangeFrom, rangeTo) => !touchesAnyDirtyRange(rangeFrom, rangeTo, dirtyRanges),
-    filterFrom: from,
-    filterTo: to,
-    sort: true,
-  });
+  let next = current;
+  for (let range of dirtyRanges) {
+    next = next.update({
+      filter: (rangeFrom, rangeTo) => !rangesTouch(rangeFrom, rangeTo, range.from, range.to),
+      filterFrom: range.from,
+      filterTo: range.to,
+    });
+  }
+  let added = additions.filter((range) => touchesAnyDirtyRange(range.from, range.to, dirtyRanges));
+  return added.length ? next.update({ add: added, sort: true }) : next;
 }
 
 function touchesAnyDirtyRange(from: number, to: number, dirtyRanges: readonly LiveMdDirtyRange[]) {
