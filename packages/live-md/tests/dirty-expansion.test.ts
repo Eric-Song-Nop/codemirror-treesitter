@@ -136,6 +136,16 @@ describe("LiveMD dirty range expansion", () => {
     ]);
   });
 
+  it("uses feature node scope for inline latex edits", async () => {
+    let doc = "$x^2$ and text";
+    let state = await markdownState(doc);
+    let dirtyFrom = doc.indexOf("x");
+
+    expect(expand([{ from: dirtyFrom, reasons: ["text"], to: dirtyFrom + 1 }], state)).toEqual([
+      { from: 0, reasons: ["text"], to: "$x^2$".length },
+    ]);
+  });
+
   it("does not shrink dirty ranges that already cover a feature node", async () => {
     let doc = "```ts\nlet a = 1;\n```\n\nplain";
     let state = await markdownState(doc);

@@ -197,6 +197,26 @@ describe("LiveMD analysis snapshot", () => {
     expect(after[1]).toBe(before[1]);
   });
 
+  it("patches latex edits without rebuilding untouched mapped latex widgets", async () => {
+    let doc = "$x$\n\n$y$\n\nnext";
+    let state = await markdownAnalysisState(doc, doc.indexOf("next"));
+    let secondLatexFrom = doc.indexOf("$y$");
+    let before = decorationsFrom(state, secondLatexFrom);
+
+    expect(before.length).toBeGreaterThan(0);
+
+    let editFrom = doc.indexOf("x");
+    let transaction = state.update({
+      changes: { from: editFrom, to: editFrom + 1, insert: "xx" },
+    });
+    let analysis = transaction.state.field(liveMdAnalysis);
+    let after = decorationsFrom(transaction.state, secondLatexFrom + 1);
+
+    expect(analysis.expandedDirtyRanges).toEqual([{ from: 0, reasons: ["text"], to: 4 }]);
+    expect(after).toHaveLength(before.length);
+    expect(after[0]).toBe(before[0]);
+  });
+
   it("patches code fence content edits without rebuilding untouched lines in the same fence", async () => {
     let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
     let state = await markdownAnalysisState(doc);
