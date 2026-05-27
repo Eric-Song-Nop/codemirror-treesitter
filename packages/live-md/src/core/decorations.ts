@@ -36,9 +36,11 @@ import {
   ImagePreviewWidget,
   LatexWidget,
   ListMarkerWidget,
+  MermaidWidget,
   TablePreviewWidget,
   TaskCheckboxWidget,
   type LatexFormula,
+  type MermaidDiagram,
   type MarkdownTable,
 } from "./widgets.js";
 
@@ -887,6 +889,15 @@ function visitCodeFence(context: VisitContext, node: SyntaxNode): false {
 
   let closingDelimiter = delimiters[1] ?? null;
   let content = node.getChild("code_fence_content");
+  let language = readFenceLanguage(context.state, node);
+
+  if (content && content.from < content.to) {
+    let diagram = readMermaidDiagram(context.state, content, language);
+    if (diagram && !rangeTouchesActiveLine(context, node.from, node.to)) {
+      context.plan.replace(node.from, node.to, new MermaidWidget(diagram), true);
+      return false;
+    }
+  }
 
   context.plan.line(
     context.state.doc.lineAt(openingDelimiter.from).number,
@@ -898,12 +909,7 @@ function visitCodeFence(context: VisitContext, node: SyntaxNode): false {
     forEachLineInRange(context.state, content.from, content.to, (line) => {
       context.plan.line(line.number, "cm-md-code-line");
     });
-    addCodeFenceHighlights(
-      context,
-      content.from,
-      content.to,
-      readFenceLanguage(context.state, node),
-    );
+    addCodeFenceHighlights(context, content.from, content.to, language);
   }
 
   if (closingDelimiter) {
@@ -1021,6 +1027,20 @@ function normalizeFenceLanguage(language: string) {
   if (token.startsWith(".")) token = token.slice(1);
   if (token.endsWith("}")) token = token.slice(0, -1);
   return token.toLowerCase();
+}
+
+function readMermaidDiagram(
+  state: EditorState,
+  content: SyntaxNode,
+  language: string,
+): MermaidDiagram | null {
+  if (!isMermaidFenceLanguage(language)) return null;
+  let source = state.sliceDoc(content.from, content.to).replace(/\s+$/u, "");
+  return source.trim() ? { source } : null;
+}
+
+function isMermaidFenceLanguage(language: string) {
+  return language == "mermaid" || language == "mmd";
 }
 
 function firstToken(value: string) {

@@ -214,6 +214,51 @@
   font-size: 0.86em;
 }
 
+.live-md-codemirror .cm-md-mermaid {
+  display: block;
+  max-width: 100%;
+  margin: 0.7em 0;
+  border: 1px solid var(--live-md-border);
+  border-radius: 8px;
+  background: #fffaf0;
+  color: var(--live-md-text);
+  cursor: pointer;
+  overflow: auto;
+  padding: 0.9em;
+}
+
+.live-md-codemirror .cm-md-mermaid:focus {
+  outline: 2px solid color-mix(in srgb, var(--live-md-accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.live-md-codemirror .cm-md-mermaid-render {
+  min-width: max-content;
+}
+
+.live-md-codemirror .cm-md-mermaid svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.live-md-codemirror .cm-md-mermaid-message {
+  color: var(--live-md-muted);
+  font-family: var(--live-md-font-ui);
+  font-size: 0.82em;
+}
+
+.live-md-codemirror .cm-md-mermaid.is-error {
+  border-color: #d9aaa0;
+  background: #fff7f4;
+  color: #9b392b;
+}
+
+.live-md-codemirror .cm-md-mermaid.is-error .cm-md-mermaid-message {
+  color: #9b392b;
+}
+
 .live-md-codemirror .cm-md-blockquote {
   position: relative;
   color: #4d5f5a;

@@ -1,5 +1,6 @@
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import katex, { type KatexOptions } from "katex";
+import type { Mermaid } from "mermaid";
 import { isAsciiDigit } from "./util.js";
 
 export type MarkdownTable = {
@@ -22,6 +23,10 @@ export type LatexFormula = {
   displayMode: boolean;
   source: string;
   tex: string;
+};
+
+export type MermaidDiagram = {
+  source: string;
 };
 
 export class TaskCheckboxWidget extends WidgetType {
@@ -111,6 +116,52 @@ export class LatexWidget extends WidgetType {
     }
 
     return element;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+let mermaidPromise: Promise<Mermaid> | null = null;
+let mermaidRenderSequence = 0;
+
+export class MermaidWidget extends WidgetType {
+  private source: string;
+
+  constructor(diagram: MermaidDiagram) {
+    super();
+    this.source = diagram.source;
+  }
+
+  eq(other: MermaidWidget) {
+    return other.source == this.source;
+  }
+
+  toDOM(view: EditorView) {
+    let element = document.createElement("div");
+    element.className = "cm-md-mermaid";
+    element.dataset.source = this.source;
+    element.tabIndex = 0;
+    element.setAttribute("role", "button");
+    element.setAttribute("aria-label", "Edit Mermaid diagram");
+    element.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
+    element.addEventListener("click", () => {
+      view.dispatch({
+        selection: { anchor: view.posAtDOM(element) },
+        scrollIntoView: true,
+        userEvent: "select.mermaidPreview",
+      });
+      view.focus();
+    });
+    renderMermaidInto(element, this.source);
+    return element;
+  }
+
+  destroy(dom: HTMLElement) {
+    delete dom.dataset.mermaidRenderToken;
   }
 
   ignoreEvent() {
@@ -232,6 +283,56 @@ export class TablePreviewWidget extends WidgetType {
 
     return wrapper;
   }
+}
+
+function loadMermaid() {
+  mermaidPromise ??= import("mermaid").then((module) => {
+    let mermaid = module.default;
+    mermaid.initialize({
+      securityLevel: "strict",
+      startOnLoad: false,
+    });
+    return mermaid;
+  });
+  return mermaidPromise;
+}
+
+function renderMermaidInto(element: HTMLElement, source: string) {
+  let renderToken = String(++mermaidRenderSequence);
+  element.dataset.mermaidRenderToken = renderToken;
+  element.classList.remove("is-error");
+  element.removeAttribute("title");
+  element.replaceChildren(mermaidMessage("Rendering Mermaid diagram"));
+
+  void loadMermaid()
+    .then(async (mermaid) => {
+      let id = `cm-md-mermaid-${++mermaidRenderSequence}`;
+      let { svg, bindFunctions } = await mermaid.render(id, source);
+      if (!isCurrentMermaidRender(element, renderToken)) return;
+
+      let render = document.createElement("div");
+      render.className = "cm-md-mermaid-render";
+      render.innerHTML = svg;
+      element.replaceChildren(render);
+      bindFunctions?.(render);
+    })
+    .catch((error: unknown) => {
+      if (!isCurrentMermaidRender(element, renderToken)) return;
+      element.classList.add("is-error");
+      element.replaceChildren(mermaidMessage("Unable to render Mermaid diagram"));
+      if (error instanceof Error) element.title = error.message;
+    });
+}
+
+function isCurrentMermaidRender(element: HTMLElement, renderToken: string) {
+  return element.isConnected && element.dataset.mermaidRenderToken == renderToken;
+}
+
+function mermaidMessage(text: string) {
+  let message = document.createElement("span");
+  message.className = "cm-md-mermaid-message";
+  message.textContent = text;
+  return message;
 }
 
 export function replaceWithWidget(from: number, to: number, widget: WidgetType, block = false) {
