@@ -894,14 +894,12 @@ function visitCodeFence(context: VisitContext, node: SyntaxNode): false {
     forEachLineInRange(context.state, content.from, content.to, (line) => {
       context.plan.line(line.number, "cm-md-code-line");
     });
-    if (!isSelectionOnlyVisit(context)) {
-      addCodeFenceHighlights(
-        context,
-        content.from,
-        content.to,
-        readFenceLanguage(context.state, node),
-      );
-    }
+    addCodeFenceHighlights(
+      context,
+      content.from,
+      content.to,
+      readFenceLanguage(context.state, node),
+    );
   }
 
   if (closingDelimiter) {
@@ -1071,8 +1069,10 @@ function getCodeFenceHighlight(
     return cached;
   }
 
-  let sourceText = codeFenceSourceText(context.state, contentFrom, contentTo);
   let previous = previousCodeFenceHighlight(context, contentFrom, contentTo, language, parser);
+  if (previous && isSelectionOnlyVisit(context)) return previous;
+
+  let sourceText = codeFenceSourceText(context.state, contentFrom, contentTo);
   let oldTree = previous
     ? editedPreviousCodeFenceTree(context, previous, contentFrom, contentTo, sourceText)
     : null;

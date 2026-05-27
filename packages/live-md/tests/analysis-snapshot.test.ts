@@ -384,16 +384,25 @@ describe("LiveMD analysis snapshot", () => {
     } as typeof tsParser);
     state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
     parseCalls = 0;
+    let secondLine = state.doc.lineAt(doc.indexOf("let b"));
+    let beforeSecondLineDecorations = rangeDecorationsInLine(state, secondLine);
+
+    expect(beforeSecondLineDecorations.length).toBeGreaterThan(1);
 
     let transaction = state.update({
       selection: { anchor: doc.indexOf("let b") },
     });
     let analysis = transaction.state.field(liveMdAnalysis);
+    let afterSecondLineDecorations = rangeDecorationsInLine(
+      transaction.state,
+      transaction.state.doc.lineAt(doc.indexOf("let b")),
+    );
 
     expect(analysis.expandedDirtyRanges).toEqual([
       { from: 6, reasons: ["selection"], to: 16 },
       { from: 17, reasons: ["selection"], to: 27 },
     ]);
+    expect(afterSecondLineDecorations.length).toBeGreaterThan(1);
     expect(parseCalls).toBe(0);
   });
 
@@ -455,6 +464,14 @@ function lineDecorations(state: EditorState, pos: number) {
   let values: Decoration[] = [];
   state.field(liveMdAnalysis).decorations.between(pos, pos, (from, to, value) => {
     if (from == pos && to == pos) values.push(value);
+  });
+  return values;
+}
+
+function rangeDecorationsInLine(state: EditorState, line: { from: number; to: number }) {
+  let values: Decoration[] = [];
+  state.field(liveMdAnalysis).decorations.between(line.from, line.to, (from, to, value) => {
+    if (from < to) values.push(value);
   });
   return values;
 }
