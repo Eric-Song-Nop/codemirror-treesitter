@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { liveMdAnalysis } from "../src/core/decorations.js";
 import {
   codeFenceLanguagesField,
+  loadCodeFenceLanguages,
   loadMarkdownExtension,
   setCodeFenceLanguages,
 } from "../src/core/languages.js";
@@ -111,6 +112,30 @@ describe("LiveMD analysis snapshot", () => {
     expect(after).toHaveLength(before.length);
     expect(after[0]).toBe(before[0]);
   });
+
+  it("patches code fence edits without rebuilding untouched mapped code highlights", async () => {
+    let doc = "```ts\nlet a = 1;\n```\n\n```ts\nlet b = 2;\n```\n";
+    let state = await markdownAnalysisState(doc);
+    state = state.update({
+      effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()),
+    }).state;
+    let secondFenceFrom = state.doc.toString().indexOf("let b");
+    let before = decorationsFrom(state, secondFenceFrom);
+
+    expect(before.length).toBeGreaterThan(1);
+
+    let editFrom = doc.indexOf("a = 1");
+    let transaction = state.update({
+      changes: { from: editFrom, to: editFrom + 1, insert: "aa" },
+    });
+    let analysis = transaction.state.field(liveMdAnalysis);
+    let after = decorationsFrom(transaction.state, secondFenceFrom + 1);
+
+    expect(analysis.expandedDirtyRanges).toEqual([{ from: 0, reasons: ["text"], to: 22 }]);
+    expect(after).toHaveLength(before.length);
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
+  });
 });
 
 function analysisState(doc: string, selection = 0) {
@@ -133,6 +158,14 @@ function lineDecorations(state: EditorState, pos: number) {
   let values: Decoration[] = [];
   state.field(liveMdAnalysis).decorations.between(pos, pos, (from, to, value) => {
     if (from == pos && to == pos) values.push(value);
+  });
+  return values;
+}
+
+function decorationsFrom(state: EditorState, pos: number) {
+  let values: Decoration[] = [];
+  state.field(liveMdAnalysis).decorations.between(pos, state.doc.length, (from, _to, value) => {
+    if (from >= pos) values.push(value);
   });
   return values;
 }
