@@ -9,6 +9,12 @@ The editor keeps Markdown as the source while the page reads like composed text.
 
 Use _emphasis_, **strong text**, ~~removed words~~, \`inline code\`, and [project links](https://viteplus.dev/) in the same writing flow.
 
+Inline math such as $E = mc^2$ stays readable, and display math can breathe on its own line:
+
+$$
+\\int_0^1 x^2\\,dx = \\frac{1}{3}
+$$
+
 ${imageUrl ? `![A writing surface](${imageUrl})` : ""}
 
 ## Working list

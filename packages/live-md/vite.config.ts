@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { defineConfig } from "vite-plus";
 
 export default defineConfig({
+  plugins: [rawCssTextPlugin()],
   resolve: {
     alias: {
       "@codemirror-treesitter/autocomplete": new URL(
@@ -39,18 +41,25 @@ export default defineConfig({
 });
 
 function rawCssTextPlugin() {
+  let rawQueries = ["?raw", "?live-md-raw"];
   return {
+    enforce: "pre" as const,
     name: "live-md-raw-css",
     resolveId(source: string, importer?: string) {
-      if (!source.endsWith(".css?raw")) return null;
-      let cssSource = source.slice(0, -"?raw".length);
-      if (cssSource.startsWith("/")) return `${cssSource}?raw`;
+      let rawQuery = rawQueries.find((query) => source.endsWith(`.css${query}`));
+      if (!rawQuery) return null;
+      let cssSource = source.slice(0, -rawQuery.length);
+      if (cssSource.startsWith("/")) return `${cssSource}${rawQuery}`;
       if (!importer) return null;
-      return `${resolve(dirname(importer), cssSource)}?raw`;
+      if (!cssSource.startsWith(".")) {
+        return `${createRequire(importer).resolve(cssSource)}${rawQuery}`;
+      }
+      return `${resolve(dirname(importer), cssSource)}${rawQuery}`;
     },
     load(id: string) {
-      if (!id.endsWith(".css?raw")) return null;
-      let fileName = id.slice(0, -"?raw".length);
+      let rawQuery = rawQueries.find((query) => id.endsWith(`.css${query}`));
+      if (!rawQuery) return null;
+      let fileName = id.slice(0, -rawQuery.length);
       return `export default ${JSON.stringify(readFileSync(fileName, "utf8"))};`;
     },
   };

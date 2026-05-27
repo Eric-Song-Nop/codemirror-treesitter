@@ -10,9 +10,11 @@ import {
 import { forEachLineInRange, isWhitespace, isWhitespaceOnly, splitRangeByLine } from "./util.js";
 import {
   ImagePreviewWidget,
+  LatexWidget,
   ListMarkerWidget,
   TablePreviewWidget,
   TaskCheckboxWidget,
+  type LatexFormula,
   type MarkdownTable,
 } from "./widgets.js";
 
@@ -70,6 +72,8 @@ const visitors: Record<string, NodeVisitor> = {
   fenced_code_block: visitCodeFence,
   image: visitImage,
   inline_link: visitInlineLink,
+  latex_block: visitLatex,
+  latex_span_delimiter: visitSyntax,
   list: visitList,
   list_item: visitLineClass("cm-md-list-line"),
   list_marker_dot: visitListMarker,
@@ -416,6 +420,21 @@ function visitImage(context: VisitContext, node: SyntaxNode): false | void {
   return false;
 }
 
+function visitLatex(context: VisitContext, node: SyntaxNode): false | void {
+  let formula = readLatexFormula(context.state, node);
+  if (!formula) return false;
+  if (rangeTouchesActiveLine(context, node.from, node.to)) return;
+
+  let range = latexReplacementRange(context.state, node, formula.displayMode);
+  context.plan.replace(
+    range.from,
+    range.to,
+    new LatexWidget({ ...formula, block: range.block }),
+    range.block,
+  );
+  return false;
+}
+
 function visitTable(context: VisitContext, node: SyntaxNode): false {
   let table = readTableFromNode(context.state, node);
   if (table && !rangeTouchesActiveLine(context, node.from, node.to)) {
@@ -470,6 +489,43 @@ function visitCodeFence(context: VisitContext, node: SyntaxNode): false {
     context.plan.syntax(closingDelimiter.from, closingDelimiter.to, context.activeLines);
   }
   return false;
+}
+
+function readLatexFormula(
+  state: EditorState,
+  node: SyntaxNode,
+): Omit<LatexFormula, "block"> | null {
+  let delimiters = node.children.filter((child) => child.name == "latex_span_delimiter");
+  let openingDelimiter = delimiters[0];
+  let closingDelimiter = delimiters[delimiters.length - 1];
+  if (!openingDelimiter || !closingDelimiter || openingDelimiter == closingDelimiter) return null;
+
+  let source = state.sliceDoc(node.from, node.to);
+  let opening = state.sliceDoc(openingDelimiter.from, openingDelimiter.to);
+  let closing = state.sliceDoc(closingDelimiter.from, closingDelimiter.to);
+  let tex = state.sliceDoc(openingDelimiter.to, closingDelimiter.from).trim();
+  if (!tex) return null;
+
+  return {
+    displayMode: opening.length > 1 || closing.length > 1 || tex.includes("\n"),
+    source,
+    tex,
+  };
+}
+
+function latexReplacementRange(state: EditorState, node: SyntaxNode, displayMode: boolean) {
+  if (!displayMode) return { block: false, from: node.from, to: node.to };
+
+  let firstLine = state.doc.lineAt(node.from);
+  let lastLine = state.doc.lineAt(Math.max(node.from, node.to - 1));
+  if (
+    isWhitespaceOnly(state.sliceDoc(firstLine.from, node.from)) &&
+    isWhitespaceOnly(state.sliceDoc(node.to, lastLine.to))
+  ) {
+    return { block: true, from: firstLine.from, to: lastLine.to };
+  }
+
+  return { block: false, from: node.from, to: node.to };
 }
 
 function readTableFromNode(state: EditorState, node: SyntaxNode): MarkdownTable | null {

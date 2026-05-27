@@ -178,6 +178,40 @@
   text-underline-offset: 0.18em;
 }
 
+.live-md-codemirror .cm-md-latex {
+  color: #142723;
+}
+
+.live-md-codemirror .cm-md-latex-inline {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: -0.05em;
+}
+
+.live-md-codemirror .cm-md-latex-inline .katex {
+  font-size: 1em;
+}
+
+.live-md-codemirror .cm-md-latex-display {
+  display: block;
+  max-width: 100%;
+  margin: 0.55em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.15em 0;
+}
+
+.live-md-codemirror .cm-md-latex-display .katex-display {
+  margin: 0;
+}
+
+.live-md-codemirror .cm-md-latex.is-error {
+  border-bottom: 1px dotted #b64d3c;
+  color: #9b392b;
+  font-family: var(--live-md-font-code);
+  font-size: 0.86em;
+}
+
 .live-md-codemirror .cm-md-blockquote {
   position: relative;
   color: #4d5f5a;

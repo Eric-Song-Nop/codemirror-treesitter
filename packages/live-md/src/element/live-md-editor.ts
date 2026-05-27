@@ -60,6 +60,7 @@ export class LiveMdEditorElement extends HTMLElement {
       return;
     }
 
+    installLiveMdStyles(this.shadow);
     this.controller = controller;
     if (this.cleanValue == null) this.cleanValue = controller.value;
     this.applyStoredSelection();

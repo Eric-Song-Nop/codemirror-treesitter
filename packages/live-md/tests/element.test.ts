@@ -401,6 +401,7 @@ describe("liveMd editor web component", () => {
     expect(document.head.querySelector("style[data-live-md-runtime]")).toBeNull();
     expect(document.querySelector(".cm-md-heading")).toBeNull();
     expect(hasShadowRuntimeStyles(editor)).toBe(true);
+    expect(editor.shadowRoot?.querySelectorAll("style[data-live-md-runtime]")).toHaveLength(1);
   });
 
   it("exports the reusable CodeMirror extension", () => {
