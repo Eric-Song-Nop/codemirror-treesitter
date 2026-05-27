@@ -261,13 +261,13 @@ export class Tree {
     let visit = (node: SyntaxNode) => {
       if (node.to < from || node.from > to) return;
       if (spec.enter?.(node) === false) return;
-      let children = node.children;
       let pos = node.from;
-      for (let child of children) {
+      for (let child = firstIteratedChild(node, from); child && child.from <= to; ) {
         emitNestedIn(pos, Math.min(child.from, node.to), false);
         visit(child);
         emitNestedIn(child.from, child.to, false);
         pos = child.to;
+        child = child.nextSibling;
       }
       emitNestedIn(pos, node.to, false);
       spec.leave?.(node);
@@ -283,6 +283,13 @@ export class Tree {
   toString() {
     return this.topNode.toString();
   }
+}
+
+function firstIteratedChild(node: SyntaxNode, from: number): SyntaxNode | null {
+  let index = from > node.from ? from - 1 : from;
+  let child = node.firstChildForIndex(index);
+  while (child && child.to < from) child = child.nextSibling;
+  return child;
 }
 
 function nestedStart(nest: NestedTree) {

@@ -590,34 +590,37 @@ function isDocumentChildNode(node: SyntaxNode) {
 
 function compressGaps(
   context: VisitContext,
-  siblings: SyntaxNode[],
+  parent: SyntaxNode,
+  isSibling: (node: SyntaxNode) => boolean,
   previousFrom: (context: VisitContext, node: SyntaxNode) => number = blockBreakFrom,
   containerTo?: number,
 ) {
+  let siblings = siblingWindowForGaps(context, parent, isSibling);
   for (let index = 1; index < siblings.length; index++) {
     let previous = siblings[index - 1];
     let current = siblings[index];
-    markParagraphBreakRun(context, previousFrom(context, previous), current.from);
+    markDirtyParagraphBreakRun(context, previousFrom(context, previous), current.from);
   }
 
   let last = siblings.at(-1);
-  if (last && containerTo != null) {
-    markParagraphBreakRun(context, previousFrom(context, last), containerTo);
+  if (last && containerTo != null && !nextMatchingSibling(last, isSibling)) {
+    markDirtyParagraphBreakRun(context, previousFrom(context, last), containerTo);
   }
 }
 
 function visitDocument(context: VisitContext, node: SyntaxNode) {
-  compressGaps(context, node.children.filter(isDocumentChildNode), blockBreakFrom, node.to);
+  compressGaps(context, node, isDocumentChildNode, blockBreakFrom, node.to);
 }
 
 function visitSection(context: VisitContext, node: SyntaxNode) {
-  compressGaps(context, node.children.filter(isBlockNode), blockBreakFrom, node.to);
+  compressGaps(context, node, isBlockNode, blockBreakFrom, node.to);
 }
 
 function visitList(context: VisitContext, node: SyntaxNode) {
   compressGaps(
     context,
-    node.children.filter((child) => child.name == "list_item"),
+    node,
+    (child) => child.name == "list_item",
     blockContainerBreakFrom,
     node.to,
   );
@@ -625,7 +628,64 @@ function visitList(context: VisitContext, node: SyntaxNode) {
 
 function visitBlockQuote(context: VisitContext, node: SyntaxNode) {
   context.plan.lineClass(node.from, node.to, "cm-md-blockquote");
-  compressGaps(context, node.children.filter(isBlockNode), blockBreakFrom, node.to);
+  compressGaps(context, node, isBlockNode, blockBreakFrom, node.to);
+}
+
+function siblingWindowForGaps(
+  context: VisitContext,
+  parent: SyntaxNode,
+  isSibling: (node: SyntaxNode) => boolean,
+) {
+  let range = context.dirtyRange;
+  if (!range) return matchingChildren(parent, isSibling);
+
+  let seed = firstChildTouchingOrAfter(parent, range.from) ?? parent.lastChild;
+  while (seed && !isSibling(seed)) seed = seed.previousSibling;
+  let first = seed ? (previousMatchingSibling(seed, isSibling) ?? seed) : null;
+  if (!first) first = firstMatchingChild(parent, isSibling);
+
+  let siblings: SyntaxNode[] = [];
+  for (let child = first; child; child = nextMatchingSibling(child, isSibling)) {
+    siblings.push(child);
+    if (child.from > range.to) break;
+  }
+  return siblings;
+}
+
+function matchingChildren(parent: SyntaxNode, isSibling: (node: SyntaxNode) => boolean) {
+  let children: SyntaxNode[] = [];
+  for (let child = parent.firstChild; child; child = child.nextSibling) {
+    if (isSibling(child)) children.push(child);
+  }
+  return children;
+}
+
+function firstMatchingChild(parent: SyntaxNode, isSibling: (node: SyntaxNode) => boolean) {
+  for (let child = parent.firstChild; child; child = child.nextSibling) {
+    if (isSibling(child)) return child;
+  }
+  return null;
+}
+
+function firstChildTouchingOrAfter(parent: SyntaxNode, from: number) {
+  let index = from > parent.from ? from - 1 : from;
+  let child = parent.firstChildForIndex(index);
+  while (child && child.to < from) child = child.nextSibling;
+  return child;
+}
+
+function previousMatchingSibling(node: SyntaxNode, isSibling: (node: SyntaxNode) => boolean) {
+  for (let sibling = node.previousSibling; sibling; sibling = sibling.previousSibling) {
+    if (isSibling(sibling)) return sibling;
+  }
+  return null;
+}
+
+function nextMatchingSibling(node: SyntaxNode, isSibling: (node: SyntaxNode) => boolean) {
+  for (let sibling = node.nextSibling; sibling; sibling = sibling.nextSibling) {
+    if (isSibling(sibling)) return sibling;
+  }
+  return null;
 }
 
 function blockBreakFrom(context: VisitContext, node: SyntaxNode): number {
@@ -666,6 +726,12 @@ function markParagraphBreakRun(context: VisitContext, from: number, to: number) 
     if (separatorLine == null) return;
     context.plan.line(separatorLine, "cm-md-block-separator");
   }
+}
+
+function markDirtyParagraphBreakRun(context: VisitContext, from: number, to: number) {
+  let range = context.dirtyRange;
+  if (range && !rangesTouch(from, to, range.from, range.to)) return;
+  markParagraphBreakRun(context, from, to);
 }
 
 function visitLineClass(className: string): NodeVisitor {

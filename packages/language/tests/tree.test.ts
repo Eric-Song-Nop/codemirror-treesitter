@@ -15,6 +15,7 @@ import {
   syntaxTreeAvailable,
 } from "../src/index.js";
 import { __testResolveWasmPath } from "../src/language.js";
+import { SyntaxNode } from "../src/tree.js";
 import type { Tree } from "../src/index.js";
 import type { NodeIterator } from "../src/tree.js";
 
@@ -541,6 +542,31 @@ describe("tree-sitter tree wrapper", () => {
 
     expect(transaction.docChanged).toBe(false);
     expect(syntaxTreeChangedRanges(transaction)).toEqual([{ from: 0, to: doc.length }]);
+  });
+
+  it("does not materialize every sibling for ranged tree iteration", async () => {
+    let doc = Array.from({ length: 80 }, (_, index) => `let value${index} = ${index};`).join("\n");
+    let state = await javascriptState(doc);
+    let from = doc.indexOf("value70");
+    let to = from + "value70".length;
+    let materializedChildren = 0;
+    let descriptor = Object.getOwnPropertyDescriptor(SyntaxNode.prototype, "children")!;
+
+    Object.defineProperty(SyntaxNode.prototype, "children", {
+      configurable: true,
+      get(this: SyntaxNode) {
+        let children = descriptor.get!.call(this) as SyntaxNode[];
+        materializedChildren += children.length;
+        return children;
+      },
+    });
+    try {
+      syntaxTree(state).iterate({ from, to, enter: () => undefined });
+    } finally {
+      Object.defineProperty(SyntaxNode.prototype, "children", descriptor);
+    }
+
+    expect(materializedChildren).toBeLessThan(40);
   });
 
   it("parses and reuses multiple disjoint nested ranges", async () => {

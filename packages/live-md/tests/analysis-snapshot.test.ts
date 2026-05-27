@@ -1,6 +1,7 @@
 import { Compartment, EditorState } from "@codemirror/state";
 import type { Decoration } from "@codemirror/view";
 import { describe, expect, it } from "vite-plus/test";
+import { SyntaxNode } from "../../language/src/tree.js";
 import { liveMdAnalysis } from "../src/core/decorations.js";
 import {
   codeFenceLanguagesField,
@@ -139,6 +140,34 @@ describe("LiveMD analysis snapshot", () => {
     expect(transaction.state.doc.line(2).from).toBe(state.doc.line(2).from + 1);
     expect(after).toHaveLength(before.length);
     expect(after[0]).toBe(before[0]);
+  });
+
+  it("keeps paragraph gap analysis local to the dirty range", async () => {
+    let doc = Array.from({ length: 80 }, (_, index) => `paragraph ${index}`).join("\n\n");
+    let state = await markdownAnalysisState(doc);
+    let editFrom = doc.indexOf("paragraph 70");
+    let materializedChildren = 0;
+    let descriptor = Object.getOwnPropertyDescriptor(SyntaxNode.prototype, "children")!;
+
+    Object.defineProperty(SyntaxNode.prototype, "children", {
+      configurable: true,
+      get(this: SyntaxNode) {
+        let children = descriptor.get!.call(this) as SyntaxNode[];
+        materializedChildren += children.length;
+        return children;
+      },
+    });
+    try {
+      state
+        .update({
+          changes: { from: editFrom, to: editFrom + "paragraph".length, insert: "section" },
+        })
+        .state.field(liveMdAnalysis);
+    } finally {
+      Object.defineProperty(SyntaxNode.prototype, "children", descriptor);
+    }
+
+    expect(materializedChildren).toBeLessThan(50);
   });
 
   it("patches code fence edits without rebuilding untouched mapped code highlights", async () => {
