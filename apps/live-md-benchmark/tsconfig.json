@@ -1,10 +1,4 @@
 {
   "extends": "../../tsconfig.app.json",
-  "compilerOptions": {
-    "paths": {
-      "@codemirror-treesitter/live-md/fixtures": ["../../packages/live-md/src/fixtures/index.ts"],
-      "@codemirror-treesitter/live-md": ["../../packages/live-md/src/index.ts"]
-    }
-  },
   "include": ["src"]
 }

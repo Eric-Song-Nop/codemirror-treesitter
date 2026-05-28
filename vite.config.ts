@@ -7,16 +7,22 @@ export default defineConfig({
   },
   fmt: {
     ignorePatterns: [
+      "apps/*/worker-configuration.d.ts",
       "packages/*/dist/**",
-      "packages/*/src/*.d.ts",
+      "packages/*/src/**/*.d.ts",
       "!packages/language-data/src/assets.d.ts",
+      "src/**/*.d.ts",
+      "!src/assets.d.ts",
     ],
   },
   lint: {
     ignorePatterns: [
+      "apps/*/worker-configuration.d.ts",
       "packages/*/dist/**",
-      "packages/*/src/*.d.ts",
+      "packages/*/src/**/*.d.ts",
       "!packages/language-data/src/assets.d.ts",
+      "src/**/*.d.ts",
+      "!src/assets.d.ts",
     ],
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },

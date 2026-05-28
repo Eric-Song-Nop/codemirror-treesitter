@@ -10,7 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-packages/*/src/*.d.ts
+.wrangler
+packages/*/src/**/*.d.ts
 !packages/language-data/src/assets.d.ts
 *.local
 

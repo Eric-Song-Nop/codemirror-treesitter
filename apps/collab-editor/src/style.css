@@ -1,0 +1,35 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  color: #171717;
+  background: #fffef8;
+  font-family: Charter, "Iowan Old Style", "Avenir Next", Avenir, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100svh;
+  overflow: hidden;
+}
+
+live-md-editor {
+  display: block;
+  width: 100vw;
+  height: 100svh;
+  --live-md-bg: #fffef8;
+  --live-md-text: #171717;
+  --live-md-accent: #9f3f28;
+  --live-md-selection: rgba(181, 133, 45, 0.26);
+}

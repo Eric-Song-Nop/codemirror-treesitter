@@ -1,0 +1,25 @@
+{
+  "name": "collab-editor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@codemirror-treesitter/live-md": "workspace:*",
+    "@codemirror-treesitter/live-md-loro": "workspace:*",
+    "@codemirror/view": "^6.43.0",
+    "loro-crdt": "^1.12.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.39.0",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "wrangler": "^4.95.0"
+  }
+}
