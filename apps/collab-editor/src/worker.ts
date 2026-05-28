@@ -158,7 +158,7 @@ export class CollabRoom extends DurableObject<Env> {
 
     this.initialized = true;
     if (shouldSeed) {
-      markdown.insert(0, createInitialDocument(roomShareUrl(request.url, roomId)));
+      markdown.insert(0, createInitialDocument(roomShareUrl(request, roomId)));
       this.doc.commit();
     }
 
@@ -280,10 +280,24 @@ function roomIdFromRequestPath(pathname: string): string | null {
   return validRoomIdPattern.test(roomId) ? roomId : null;
 }
 
-function roomShareUrl(requestUrl: string, roomId: string): string {
-  let url = new URL(requestUrl);
+function roomShareUrl(request: Request, roomId: string): string {
+  let url = publicAppUrlFromRequest(request);
   url.pathname = "/";
   url.search = "";
   url.hash = roomId;
   return url.toString();
+}
+
+function publicAppUrlFromRequest(request: Request): URL {
+  let origin = request.headers.get("Origin");
+  if (origin != null) {
+    try {
+      let url = new URL(origin);
+      if (url.protocol == "http:" || url.protocol == "https:") return url;
+    } catch {
+      // Fall through to the request URL.
+    }
+  }
+
+  return new URL(request.url);
 }

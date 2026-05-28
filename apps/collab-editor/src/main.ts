@@ -207,13 +207,30 @@ class CollaborationConnection {
   }
 
   private websocketUrl() {
-    let protocol = location.protocol == "https:" ? "wss:" : "ws:";
     let path = `/api/doc/${encodeURIComponent(this.roomId)}/ws`;
+    let url = new URL(path, collaborationWorkerOrigin());
+    url.protocol = url.protocol == "http:" || url.protocol == "ws:" ? "ws:" : "wss:";
     let params = new URLSearchParams({
       clientId: this.clientId,
       hasLocalSnapshot: this.restoredSnapshot ? "1" : "0",
     });
-    return `${protocol}//${location.host}${path}?${params}`;
+    url.search = params.toString();
+    return url.toString();
+  }
+}
+
+function collaborationWorkerOrigin(): string {
+  let configuredOrigin = import.meta.env.VITE_COLLAB_WORKER_ORIGIN?.trim();
+  if (!configuredOrigin) return location.origin;
+
+  let normalizedOrigin = /^[a-z]+:\/\//i.test(configuredOrigin)
+    ? configuredOrigin
+    : `https://${configuredOrigin}`;
+
+  try {
+    return new URL(normalizedOrigin).origin;
+  } catch {
+    return location.origin;
   }
 }
 
