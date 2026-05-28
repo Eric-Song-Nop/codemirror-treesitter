@@ -90,13 +90,16 @@ describe("code fence at end of document", () => {
     await editor.ready;
 
     let closingLine = editor.view.contentDOM.querySelectorAll(".cm-line").item(2);
+    let openingLine = editor.view.contentDOM.querySelectorAll(".cm-line").item(0);
     let closingSpan = Array.from(closingLine.querySelectorAll("span")).find((span) =>
       span.textContent?.includes("```"),
     );
 
     expect(closingSpan).toBeTruthy();
     expect(closingSpan?.classList.contains("cm-md-syntax-hidden")).toBe(true);
+    expect(openingLine.classList.contains("cm-md-code-block-start")).toBe(true);
     expect(closingLine.classList.contains("cm-md-code-fence-line")).toBe(true);
+    expect(closingLine.classList.contains("cm-md-code-block-end")).toBe(true);
     expect(closingLine.classList.contains("cm-md-code-line")).toBe(false);
   });
 
@@ -113,13 +116,16 @@ describe("code fence at end of document", () => {
     await editor.ready;
 
     let closingLine = editor.view.contentDOM.querySelectorAll(".cm-line").item(2);
+    let openingLine = editor.view.contentDOM.querySelectorAll(".cm-line").item(0);
     let closingSpan = Array.from(closingLine.querySelectorAll("span")).find((span) =>
       span.textContent?.includes("```"),
     );
 
     expect(closingSpan).toBeTruthy();
     expect(closingSpan?.classList.contains("cm-md-syntax-hidden")).toBe(true);
+    expect(openingLine.classList.contains("cm-md-code-block-start")).toBe(true);
     expect(closingLine.classList.contains("cm-md-code-fence-line")).toBe(true);
+    expect(closingLine.classList.contains("cm-md-code-block-end")).toBe(true);
     expect(closingLine.classList.contains("cm-md-code-line")).toBe(false);
   });
 });

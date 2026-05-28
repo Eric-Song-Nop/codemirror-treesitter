@@ -899,26 +899,29 @@ function visitCodeFence(context: VisitContext, node: SyntaxNode): false {
     }
   }
 
-  context.plan.line(
-    context.state.doc.lineAt(openingDelimiter.from).number,
-    "cm-md-code-fence-line",
-  );
+  let openingLineNumber = context.state.doc.lineAt(openingDelimiter.from).number;
+  let blockEndLineNumber = openingLineNumber;
+
+  context.plan.line(openingLineNumber, "cm-md-code-fence-line");
+  context.plan.line(openingLineNumber, "cm-md-code-block-start");
   context.plan.syntax(openingDelimiter.from, openingDelimiter.to, context.activeLines);
 
   if (content && content.from < content.to) {
     forEachLineInRange(context.state, content.from, content.to, (line) => {
       context.plan.line(line.number, "cm-md-code-line");
+      blockEndLineNumber = line.number;
     });
     addCodeFenceHighlights(context, content.from, content.to, language);
   }
 
   if (closingDelimiter) {
-    context.plan.line(
-      context.state.doc.lineAt(closingDelimiter.from).number,
-      "cm-md-code-fence-line",
-    );
+    let closingLineNumber = context.state.doc.lineAt(closingDelimiter.from).number;
+    blockEndLineNumber = closingLineNumber;
+    context.plan.line(closingLineNumber, "cm-md-code-fence-line");
     context.plan.syntax(closingDelimiter.from, closingDelimiter.to, context.activeLines);
   }
+
+  context.plan.line(blockEndLineNumber, "cm-md-code-block-end");
   return false;
 }
 
