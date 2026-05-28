@@ -89,6 +89,31 @@ describe("liveMdLoroCollaboration", () => {
     editor.destroy();
   });
 
+  it("syncs the first editor edit when both documents start empty", async () => {
+    let doc = new LoroDoc();
+    let text = doc.getText("markdown");
+
+    let parent = document.createElement("div");
+    document.body.append(parent);
+    let editor = createLiveMdEditor({
+      extensions: [liveMdLoroCollaboration({ doc })],
+      parent,
+    });
+
+    await flushMicrotasks();
+    expect(editor.value).toBe("");
+    expect(text.toString()).toBe("");
+
+    editor.view.dispatch({
+      changes: { from: 0, insert: "first" },
+      userEvent: "input.test",
+    });
+
+    expect(text.toString()).toBe("first");
+    await editor.ready;
+    editor.destroy();
+  });
+
   it("exposes reusable text getter functions", () => {
     let doc = new LoroDoc();
     let getText = createLiveMdLoroTextGetter("article");
