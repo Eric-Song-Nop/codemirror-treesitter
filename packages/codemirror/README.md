@@ -4,6 +4,16 @@ This directory publishes `@codemirror-treesitter/basic-setup`. It assembles the
 Tree-sitter workspace packages into CodeMirror setup arrays equivalent to the
 official `basicSetup` and `minimalSetup` entry points.
 
+## Stack and Boundaries
+
+- Depends on local `autocomplete`, `commands`, and `language` packages plus
+  official `@codemirror/state`, `@codemirror/view`, `@codemirror/search`, and
+  `@codemirror/lint`.
+- Built as an ES module package with Vite+ `vp pack`.
+- Intentionally avoids Lezer and official language-layer packages in the local
+  implementation path.
+- Exports only `.` and `./package.json` from the built package.
+
 ## Responsibilities
 
 - Export `basicSetup`, a full editor extension list with line numbers, active
@@ -21,26 +31,30 @@ official `basicSetup` and `minimalSetup` entry points.
 ## Public Entry
 
 ```ts
-import { basicSetup, minimalSetup } from "@codemirror-treesitter/basic-setup";
+import { EditorView, basicSetup, minimalSetup } from "@codemirror-treesitter/basic-setup";
 ```
 
-The root entry point is `src/index.ts`, and the package exports only `.` and
-`./package.json`.
+The root entry point is `src/index.ts`.
+
+## Source Layout
+
+- `src/index.ts`: setup arrays, keymap assembly, and `EditorView`
+  compatibility export.
+- `tests/setup.test.ts`: setup export and ordering coverage.
 
 ## Relationship to Other Packages
 
-This package composes `@codemirror-treesitter/language`,
-`@codemirror-treesitter/commands`, and
-`@codemirror-treesitter/autocomplete` with official CodeMirror packages that do
-not introduce Lezer into the local implementation path.
+This package composes local `language`, `commands`, and `autocomplete` with
+official CodeMirror packages that do not introduce Lezer into the local
+implementation path. It is used directly by examples and by LiveMD.
 
 ## Validation
 
 Run from the workspace root:
 
 ```bash
-vp check
-vp run -r test
+vp run @codemirror-treesitter/basic-setup#check
+vp run @codemirror-treesitter/basic-setup#test
 vp run audit
 ```
 

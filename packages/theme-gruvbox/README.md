@@ -3,6 +3,14 @@
 Gruvbox editor themes for the CodeMirror Tree-sitter build. The themes use the
 local highlight tag implementation from `@codemirror-treesitter/language`.
 
+## Stack and Boundaries
+
+- Depends on `@codemirror-treesitter/language`, `@codemirror/state`, and
+  `@codemirror/view`.
+- Built as an ES module package with Vite+ `vp pack`.
+- Intentionally avoids `@codemirror/language` and `@lezer/highlight`.
+- Exports only `.` and `./package.json` from the built package.
+
 ## Responsibilities
 
 - Export dark and light Gruvbox color palettes.
@@ -23,8 +31,13 @@ import {
 } from "@codemirror-treesitter/theme-gruvbox";
 ```
 
-The root entry point is `src/index.ts`, and the package exports only `.` and
-`./package.json`.
+The root entry point is `src/index.ts`.
+
+## Source Layout
+
+- `src/index.ts`: color palettes, editor themes, highlight styles, and
+  combined dark/light theme extensions.
+- `tests/theme.test.ts`: export and local highlighting coverage.
 
 ## Relationship to Other Packages
 
@@ -37,8 +50,8 @@ app and LiveMD.
 Run from the workspace root:
 
 ```bash
-vp check
-vp run -r test
+vp run @codemirror-treesitter/theme-gruvbox#check
+vp run @codemirror-treesitter/theme-gruvbox#test
 vp run audit
 ```
 
