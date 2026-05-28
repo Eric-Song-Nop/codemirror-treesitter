@@ -3,8 +3,10 @@ import { defineLiveMdEditor, type LiveMdEditorElement } from "@codemirror-treesi
 import { liveMdLoroCollaboration } from "@codemirror-treesitter/live-md-loro";
 import { LoroDoc, UndoManager } from "loro-crdt";
 import { WireKind, decodeWireFrame, encodeWireBatch, type WireMessage } from "./protocol.ts";
+import { isValidRoomId, selectRoomFromHash, type RoomSelection } from "./room.ts";
 
-const roomId = ensureRoomId();
+const room = ensureRoom();
+const roomId = room.id;
 const localSnapshotKey = `collab:${roomId}:snapshot`;
 const clientId = getOrCreateClientId();
 const doc = new LoroDoc();
@@ -207,7 +209,10 @@ class CollaborationConnection {
   private websocketUrl() {
     let protocol = location.protocol == "https:" ? "wss:" : "ws:";
     let path = `/api/doc/${encodeURIComponent(this.roomId)}/ws`;
-    let params = new URLSearchParams({ clientId: this.clientId });
+    let params = new URLSearchParams({
+      clientId: this.clientId,
+      hasLocalSnapshot: this.restoredSnapshot ? "1" : "0",
+    });
     return `${protocol}//${location.host}${path}?${params}`;
   }
 }
@@ -216,8 +221,19 @@ defineLiveMdEditor();
 
 let editor = document.createElement("live-md-editor") as LiveMdEditorElement;
 editor.setAttribute("autofocus", "");
+editor.placeholder = "Start writing Markdown. Share this link to collaborate.";
 editor.extensions = [liveMdLoroCollaboration({ doc, undoManager })];
-document.querySelector<HTMLDivElement>("#app")!.replaceChildren(editor);
+
+let editorFrame = document.createElement("section");
+editorFrame.className = "editor-frame";
+editorFrame.setAttribute("aria-label", "Collaborative Markdown editor");
+editorFrame.appendChild(editor);
+
+let shell = document.createElement("main");
+shell.className = "collab-shell";
+shell.appendChild(editorFrame);
+
+document.querySelector<HTMLDivElement>("#app")!.replaceChildren(shell);
 
 let connection = new CollaborationConnection(roomId, clientId, doc, restoredSnapshot);
 
@@ -254,13 +270,30 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(chunks.join(""));
 }
 
-function ensureRoomId() {
-  let hash = decodeURIComponent(location.hash.slice(1));
-  if (/^[A-Za-z0-9_-]{8,96}$/.test(hash)) return hash;
+function ensureRoom(): RoomSelection {
+  let room = selectRoomFromHash(location.hash);
+  if (!room.generated) return room;
 
-  let nextRoomId = crypto.randomUUID();
-  history.replaceState(null, "", `${location.pathname}${location.search}#${nextRoomId}`);
-  return nextRoomId;
+  let pathRoomId = roomIdFromPath(location.pathname);
+  if (pathRoomId) {
+    history.replaceState(null, "", roomHash(pathRoomId, "/"));
+    return { generated: false, id: pathRoomId };
+  }
+
+  history.replaceState(null, "", roomHash(room.id));
+  return room;
+}
+
+function roomIdFromPath(pathname: string) {
+  let match = /^\/([^/]+)\/?$/.exec(pathname);
+  if (!match) return null;
+
+  let roomId = decodeURIComponent(match[1]!);
+  return isValidRoomId(roomId) ? roomId : null;
+}
+
+function roomHash(roomId: string, pathname = location.pathname) {
+  return `${pathname}${location.search}#${encodeURIComponent(roomId)}`;
 }
 
 function getOrCreateClientId() {
