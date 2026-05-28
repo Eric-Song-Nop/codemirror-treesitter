@@ -30,6 +30,11 @@ export const workspaceAliases = {
   ).pathname,
   "@codemirror-treesitter/live-md": new URL("packages/live-md/src/index.ts", import.meta.url)
     .pathname,
+  "@codemirror-treesitter/live-md-loro": new URL(
+    "packages/live-md-loro/src/index.ts",
+    import.meta.url,
+  ).pathname,
+  "loro-codemirror": new URL("node_modules/loro-codemirror/src/index.ts", import.meta.url).pathname,
 };
 
 type WorkspaceAlias = keyof typeof workspaceAliases;
