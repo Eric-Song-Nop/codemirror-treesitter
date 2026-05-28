@@ -4,6 +4,16 @@ Tree-sitter-backed language metadata for the CodeMirror Tree-sitter runtime.
 This package mirrors the shape of CodeMirror language-data while loading
 Tree-sitter grammars and highlight queries instead of Lezer language packages.
 
+## Stack and Boundaries
+
+- Depends on `@codemirror-treesitter/language` plus published Tree-sitter
+  grammar packages and bundled WASM assets.
+- Built as an ES module package with Vite+ `vp pack`.
+- Uses Vite URL/raw imports and copied `src/wasm` assets so language loaders
+  work in browser-like runtimes, Vite dev, tests, and package builds.
+- Intentionally returns local `LanguageSupport` objects and does not import
+  Lezer language packages.
+
 ## Responsibilities
 
 - Export the `languages` array of `LanguageDescription` objects.
@@ -15,7 +25,7 @@ Tree-sitter grammars and highlight queries instead of Lezer language packages.
   assets, or Vite URLs depending on the runtime.
 - Lazily load published Tree-sitter highlight queries where available.
 - Attach language data such as comments, indentation, close brackets, and
-  folding props through the local `@codemirror-treesitter/language` package.
+  folding props through the local language package.
 - Wire mixed-language parsing for entries such as HTML, Vue, and Markdown
   inline regions.
 - Provide compact in-repo grammar/style shims for upstream entries that do not
@@ -30,14 +40,22 @@ const markdown = languages.find((language) => language.name == "Markdown");
 const support = await markdown?.load();
 ```
 
-The root entry point is `src/index.ts`, and the package exports only `.` and
-`./package.json`.
+The root entry point is `src/index.ts`.
+
+## Source Layout
+
+- `src/index.ts`: language registry, metadata, loaders, language data, and
+  mixed-language setup.
+- `src/assets.d.ts`: Vite import declarations for WASM and raw query assets.
+- `src/wasm/*`: bundled Tree-sitter WASM grammars used when no suitable
+  package URL import is available.
+- `tests/language-data.test.ts`: language metadata and loader coverage.
 
 ## Asset Model
 
 `vite.config.ts` copies `src/wasm` into the built package. Source code also
 uses `?url` and `?raw` imports for grammar WASM files and highlight queries
-provided by dependencies. The loader helpers choose the correct path for
+provided by dependencies. Loader helpers choose the correct path for
 browser-like runtimes, Vite local development, and Node-based tests/builds.
 
 ## Relationship to Other Packages
@@ -52,8 +70,8 @@ loaders.
 Run from the workspace root:
 
 ```bash
-vp check
-vp run -r test
+vp run @codemirror-treesitter/language-data#check
+vp run @codemirror-treesitter/language-data#test
 vp run audit
 ```
 

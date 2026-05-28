@@ -14,3 +14,109 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
 
 <!--VITE PLUS END-->
+
+# Project Notes for Agents
+
+## Stack Snapshot
+
+- Runtime/package management: Bun `1.3.14` through Vite+ `vp install`; Node.js
+  `>=22.12.0`.
+- Workspace tooling: Vite+ (`vp`) for dev, build, pack, check, test, preview,
+  formatting, linting, type checking, task caching, and script orchestration.
+- Language: TypeScript 6.x, ES modules, shared `tsconfig.*` files, and package
+  builds through `vp pack`.
+- Editor base: official `@codemirror/state`, `@codemirror/view`,
+  `@codemirror/search`, and `@codemirror/lint` are allowed where they do not
+  bring in Lezer-specific language behavior.
+- Parser/runtime layer: `web-tree-sitter`, Tree-sitter grammar packages, WASM
+  assets, highlight queries, and local CodeMirror-compatible wrappers.
+- Product/runtime integrations: LiveMD uses KaTeX, Mermaid, and
+  `beautiful-mermaid`; optional collaboration uses `loro-crdt` and
+  `loro-codemirror`; `apps/collab-editor` uses Cloudflare Workers, Durable
+  Objects, WebSockets, Wrangler, and `@cloudflare/vite-plugin`.
+
+## Repository Layout
+
+- `packages/language`: Tree-sitter parser integration, syntax-tree wrappers,
+  highlighting, indentation, folding, bracket matching, bidi isolation, and
+  stream-parser compatibility.
+- `packages/language-data`: `LanguageDescription` registry, Tree-sitter WASM
+  asset loading, highlight-query loading, language metadata, and mixed-language
+  parser wiring.
+- `packages/commands`: Lezer-free editing commands, comments, history, and
+  keymaps.
+- `packages/autocomplete`: Completion state, sources, filtering, tooltips,
+  snippets, word completion, and close brackets.
+- `packages/codemirror`: `@codemirror-treesitter/basic-setup`, including
+  `basicSetup`, `minimalSetup`, and the compatibility `EditorView` export.
+- `packages/theme-gruvbox`: Local Gruvbox editor themes and highlight styles.
+- `packages/merge`: Diff, split merge view, unified merge view, chunk helpers,
+  and local highlighting for deletion widgets.
+- `packages/lsp-client`: LSP transport, plugin, workspace mapping,
+  diagnostics, completions, hover, formatting, rename, definition, references,
+  and signature help.
+- `packages/live-md`: Live Markdown editor runtime, web component, registration
+  entry, CSS export, and fixtures.
+- `packages/live-md-loro`: Optional Loro collaboration bindings for LiveMD.
+- `apps/basic-editor`: Minimal `<live-md-editor>` smoke app.
+- `apps/examples`: Side-by-side local-vs-official CodeMirror comparison app.
+- `apps/live-md-benchmark`: LiveMD benchmark harness.
+- `apps/live-md-loro-demo`: Local two-peer Loro collaboration demo.
+- `apps/collab-editor`: Cloudflare collaboration app with Durable Object room
+  persistence and WebSocket Loro sync.
+- `tools/audit.mjs`: Network-aware parity and boundary audit for packages,
+  language-data coverage, examples, benchmark wiring, and Lezer-free rules.
+
+## Dependency Boundaries
+
+- Implementation packages should not depend on Lezer packages or official
+  language-layer CodeMirror packages unless the specific package README and
+  `tools/audit.mjs` allow it.
+- `apps/examples` is the comparison app and may depend on official
+  CodeMirror/Lezer packages.
+- Prefer imports through workspace package names and the aliases in
+  `vite.shared.ts` instead of reaching across package internals from another
+  package.
+- Keep Loro collaboration optional. Do not import `loro-crdt` or
+  `loro-codemirror` from `packages/live-md`.
+- Cloudflare-specific APIs belong in `apps/collab-editor`; package code should
+  remain browser/library oriented.
+
+## Common Commands
+
+Run from the workspace root unless a package-local check is intentional.
+
+```bash
+vp install
+vp check
+vp test
+vp run -r test
+vp run -r build
+vp run audit
+vp run ready
+```
+
+Useful task selectors:
+
+```bash
+vp run @codemirror-treesitter/language#test
+vp run @codemirror-treesitter/live-md#build
+vp run examples#dev
+vp run live-md-benchmark#benchmark
+vp run live-md-loro-demo#dev
+vp run collab-editor#dev
+vp run collab-editor#types
+```
+
+`vp run` with no task lists every task in the workspace.
+
+## Documentation Expectations
+
+- Update the root `README.md` when package topology, apps, toolchain,
+  validation workflow, or LiveMD public API changes.
+- Update package READMEs when public exports, source layout, dependencies, or
+  package responsibilities change.
+- Update this file when agent-facing setup, validation, dependency boundaries,
+  or app/task workflows change.
+- Keep docs in sync with `package.json`, `vite.config.ts`, `vite.shared.ts`,
+  package `src/index.ts` files, and `tools/audit.mjs`.
