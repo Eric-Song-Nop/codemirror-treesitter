@@ -95,7 +95,13 @@ export class CollabRoom extends DurableObject<Env> {
 
     for (let item of messages) {
       if (item.kind == WireKind.Doc || item.kind == WireKind.Snapshot) {
-        this.doc.import(item.payload);
+        try {
+          this.doc.import(item.payload);
+        } catch (error: unknown) {
+          console.warn("Dropping malformed Loro payload", error);
+          ws.close(1003, "Malformed collaboration payload");
+          return;
+        }
         this.initialized = true;
         this.markDirty();
         relay.push(item);
