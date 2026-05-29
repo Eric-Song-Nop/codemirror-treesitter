@@ -17,7 +17,7 @@ Project: [Eric-Song-Nop/codemirror-treesitter](${projectUrl})
 ## How to use this room
 
 1. Write Markdown directly in this editor.
-2. Share this link to collaborate: ${shareUrl}
+2. Share this link to collaborate: <${shareUrl}>
 3. Everyone with the same link edits the same document.
 
 \`\`\`ts
