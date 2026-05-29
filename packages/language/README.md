@@ -24,7 +24,9 @@ parsers while keeping the public CodeMirror language surface.
 - Maintain incremental parsing, parse scheduling, viewport-aware parsing, and
   syntax-tree availability helpers.
 - Support nested parsing through included ranges and
-  `TreeSitterParser.getSkippingParser(...)` for async parser loading.
+  `TreeSitterParser.getSkippingParser(...)` for async parser loading. Nested
+  parser sources may return one merged range list or grouped range lists when a
+  grammar needs separate nested trees per region.
 - Implement local highlighting tags, `HighlightStyle`,
   `syntaxHighlighting(...)`, `highlightTree(...)`, and
   `highlightCode(...)`.

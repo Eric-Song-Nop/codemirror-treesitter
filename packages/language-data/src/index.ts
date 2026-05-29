@@ -13,6 +13,7 @@ import {
   type DocRange,
   type NestedParserSource,
   type NodePropSource,
+  type SyntaxNode,
   type Tag,
   type Tree,
 } from "@codemirror-treesitter/language";
@@ -1416,16 +1417,31 @@ function rawTextRanges(parentName: string) {
   };
 }
 
-function nodeRanges(name: string) {
-  return (tree: Tree): DocRange[] => {
-    let ranges: DocRange[] = [];
+function markdownInlineRangeGroups() {
+  return (tree: Tree): DocRange[][] => {
+    let groups: DocRange[][] = [];
     tree.iterate({
       enter(node) {
-        if (node.name == name && node.from < node.to) ranges.push({ from: node.from, to: node.to });
+        if (node.name != "inline" && node.name != "pipe_table_cell") return;
+        let ranges = rangesExcludingNamedChildren(node);
+        if (ranges.length) groups.push(ranges);
+        return false;
       },
     });
-    return ranges;
+    return groups;
   };
+}
+
+function rangesExcludingNamedChildren(node: SyntaxNode) {
+  let ranges: DocRange[] = [];
+  let from = node.from;
+  for (let child of node.children) {
+    if (!child.isNamed) continue;
+    if (from < child.from) ranges.push({ from, to: child.from });
+    from = Math.max(from, child.to);
+  }
+  if (from < node.to) ranges.push({ from, to: node.to });
+  return ranges;
 }
 
 const cssSpec: LanguageSpec = {
@@ -1952,7 +1968,7 @@ export const languages = [
     languageData: markdownData,
     highlightQuery: markdownHighlights,
     nested: async () => [
-      { parser: await nestedParser(markdownInlineSpec), ranges: nodeRanges("inline") },
+      { parser: await nestedParser(markdownInlineSpec), ranges: markdownInlineRangeGroups() },
     ],
   }),
   desc({
