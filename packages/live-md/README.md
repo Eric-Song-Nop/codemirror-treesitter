@@ -58,6 +58,7 @@ import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
 const editor = createLiveMdEditor({
   parent: document.body,
   defaultValue: "# Draft",
+  linkBaseUrl: "https://docs.example/notes/current.md",
   placeholder: "Start writing...",
   persistKey: "draft",
   onChange({ value }) {
@@ -72,9 +73,10 @@ editor.destroy();
 
 `createLiveMdEditor()` accepts `value`, `doc`, `defaultValue`, `persistKey`,
 `placeholder`, `readOnly`, `autofocus`, `focus`, `root`, `extensions`,
-`onChange`, and `onBlur`. The controller exposes `view`, `value`, `ready`,
-`setValue()`, `setExtensions()`, `setPersistKey()`, `setPlaceholder()`,
-`setReadOnly()`, and `destroy()`.
+`linkBaseUrl`, `onChange`, and `onBlur`. `linkBaseUrl` is used to resolve
+relative Markdown links for Shift-click link jumps. The controller exposes
+`view`, `value`, `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`,
+`setPlaceholder()`, `setReadOnly()`, and `destroy()`.
 
 ## Web Component
 
@@ -102,10 +104,10 @@ The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 - `src/core/editor.ts`: editor controller, persistence, read-only state,
   placeholders, and async language loading.
 - `src/core/extension.ts`, `src/core/decorations.ts`, `src/core/widgets.ts`,
-  `src/core/dirty-ranges.ts`, `src/core/features.ts`, and
+  `src/core/links.ts`, `src/core/dirty-ranges.ts`, `src/core/features.ts`, and
   `src/core/languages.ts`: live Markdown extension, decoration pipeline,
-  widget rendering, dirty-range tracking, feature registry, and language
-  loading.
+  link interactions, widget rendering, dirty-range tracking, feature registry,
+  and language loading.
 - `src/element/*`: custom element implementation and style installation.
 - `src/fixtures/*`: reusable sample content for examples and benchmarks.
 - `vite-plugin.ts`: raw CSS helper used by apps that need to import LiveMD CSS

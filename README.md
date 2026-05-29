@@ -262,6 +262,7 @@ import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
 const controller = createLiveMdEditor({
   parent: document.body,
   defaultValue: "# Draft",
+  linkBaseUrl: "https://docs.example/notes/current.md",
   placeholder: "Start writing...",
   persistKey: "draft",
   onChange({ value }) {
@@ -277,9 +278,10 @@ controller.destroy();
 
 `createLiveMdEditor()` accepts `value`, `doc`, `defaultValue`, `persistKey`,
 `placeholder`, `readOnly`, `autofocus`, `focus`, `root`, `extensions`,
-`onChange`, and `onBlur`. The controller exposes `view`, `value`, `ready`,
-`setValue()`, `setExtensions()`, `setPersistKey()`, `setPlaceholder()`,
-`setReadOnly()`, and `destroy()`.
+`linkBaseUrl`, `onChange`, and `onBlur`. `linkBaseUrl` is used to resolve
+relative Markdown links for Shift-click link jumps. The controller exposes
+`view`, `value`, `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`,
+`setPlaceholder()`, `setReadOnly()`, and `destroy()`.
 
 ## Optional Loro Collaboration
 

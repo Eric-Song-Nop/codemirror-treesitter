@@ -32,6 +32,7 @@ import {
 } from "./dirty-ranges.js";
 import { createLiveMdFeatureRegistry, type LiveMdFeature, type LiveMdScope } from "./features.js";
 import { forEachLineInRange, isWhitespace, isWhitespaceOnly, splitRangeByLine } from "./util.js";
+import { liveMdLinkBaseUrl, liveMdLinkMark } from "./links.js";
 import {
   ImagePreviewWidget,
   LatexWidget,
@@ -56,6 +57,7 @@ type VisitContext = {
   codeFenceLanguages: CodeFenceLanguageMap;
   dirtyRange: LiveMdDirtyRange | null;
   dirtyReasons: readonly LiveMdDirtyReason[] | null;
+  linkBaseUrl: string | null;
   plannedCodeFenceHighlightKeys: Set<string>;
   previousCodeFenceHighlights: readonly CodeFenceHighlightTree[];
   changes: ChangeDesc | null;
@@ -99,7 +101,6 @@ const strongMark = Decoration.mark({ class: "cm-md-strong" });
 const emphasisMark = Decoration.mark({ class: "cm-md-emphasis" });
 const strikeMark = Decoration.mark({ class: "cm-md-strike" });
 const inlineCodeMark = Decoration.mark({ class: "cm-md-inline-code" });
-const linkMark = Decoration.mark({ class: "cm-md-link" });
 const tablePipeMark = Decoration.mark({ class: "cm-md-table-pipe" });
 
 type LiveMdAnalysis = {
@@ -430,6 +431,7 @@ function buildLiveMdPlan(
     codeFenceLanguages,
     dirtyRange: null,
     dirtyReasons: null,
+    linkBaseUrl: state.facet(liveMdLinkBaseUrl),
     plannedCodeFenceHighlightKeys: new Set(),
     previousCodeFenceHighlights,
     changes,
@@ -803,16 +805,28 @@ function visitRule(context: VisitContext, node: SyntaxNode): false {
 
 function visitInlineLink(context: VisitContext, node: SyntaxNode) {
   let text = node.getChild("link_text");
+  let destination = node.getChild("link_destination");
   if (!text) return;
   context.plan.syntax(node.from, text.from, context.activeLines);
-  context.plan.mark(text.from, text.to, linkMark);
+  context.plan.mark(
+    text.from,
+    text.to,
+    liveMdLinkMark(
+      destination ? context.state.sliceDoc(destination.from, destination.to) : null,
+      context.linkBaseUrl,
+    ),
+  );
   context.plan.syntax(text.to, node.to, context.activeLines);
 }
 
 function visitUriAutolink(context: VisitContext, node: SyntaxNode) {
   if (node.to - node.from <= 2) return;
   context.plan.syntax(node.from, node.from + 1, context.activeLines);
-  context.plan.mark(node.from + 1, node.to - 1, linkMark);
+  context.plan.mark(
+    node.from + 1,
+    node.to - 1,
+    liveMdLinkMark(context.state.sliceDoc(node.from + 1, node.to - 1), context.linkBaseUrl),
+  );
   context.plan.syntax(node.to - 1, node.to, context.activeLines);
 }
 
@@ -841,7 +855,7 @@ function visitImage(context: VisitContext, node: SyntaxNode): false | void {
 
   if (description) {
     context.plan.syntax(node.from, description.from, context.activeLines);
-    context.plan.mark(description.from, description.to, linkMark);
+    context.plan.mark(description.from, description.to, liveMdLinkMark(null, context.linkBaseUrl));
     context.plan.syntax(description.to, node.to, context.activeLines);
   }
   return false;

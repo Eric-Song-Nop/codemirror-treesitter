@@ -8,6 +8,7 @@ import {
   loadMarkdownExtension,
   setCodeFenceLanguages,
 } from "./languages.js";
+import type { LiveMdLinkBaseUrl } from "./links.js";
 
 export type LiveMdEditorChange = {
   update: ViewUpdate;
@@ -21,6 +22,7 @@ export type LiveMdEditorOptions = {
   doc?: string;
   extensions?: Extension;
   focus?: boolean;
+  linkBaseUrl?: LiveMdLinkBaseUrl | null;
   onBlur?: (view: EditorView) => void;
   onChange?: (change: LiveMdEditorChange) => void;
   parent: Element | DocumentFragment;
@@ -62,7 +64,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
     state: EditorState.create({
       doc: initialValue,
       extensions: [
-        liveMarkdown(),
+        liveMarkdown({ linkBaseUrl: options.linkBaseUrl }),
         codeFenceHighlightModule,
         markdownCompartment.of([]),
         placeholderCompartment.of(placeholderValue(options.placeholder)),
