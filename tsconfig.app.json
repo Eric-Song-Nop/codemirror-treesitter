@@ -19,7 +19,6 @@
       "loro-codemirror": ["./node_modules/loro-codemirror/src/index.ts"]
     },
     "types": ["vite-plus/client"],
-    "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   }
 }
