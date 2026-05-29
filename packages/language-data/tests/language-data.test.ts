@@ -10,10 +10,17 @@ import {
   syntaxTreeAvailable,
   tagHighlighter,
   tags,
+  type SyntaxNode,
   type TreeSitterLanguage,
 } from "@codemirror-treesitter/language";
 import { __testHighlightTree } from "../../language/src/highlight.js";
 import { languages } from "../src/index.js";
+
+function ancestorNames(node: SyntaxNode) {
+  let names: string[] = [];
+  for (let cur: SyntaxNode | null = node; cur; cur = cur.parent) names.push(cur.name);
+  return names;
+}
 
 describe("tree-sitter language data", () => {
   it("matches upstream filenames, aliases, and extensions for tree-sitter-backed entries", () => {
@@ -731,6 +738,39 @@ describe("tree-sitter language data", () => {
           span.class.includes("monospace"),
       ),
     ).toBe(true);
+  });
+
+  it("parses whole-paragraph Markdown delimiter spans independently", async () => {
+    let support = await languages.find((lang) => lang.name == "Markdown")!.load();
+    let target = "The editor keeps Markdown as the source while the page reads like composed text.";
+    let delimiters = [
+      { source: `_${target}_`, node: "emphasis" },
+      { source: `*${target}*`, node: "emphasis" },
+      { source: `__${target}__`, node: "strong_emphasis" },
+      { source: `**${target}**`, node: "strong_emphasis" },
+      { source: `~~${target}~~`, node: "strikethrough" },
+    ];
+    let followers = ["\n\nNext paragraph\n", "\n\n> Next quote\n", "\n\n- Next list item\n"];
+
+    for (let delimiter of delimiters) {
+      for (let follower of followers) {
+        let doc = delimiter.source + follower;
+        let state = EditorState.create({ doc, extensions: [support.extension] });
+        let node = syntaxTree(state).resolveInner(doc.indexOf(target));
+
+        expect(ancestorNames(node)).toContain(delimiter.node);
+      }
+    }
+  });
+
+  it("parses Markdown delimiter spans inside pipe table cells", async () => {
+    let support = await languages.find((lang) => lang.name == "Markdown")!.load();
+    let target = "cell text";
+    let doc = `| _${target}_ | next |\n| --- | --- |\n| value | next |\n`;
+    let state = EditorState.create({ doc, extensions: [support.extension] });
+    let node = syntaxTree(state).resolveInner(doc.indexOf(target));
+
+    expect(ancestorNames(node)).toContain("emphasis");
   });
 
   it("parses Markdown closing code fences at EOF", async () => {

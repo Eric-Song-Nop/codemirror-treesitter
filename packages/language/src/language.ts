@@ -81,9 +81,11 @@ export type NestedParser =
   | TreeSitterParser
   | ((tree: Tree, ranges: readonly DocRange[]) => TreeSitterParser | null);
 
+type NestedParserRanges = readonly DocRange[] | readonly (readonly DocRange[])[];
+
 export interface NestedParserSource {
   parser: NestedParser;
-  ranges: (tree: Tree) => readonly DocRange[];
+  ranges: (tree: Tree) => NestedParserRanges;
 }
 
 let parserInit: Promise<void> | null = null;
@@ -286,38 +288,38 @@ export class TreeSitterParser implements TreeConfig {
     if (!this.nestedParsers.length) return outer;
     let nested: NestedTree[] = [];
     for (let source of this.nestedParsers) {
-      let ranges = normalizeRanges(source.ranges(outer));
-      if (!ranges.length) continue;
-      let parser = resolveNestedParser(source.parser, outer, ranges);
-      if (!parser) continue;
-      if (parser.isSkippingParser) {
-        parser.skipNestedRanges(ranges);
-        continue;
+      for (let ranges of normalizeRangeGroups(source.ranges(outer))) {
+        let parser = resolveNestedParser(source.parser, outer, ranges);
+        if (!parser) continue;
+        if (parser.isSkippingParser) {
+          parser.skipNestedRanges(ranges);
+          continue;
+        }
+        let oldNested =
+          oldTree?.nested.find(
+            (tree) =>
+              tree.parser == parser &&
+              tree.ranges.some((oldRange) =>
+                ranges.some((range) => oldRange.from <= range.to && oldRange.to >= range.from),
+              ),
+          ) ?? null;
+        let tsParser = nestedParsers?.get(parser);
+        if (!tsParser) {
+          tsParser = parser.createParser();
+          nestedParsers?.set(parser, tsParser);
+        }
+        let parsed = parser.parseWith(
+          tsParser,
+          doc,
+          oldNested?.tree.tree ?? null,
+          shouldStop,
+          ranges,
+        );
+        if (!parsed) return null;
+        let tree = parser.wrapTree(parsed, doc, oldNested?.tree ?? null, shouldStop, nestedParsers);
+        if (!tree) return null;
+        nested.push({ parser, tree, ranges });
       }
-      let oldNested =
-        oldTree?.nested.find(
-          (tree) =>
-            tree.parser == parser &&
-            tree.ranges.some((oldRange) =>
-              ranges.some((range) => oldRange.from <= range.to && oldRange.to >= range.from),
-            ),
-        ) ?? null;
-      let tsParser = nestedParsers?.get(parser);
-      if (!tsParser) {
-        tsParser = parser.createParser();
-        nestedParsers?.set(parser, tsParser);
-      }
-      let parsed = parser.parseWith(
-        tsParser,
-        doc,
-        oldNested?.tree.tree ?? null,
-        shouldStop,
-        ranges,
-      );
-      if (!parsed) return null;
-      let tree = parser.wrapTree(parsed, doc, oldNested?.tree ?? null, shouldStop, nestedParsers);
-      if (!tree) return null;
-      nested.push({ parser, tree, ranges });
     }
     return new Tree(tree, this, doc.length, nested);
   }
@@ -424,6 +426,17 @@ function normalizeRanges(ranges: readonly DocRange[]): DocRange[] {
     else result.push(range);
   }
   return result;
+}
+
+function normalizeRangeGroups(ranges: NestedParserRanges): DocRange[][] {
+  if (!ranges.length) return [];
+  if (Array.isArray(ranges[0])) {
+    return (ranges as readonly (readonly DocRange[])[])
+      .map((group) => normalizeRanges(group))
+      .filter((group) => group.length);
+  }
+  let group = normalizeRanges(ranges as readonly DocRange[]);
+  return group.length ? [group] : [];
 }
 
 function resolveNestedParser(
