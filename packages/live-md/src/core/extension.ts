@@ -4,10 +4,12 @@ import { EditorView, keymap, placeholder as placeholderExtension } from "@codemi
 import { liveMdKeymap } from "./commands.js";
 import { liveMdAnalysis } from "./decorations.js";
 import { codeFenceLanguagesField } from "./languages.js";
+import { liveMdLinkBase, liveMdLinkInteractions, type LiveMdLinkBaseUrl } from "./links.js";
 
 export type LiveMarkdownOptions = {
   ariaLabel?: string;
   className?: string;
+  linkBaseUrl?: LiveMdLinkBaseUrl | null;
   placeholder?: string;
   spellcheck?: boolean;
 };
@@ -27,6 +29,8 @@ export function liveMarkdown(options: LiveMarkdownOptions = {}): Extension {
     EditorView.editorAttributes.of({
       class: options.className ?? "live-md-codemirror",
     }),
+    liveMdLinkBase(options.linkBaseUrl),
+    liveMdLinkInteractions(),
     liveMdAnalysis,
   ];
 
