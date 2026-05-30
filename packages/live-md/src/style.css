@@ -191,6 +191,10 @@
   text-underline-offset: 0.18em;
 }
 
+.live-md-codemirror .cm-md-link.cm-md-link-shift-hover[data-live-md-href] {
+  cursor: pointer;
+}
+
 .live-md-codemirror .cm-md-latex {
   color: #142723;
 }

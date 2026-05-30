@@ -1,8 +1,9 @@
 import { Facet, type Extension } from "@codemirror/state";
-import { Decoration, EditorView } from "@codemirror/view";
+import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 
 const allowedLinkProtocols = new Set(["http:", "https:", "mailto:", "tel:"]);
 const allowedBaseProtocols = new Set(["http:", "https:"]);
+const shiftHoverClass = "cm-md-link-shift-hover";
 const linkMarkCache = new Map<string, Decoration>();
 const plainLinkMark = Decoration.mark({ class: "cm-md-link" });
 
@@ -37,22 +38,96 @@ export function liveMdLinkMark(destination: null | string | undefined, baseUrl: 
 }
 
 export function liveMdLinkInteractions(): Extension {
-  return EditorView.domEventHandlers({
-    mousedown(event) {
-      if (!event.shiftKey || !eventLiveMdLink(event)) return false;
-      event.preventDefault();
-      return true;
-    },
-    click(event) {
-      let link = eventLiveMdLink(event);
-      if (!link || !event.shiftKey) return false;
+  return [
+    liveMdShiftHoverCursor,
+    EditorView.domEventHandlers({
+      mousedown(event) {
+        if (!event.shiftKey || !eventLiveMdLink(event)) return false;
+        event.preventDefault();
+        return true;
+      },
+      click(event) {
+        let link = eventLiveMdLink(event);
+        if (!link || !event.shiftKey) return false;
 
-      event.preventDefault();
-      openLiveMdLink(link.dataset.liveMdHref!);
-      return true;
-    },
-  });
+        event.preventDefault();
+        openLiveMdLink(link.dataset.liveMdHref!);
+        return true;
+      },
+    }),
+  ];
 }
+
+const liveMdShiftHoverCursor = ViewPlugin.fromClass(
+  class {
+    private hoveredLink: HTMLElement | null = null;
+    private shiftPressed = false;
+
+    destroy() {
+      this.setHoveredLink(null);
+    }
+
+    onMouseMove(event: MouseEvent) {
+      this.setHoveredLink(eventLiveMdLink(event));
+      this.setShiftPressed(event.shiftKey);
+    }
+
+    onMouseLeave() {
+      this.setHoveredLink(null);
+    }
+
+    onKeyDown(event: KeyboardEvent) {
+      if (event.key == "Shift") this.setShiftPressed(true);
+    }
+
+    onKeyUp(event: KeyboardEvent) {
+      if (event.key == "Shift") this.setShiftPressed(false);
+    }
+
+    onBlur() {
+      this.setShiftPressed(false);
+    }
+
+    private setHoveredLink(link: HTMLElement | null) {
+      if (link == this.hoveredLink) return;
+      this.hoveredLink?.classList.remove(shiftHoverClass);
+      this.hoveredLink = link;
+      this.sync();
+    }
+
+    private setShiftPressed(pressed: boolean) {
+      if (pressed == this.shiftPressed) return;
+      this.shiftPressed = pressed;
+      this.sync();
+    }
+
+    private sync() {
+      this.hoveredLink?.classList.toggle(shiftHoverClass, this.shiftPressed);
+    }
+  },
+  {
+    eventHandlers: {
+      blur() {
+        this.onBlur();
+      },
+      keydown(event) {
+        this.onKeyDown(event);
+      },
+      keyup(event) {
+        this.onKeyUp(event);
+      },
+      mouseleave() {
+        this.onMouseLeave();
+      },
+      mousemove(event) {
+        this.onMouseMove(event);
+      },
+      mouseover(event) {
+        this.onMouseMove(event);
+      },
+    },
+  },
+);
 
 function normalizeLiveMdLinkDestination(source: null | string | undefined, baseUrl: null | string) {
   let destination = normalizeMarkdownDestination(source);
