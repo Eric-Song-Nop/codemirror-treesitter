@@ -45,6 +45,26 @@ describe("LiveMD links", () => {
     expect(openLink).not.toHaveBeenCalled();
   });
 
+  it("shows the pointer cursor affordance only while Shift is held over a link", async () => {
+    let editor = await mountEditor("[Vite+](https://viteplus.dev/)");
+    let link = firstClickableLink(editor.view);
+
+    moveOverLink(link);
+    expect(link.classList.contains("cm-md-link-shift-hover")).toBe(false);
+
+    dispatchShiftKey(editor.view, "keydown");
+    expect(link.classList.contains("cm-md-link-shift-hover")).toBe(true);
+
+    dispatchShiftKey(editor.view, "keyup");
+    expect(link.classList.contains("cm-md-link-shift-hover")).toBe(false);
+
+    moveOverLink(link, { shiftKey: true });
+    expect(link.classList.contains("cm-md-link-shift-hover")).toBe(true);
+
+    editor.view.contentDOM.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
+    expect(link.classList.contains("cm-md-link-shift-hover")).toBe(false);
+  });
+
   it("opens URI autolinks without their angle brackets", async () => {
     let editor = await mountEditor("<https://viteplus.dev/>\n\nnext");
     let link = firstClickableLink(editor.view);
@@ -182,4 +202,22 @@ function clickLink(link: HTMLElement, init: MouseEventInit = {}) {
 
 function shiftClick(link: HTMLElement) {
   clickLink(link, { shiftKey: true });
+}
+
+function moveOverLink(link: HTMLElement, init: MouseEventInit = {}) {
+  link.dispatchEvent(
+    new MouseEvent("mouseover", {
+      bubbles: true,
+      ...init,
+    }),
+  );
+}
+
+function dispatchShiftKey(view: EditorView, type: "keydown" | "keyup") {
+  view.contentDOM.dispatchEvent(
+    new KeyboardEvent(type, {
+      bubbles: true,
+      key: "Shift",
+    }),
+  );
 }
