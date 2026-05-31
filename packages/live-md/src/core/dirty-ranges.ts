@@ -59,6 +59,7 @@ export function analyzeLiveMdDirtyRanges(
     ...input,
     sourceRanges: [
       ...(input.sourceRanges ?? []),
+      ...collectTreeSeededSyntaxDirtyRanges(input),
       ...collectInvalidatedSyntaxNodeDirtyRanges(input.state, input.invalidations ?? []),
     ],
   });
@@ -98,6 +99,44 @@ export function collectLiveMdDirtyRanges(input: CollectLiveMdDirtyRangesInput): 
 }
 
 export const __testCollectLiveMdDirtyRanges = collectLiveMdDirtyRanges;
+
+function collectTreeSeededSyntaxDirtyRanges(
+  input: Pick<AnalyzeLiveMdDirtyRangesInput, "changes" | "registry" | "startState" | "state">,
+): LiveMdDirtySourceRange[] {
+  let ranges: LiveMdDirtySourceRange[] = [];
+  input.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    let oldContext = featureContext(input.startState, input.registry, { from: fromA, to: toA });
+    let newContext = featureContext(input.state, input.registry, { from: fromB, to: toB });
+    if (sameContext(oldContext, newContext)) return;
+    ranges.push({ from: fromB, reason: "syntax", to: toB });
+  });
+  return ranges;
+}
+
+function featureContext(
+  state: EditorState,
+  registry: LiveMdDirtyRangeRegistry,
+  range: Pick<LiveMdDirtyRange, "from" | "to">,
+) {
+  let names = new Set<string>();
+  for (let boundary of dirtyBoundaries(state, range)) {
+    for (
+      let current: SyntaxNodeIterator | null = syntaxTree(state).resolveStack(
+        boundary.pos,
+        boundary.side,
+      );
+      current;
+      current = current.next
+    ) {
+      if (registry.hasNode(current.node.name)) names.add(current.node.name);
+    }
+  }
+  return Array.from(names).sort();
+}
+
+function sameContext(left: readonly string[], right: readonly string[]) {
+  return left.length == right.length && left.every((name, index) => name == right[index]);
+}
 
 export type CollectSyntaxNodeDirtyRangesInput = {
   nodes: readonly string[];
@@ -157,6 +196,13 @@ type MutableDirtyRange = {
 type SyntaxNodeIterator = {
   next: SyntaxNodeIterator | null;
   node: SyntaxNode;
+};
+
+type DirtyBoundary = {
+  from: number;
+  pos: number;
+  side: -1 | 0 | 1;
+  to: number;
 };
 
 const reasonOrder: readonly LiveMdDirtyReason[] = [
@@ -291,7 +337,10 @@ function smallestFeatureNode(
       let key = `${node.name}:${node.from}:${node.to}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (!registry.hasNode(node.name) || !touches(node.from, node.to, range.from, range.to)) {
+      if (
+        !registry.hasNode(node.name) ||
+        !touches(node.from, node.to, boundary.from, boundary.to)
+      ) {
         continue;
       }
       if (!found || node.to - node.from < found.to - found.from) found = node;
@@ -300,14 +349,42 @@ function smallestFeatureNode(
   return found;
 }
 
-function dirtyBoundaries(state: EditorState, range: Pick<LiveMdDirtyRange, "from" | "to">) {
+function dirtyBoundaries(
+  state: EditorState,
+  range: Pick<LiveMdDirtyRange, "from" | "to">,
+): DirtyBoundary[] {
   let from = clamp(range.from, 0, state.doc.length);
   let to = clamp(range.to, 0, state.doc.length);
-  if (from == to) return [{ pos: from, side: 0 as const }];
+  if (from == to) {
+    let boundaries: DirtyBoundary[] = [{ from, pos: from, side: 0, to }];
+    let next = nextNonWhitespace(state, from);
+    if (next < state.doc.length) {
+      boundaries.push({ from: next, pos: next, side: 1, to: next + 1 });
+    }
+    let previous = previousNonWhitespace(state, from);
+    if (previous >= 0) {
+      boundaries.push({ from: previous, pos: previous, side: 1, to: previous + 1 });
+    }
+    return boundaries;
+  }
   return [
-    { pos: from, side: 1 as const },
-    { pos: to, side: -1 as const },
+    { from, pos: from, side: 1, to },
+    { from, pos: to, side: -1, to },
   ];
+}
+
+function nextNonWhitespace(state: EditorState, from: number) {
+  for (let pos = from; pos < state.doc.length; pos++) {
+    if (!/\s/u.test(state.sliceDoc(pos, pos + 1))) return pos;
+  }
+  return state.doc.length;
+}
+
+function previousNonWhitespace(state: EditorState, from: number) {
+  for (let pos = Math.min(from - 1, state.doc.length - 1); pos >= 0; pos--) {
+    if (!/\s/u.test(state.sliceDoc(pos, pos + 1))) return pos;
+  }
+  return -1;
 }
 
 function expandByScope(

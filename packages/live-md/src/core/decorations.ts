@@ -13,7 +13,7 @@ import {
   patchRangeSet,
   rangesTouch,
   syntaxTree,
-  syntaxTreeChangedRanges,
+  type DocRange,
   type SyntaxNode,
   type Tree,
 } from "@codemirror-treesitter/language";
@@ -90,6 +90,18 @@ type CodeFenceContentChangeResult = {
   touched: boolean;
 };
 
+type DirtyBoundary = {
+  from: number;
+  pos: number;
+  side: -1 | 0 | 1;
+  to: number;
+};
+
+type SyntaxNodeIterator = {
+  next: SyntaxNodeIterator | null;
+  node: SyntaxNode;
+};
+
 const emptyCodeFenceSyntaxChanges: CodeFenceSyntaxChanges = {
   highlights: [],
   sourceRanges: [],
@@ -122,12 +134,12 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
       transaction.startState,
       transaction.state,
     );
-    let syntaxChangedRanges = syntaxTreeChangedRanges(transaction);
+    let syntaxTreeChanged = syntaxTree(transaction.startState) != syntaxTree(transaction.state);
     if (
       !transaction.docChanged &&
       !transaction.selection &&
       !codeFenceLanguageUpdate &&
-      !syntaxChangedRanges.length
+      !syntaxTreeChanged
     ) {
       return value;
     }
@@ -153,10 +165,14 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
         : undefined,
       previousActiveLines: transaction.selection ? Array.from(value.activeLines) : undefined,
       registry: liveMdFeatureRegistry,
-      sourceRanges: codeFenceSyntaxChanges.sourceRanges,
+      sourceRanges: [
+        ...(syntaxTreeChanged && !transaction.docChanged
+          ? [{ from: 0, reason: "syntax" as const, to: transaction.state.doc.length }]
+          : []),
+        ...codeFenceSyntaxChanges.sourceRanges,
+      ],
       startState: transaction.startState,
       state: transaction.state,
-      syntaxChangedRanges,
     });
     return patchLiveMdAnalysis(
       value,
@@ -506,8 +522,9 @@ function analyzeCodeFenceSyntaxChanges(
   let highlights: CodeFenceHighlightTree[] = [];
   let sourceRanges: LiveMdDirtySourceRange[] = [];
   for (let previous of previousHighlights) {
-    let contentFrom = changes.mapPos(previous.contentFrom, 1);
-    let contentTo = changes.mapPos(previous.contentTo, -1);
+    // Treat edits exactly at content boundaries as part of the code fence body.
+    let contentFrom = changes.mapPos(previous.contentFrom, -1);
+    let contentTo = changes.mapPos(previous.contentTo, 1);
     if (contentFrom >= contentTo) continue;
 
     let contentChanges = codeFenceContentChangeResult(
@@ -535,17 +552,18 @@ function analyzeCodeFenceSyntaxChanges(
       tree,
     };
     highlights.push(highlight);
-    let changedRanges = oldTree.tree
-      ? oldTree.tree.getChangedRanges(tree.tree!)
-      : [{ startIndex: 0, endIndex: tree.length }];
-    if (!changedRanges.length) continue;
-
-    let rangeFrom = Math.min(...changedRanges.map((range) => range.startIndex));
-    sourceRanges.push({
-      from: contentFrom + rangeFrom,
-      reason: "syntax",
-      to: codeFenceContentDirtyTo(state, contentTo),
-    });
+    for (let range of codeFenceSyntaxDirtyRanges(
+      oldTree,
+      tree,
+      contentChanges.changes,
+      sourceText,
+    )) {
+      sourceRanges.push({
+        from: contentFrom + range.from,
+        reason: "syntax",
+        to: contentFrom + range.to,
+      });
+    }
   }
 
   return highlights.length || sourceRanges.length
@@ -566,6 +584,117 @@ function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) 
   return (
     startState.field(codeFenceLanguagesField, false) != state.field(codeFenceLanguagesField, false)
   );
+}
+
+function codeFenceSyntaxDirtyRanges(
+  oldTree: Tree,
+  newTree: Tree,
+  changes: ChangeDesc,
+  sourceText: Text,
+): DocRange[] {
+  if (!oldTree.tree || !newTree.tree) return [{ from: 0, to: sourceText.length }];
+  let ranges: DocRange[] = [];
+  changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    let range = { from: fromB, to: toB };
+    if (sameCodeSyntaxContext(oldTree, newTree, sourceText, range)) return;
+    ranges.push(codeFenceSyntaxRange(sourceText, range));
+  });
+  return normalizeDocRanges(ranges);
+}
+
+function sameCodeSyntaxContext(oldTree: Tree, newTree: Tree, sourceText: Text, range: DocRange) {
+  let oldContext = codeSyntaxContext(oldTree, sourceText, range);
+  let newContext = codeSyntaxContext(newTree, sourceText, range);
+  return (
+    oldContext.length == newContext.length &&
+    oldContext.every((name, index) => name == newContext[index])
+  );
+}
+
+function codeSyntaxContext(tree: Tree, sourceText: Text, range: DocRange) {
+  let names = new Set<string>();
+  for (let boundary of codeFenceDirtyBoundaries(sourceText, range)) {
+    for (
+      let current: SyntaxNodeIterator | null = tree.resolveStack(boundary.pos, boundary.side);
+      current;
+      current = current.next
+    ) {
+      let { node } = current;
+      if (!node.type.isAnonymous) names.add(node.name);
+    }
+  }
+  return Array.from(names).sort();
+}
+
+function codeFenceSyntaxRange(sourceText: Text, range: DocRange): DocRange {
+  // Nested highlight state can spill past the smallest changed syntax node.
+  return {
+    from: codeFenceTouchedLine(sourceText, range.from).from,
+    to: codeFenceSyntaxDirtyTo(sourceText, range),
+  };
+}
+
+function codeFenceSyntaxDirtyTo(sourceText: Text, range: DocRange) {
+  if (range.from < range.to) return sourceText.length;
+  if (sourceText.length <= 0) return sourceText.length;
+  return sourceText.sliceString(sourceText.length - 1, sourceText.length) == "\n"
+    ? sourceText.length - 1
+    : sourceText.length;
+}
+
+function codeFenceDirtyBoundaries(sourceText: Text, range: DocRange): DirtyBoundary[] {
+  let from = clamp(range.from, 0, sourceText.length);
+  let to = clamp(range.to, 0, sourceText.length);
+  if (from < to) {
+    return [
+      { from, pos: from, side: 1, to },
+      { from, pos: to, side: -1, to },
+    ];
+  }
+
+  let boundaries: DirtyBoundary[] = [{ from, pos: from, side: 0, to }];
+  let next = nextNonWhitespaceText(sourceText, from);
+  if (next < sourceText.length) boundaries.push({ from: next, pos: next, side: 1, to: next + 1 });
+  let previous = previousNonWhitespaceText(sourceText, from);
+  if (previous >= 0) boundaries.push({ from: previous, pos: previous, side: 1, to: previous + 1 });
+  return boundaries;
+}
+
+function codeFenceTouchedLine(sourceText: Text, pos: number): DocRange {
+  let line = sourceText.lineAt(clamp(pos, 0, sourceText.length));
+  return { from: line.from, to: line.to };
+}
+
+function nextNonWhitespaceText(sourceText: Text, from: number) {
+  for (let pos = from; pos < sourceText.length; pos++) {
+    if (!/\s/u.test(sourceText.sliceString(pos, pos + 1))) return pos;
+  }
+  return sourceText.length;
+}
+
+function previousNonWhitespaceText(sourceText: Text, from: number) {
+  for (let pos = Math.min(from - 1, sourceText.length - 1); pos >= 0; pos--) {
+    if (!/\s/u.test(sourceText.sliceString(pos, pos + 1))) return pos;
+  }
+  return -1;
+}
+
+function normalizeDocRanges(ranges: readonly DocRange[]): DocRange[] {
+  let sorted = [...ranges].sort((left, right) => left.from - right.from || left.to - right.to);
+  let merged: DocRange[] = [];
+  for (let range of sorted) {
+    let last = merged[merged.length - 1];
+    if (last && range.from <= last.to) {
+      last.to = Math.max(last.to, range.to);
+    } else {
+      merged.push({ from: range.from, to: range.to });
+    }
+  }
+  return merged;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function getActiveLines(state: EditorState) {
@@ -1156,11 +1285,6 @@ function codeFenceHighlightKey(contentFrom: number, contentTo: number, language:
 
 function codeFenceSourceText(state: EditorState, contentFrom: number, contentTo: number) {
   return Text.of(state.sliceDoc(contentFrom, contentTo).split("\n"));
-}
-
-function codeFenceContentDirtyTo(state: EditorState, contentTo: number) {
-  if (contentTo <= 0) return contentTo;
-  return state.sliceDoc(contentTo - 1, contentTo) == "\n" ? contentTo - 1 : contentTo;
 }
 
 function codeFenceHighlightRange(context: VisitContext, contentFrom: number, sourceLength: number) {
