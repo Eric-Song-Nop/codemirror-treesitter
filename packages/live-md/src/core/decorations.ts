@@ -75,6 +75,15 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
       state: transaction.state,
       syntaxChangedRanges,
     });
+    if (codeFenceLanguageUpdate && !dirtyRanges.length) {
+      dirtyRanges = [
+        {
+          from: 0,
+          reasons: ["syntax"],
+          to: transaction.state.doc.length,
+        },
+      ];
+    }
     return patchLiveMdAnalysis(
       value,
       transaction.state,
@@ -163,6 +172,10 @@ function buildLiveMdAnalysis(
     owners: output.owners,
     queryRanges: [],
   };
+}
+
+export function __testBuildLiveMdAnalysis(state: EditorState) {
+  return buildLiveMdAnalysis(state, []);
 }
 
 export function __testLiveMdOwnerSnapshots(analysis: LiveMdAnalysis) {
@@ -881,7 +894,7 @@ function renderParagraphGapOwners(
       let current = children[index]!;
       nextOwnerId = renderParagraphGapOwner(
         plan,
-        blockBreakFrom(previous),
+        blockBreakFrom(plan.state, previous),
         current.from,
         nextOwnerId,
         ranges,
@@ -892,7 +905,7 @@ function renderParagraphGapOwners(
     if (last) {
       nextOwnerId = renderParagraphGapOwner(
         plan,
-        blockBreakFrom(last),
+        blockBreakFrom(plan.state, last),
         node.to,
         nextOwnerId,
         ranges,
@@ -981,13 +994,12 @@ function isBlockSiblingNode(node: SyntaxNode) {
   }
 }
 
-function blockBreakFrom(node: SyntaxNode): number {
+function blockBreakFrom(state: EditorState, node: SyntaxNode): number {
   let children = blockGapChildren(node);
   let last = children[children.length - 1];
-  if (last && last.to <= node.to) return blockBreakFrom(last);
-  if (node.to > node.from && node.tree.length >= node.to) {
-    let stateText = node.text;
-    if (stateText.endsWith("\n")) return node.to - 1;
+  if (last && last.to <= node.to) return blockBreakFrom(state, last);
+  if (node.to > node.from && node.to <= state.doc.length) {
+    if (state.sliceDoc(node.to - 1, node.to) == "\n") return node.to - 1;
   }
   return node.to;
 }
@@ -1023,8 +1035,8 @@ function ownerIdsTouching(owners: RangeSet<LiveMdOwner>, ranges: readonly LiveMd
   let ids = new Set<number>();
   if (!ranges.length) return ids;
   for (let range of ranges) {
-    owners.between(range.from, range.to, (_from, _to, owner) => {
-      ids.add(owner.id);
+    owners.between(range.from, range.to, (from, to, owner) => {
+      if (rangesTouch(from, to, range.from, range.to)) ids.add(owner.id);
     });
   }
   return ids;

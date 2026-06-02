@@ -1,7 +1,16 @@
 import { Compartment, EditorState } from "@codemirror/state";
+import { ensureSyntaxTree } from "@codemirror-treesitter/language";
 import { describe, expect, it } from "vite-plus/test";
-import { __testLiveMdOwnerSnapshots, liveMdAnalysis } from "../src/core/decorations.js";
-import { codeFenceLanguagesField, loadMarkdownExtension } from "../src/core/languages.js";
+import {
+  __testBuildLiveMdAnalysis,
+  __testLiveMdOwnerSnapshots,
+  liveMdAnalysis,
+} from "../src/core/decorations.js";
+import {
+  codeFenceLanguagesField,
+  loadMarkdownExtension,
+  setCodeFenceLanguages,
+} from "../src/core/languages.js";
 
 describe("LiveMD query owner analysis", () => {
   it("records text dirty ranges", () => {
@@ -65,6 +74,48 @@ describe("LiveMD query owner analysis", () => {
     expect(snapshots.queryRanges[0]!.from).toBeGreaterThan(0);
     expect(snapshots.affectedRanges).toEqual([{ from: 0, reasons: ["text"], to: tableTo }]);
   });
+
+  it("keeps incremental owners consistent with a fresh final analysis", async () => {
+    await expectIncrementalOwnersToMatchFresh({
+      startDoc: ["| Name | Value |", "| --- | ---: |", ...numberedTableRows(40), "", "after"].join(
+        "\n",
+      ),
+      replace: "row 30",
+      insert: "row thirty",
+      selectionText: "after",
+    });
+
+    await expectIncrementalOwnersToMatchFresh({
+      startDoc: "[docs](https://one.example)\n\nnext",
+      replace: "one.example",
+      insert: "two.example",
+      selectionText: "next",
+    });
+
+    await expectIncrementalOwnersToMatchFresh({
+      startDoc: "first\nsecond",
+      replace: "\n",
+      insert: "\n\n",
+      selectionText: "second",
+    });
+  });
+
+  it("does not duplicate owners when code fence languages update without text changes", async () => {
+    let markdown = new Compartment();
+    let doc = "# Title\n\n```ts\ncode\n```\n\n[docs](https://example.test)";
+    let state = EditorState.create({
+      doc,
+      extensions: [codeFenceLanguagesField, liveMdAnalysis, markdown.of([])],
+    });
+    state = state.update({ effects: markdown.reconfigure(await loadMarkdownExtension()) }).state;
+    let before = normalizedOwners(state.field(liveMdAnalysis));
+
+    state = state.update({ effects: setCodeFenceLanguages.of(new Map()) }).state;
+    let after = normalizedOwners(state.field(liveMdAnalysis));
+
+    expect(after).toEqual(before);
+    expect(new Set(after.map(ownerKey)).size).toBe(after.length);
+  });
 });
 
 function analysisState(doc: string, selection = 0) {
@@ -81,4 +132,48 @@ async function markdownAnalysisState(doc: string, selection = 0) {
     selection: { anchor: selection },
     extensions: [codeFenceLanguagesField, liveMdAnalysis, await loadMarkdownExtension()],
   });
+}
+
+async function expectIncrementalOwnersToMatchFresh(spec: {
+  insert: string;
+  replace: string;
+  selectionText: string;
+  startDoc: string;
+}) {
+  let editFrom = spec.startDoc.indexOf(spec.replace);
+  expect(editFrom).toBeGreaterThanOrEqual(0);
+  let finalDoc =
+    spec.startDoc.slice(0, editFrom) +
+    spec.insert +
+    spec.startDoc.slice(editFrom + spec.replace.length);
+  let startState = await markdownAnalysisState(
+    spec.startDoc,
+    spec.startDoc.indexOf(spec.selectionText),
+  );
+  let transaction = startState.update({
+    changes: { from: editFrom, to: editFrom + spec.replace.length, insert: spec.insert },
+  });
+  let freshState = await markdownAnalysisState(finalDoc, finalDoc.indexOf(spec.selectionText));
+  ensureSyntaxTree(freshState, freshState.doc.length, 5_000);
+
+  expect(normalizedOwners(transaction.state.field(liveMdAnalysis))).toEqual(
+    normalizedOwners(__testBuildLiveMdAnalysis(freshState)),
+  );
+}
+
+function normalizedOwners(analysis: Parameters<typeof __testLiveMdOwnerSnapshots>[0]) {
+  return __testLiveMdOwnerSnapshots(analysis)
+    .owners.map(({ from, kind, to }) => ({ from, kind, to }))
+    .sort(
+      (left, right) =>
+        left.from - right.from || left.to - right.to || left.kind.localeCompare(right.kind),
+    );
+}
+
+function ownerKey(owner: { from: number; kind: string; to: number }) {
+  return `${owner.kind}:${owner.from}:${owner.to}`;
+}
+
+function numberedTableRows(count: number) {
+  return Array.from({ length: count }, (_, index) => `| row ${index} | ${index} |`);
 }

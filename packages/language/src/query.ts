@@ -56,9 +56,14 @@ export class TreeSitterQuery {
     let resolved = this.resolveTarget(target);
     if (!resolved) return [];
     let contained = containedRange(options);
+    let intersecting = intersectingRange(options);
     return this.query
       .captures(resolved.node, queryOptions(options, resolved.node))
-      .filter((capture) => !contained || containsNode(contained, capture.node))
+      .filter(
+        (capture) =>
+          (!intersecting || intersectsNode(intersecting, capture.node)) &&
+          (!contained || containsNode(contained, capture.node)),
+      )
       .map((capture) => wrapCapture(resolved.tree, capture));
   }
 
@@ -69,11 +74,14 @@ export class TreeSitterQuery {
     let resolved = this.resolveTarget(target);
     if (!resolved) return [];
     let contained = containedRange(options);
+    let intersecting = intersectingRange(options);
     return this.query
       .matches(resolved.node, queryOptions(options, resolved.node))
       .filter(
         (match) =>
-          !contained || match.captures.every((capture) => containsNode(contained, capture.node)),
+          (!intersecting ||
+            match.captures.some((capture) => intersectsNode(intersecting, capture.node))) &&
+          (!contained || match.captures.every((capture) => containsNode(contained, capture.node))),
       )
       .map((match) => {
         return withProperties(
@@ -100,15 +108,31 @@ export class TreeSitterQuery {
 function queryOptions(options: TreeSitterQueryOptions, node: TSNode): TSQueryOptions {
   let result: TSQueryOptions = {};
   if (options.from != null || options.to != null) {
-    result.startIndex = options.from ?? 0;
-    result.endIndex = options.to ?? node.endIndex;
+    let from = options.from ?? node.startIndex;
+    let to = options.to ?? node.endIndex;
+    if (to >= node.endIndex - 1) {
+      if (options.matchLimit !== undefined) result.matchLimit = options.matchLimit;
+      if (options.maxStartDepth != null) result.maxStartDepth = options.maxStartDepth;
+      return result;
+    }
+    let range = expandedNativeRange(node, from, to);
+    result.startIndex = range.from;
+    result.endIndex = range.to;
     result.startPosition = pointAt(node, result.startIndex);
     result.endPosition = pointAt(node, result.endIndex);
   }
   if (options.containedFrom != null || options.containedTo != null) {
     if (options.from == null && options.to == null) {
-      result.startIndex = options.containedFrom ?? 0;
-      result.endIndex = options.containedTo ?? node.endIndex;
+      let from = options.containedFrom ?? node.startIndex;
+      let to = options.containedTo ?? node.endIndex;
+      if (to >= node.endIndex - 1) {
+        if (options.matchLimit !== undefined) result.matchLimit = options.matchLimit;
+        if (options.maxStartDepth != null) result.maxStartDepth = options.maxStartDepth;
+        return result;
+      }
+      let range = expandedNativeRange(node, from, to);
+      result.startIndex = range.from;
+      result.endIndex = range.to;
       result.startPosition = pointAt(node, result.startIndex);
       result.endPosition = pointAt(node, result.endIndex);
     }
@@ -118,10 +142,33 @@ function queryOptions(options: TreeSitterQueryOptions, node: TSNode): TSQueryOpt
   return result;
 }
 
+function expandedNativeRange(node: TSNode, from: number, to: number) {
+  return {
+    from: Math.max(node.startIndex, from - 1),
+    to: Math.max(node.startIndex, Math.min(node.endIndex + 1, to + 1)),
+  };
+}
+
+function intersectingRange(options: TreeSitterQueryOptions) {
+  return options.from != null || options.to != null
+    ? { from: options.from ?? 0, to: options.to ?? Infinity }
+    : null;
+}
+
 function containedRange(options: TreeSitterQueryOptions) {
   return options.containedFrom != null || options.containedTo != null
     ? { from: options.containedFrom ?? 0, to: options.containedTo ?? Infinity }
     : null;
+}
+
+function intersectsNode(range: { from: number; to: number }, node: TSNode) {
+  if (node.startIndex == node.endIndex && range.from == range.to)
+    return node.startIndex == range.from;
+  if (node.startIndex == node.endIndex) {
+    return node.startIndex >= range.from && node.startIndex < range.to;
+  }
+  if (range.from == range.to) return node.startIndex <= range.from && node.endIndex >= range.from;
+  return node.startIndex < range.to && node.endIndex > range.from;
 }
 
 function containsNode(range: { from: number; to: number }, node: TSNode) {
@@ -182,7 +229,8 @@ function pointAt(node: TSNode, index: number) {
   let column = root.startPosition.column;
   let text = root.text;
   let start = root.startIndex;
-  let end = Math.min(text.length, Math.max(0, index - start));
+  let target = Math.max(0, index - start);
+  let end = Math.min(text.length, target);
   for (let i = 0; i < end; i++) {
     if (text.charCodeAt(i) == 10) {
       row++;
@@ -190,6 +238,10 @@ function pointAt(node: TSNode, index: number) {
     } else {
       column++;
     }
+  }
+  for (let i = end; i < target; i++) {
+    row++;
+    column = 0;
   }
   return { row, column };
 }

@@ -63,6 +63,43 @@ describe("mermaid rendering", () => {
     expect(editor.view.contentDOM.querySelector(".cm-md-mermaid")).toBeTruthy();
   });
 
+  it("updates the block preview when the fence language changes", async () => {
+    let doc = "```text\nflowchart TD\n  A --> B\n```\n\nnext";
+    let editor = await mountEditor(doc, "next");
+
+    expect(editor.view.contentDOM.querySelector(".cm-md-mermaid")).toBeNull();
+
+    editor.view.dispatch({
+      changes: {
+        from: doc.indexOf("text"),
+        to: doc.indexOf("text") + "text".length,
+        insert: "mermaid",
+      },
+    });
+
+    let widget = editor.view.contentDOM.querySelector<HTMLElement>(".cm-md-mermaid");
+    expect(widget).toBeTruthy();
+    expect(widget?.dataset.source).toBe("flowchart TD\n  A --> B");
+  });
+
+  it("restores fence source when the mermaid language is removed", async () => {
+    let doc = "```mermaid\nflowchart TD\n  A --> B\n```\n\nnext";
+    let editor = await mountEditor(doc, "next");
+
+    expect(editor.view.contentDOM.querySelector(".cm-md-mermaid")).toBeTruthy();
+
+    editor.view.dispatch({
+      changes: {
+        from: doc.indexOf("mermaid"),
+        to: doc.indexOf("mermaid") + "mermaid".length,
+        insert: "text",
+      },
+    });
+
+    expect(editor.view.contentDOM.querySelector(".cm-md-mermaid")).toBeNull();
+    expect(editor.view.contentDOM.textContent).toContain("```text");
+  });
+
   it("keeps mermaid source editable on the active line", async () => {
     let doc = "```mermaid\nflowchart TD\n  A --> B\n```\n\nnext";
     let editor = await mountEditor(doc, "next");

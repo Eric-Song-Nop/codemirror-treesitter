@@ -12,13 +12,26 @@ const javascriptWasm = new URL(
   "../../../node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm",
   import.meta.url,
 ).pathname;
+const markdownWasm = new URL(
+  "../../language-data/src/wasm/tree-sitter-markdown.wasm",
+  import.meta.url,
+).pathname;
 
 let javascriptParser: Promise<TreeSitterParser> | null = null;
+let markdownParser: Promise<TreeSitterParser> | null = null;
 
 async function javascriptTree(doc: string) {
   javascriptParser ??= TreeSitterParser.load(javascriptWasm);
   let parser = await javascriptParser;
   let language = TreeSitterLanguage.define({ name: "javascript", parser });
+  let state = EditorState.create({ doc, extensions: [language.extension] });
+  return { parser, tree: syntaxTree(state) };
+}
+
+async function markdownTree(doc: string) {
+  markdownParser ??= TreeSitterParser.load(markdownWasm, { implicitFinalNewline: true });
+  let parser = await markdownParser;
+  let language = TreeSitterLanguage.define({ name: "markdown", parser });
   let state = EditorState.create({ doc, extensions: [language.extension] });
   return { parser, tree: syntaxTree(state) };
 }
@@ -80,6 +93,17 @@ describe("tree-sitter query wrapper", () => {
       .captures(tree, { from: value, to: value + 1 });
 
     expect(captureTexts(captures)).toEqual([doc.trimEnd()]);
+  });
+
+  it("keeps from/to query windows valid across implicit final newlines", async () => {
+    let doc = "[docs](https://two.example)\n\nnext";
+    let { parser, tree } = await markdownTree(doc);
+    let captures = parser.query("(paragraph) @paragraph").captures(tree, {
+      from: 0,
+      to: tree.topNode.to,
+    });
+
+    expect(captureTexts(captures)).toEqual(["[docs](https://two.example)\n", "next\n"]);
   });
 
   it("uses containedFrom/containedTo as a fully-contained query window", async () => {
