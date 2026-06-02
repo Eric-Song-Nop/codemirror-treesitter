@@ -513,6 +513,70 @@ function liveMdQueryRanges(
   return mergeLiveMdRanges(expanded);
 }
 
+function liveMdAffectedRanges(
+  state: EditorState,
+  dirtyRanges: readonly LiveMdDirtyRange[],
+  queryRanges: readonly LiveMdDirtyRange[],
+  fallbackRanges: readonly LiveMdDirtyRange[],
+): readonly LiveMdDirtyRange[] {
+  let tree = syntaxTree(state);
+  let query = liveMdOwnerQuery(tree);
+  if (!query) return fallbackRanges;
+
+  let ownerRanges: LiveMdDirtyRange[] = [];
+  for (let dirtyRange of dirtyRanges) {
+    let queryRange = queryRanges.find((range) =>
+      rangesTouch(range.from, range.to, dirtyRange.from, dirtyRange.to),
+    );
+    if (!queryRange) continue;
+    for (let capture of query.captures(tree, { from: queryRange.from, to: queryRange.to })) {
+      let kind = liveMdOwnerKind(capture.name);
+      if (!kind) continue;
+      let ownerRange = liveMdAffectedOwnerRange(state, capture.node, kind, dirtyRange);
+      if (!ownerRange) continue;
+      ownerRanges.push({ ...ownerRange, reasons: dirtyRange.reasons });
+    }
+  }
+
+  return mergeLiveMdRanges([...fallbackRanges, ...ownerRanges]);
+}
+
+function liveMdAffectedOwnerRange(
+  state: EditorState,
+  node: SyntaxNode,
+  kind: LiveMdOwnerKind,
+  dirtyRange: LiveMdDirtyRange,
+): Pick<LiveMdDirtyRange, "from" | "to"> | null {
+  switch (kind) {
+    case "table":
+      return { from: node.from, to: node.to };
+    case "codeFence":
+      return codeFenceOwnerInvalidationRange(state, node, dirtyRange);
+    case "heading":
+    case "rule":
+      return liveMdOwnerRange(state, node, kind);
+    default:
+      return null;
+  }
+}
+
+function codeFenceOwnerInvalidationRange(
+  state: EditorState,
+  node: SyntaxNode,
+  dirtyRange: LiveMdDirtyRange,
+): Pick<LiveMdDirtyRange, "from" | "to"> | null {
+  if (dirtyRange.reasons.includes("codeFenceLanguages")) return { from: node.from, to: node.to };
+  let content = node.getChild("code_fence_content");
+  if (
+    content &&
+    dirtyRange.from >= content.from &&
+    dirtyRange.to <= codeFenceContentDirtyTo(state, content.to)
+  ) {
+    return null;
+  }
+  return { from: node.from, to: node.to };
+}
+
 function mergeLiveMdRanges(ranges: readonly LiveMdDirtyRange[]) {
   let sorted = ranges
     .map((range) => ({ ...range }))
@@ -555,13 +619,13 @@ function patchLiveMdAnalysis(
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
   let queryRanges = liveMdQueryRanges(state, dirtyRanges);
-  let affectedRanges = expandedDirtyRanges;
+  let affectedRanges = liveMdAffectedRanges(state, dirtyRanges, queryRanges, expandedDirtyRanges);
   let { owners, nextOwnerId } = buildLiveMdOwners(state, previous.nextOwnerId);
   let plan = buildLiveMdPlan(
     state,
     activeLines,
     codeFenceLanguages,
-    expandedDirtyRanges,
+    affectedRanges,
     previous.codeFenceHighlightTrees,
     changes,
     precomputedCodeFenceHighlights,
