@@ -7,13 +7,7 @@ import {
   type DocRange,
 } from "@codemirror-treesitter/language";
 import { describe, expect, it } from "vite-plus/test";
-import {
-  __testCollectLiveMdDirtyRanges,
-  analyzeLiveMdDirtyRanges,
-  collectSyntaxNodeDirtyRanges,
-} from "../src/core/dirty-ranges.js";
-import { __testLiveMdFeatureRegistry } from "../src/core/decorations.js";
-import { loadMarkdownExtension } from "../src/core/languages.js";
+import { __testCollectLiveMdDirtyRanges } from "../src/core/dirty-ranges.js";
 
 const javascriptWasm = new URL(
   "../../../node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm",
@@ -86,7 +80,7 @@ describe("LiveMD dirty range collection", () => {
     ).toEqual([{ from: 4, reasons: ["text"], to: 4 }]);
   });
 
-  it("merges text ranges covered by code fence language invalidation ranges", () => {
+  it("merges text ranges covered by source invalidation ranges", () => {
     let state = EditorState.create({ doc: "```ts\nlet a = 1;\n```\n" });
     let transaction = state.update({
       changes: { from: 10, to: 11, insert: "b" },
@@ -110,55 +104,6 @@ describe("LiveMD dirty range collection", () => {
         to: contentLine.to + 1,
       },
     ]);
-  });
-
-  it("collects syntax node dirty ranges for code fence language invalidation", async () => {
-    let doc = "```ts\nlet a = 1;\n```\n\nplain\n\n```ts\nlet b = 2;\n```\n";
-    let state = await markdownState(doc);
-    let firstContentLine = state.doc.lineAt(doc.indexOf("let a"));
-    let secondContentLine = state.doc.lineAt(doc.indexOf("let b"));
-
-    expect(
-      collectSyntaxNodeDirtyRanges({
-        nodes: ["code_fence_content"],
-        reason: "codeFenceLanguages",
-        state,
-      }),
-    ).toEqual([
-      { from: firstContentLine.from, reason: "codeFenceLanguages", to: firstContentLine.to + 1 },
-      { from: secondContentLine.from, reason: "codeFenceLanguages", to: secondContentLine.to + 1 },
-    ]);
-  });
-
-  it("analyzes dirty ranges, feature invalidations, and expanded ranges through one API", async () => {
-    let doc = "![alt](one.png)\n\n```ts\nlet a = 1;\n```\n\nplain";
-    let state = await markdownState(doc);
-    let dirtyFrom = doc.indexOf("one");
-    let transaction = state.update({
-      changes: { from: dirtyFrom, to: dirtyFrom + 3, insert: "two" },
-    });
-    let nextDoc = transaction.state.doc.toString();
-    let contentLine = transaction.state.doc.lineAt(nextDoc.indexOf("let a"));
-
-    expect(
-      analyzeLiveMdDirtyRanges({
-        changes: transaction.changes,
-        invalidations: [{ nodes: ["code_fence_content"], reason: "codeFenceLanguages" }],
-        registry: __testLiveMdFeatureRegistry,
-        startState: state,
-        state: transaction.state,
-        syntaxChangedRanges: [],
-      }),
-    ).toEqual({
-      dirtyRanges: [
-        { from: dirtyFrom, reasons: ["text"], to: dirtyFrom + 3 },
-        { from: contentLine.from, reasons: ["codeFenceLanguages"], to: contentLine.to + 1 },
-      ],
-      expandedDirtyRanges: [
-        { from: 0, reasons: ["text"], to: "![alt](two.png)".length },
-        { from: contentLine.from, reasons: ["codeFenceLanguages"], to: contentLine.to + 1 },
-      ],
-    });
   });
 
   it("adds old and new active lines for selection-only updates", () => {
@@ -191,19 +136,9 @@ async function javascriptState(doc: string) {
   javascriptParser ??= TreeSitterParser.load(javascriptWasm);
   let parser = await javascriptParser;
   let language = TreeSitterLanguage.define({ name: "javascript", parser });
-  return {
-    parser,
-    state: EditorState.create({ doc, extensions: [language.extension] }),
-  };
-}
-
-async function markdownState(doc: string) {
-  let state = EditorState.create({
-    doc,
-    extensions: [await loadMarkdownExtension()],
-  });
+  let state = EditorState.create({ doc, extensions: [language.extension] });
   ensureSyntaxTree(state, doc.length, 5_000);
-  return state;
+  return { parser, state };
 }
 
 function changedSyntaxRanges(
