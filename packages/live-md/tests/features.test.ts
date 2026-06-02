@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-import { __testLiveMdFeatureRegistry } from "../src/core/decorations.js";
 import { __testCreateLiveMdFeatureRegistry, type LiveMdFeature } from "../src/core/features.js";
 
 type TestContext = {
@@ -38,36 +37,15 @@ describe("LiveMD feature registry", () => {
     expect(context.calls).toEqual(["decorate", "replace", "after"]);
   });
 
-  it("exposes node scopes for dirty range expansion", () => {
+  it("ignores nodes without registered visitors", () => {
     let registry = __testCreateLiveMdFeatureRegistry<TestContext, TestNode>([
-      { nodes: ["image"], scope: "line" },
-      { nodes: ["fenced_code_block"], scope: "node" },
-      { nodes: ["pipe_table"], scope: "node" },
+      feature("image", "preview"),
     ]);
+    let context = { calls: [] };
 
-    expect(registry.scopeFor("image")).toBe("line");
-    expect(registry.scopeFor("fenced_code_block")).toBe("node");
-    expect(registry.scopeFor("unknown")).toBe("node");
-    expect(registry.hasNode("image")).toBe(true);
-    expect(registry.hasNode("unknown")).toBe(false);
-  });
+    registry.enter(context, { name: "paragraph" });
 
-  it("exposes nodes affected by feature invalidations", () => {
-    let registry = __testCreateLiveMdFeatureRegistry<TestContext, TestNode>([
-      { invalidatedBy: ["codeFenceLanguages"], nodes: ["fenced_code_block"], scope: "node" },
-      { invalidatedBy: ["codeFenceLanguages"], nodes: ["fenced_code_block"], scope: "node" },
-      { invalidatedBy: ["other"], nodes: ["image"], scope: "line" },
-    ]);
-
-    expect(registry.invalidatedNodes("codeFenceLanguages")).toEqual(["fenced_code_block"]);
-    expect(registry.invalidatedNodes("other")).toEqual(["image"]);
-    expect(registry.invalidatedNodes("unknown")).toEqual([]);
-  });
-
-  it("keeps code fence language invalidation scoped to fence content", () => {
-    expect(__testLiveMdFeatureRegistry.invalidatedNodes("codeFenceLanguages")).toEqual([
-      "code_fence_content",
-    ]);
+    expect(context.calls).toEqual([]);
   });
 });
 

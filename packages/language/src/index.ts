@@ -12,12 +12,15 @@ export {
   TreeSitterLanguage,
   TreeSitterParser,
   classHighlighter,
+  compileTreeSitterQuery,
   defineLanguageFacet,
   ensureSyntaxTree,
   forceParsing,
   getStyleTags,
   language,
   languageDataProp,
+  queryNodeCaptures,
+  queryTreeCaptures,
   styleTags,
   sublanguageProp,
   syntaxParserRunning,
@@ -37,6 +40,9 @@ export {
   type SyntaxNode,
   type SyntaxNodeRef,
   type TreeSitterParserConfig,
+  type TreeSitterQueryCapture,
+  type TreeSitterQueryOptions,
+  type TreeSitterQuerySource,
 } from "./language.js";
 
 export {
