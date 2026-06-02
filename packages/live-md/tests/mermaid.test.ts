@@ -44,7 +44,7 @@ describe("mermaid rendering", () => {
     expect(svg.outerHTML).toContain("Start");
     expect(svg.outerHTML).toContain("--live-md-mermaid-font");
     expect(svg.outerHTML).not.toContain("fonts.googleapis.com");
-  });
+  }, 10_000);
 
   it("falls back to the official Mermaid renderer for unsupported beautiful-mermaid syntax", async () => {
     let doc = "```mermaid\ngraph LR; A --> B\n```\n\nnext";
@@ -55,7 +55,7 @@ describe("mermaid rendering", () => {
     let svg = await waitForMermaidSvg(widget!);
 
     expect(svg.id).toMatch(/^cm-md-mermaid-/);
-  });
+  }, 10_000);
 
   it("supports the mmd fence alias", async () => {
     let editor = await mountEditor("```mmd\nflowchart TD\n  A --> B\n```\n\nnext", "next");

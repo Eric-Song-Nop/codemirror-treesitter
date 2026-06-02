@@ -67,28 +67,43 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
     }
 
     let activeLines = getActiveLines(transaction.state);
-    let dirtyRanges = collectLiveMdDirtyRanges({
+    let previousActiveLines = transaction.selection ? Array.from(value.activeLines) : undefined;
+    let newDirtyRanges = collectLiveMdDirtyRanges({
       activeLines: transaction.selection ? Array.from(activeLines) : undefined,
       changes: transaction.changes,
-      previousActiveLines: transaction.selection ? Array.from(value.activeLines) : undefined,
       startState: transaction.startState,
       state: transaction.state,
       syntaxChangedRanges,
     });
-    if (codeFenceLanguageUpdate && !dirtyRanges.length) {
-      dirtyRanges = [
+    let oldDirtyRanges = collectOldLiveMdDirtyRanges(
+      transaction.startState,
+      transaction.changes,
+      syntaxChangedRanges,
+      previousActiveLines,
+    );
+    if (codeFenceLanguageUpdate && !newDirtyRanges.length && !oldDirtyRanges.length) {
+      newDirtyRanges = [
         {
           from: 0,
           reasons: ["syntax"],
           to: transaction.state.doc.length,
         },
       ];
+      oldDirtyRanges = [
+        {
+          from: 0,
+          reasons: ["syntax"],
+          to: transaction.startState.doc.length,
+        },
+      ];
     }
     return patchLiveMdAnalysis(
       value,
+      transaction.startState,
       transaction.state,
       transaction.changes,
-      dirtyRanges,
+      oldDirtyRanges,
+      newDirtyRanges,
       activeLines,
     );
   },
@@ -449,19 +464,84 @@ function mergeReasons(
   ) as readonly LiveMdDirtyReason[];
 }
 
+function collectOldLiveMdDirtyRanges(
+  startState: EditorState,
+  changes: ChangeDesc,
+  syntaxChangedRanges: readonly Pick<LiveMdDirtyRange, "from" | "to">[],
+  previousActiveLines: readonly number[] | undefined,
+) {
+  let ranges: LiveMdDirtyRange[] = [];
+  changes.iterChangedRanges((from, to) => {
+    ranges.push({ from, reasons: ["text"], to });
+  });
+  ranges.push(...mapLiveMdRanges(changes.invertedDesc, syntaxChangedRanges, ["syntax"]));
+  for (let lineNumber of previousActiveLines ?? []) {
+    let range = lineDirtyRange(startState, lineNumber, "selection");
+    if (range) ranges.push(range);
+  }
+  return mergeLiveMdRanges(ranges);
+}
+
+function lineDirtyRange(
+  state: EditorState,
+  lineNumber: number,
+  reason: LiveMdDirtyReason,
+): LiveMdDirtyRange | null {
+  if (lineNumber < 1 || lineNumber > state.doc.lines) return null;
+  let line = state.doc.line(lineNumber);
+  return { from: line.from, reasons: [reason], to: line.to };
+}
+
+function mapLiveMdRanges(
+  changes: ChangeDesc,
+  ranges: readonly (Pick<LiveMdDirtyRange, "from" | "to"> &
+    Partial<Pick<LiveMdDirtyRange, "reasons">>)[],
+  fallbackReasons?: readonly LiveMdDirtyReason[],
+) {
+  return mergeLiveMdRanges(
+    ranges.map((range) => {
+      let sourceFrom = clamp(range.from, 0, changes.length);
+      let sourceTo = clamp(range.to, 0, changes.length);
+      let from = changes.mapPos(sourceFrom, 1);
+      let to = changes.mapPos(sourceTo, -1);
+      return {
+        from: Math.min(from, to),
+        reasons: range.reasons ?? fallbackReasons ?? [],
+        to: Math.max(from, to),
+      };
+    }),
+  );
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function clampPosition(state: EditorState, pos: number) {
   return Math.min(state.doc.length, Math.max(0, pos));
 }
 
 function patchLiveMdAnalysis(
   previous: LiveMdAnalysis,
+  startState: EditorState,
   state: EditorState,
   changes: ChangeDesc,
-  dirtyRanges: readonly LiveMdDirtyRange[],
+  oldDirtyRanges: readonly LiveMdDirtyRange[],
+  newDirtyRanges: readonly LiveMdDirtyRange[],
   activeLines: Set<number>,
 ): LiveMdAnalysis {
-  let queryRanges = liveMdQueryRanges(state, dirtyRanges);
-  let affectedRanges = liveMdAffectedRanges(state, dirtyRanges, queryRanges);
+  let oldQueryRanges = liveMdQueryRanges(startState, oldDirtyRanges);
+  let newQueryRanges = liveMdQueryRanges(state, newDirtyRanges);
+  let mappedOldQueryRanges = mapLiveMdRanges(changes, oldQueryRanges);
+  let queryRanges = mergeLiveMdRanges([...mappedOldQueryRanges, ...newQueryRanges]);
+  let oldAffectedRanges = liveMdAffectedRanges(startState, oldDirtyRanges, oldQueryRanges);
+  let newAffectedRanges = liveMdAffectedRanges(state, newDirtyRanges, newQueryRanges);
+  let mappedOldAffectedRanges = mapLiveMdRanges(changes, oldAffectedRanges);
+  let affectedRanges = mergeLiveMdRanges([...mappedOldAffectedRanges, ...newAffectedRanges]);
+  let dirtyRanges = mergeLiveMdRanges([
+    ...mapLiveMdRanges(changes, oldDirtyRanges),
+    ...newDirtyRanges,
+  ]);
   let mappedOwners = previous.owners.map(changes);
   let refreshRanges = mergeLiveMdRanges([...affectedRanges, ...queryRanges]);
   let invalidOwnerIds = ownerIdsTouching(mappedOwners, refreshRanges);

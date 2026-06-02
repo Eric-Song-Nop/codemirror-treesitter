@@ -75,6 +75,30 @@ describe("LiveMD query owner analysis", () => {
     expect(snapshots.affectedRanges).toEqual([{ from: 0, reasons: ["text"], to: tableTo }]);
   });
 
+  it("uses old-tree owner hits when the new tree no longer contains that owner", async () => {
+    let rows = numberedTableRows(30);
+    let doc = ["| Name | Value |", "| --- | ---: |", ...rows, "", "after"].join("\n");
+    let state = await markdownAnalysisState(doc, doc.indexOf("after"));
+    let delimiterFrom = doc.indexOf("| --- | ---: |");
+    let transaction = state.update({
+      changes: {
+        from: delimiterFrom,
+        to: delimiterFrom + "| --- | ---: |".length,
+        insert: "not a delimiter",
+      },
+    });
+    let snapshots = __testLiveMdOwnerSnapshots(transaction.state.field(liveMdAnalysis));
+    let finalDoc = transaction.state.doc.toString();
+    let oldTableMappedTo = finalDoc.indexOf("\n\nafter") + 1;
+
+    expect(snapshots.owners.some((owner) => owner.kind == "table")).toBe(false);
+    expect(snapshots.affectedRanges).toContainEqual({
+      from: 0,
+      reasons: ["text", "syntax"],
+      to: oldTableMappedTo,
+    });
+  });
+
   it("keeps incremental owners consistent with a fresh final analysis", async () => {
     await expectIncrementalOwnersToMatchFresh({
       startDoc: ["| Name | Value |", "| --- | ---: |", ...numberedTableRows(40), "", "after"].join(
@@ -97,6 +121,13 @@ describe("LiveMD query owner analysis", () => {
       replace: "\n",
       insert: "\n\n",
       selectionText: "second",
+    });
+
+    await expectIncrementalOwnersToMatchFresh({
+      startDoc: [...numberedQuoteRows(30), "", "after"].join("\n"),
+      replace: "> quote 20",
+      insert: "quote 20",
+      selectionText: "after",
     });
   });
 
@@ -176,4 +207,8 @@ function ownerKey(owner: { from: number; kind: string; to: number }) {
 
 function numberedTableRows(count: number) {
   return Array.from({ length: count }, (_, index) => `| row ${index} | ${index} |`);
+}
+
+function numberedQuoteRows(count: number) {
+  return Array.from({ length: count }, (_, index) => `> quote ${index}`);
 }
