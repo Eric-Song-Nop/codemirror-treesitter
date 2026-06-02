@@ -26,8 +26,7 @@ and a CSS export.
 - Render live Markdown decorations for headings, lists, task checkboxes,
   blockquotes, inline emphasis/strong/strike/code/link syntax, tables, images,
   thematic breaks, LaTeX, Mermaid diagrams, and code fences.
-- Patch decorations incrementally with dirty-range analysis so edits avoid full
-  document recomputation where possible.
+- Patch decorations incrementally through query-owned invalidation.
 - Support Shadow DOM styling, CSS custom properties, persistence, readonly
   mode, placeholder text, focus/blur, selection APIs, dirty tracking, ready and
   error events, and fixtures for demos/benchmarks.
@@ -133,5 +132,5 @@ vp run @codemirror-treesitter/live-md#build
 ```
 
 The LiveMD test suite covers web component behavior, readonly commands,
-dirty-range expansion, feature registration, code fences, LaTeX, Mermaid,
+dirty-range collection, query owner analysis, code fences, LaTeX, Mermaid,
 paragraph breaks, and style installation.

@@ -1,7 +1,7 @@
 import type { ChangeDesc, EditorState } from "@codemirror/state";
 import type { DocRange } from "@codemirror-treesitter/language";
 
-export type LiveMdDirtyReason = "codeFenceLanguages" | "selection" | "syntax" | "text";
+export type LiveMdDirtyReason = "selection" | "syntax" | "text";
 
 export type LiveMdDirtyRange = {
   from: number;
@@ -47,12 +47,7 @@ type MutableDirtyRange = {
   to: number;
 };
 
-const reasonOrder: readonly LiveMdDirtyReason[] = [
-  "text",
-  "syntax",
-  "selection",
-  "codeFenceLanguages",
-];
+const reasonOrder: readonly LiveMdDirtyReason[] = ["text", "syntax", "selection"];
 
 function addLineRange(
   ranges: MutableDirtyRange[],
