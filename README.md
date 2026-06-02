@@ -141,7 +141,7 @@ this repository replace the language-aware layers above those primitives.
 
 | Directory                | Package                                | Role                                                                                                                            |
 | ------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/language`      | `@codemirror-treesitter/language`      | Tree-sitter parser, query, and CodeMirror-compatible language infrastructure.                                                  |
+| `packages/language`      | `@codemirror-treesitter/language`      | Tree-sitter parser, query, and CodeMirror-compatible language infrastructure.                                                   |
 | `packages/language-data` | `@codemirror-treesitter/language-data` | Lazy language metadata, Tree-sitter WASM loading, highlight-query loading, and mixed-language parser wiring.                    |
 | `packages/commands`      | `@codemirror-treesitter/commands`      | Cursor movement, selection, deletion, indentation, commenting, history, and keymaps.                                            |
 | `packages/autocomplete`  | `@codemirror-treesitter/autocomplete`  | Completion contexts, sources, results, tooltip UI, filtering, snippets, word completion, and close brackets.                    |
