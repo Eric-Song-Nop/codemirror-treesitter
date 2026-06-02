@@ -95,6 +95,14 @@ export {
 } from "./incremental.js";
 
 export {
+  TreeSitterQuery,
+  type TreeSitterQueryCapture,
+  type TreeSitterQueryMatch,
+  type TreeSitterQueryOptions,
+  type TreeSitterQueryTarget,
+} from "./query.js";
+
+export {
   bracketMatching,
   bracketMatchingHandle,
   matchBrackets,

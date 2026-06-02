@@ -31,6 +31,7 @@ import {
   pointAfterText,
 } from "./tree.js";
 import { Tag, tagsForCapture } from "./tags.js";
+import { TreeSitterQuery } from "./query.js";
 
 export {
   NodeProp,
@@ -119,6 +120,13 @@ export class TreeSitterParser implements TreeConfig {
     let parser = new TSParser();
     parser.setLanguage(this.language);
     return parser;
+  }
+
+  query(source: string): TreeSitterQuery {
+    if (!this.language) {
+      throw new RangeError("Skipping parsers can not create tree-sitter queries");
+    }
+    return TreeSitterQuery.create(this.language, source);
   }
 
   static async init(options?: Parameters<typeof TSParser.init>[0]) {

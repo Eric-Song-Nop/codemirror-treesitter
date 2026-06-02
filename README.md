@@ -67,9 +67,9 @@ await editor.ready;
 
 - A Tree-sitter-backed replacement for the CodeMirror language layer, including
   `Language`, `LanguageSupport`, `LRLanguage`, `ParseContext`, syntax tree
-  wrappers, language data facets, mixed-language parsing, highlighting,
-  indentation, folding, bracket matching, bidi isolates, and stream-parser
-  compatibility.
+  wrappers, Tree-sitter query wrappers, language data facets, mixed-language
+  parsing, highlighting, indentation, folding, bracket matching, bidi isolates,
+  and stream-parser compatibility.
 - A language-data registry that mirrors CodeMirror language metadata while
   lazily loading Tree-sitter WASM grammars and highlight queries.
 - Lezer-free implementations of CodeMirror commands, autocompletion, close
@@ -98,9 +98,9 @@ this repository replace the language-aware layers above those primitives.
 1. **Tree-sitter language runtime**:
    `@codemirror-treesitter/language` adapts `web-tree-sitter` into
    CodeMirror's language interfaces. It owns parser scheduling, incremental
-   parsing, syntax-tree wrappers, nested parsing, syntax highlighting,
-   indentation, folding, bracket matching, bidi isolation, and stream-parser
-   support.
+   parsing, syntax-tree wrappers, Tree-sitter query execution, nested parsing,
+   syntax highlighting, indentation, folding, bracket matching, bidi isolation,
+   and stream-parser support.
 2. **Language registry**:
    `@codemirror-treesitter/language-data` builds `LanguageDescription` entries
    on top of the language runtime. Each entry owns aliases, filename and
@@ -141,7 +141,7 @@ this repository replace the language-aware layers above those primitives.
 
 | Directory                | Package                                | Role                                                                                                                            |
 | ------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/language`      | `@codemirror-treesitter/language`      | Tree-sitter parser integration and CodeMirror-compatible language infrastructure.                                               |
+| `packages/language`      | `@codemirror-treesitter/language`      | Tree-sitter parser, query, and CodeMirror-compatible language infrastructure.                                                  |
 | `packages/language-data` | `@codemirror-treesitter/language-data` | Lazy language metadata, Tree-sitter WASM loading, highlight-query loading, and mixed-language parser wiring.                    |
 | `packages/commands`      | `@codemirror-treesitter/commands`      | Cursor movement, selection, deletion, indentation, commenting, history, and keymaps.                                            |
 | `packages/autocomplete`  | `@codemirror-treesitter/autocomplete`  | Completion contexts, sources, results, tooltip UI, filtering, snippets, word completion, and close brackets.                    |
