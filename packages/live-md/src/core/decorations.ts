@@ -14,6 +14,8 @@ import {
   rangesTouch,
   syntaxTree,
   syntaxTreeChangedRanges,
+  TreeSitterParser,
+  type TreeSitterQuery,
   type SyntaxNode,
   type Tree,
 } from "@codemirror-treesitter/language";
@@ -111,6 +113,10 @@ type LiveMdAnalysis = {
   decorations: DecorationSet;
   dirtyRanges: readonly LiveMdDirtyRange[];
   expandedDirtyRanges: readonly LiveMdDirtyRange[];
+  affectedRanges: readonly LiveMdDirtyRange[];
+  nextOwnerId: number;
+  owners: RangeSet<LiveMdOwner>;
+  queryRanges: readonly LiveMdDirtyRange[];
 };
 
 export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
@@ -240,6 +246,33 @@ class AtomicRange extends RangeValue {
 
 const paragraphBreakAtom = new AtomicRange();
 
+type LiveMdOwnerKind =
+  | "blockquote"
+  | "codeFence"
+  | "codeFenceContent"
+  | "heading"
+  | "image"
+  | "inline"
+  | "latex"
+  | "link"
+  | "list"
+  | "paragraph"
+  | "rule"
+  | "table";
+
+class LiveMdOwner extends RangeValue {
+  constructor(
+    readonly id: number,
+    readonly kind: LiveMdOwnerKind,
+  ) {
+    super();
+  }
+
+  eq(other: RangeValue) {
+    return other instanceof LiveMdOwner && other.id == this.id && other.kind == this.kind;
+  }
+}
+
 class DecorationPlan {
   private atomicRanges: Array<{ from: number; to: number }> = [];
   private codeFenceHighlightTrees: CodeFenceHighlightTree[] = [];
@@ -358,19 +391,157 @@ function buildLiveMdAnalysis(
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
   let plan = buildLiveMdPlan(state, activeLines, codeFenceLanguages);
+  let { owners, nextOwnerId } = buildLiveMdOwners(state, 1);
   return {
     activeLines,
+    affectedRanges: [],
     atomicRanges: plan.finishAtomicRanges(),
     codeFenceHighlightTrees: plan.finishCodeFenceHighlightTrees(),
     codeFenceLanguages,
     decorations: plan.finish(),
     dirtyRanges,
     expandedDirtyRanges,
+    nextOwnerId,
+    owners,
+    queryRanges: [],
   };
 }
 
 export function __testBuildLiveMdAnalysis(state: EditorState) {
   return buildLiveMdAnalysis(state, [], []);
+}
+
+export function __testLiveMdOwnerSnapshots(analysis: LiveMdAnalysis) {
+  let owners: Array<{ from: number; id: number; kind: LiveMdOwnerKind; to: number }> = [];
+  analysis.owners.between(0, Number.MAX_SAFE_INTEGER, (from, to, owner) => {
+    owners.push({ from, id: owner.id, kind: owner.kind, to });
+  });
+  return {
+    affectedRanges: analysis.affectedRanges,
+    owners,
+    queryRanges: analysis.queryRanges,
+  };
+}
+
+const liveMdOwnerQuerySource = `
+  (atx_heading) @heading
+  (setext_heading) @heading
+  (block_quote) @blockquote
+  (list) @list
+  (fenced_code_block) @code_fence
+  (code_fence_content) @code_fence_content
+  (pipe_table) @table
+  (paragraph) @paragraph
+  (thematic_break) @rule
+`;
+
+const liveMdOwnerQueries = new WeakMap<TreeSitterParser, TreeSitterQuery>();
+
+function buildLiveMdOwners(state: EditorState, nextOwnerId: number) {
+  let tree = syntaxTree(state);
+  let query = liveMdOwnerQuery(tree);
+  let builder = new RangeSetBuilder<LiveMdOwner>();
+  if (!query) return { nextOwnerId, owners: builder.finish() };
+
+  let seen = new Set<string>();
+  for (let capture of query.captures(tree)) {
+    let kind = liveMdOwnerKind(capture.name);
+    if (!kind) continue;
+    let range = liveMdOwnerRange(state, capture.node, kind);
+    let key = `${kind}:${range.from}:${range.to}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    builder.add(range.from, range.to, new LiveMdOwner(nextOwnerId++, kind));
+  }
+  return { nextOwnerId, owners: builder.finish() };
+}
+
+function liveMdOwnerQuery(tree: Tree) {
+  let parser = tree.config instanceof TreeSitterParser ? tree.config : null;
+  if (!parser || !tree.tree) return null;
+  let query = liveMdOwnerQueries.get(parser);
+  if (!query) {
+    query = parser.query(liveMdOwnerQuerySource);
+    liveMdOwnerQueries.set(parser, query);
+  }
+  return query;
+}
+
+function liveMdOwnerKind(name: string): LiveMdOwnerKind | null {
+  switch (name) {
+    case "blockquote":
+    case "heading":
+    case "image":
+    case "inline":
+    case "latex":
+    case "link":
+    case "list":
+    case "paragraph":
+    case "rule":
+    case "table":
+      return name;
+    case "code_fence":
+      return "codeFence";
+    case "code_fence_content":
+      return "codeFenceContent";
+    default:
+      return null;
+  }
+}
+
+function liveMdOwnerRange(state: EditorState, node: SyntaxNode, kind: LiveMdOwnerKind) {
+  if (kind == "heading" || kind == "image" || kind == "paragraph" || kind == "rule") {
+    let first = state.doc.lineAt(node.from);
+    let last = state.doc.lineAt(Math.max(node.from, node.to - 1));
+    return { from: first.from, to: last.to };
+  }
+  return { from: node.from, to: node.to };
+}
+
+function liveMdQueryRanges(
+  state: EditorState,
+  dirtyRanges: readonly LiveMdDirtyRange[],
+): readonly LiveMdDirtyRange[] {
+  let expanded: LiveMdDirtyRange[] = [];
+  for (let range of dirtyRanges) {
+    let fromLine = state.doc.lineAt(clampPosition(state, range.from)).number;
+    let toLine = state.doc.lineAt(clampPosition(state, Math.max(range.from, range.to - 1))).number;
+    let first = state.doc.line(Math.max(1, fromLine - 1));
+    let last = state.doc.line(Math.min(state.doc.lines, toLine + 2));
+    expanded.push({ from: first.from, reasons: range.reasons, to: last.to });
+  }
+  return mergeLiveMdRanges(expanded);
+}
+
+function mergeLiveMdRanges(ranges: readonly LiveMdDirtyRange[]) {
+  let sorted = ranges
+    .map((range) => ({ ...range }))
+    .sort((left, right) => left.from - right.from || left.to - right.to);
+  let merged: LiveMdDirtyRange[] = [];
+  for (let range of sorted) {
+    let last = merged[merged.length - 1];
+    if (last && range.from <= last.to) {
+      last.to = Math.max(last.to, range.to);
+      last.reasons = mergeReasons(last.reasons, range.reasons);
+    } else {
+      merged.push(range);
+    }
+  }
+  return merged;
+}
+
+function mergeReasons(
+  left: readonly LiveMdDirtyReason[],
+  right: readonly LiveMdDirtyReason[],
+): readonly LiveMdDirtyReason[] {
+  let reasons = new Set([...left, ...right]);
+  return ["text", "syntax", "selection", "codeFenceLanguages"].filter((reason) =>
+    reasons.has(reason as LiveMdDirtyReason),
+  ) as readonly LiveMdDirtyReason[];
+}
+
+function clampPosition(state: EditorState, pos: number) {
+  return Math.min(state.doc.length, Math.max(0, pos));
 }
 
 function patchLiveMdAnalysis(
@@ -383,6 +554,9 @@ function patchLiveMdAnalysis(
   precomputedCodeFenceHighlights: readonly CodeFenceHighlightTree[] = [],
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
+  let queryRanges = liveMdQueryRanges(state, dirtyRanges);
+  let affectedRanges = expandedDirtyRanges;
+  let { owners, nextOwnerId } = buildLiveMdOwners(state, previous.nextOwnerId);
   let plan = buildLiveMdPlan(
     state,
     activeLines,
@@ -394,25 +568,29 @@ function patchLiveMdAnalysis(
   );
   return {
     activeLines,
+    affectedRanges,
     atomicRanges: patchRangeSet(
       previous.atomicRanges.map(changes),
-      expandedDirtyRanges,
+      affectedRanges,
       plan.finishAtomicRangeValues(),
     ),
     codeFenceHighlightTrees: mergeCodeFenceHighlightTrees(
       previous.codeFenceHighlightTrees,
       changes,
-      expandedDirtyRanges,
+      affectedRanges,
       plan.finishCodeFenceHighlightTrees(),
     ),
     codeFenceLanguages,
     decorations: patchRangeSet(
       previous.decorations.map(changes),
-      expandedDirtyRanges,
+      affectedRanges,
       plan.finishDecorationRanges(),
     ),
     dirtyRanges,
     expandedDirtyRanges,
+    nextOwnerId,
+    owners,
+    queryRanges,
   };
 }
 

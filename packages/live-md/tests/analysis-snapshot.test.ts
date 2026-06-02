@@ -2,7 +2,11 @@ import { Compartment, EditorState, type TransactionSpec } from "@codemirror/stat
 import type { Decoration } from "@codemirror/view";
 import { describe, expect, it } from "vite-plus/test";
 import { SyntaxNode } from "../../language/src/tree.js";
-import { __testBuildLiveMdAnalysis, liveMdAnalysis } from "../src/core/decorations.js";
+import {
+  __testBuildLiveMdAnalysis,
+  __testLiveMdOwnerSnapshots,
+  liveMdAnalysis,
+} from "../src/core/decorations.js";
 import {
   codeFenceLanguagesField,
   loadCodeFenceLanguages,
@@ -275,6 +279,28 @@ describe("LiveMD analysis snapshot", () => {
     expect(after).toHaveLength(before.length);
     expect(after[0]).toBe(before[0]);
     expect(after[1]).toBe(before[1]);
+  });
+
+  it("tracks query owners and lets affected owners escape the query window", async () => {
+    let rows = Array.from({ length: 40 }, (_, index) => `| row ${index} | ${index} |`);
+    let doc = ["| Name | Value |", "| --- | ---: |", ...rows, "", "after"].join("\n");
+    let state = await markdownAnalysisState(doc, doc.indexOf("after"));
+    let editFrom = doc.indexOf("row 30");
+    let transaction = state.update({
+      changes: { from: editFrom, to: editFrom + "row 30".length, insert: "row thirty" },
+    });
+    let analysis = transaction.state.field(liveMdAnalysis);
+    let tableTo = transaction.state.doc.toString().indexOf("\n\nafter") + 1;
+    let snapshots = __testLiveMdOwnerSnapshots(analysis);
+
+    expect(snapshots.owners).toContainEqual({
+      from: 0,
+      id: expect.any(Number),
+      kind: "table",
+      to: tableTo,
+    });
+    expect(snapshots.queryRanges[0]!.from).toBeGreaterThan(0);
+    expect(snapshots.affectedRanges).toEqual([{ from: 0, reasons: ["text"], to: tableTo }]);
   });
 
   it("patches latex edits without rebuilding untouched mapped latex widgets", async () => {
