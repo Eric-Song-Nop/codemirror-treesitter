@@ -9,17 +9,10 @@ export type LiveMdDirtyRange = {
   to: number;
 };
 
-export type LiveMdDirtySourceRange = {
-  from: number;
-  reason: LiveMdDirtyReason;
-  to: number;
-};
-
 export type CollectLiveMdDirtyRangesInput = {
   activeLines?: readonly number[];
   changes: ChangeDesc;
   previousActiveLines?: readonly number[];
-  sourceRanges?: readonly LiveMdDirtySourceRange[];
   startState: EditorState;
   state: EditorState;
   syntaxChangedRanges?: readonly DocRange[];
@@ -41,10 +34,6 @@ export function collectLiveMdDirtyRanges(input: CollectLiveMdDirtyRangesInput): 
   }
   for (let lineNumber of input.activeLines ?? []) {
     addLineRange(ranges, input.state, lineNumber, "selection");
-  }
-
-  for (let range of input.sourceRanges ?? []) {
-    addDirtyRange(ranges, input.state, range.from, range.to, range.reason);
   }
 
   return mergeDirtyRanges(ranges);

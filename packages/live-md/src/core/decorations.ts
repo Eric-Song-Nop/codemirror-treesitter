@@ -24,11 +24,9 @@ type LiveMdAnalysis = {
   activeLines: ReadonlySet<number>;
   affectedRanges: readonly LiveMdDirtyRange[];
   atomicRanges: RangeSet<RangeValue>;
-  codeFenceHighlightTrees: readonly never[];
   codeFenceLanguages: CodeFenceLanguageMap;
   decorations: DecorationSet;
   dirtyRanges: readonly LiveMdDirtyRange[];
-  expandedDirtyRanges: readonly LiveMdDirtyRange[];
   nextOwnerId: number;
   owners: RangeSet<LiveMdOwner>;
   queryRanges: readonly LiveMdDirtyRange[];
@@ -36,7 +34,7 @@ type LiveMdAnalysis = {
 
 export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
   create(state) {
-    return buildLiveMdAnalysis(state, [], []);
+    return buildLiveMdAnalysis(state, []);
   },
   update(value, transaction) {
     let codeFenceLanguageUpdate = codeFenceLanguagesChanged(
@@ -62,7 +60,7 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
       state: transaction.state,
       syntaxChangedRanges,
     });
-    return patchLiveMdAnalysis(value, transaction.state, dirtyRanges, dirtyRanges, activeLines);
+    return patchLiveMdAnalysis(value, transaction.state, dirtyRanges, activeLines);
   },
   provide(field) {
     return [
@@ -100,7 +98,6 @@ class LiveMdOwner extends RangeValue {
 function buildLiveMdAnalysis(
   state: EditorState,
   dirtyRanges: readonly LiveMdDirtyRange[],
-  expandedDirtyRanges: readonly LiveMdDirtyRange[],
   activeLines = getActiveLines(state),
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
@@ -109,11 +106,9 @@ function buildLiveMdAnalysis(
     activeLines,
     affectedRanges: [],
     atomicRanges: RangeSet.empty,
-    codeFenceHighlightTrees: [],
     codeFenceLanguages,
     decorations: Decoration.none,
     dirtyRanges,
-    expandedDirtyRanges,
     nextOwnerId,
     owners,
     queryRanges: [],
@@ -121,7 +116,7 @@ function buildLiveMdAnalysis(
 }
 
 export function __testBuildLiveMdAnalysis(state: EditorState) {
-  return buildLiveMdAnalysis(state, [], []);
+  return buildLiveMdAnalysis(state, []);
 }
 
 export function __testLiveMdOwnerSnapshots(analysis: LiveMdAnalysis) {
@@ -226,11 +221,10 @@ function liveMdAffectedRanges(
   state: EditorState,
   dirtyRanges: readonly LiveMdDirtyRange[],
   queryRanges: readonly LiveMdDirtyRange[],
-  fallbackRanges: readonly LiveMdDirtyRange[],
 ): readonly LiveMdDirtyRange[] {
   let tree = syntaxTree(state);
   let query = liveMdOwnerQuery(tree);
-  if (!query) return fallbackRanges;
+  if (!query) return [];
 
   let ownerRanges: LiveMdDirtyRange[] = [];
   for (let dirtyRange of dirtyRanges) {
@@ -247,7 +241,7 @@ function liveMdAffectedRanges(
     }
   }
 
-  return mergeLiveMdRanges([...fallbackRanges, ...ownerRanges]);
+  return mergeLiveMdRanges(ownerRanges);
 }
 
 function liveMdAffectedOwnerRange(
@@ -325,22 +319,19 @@ function patchLiveMdAnalysis(
   previous: LiveMdAnalysis,
   state: EditorState,
   dirtyRanges: readonly LiveMdDirtyRange[],
-  expandedDirtyRanges: readonly LiveMdDirtyRange[],
   activeLines: Set<number>,
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
   let queryRanges = liveMdQueryRanges(state, dirtyRanges);
-  let affectedRanges = liveMdAffectedRanges(state, dirtyRanges, queryRanges, expandedDirtyRanges);
+  let affectedRanges = liveMdAffectedRanges(state, dirtyRanges, queryRanges);
   let { owners, nextOwnerId } = buildLiveMdOwners(state, previous.nextOwnerId);
   return {
     activeLines,
     affectedRanges,
     atomicRanges: RangeSet.empty,
-    codeFenceHighlightTrees: [],
     codeFenceLanguages,
     decorations: Decoration.none,
     dirtyRanges,
-    expandedDirtyRanges,
     nextOwnerId,
     owners,
     queryRanges,

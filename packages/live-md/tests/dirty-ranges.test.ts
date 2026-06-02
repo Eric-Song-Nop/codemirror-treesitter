@@ -80,32 +80,6 @@ describe("LiveMD dirty range collection", () => {
     ).toEqual([{ from: 4, reasons: ["text"], to: 4 }]);
   });
 
-  it("merges text ranges covered by source invalidation ranges", () => {
-    let state = EditorState.create({ doc: "```ts\nlet a = 1;\n```\n" });
-    let transaction = state.update({
-      changes: { from: 10, to: 11, insert: "b" },
-    });
-    let contentLine = transaction.state.doc.lineAt(transaction.state.doc.toString().indexOf("let"));
-
-    expect(
-      __testCollectLiveMdDirtyRanges({
-        changes: transaction.changes,
-        sourceRanges: [
-          { from: contentLine.from, reason: "codeFenceLanguages", to: contentLine.to + 1 },
-        ],
-        startState: state,
-        state: transaction.state,
-        syntaxChangedRanges: [],
-      }),
-    ).toEqual([
-      {
-        from: contentLine.from,
-        reasons: ["text", "codeFenceLanguages"],
-        to: contentLine.to + 1,
-      },
-    ]);
-  });
-
   it("adds old and new active lines for selection-only updates", () => {
     let doc = "first\nsecond\nthird";
     let state = EditorState.create({
