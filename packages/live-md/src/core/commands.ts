@@ -1,8 +1,9 @@
 import { EditorSelection, type EditorState } from "@codemirror/state";
 import { indentWithTab } from "@codemirror-treesitter/commands";
-import { syntaxTree, type SyntaxNode } from "@codemirror-treesitter/language";
+import { queryTreeCaptures, syntaxTree, type SyntaxNode } from "@codemirror-treesitter/language";
 import { EditorView, keymap, type Command } from "@codemirror/view";
 import { hasAncestor, isAsciiDigit, isWhitespace, isWhitespaceOnly, type DocLine } from "./util.js";
+import lineMarkerQuerySource from "./queries/line-markers.scm?raw";
 
 type LineMarkers = {
   inCode: boolean;
@@ -32,41 +33,34 @@ function readLineMarkers(state: EditorState, line: DocLine) {
 
   if (result.inCode) return result;
 
-  syntaxTree(state).iterate({
+  for (let capture of queryTreeCaptures(syntaxTree(state), lineMarkerQuerySource, {
     from: line.from,
+    includeNested: false,
     to: line.to,
-    enter(node) {
-      if (node.name == "fenced_code_block") return false;
-      if (node.from < line.from || node.from > line.to) return;
-      switch (node.name) {
-        case "block_quote_marker":
-        case "block_continuation":
-          result.quoteTo = Math.max(result.quoteTo ?? line.from, node.to);
-          return;
-        case "list_marker_dot":
-        case "list_marker_minus":
-        case "list_marker_parenthesis":
-        case "list_marker_plus":
-        case "list_marker_star":
-          result.listMarker ??= {
-            from: node.from,
-            text: state.sliceDoc(node.from, node.to),
-            to: node.to,
-          };
-          return;
-        case "task_list_marker_checked":
-        case "task_list_marker_unchecked":
-          result.task ??= {
-            checked: node.name == "task_list_marker_checked",
-            from: node.from,
-            to: node.to,
-          };
-          return;
-        default:
-          return;
-      }
-    },
-  });
+  })) {
+    let { node } = capture;
+    if (node.from < line.from || node.from > line.to) continue;
+    switch (capture.name) {
+      case "quote":
+        result.quoteTo = Math.max(result.quoteTo ?? line.from, node.to);
+        break;
+      case "list":
+        result.listMarker ??= {
+          from: node.from,
+          text: state.sliceDoc(node.from, node.to),
+          to: node.to,
+        };
+        break;
+      case "task.checked":
+      case "task.unchecked":
+        result.task ??= {
+          checked: capture.name == "task.checked",
+          from: node.from,
+          to: node.to,
+        };
+        break;
+    }
+  }
 
   return result;
 }

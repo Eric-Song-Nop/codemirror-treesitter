@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
 
 import { EditorState } from "@codemirror/state";
-import { syntaxTree } from "@codemirror-treesitter/language";
+import { queryTreeMatches, syntaxTree } from "@codemirror-treesitter/language";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { createLiveMdEditor } from "../src/core/editor.js";
 import { loadMarkdownExtension } from "../src/core/languages.js";
+import codeFenceQuerySource from "./queries/code-fence.scm?raw";
 
 let locationDescriptor: PropertyDescriptor | undefined;
 
@@ -34,21 +35,7 @@ describe("code fence at end of document", () => {
     });
 
     let tree = syntaxTree(stateNoNewline);
-    let fencedBlocks: Array<{ delimiters: number; hasContent: boolean }> = [];
-
-    tree.iterate({
-      enter(node) {
-        if (node.name === "fenced_code_block") {
-          let delimiters = node.children.filter(
-            (child) => child.name === "fenced_code_block_delimiter",
-          );
-          fencedBlocks.push({
-            delimiters: delimiters.length,
-            hasContent: node.getChild("code_fence_content") !== null,
-          });
-        }
-      },
-    });
+    let fencedBlocks = codeFenceSnapshots(tree);
 
     expect(fencedBlocks).toHaveLength(1);
 
@@ -58,20 +45,7 @@ describe("code fence at end of document", () => {
       extensions: [markdown],
     });
 
-    let fencedBlocksWithNewline: Array<{ delimiters: number; hasContent: boolean }> = [];
-    syntaxTree(stateWithNewline).iterate({
-      enter(node) {
-        if (node.name === "fenced_code_block") {
-          let delimiters = node.children.filter(
-            (child) => child.name === "fenced_code_block_delimiter",
-          );
-          fencedBlocksWithNewline.push({
-            delimiters: delimiters.length,
-            hasContent: node.getChild("code_fence_content") !== null,
-          });
-        }
-      },
-    });
+    let fencedBlocksWithNewline = codeFenceSnapshots(syntaxTree(stateWithNewline));
 
     expect(fencedBlocks[0]).toEqual({ delimiters: 2, hasContent: true });
     expect(fencedBlocksWithNewline[0]).toEqual({ delimiters: 2, hasContent: true });
@@ -129,3 +103,10 @@ describe("code fence at end of document", () => {
     expect(closingLine.classList.contains("cm-md-code-line")).toBe(false);
   });
 });
+
+function codeFenceSnapshots(tree: ReturnType<typeof syntaxTree>) {
+  return queryTreeMatches(tree, codeFenceQuerySource, { includeNested: false }).map((match) => ({
+    delimiters: match.captures.filter((capture) => capture.name == "codeFence.delimiter").length,
+    hasContent: match.captures.some((capture) => capture.name == "codeFence.content"),
+  }));
+}

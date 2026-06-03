@@ -20,7 +20,9 @@ export {
   language,
   languageDataProp,
   queryNodeCaptures,
+  queryNodeMatches,
   queryTreeCaptures,
+  queryTreeMatches,
   styleTags,
   sublanguageProp,
   syntaxParserRunning,
@@ -41,7 +43,9 @@ export {
   type SyntaxNodeRef,
   type TreeSitterParserConfig,
   type TreeSitterQueryCapture,
+  type TreeSitterQueryMatch,
   type TreeSitterQueryOptions,
+  type TreeSitterQueryProperties,
   type TreeSitterQuerySource,
 } from "./language.js";
 

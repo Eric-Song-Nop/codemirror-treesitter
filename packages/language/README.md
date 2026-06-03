@@ -21,6 +21,8 @@ parsers while keeping the public CodeMirror language surface.
   the `language` facet.
 - Wrap Tree-sitter nodes and cursors with CodeMirror-facing `Tree`,
   `SyntaxNode`, `NodeType`, `NodeProp`, and cursor APIs.
+- Expose low-level Tree-sitter query helpers for cached query compilation and
+  capture collection over wrapped trees and nodes.
 - Maintain incremental parsing, parse scheduling, viewport-aware parsing, and
   syntax-tree availability helpers.
 - Support nested parsing through included ranges and
@@ -41,6 +43,8 @@ import {
   LRLanguage,
   TreeSitterParser,
   ensureSyntaxTree,
+  queryTreeMatches,
+  queryTreeCaptures,
   syntaxHighlighting,
   syntaxTree,
   tags,
@@ -52,7 +56,7 @@ The root entry point is `src/index.ts`.
 ## Source Layout
 
 - `src/language.ts`: parser integration, language objects, parse context, tree
-  access, nested parsing, and language data facets.
+  access, query capture/match helpers, nested parsing, and language data facets.
 - `src/tree.ts`: Tree-sitter-to-CodeMirror syntax tree wrappers.
 - `src/highlight.ts` and `src/tags.ts`: highlight tags, style definitions, and
   decoration generation.

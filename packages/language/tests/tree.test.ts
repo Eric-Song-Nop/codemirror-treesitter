@@ -10,12 +10,14 @@ import {
   ensureSyntaxTree,
   languageDataProp,
   matchBrackets,
+  queryTreeMatches,
   syntaxTreeChangedRanges,
   syntaxTree,
   syntaxTreeAvailable,
 } from "../src/index.js";
 import { __testResolveWasmPath } from "../src/language.js";
 import { SyntaxNode } from "../src/tree.js";
+import declarationMatchQuerySource from "./queries/declaration-match.scm?raw";
 import type { Tree } from "../src/index.js";
 import type { NodeIterator } from "../src/tree.js";
 
@@ -152,6 +154,27 @@ function scriptTextRanges(tree: Tree) {
 }
 
 describe("tree-sitter tree wrapper", () => {
+  it("returns grouped query matches with directive properties", async () => {
+    let doc = "let answer = 42;";
+    let state = await javascriptState(doc);
+    ensureSyntaxTree(state, doc.length, 5_000);
+
+    let matches = queryTreeMatches(syntaxTree(state), declarationMatchQuerySource, {
+      includeNested: false,
+    });
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.setProperties?.["declaration.kind"]).toBe("local");
+    expect(matches[0]!.captures.map((capture) => capture.name)).toEqual([
+      "declaration",
+      "declaration.name",
+      "declaration.value",
+    ]);
+    expect(
+      state.sliceDoc(matches[0]!.captures[1]!.node.from, matches[0]!.captures[1]!.node.to),
+    ).toBe("answer");
+  });
+
   it("keeps Vite file URLs intact in browsers and resolves them for Node", () => {
     let viteUrl = "/@fs/Users/example/project/node_modules/tree-sitter-x/tree-sitter-x.wasm";
     expect(__testResolveWasmPath(viteUrl)).toBe(

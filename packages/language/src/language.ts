@@ -16,6 +16,7 @@ import {
   Parser as TSParser,
   Query as TSQuery,
   type QueryOptions as TSQueryOptions,
+  type QueryProperties as TSQueryProperties,
   type Range as TSRange,
   Tree as TSTree,
   type Point,
@@ -92,6 +93,16 @@ export type TreeSitterQueryCapture = {
   name: string;
   node: SyntaxNode;
   patternIndex: number;
+};
+
+export type TreeSitterQueryProperties = TSQueryProperties;
+
+export type TreeSitterQueryMatch = {
+  assertedProperties?: TreeSitterQueryProperties;
+  captures: TreeSitterQueryCapture[];
+  patternIndex: number;
+  refutedProperties?: TreeSitterQueryProperties;
+  setProperties?: TreeSitterQueryProperties;
 };
 
 export type TreeSitterQueryOptions = {
@@ -421,7 +432,41 @@ export function queryNodeCaptures(
   return captures.map(({ order: _order, ...capture }) => capture);
 }
 
+export function queryTreeMatches(
+  tree: Tree,
+  source: TreeSitterQuerySource,
+  options: TreeSitterQueryOptions = {},
+): TreeSitterQueryMatch[] {
+  let matches: InternalQueryMatch[] = [];
+  collectTreeMatches(tree, source, options, matches);
+  matches.sort(compareQueryMatches);
+  return matches.map(({ order: _order, captures, ...match }) => ({
+    ...match,
+    captures: captures.map(({ order: _captureOrder, ...capture }) => capture),
+  }));
+}
+
+export function queryNodeMatches(
+  node: SyntaxNode,
+  source: string,
+  options: TreeSitterQueryOptions = {},
+): TreeSitterQueryMatch[] {
+  let parser = parserForTree(node.tree);
+  if (!parser || !node.node || !source) return [];
+  let matches = nodeQueryMatches(node, parser, source, options);
+  matches.sort(compareQueryMatches);
+  return matches.map(({ order: _order, captures, ...match }) => ({
+    ...match,
+    captures: captures.map(({ order: _captureOrder, ...capture }) => capture),
+  }));
+}
+
 type InternalQueryCapture = TreeSitterQueryCapture & {
+  order: number;
+};
+
+type InternalQueryMatch = Omit<TreeSitterQueryMatch, "captures"> & {
+  captures: InternalQueryCapture[];
   order: number;
 };
 
@@ -445,6 +490,26 @@ function collectTreeCaptures(
   }
 }
 
+function collectTreeMatches(
+  tree: Tree,
+  source: TreeSitterQuerySource,
+  options: TreeSitterQueryOptions,
+  matches: InternalQueryMatch[],
+) {
+  let parser = parserForTree(tree);
+  if (parser && tree.tree) {
+    let querySource = typeof source == "function" ? source(parser, tree) : source;
+    if (querySource) {
+      matches.push(...nodeQueryMatches(tree.topNode, parser, querySource, options));
+    }
+  }
+
+  if (options.includeNested === false) return;
+  for (let nest of tree.nested) {
+    collectTreeMatches(nest.tree, source, options, matches);
+  }
+}
+
 function nodeQueryCaptures(
   root: SyntaxNode,
   parser: TreeSitterParser,
@@ -458,6 +523,29 @@ function nodeQueryCaptures(
     node: new SyntaxNode(root.tree, capture.node),
     order,
     patternIndex: capture.patternIndex,
+  }));
+}
+
+function nodeQueryMatches(
+  root: SyntaxNode,
+  parser: TreeSitterParser,
+  source: string,
+  options: TreeSitterQueryOptions,
+): InternalQueryMatch[] {
+  if (!root.node) return [];
+  let query = compileTreeSitterQuery(parser, source);
+  return query.matches(root.node, queryOptions(options)).map((match, order) => ({
+    assertedProperties: match.assertedProperties,
+    captures: match.captures.map((capture, captureOrder) => ({
+      name: capture.name,
+      node: new SyntaxNode(root.tree, capture.node),
+      order: captureOrder,
+      patternIndex: capture.patternIndex,
+    })),
+    order,
+    patternIndex: match.patternIndex,
+    refutedProperties: match.refutedProperties,
+    setProperties: match.setProperties,
   }));
 }
 
@@ -479,6 +567,26 @@ function compareQueryCaptures(left: InternalQueryCapture, right: InternalQueryCa
     left.patternIndex - right.patternIndex ||
     left.order - right.order
   );
+}
+
+function compareQueryMatches(left: InternalQueryMatch, right: InternalQueryMatch) {
+  return (
+    queryMatchFrom(left) - queryMatchFrom(right) ||
+    queryMatchTo(right) - queryMatchTo(left) ||
+    left.patternIndex - right.patternIndex ||
+    left.order - right.order
+  );
+}
+
+function queryMatchFrom(match: InternalQueryMatch) {
+  return match.captures.reduce(
+    (from, capture) => Math.min(from, capture.node.from),
+    Number.POSITIVE_INFINITY,
+  );
+}
+
+function queryMatchTo(match: InternalQueryMatch) {
+  return match.captures.reduce((to, capture) => Math.max(to, capture.node.to), 0);
 }
 
 export function __testResolveWasmPath(wasm: string | Uint8Array) {

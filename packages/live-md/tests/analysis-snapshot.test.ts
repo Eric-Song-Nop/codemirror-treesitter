@@ -13,17 +13,20 @@ describe("LiveMD analysis snapshot", () => {
   it("builds decorations through query captures without tree iteration", async () => {
     let state = await markdownAnalysisState(liveMdKitchenSinkDoc(), "After anchor");
     expect(canonicalAnalysis(state).decorations.length).toBeGreaterThan(0);
-    let iterate = Tree.prototype.iterate;
+    let iterateDescriptor = Object.getOwnPropertyDescriptor(Tree.prototype, "iterate")!;
 
-    Tree.prototype.iterate = () => {
-      throw new Error("LiveMD analysis should use tree-sitter queries");
-    };
+    Object.defineProperty(Tree.prototype, "iterate", {
+      configurable: true,
+      value: () => {
+        throw new Error("LiveMD analysis should use tree-sitter queries");
+      },
+    });
     try {
-      expect(canonicalAnalysis(state, __testBuildLiveMdAnalysis(state)).decorations.length).toBeGreaterThan(
-        0,
-      );
+      expect(
+        canonicalAnalysis(state, __testBuildLiveMdAnalysis(state)).decorations.length,
+      ).toBeGreaterThan(0);
     } finally {
-      Tree.prototype.iterate = iterate;
+      Object.defineProperty(Tree.prototype, "iterate", iterateDescriptor);
     }
   });
 

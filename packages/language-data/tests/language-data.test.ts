@@ -3,8 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   LanguageDescription,
   NodeProp,
+  Tree,
   defineLanguageFacet,
   ensureSyntaxTree,
+  queryTreeCaptures,
   sublanguageProp,
   syntaxTree,
   syntaxTreeAvailable,
@@ -15,6 +17,7 @@ import {
 } from "@codemirror-treesitter/language";
 import { __testHighlightTree } from "../../language/src/highlight.js";
 import { languages } from "../src/index.js";
+import codeFenceDelimiterQuerySource from "./queries/code-fence-delimiters.scm?raw";
 
 function ancestorNames(node: SyntaxNode) {
   let names: string[] = [];
@@ -773,17 +776,40 @@ describe("tree-sitter language data", () => {
     expect(ancestorNames(node)).toContain("emphasis");
   });
 
+  it("builds Markdown inline injections through query captures without tree iteration", async () => {
+    let support = await languages.find((lang) => lang.name == "Markdown")!.load();
+    let doc =
+      "Text with *emphasis* and `code`.\n\n" + "| _cell text_ | next |\n" + "| --- | --- |\n";
+    let iterateDescriptor = Object.getOwnPropertyDescriptor(Tree.prototype, "iterate")!;
+    Object.defineProperty(Tree.prototype, "iterate", {
+      configurable: true,
+      value: () => {
+        throw new Error("Markdown injections should use tree-sitter queries");
+      },
+    });
+
+    try {
+      let state = EditorState.create({ doc, extensions: [support.extension] });
+      ensureSyntaxTree(state, doc.length, 5_000);
+
+      expect(ancestorNames(syntaxTree(state).resolveInner(doc.indexOf("emphasis")))).toContain(
+        "emphasis",
+      );
+      expect(ancestorNames(syntaxTree(state).resolveInner(doc.indexOf("cell text")))).toContain(
+        "emphasis",
+      );
+    } finally {
+      Object.defineProperty(Tree.prototype, "iterate", iterateDescriptor);
+    }
+  });
+
   it("parses Markdown closing code fences at EOF", async () => {
     let support = await languages.find((lang) => lang.name == "Markdown")!.load();
     let doc = "```ts\nconst x = 1;\n```";
     let state = EditorState.create({ doc, extensions: [support.extension] });
-    let delimiters = 0;
-
-    syntaxTree(state).iterate({
-      enter(node) {
-        if (node.name == "fenced_code_block_delimiter") delimiters++;
-      },
-    });
+    let delimiters = queryTreeCaptures(syntaxTree(state), codeFenceDelimiterQuerySource, {
+      includeNested: false,
+    }).length;
 
     expect(delimiters).toBe(2);
   });
