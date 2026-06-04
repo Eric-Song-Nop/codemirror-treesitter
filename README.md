@@ -160,6 +160,10 @@ entry points, dependency boundaries, source layout, and validation notes.
 - `apps/basic-editor`: Minimal Tree-sitter-only editor that imports
   `@codemirror-treesitter/live-md/register` and renders one
   `<live-md-editor>` element.
+- `apps/local-md-workspace`: React, Vite+, and shadcn/ui local-first Markdown
+  workspace that opens a browser-granted local folder, edits `.md` files with
+  LiveMD, and supports file create, rename, delete, tree browsing, and
+  autosave through the File System Access API.
 - `apps/examples`: Side-by-side workbench comparing the local Tree-sitter
   implementation with official CodeMirror/Lezer behavior on parser-relevant
   examples, package coverage, merge/LSP behavior, and benchmark metrics.
@@ -393,6 +397,7 @@ Useful task selectors:
 ```bash
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
+vp run local-md-workspace#dev
 vp run examples#dev
 vp run live-md-benchmark#benchmark
 vp run live-md-loro-demo#dev
