@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import "@codemirror-treesitter/live-md/register";
+import { gruvboxDark } from "@codemirror-treesitter/theme-gruvbox";
 
 type LiveMdEditorProps = {
   documentKey: string;
@@ -33,9 +34,13 @@ export function LiveMdEditor({
     let editor = editorRef.current;
     if (!editor) return;
 
+    editor.extensions = gruvboxDark;
     let handleInput = () => onInputRef.current(editor.value);
     editor.addEventListener("input", handleInput);
-    return () => editor.removeEventListener("input", handleInput);
+    return () => {
+      editor.removeEventListener("input", handleInput);
+      editor.extensions = [];
+    };
   }, []);
 
   return (

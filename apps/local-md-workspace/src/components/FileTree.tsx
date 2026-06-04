@@ -106,7 +106,7 @@ export const FileTree = memo(function FileTree({
 
   if (!root) return null;
 
-  return <div ref={containerRef} className="local-md-file-tree min-h-0 flex-1" />;
+  return <div ref={containerRef} className="local-md-file-tree min-h-0 flex-1 overflow-auto" />;
 });
 
 function collectTreePaths(nodes: MarkdownTreeNode[]) {

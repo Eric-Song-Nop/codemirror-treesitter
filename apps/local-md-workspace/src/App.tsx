@@ -109,8 +109,13 @@ export function App() {
 
   let selectedPath = selectedFile?.path ?? null;
   let rootName = tree?.name ?? storedWorkspaceHandle?.name ?? "Local Markdown";
-  let selectedPathLabel =
-    selectedFile?.path ?? (rootHandle ? "No file selected" : "No folder selected");
+  let selectedPathLabel = selectedFile
+    ? selectedFile.path == selectedFile.name
+      ? ""
+      : selectedFile.path
+    : rootHandle
+      ? "No file selected"
+      : "No folder selected";
   let browserSupported = supportsDirectoryPicker();
 
   let setSaveStateSynced = useCallback((nextState: SaveState) => {
@@ -441,7 +446,7 @@ export function App() {
         <aside
           className={cn(
             "flex w-[19rem] shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:w-[min(21rem,88vw)]",
-            !sidebarOpen && "max-md:hidden",
+            !sidebarOpen && "hidden",
           )}
         >
           <div className="flex h-12 shrink-0 items-center gap-2 px-3">
@@ -510,10 +515,9 @@ export function App() {
         <main className="flex min-w-0 flex-1 flex-col">
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
             <TooltipIconButton
-              label="Toggle sidebar"
+              label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
               size="icon-sm"
               variant="ghost"
-              className="md:hidden"
               onClick={() => setSidebarOpen((open) => !open)}
             >
               <MenuIcon data-icon="inline-start" />
@@ -522,7 +526,9 @@ export function App() {
               <div className="truncate text-sm font-medium">
                 {selectedFile?.name ?? "Local Markdown"}
               </div>
-              <div className="truncate text-xs text-muted-foreground">{selectedPathLabel}</div>
+              {selectedPathLabel && (
+                <div className="truncate text-xs text-muted-foreground">{selectedPathLabel}</div>
+              )}
             </div>
             <Badge variant={saveState == "error" ? "destructive" : "secondary"}>
               <SaveIcon data-icon="inline-start" />
