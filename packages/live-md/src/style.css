@@ -11,6 +11,41 @@
   --live-md-code-text: #2f3437;
   --live-md-code-muted: #7b7167;
   --live-md-code-border: #ddd6ca;
+  --live-md-cursor: var(--live-md-accent-2);
+  --live-md-selection: color-mix(in srgb, var(--live-md-accent) 18%, transparent);
+  --live-md-active-line: color-mix(in srgb, var(--live-md-accent) 8%, transparent);
+  --live-md-syntax: #9a8f86;
+  --live-md-heading-1: #13231f;
+  --live-md-heading-2: #183630;
+  --live-md-heading-3: #24433d;
+  --live-md-heading-rest: #355750;
+  --live-md-inline-code-bg: #f1ece4;
+  --live-md-inline-code-text: #8d3525;
+  --live-md-inline-code-border: #d4c9bc;
+  --live-md-link: #0f6a85;
+  --live-md-link-underline: rgba(15, 106, 133, 0.35);
+  --live-md-latex: #142723;
+  --live-md-error: #9b392b;
+  --live-md-error-border: #b64d3c;
+  --live-md-surface: #fffaf0;
+  --live-md-surface-error: #fff7f4;
+  --live-md-surface-error-border: #d9aaa0;
+  --live-md-blockquote: #4d5f5a;
+  --live-md-blockquote-border: #86aaa0;
+  --live-md-ordered-marker: #8b4a35;
+  --live-md-task-border: #87958f;
+  --live-md-task-bg: #fffefa;
+  --live-md-task-check: #fff;
+  --live-md-task-checked: #7c8581;
+  --live-md-task-checked-strong: #6f7874;
+  --live-md-rule: #ccd6d1;
+  --live-md-table-line-bg: rgba(236, 241, 238, 0.72);
+  --live-md-table-divider: #99a5a0;
+  --live-md-table-pipe: #aeb9b4;
+  --live-md-table-bg: #fbfcfa;
+  --live-md-table-border: #d9e0dc;
+  --live-md-table-header-bg: #edf3ef;
+  --live-md-table-header-text: #213d37;
   --live-md-font-body: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --live-md-font-ui: "Avenir Next", "Gill Sans", ui-sans-serif, system-ui, sans-serif;
   --live-md-font-code: "SFMono-Regular", "Cascadia Code", ui-monospace, monospace;
@@ -69,7 +104,13 @@
   min-height: 100%;
   margin: 0 auto;
   padding: clamp(34px, 6vw, 72px) clamp(22px, 7vw, 78px) 120px;
-  caret-color: var(--live-md-accent-2);
+  caret-color: var(--live-md-cursor);
+}
+
+.live-md-codemirror .cm-cursor,
+.live-md-codemirror .cm-dropCursor {
+  border-left-color: var(--live-md-cursor) !important;
+  border-left-width: 2px !important;
 }
 
 .live-md-codemirror .cm-line {
@@ -78,19 +119,15 @@
 
 .live-md-codemirror .cm-selectionBackground,
 .live-md-codemirror .cm-content ::selection {
-  background: color-mix(in srgb, var(--live-md-accent) 18%, transparent) !important;
+  background: var(--live-md-selection) !important;
 }
 
 .live-md-codemirror .cm-md-active-line {
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--live-md-accent) 8%, transparent),
-    transparent 38%
-  );
+  background: linear-gradient(90deg, var(--live-md-active-line), transparent 38%);
 }
 
 .live-md-codemirror .cm-md-syntax {
-  color: #9a8f86;
+  color: var(--live-md-syntax);
   font-family: var(--live-md-font-code);
   font-size: 0.86em;
 }
@@ -139,25 +176,25 @@
 .live-md-codemirror .cm-md-heading-1 {
   padding-top: 0.7em;
   font-size: 2.25em;
-  color: #13231f;
+  color: var(--live-md-heading-1);
 }
 
 .live-md-codemirror .cm-md-heading-2 {
   padding-top: 0.95em;
   font-size: 1.62em;
-  color: #183630;
+  color: var(--live-md-heading-2);
 }
 
 .live-md-codemirror .cm-md-heading-3 {
   padding-top: 0.7em;
   font-size: 1.28em;
-  color: #24433d;
+  color: var(--live-md-heading-3);
 }
 
 .live-md-codemirror .cm-md-heading-4,
 .live-md-codemirror .cm-md-heading-5,
 .live-md-codemirror .cm-md-heading-6 {
-  color: #355750;
+  color: var(--live-md-heading-rest);
   font-size: 1.08em;
 }
 
@@ -175,19 +212,19 @@
 }
 
 .live-md-codemirror .cm-md-inline-code {
-  border: 1px solid #d4c9bc;
+  border: 1px solid var(--live-md-inline-code-border);
   border-radius: 5px;
-  background: #f1ece4;
-  color: #8d3525;
+  background: var(--live-md-inline-code-bg);
+  color: var(--live-md-inline-code-text);
   font-family: var(--live-md-font-code);
   font-size: 0.86em;
   padding: 0.05em 0.28em;
 }
 
 .live-md-codemirror .cm-md-link {
-  color: #0f6a85;
+  color: var(--live-md-link);
   text-decoration: underline;
-  text-decoration-color: rgba(15, 106, 133, 0.35);
+  text-decoration-color: var(--live-md-link-underline);
   text-underline-offset: 0.18em;
 }
 
@@ -196,7 +233,7 @@
 }
 
 .live-md-codemirror .cm-md-latex {
-  color: #142723;
+  color: var(--live-md-latex);
 }
 
 .live-md-codemirror .cm-md-latex-inline {
@@ -223,8 +260,8 @@
 }
 
 .live-md-codemirror .cm-md-latex.is-error {
-  border-bottom: 1px dotted #b64d3c;
-  color: #9b392b;
+  border-bottom: 1px dotted var(--live-md-error-border);
+  color: var(--live-md-error);
   font-family: var(--live-md-font-code);
   font-size: 0.86em;
 }
@@ -235,7 +272,7 @@
   margin: 0.7em 0;
   border: 1px solid var(--live-md-border);
   border-radius: 8px;
-  background: #fffaf0;
+  background: var(--live-md-surface);
   color: var(--live-md-text);
   cursor: pointer;
   overflow: auto;
@@ -265,18 +302,18 @@
 }
 
 .live-md-codemirror .cm-md-mermaid.is-error {
-  border-color: #d9aaa0;
-  background: #fff7f4;
-  color: #9b392b;
+  border-color: var(--live-md-surface-error-border);
+  background: var(--live-md-surface-error);
+  color: var(--live-md-error);
 }
 
 .live-md-codemirror .cm-md-mermaid.is-error .cm-md-mermaid-message {
-  color: #9b392b;
+  color: var(--live-md-error);
 }
 
 .live-md-codemirror .cm-md-blockquote {
   position: relative;
-  color: #4d5f5a;
+  color: var(--live-md-blockquote);
   font-style: italic;
   padding-left: 18px;
 }
@@ -289,7 +326,7 @@
   bottom: 0.22em;
   width: 3px;
   border-radius: 3px;
-  background: #86aaa0;
+  background: var(--live-md-blockquote-border);
 }
 
 .live-md-codemirror .cm-md-list-line {
@@ -306,7 +343,7 @@
 
 .live-md-codemirror .cm-md-list-marker.is-ordered {
   width: 2.1em;
-  color: #8b4a35;
+  color: var(--live-md-ordered-marker);
 }
 
 .live-md-codemirror .cm-md-task-toggle {
@@ -315,26 +352,27 @@
   margin: 0 0.42em 0 0.1em;
   padding: 0;
   vertical-align: -0.12em;
-  border: 1.6px solid #87958f;
+  border: 1.6px solid var(--live-md-task-border);
   border-radius: 4px;
-  background: #fffefa;
+  background: var(--live-md-task-bg);
   cursor: pointer;
 }
 
 .live-md-codemirror .cm-md-task-toggle.is-checked {
   border-color: var(--live-md-accent);
   background:
-    linear-gradient(135deg, transparent 45%, #fff 45% 55%, transparent 55%),
-    linear-gradient(45deg, transparent 37%, #fff 37% 48%, transparent 48%), var(--live-md-accent);
+    linear-gradient(135deg, transparent 45%, var(--live-md-task-check) 45% 55%, transparent 55%),
+    linear-gradient(45deg, transparent 37%, var(--live-md-task-check) 37% 48%, transparent 48%),
+    var(--live-md-accent);
 }
 
 .live-md-codemirror .cm-md-task-line.is-checked {
-  color: #7c8581;
+  color: var(--live-md-task-checked);
 }
 
 .live-md-codemirror .cm-md-task-line.is-checked .cm-md-strong,
 .live-md-codemirror .cm-md-task-line.is-checked .cm-md-emphasis {
-  color: #6f7874;
+  color: var(--live-md-task-checked-strong);
 }
 
 .live-md-codemirror .cm-md-rule-line {
@@ -349,7 +387,7 @@
   left: 0;
   right: 0;
   top: 50%;
-  border-top: 1px solid #ccd6d1;
+  border-top: 1px solid var(--live-md-rule);
 }
 
 .live-md-codemirror .cm-md-active-line.cm-md-rule-line {
@@ -357,24 +395,24 @@
 }
 
 .live-md-codemirror .cm-md-table-line {
-  background: rgba(236, 241, 238, 0.72);
+  background: var(--live-md-table-line-bg);
   font-family: var(--live-md-font-code);
   font-size: 0.86em;
 }
 
 .live-md-codemirror .cm-md-table-divider {
-  color: #99a5a0;
+  color: var(--live-md-table-divider);
 }
 
 .live-md-codemirror .cm-md-table-pipe {
-  color: #aeb9b4;
+  color: var(--live-md-table-pipe);
 }
 
 .live-md-codemirror .cm-md-table-preview {
   overflow-x: auto;
-  border: 1px solid #d9e0dc;
+  border: 1px solid var(--live-md-table-border);
   border-radius: 8px;
-  background: #fbfcfa;
+  background: var(--live-md-table-bg);
 }
 
 .live-md-codemirror .cm-md-table-preview table {
@@ -389,8 +427,8 @@
 .live-md-codemirror .cm-md-table-preview th,
 .live-md-codemirror .cm-md-table-preview td {
   padding: 10px 12px;
-  border-right: 1px solid #d9e0dc;
-  border-bottom: 1px solid #d9e0dc;
+  border-right: 1px solid var(--live-md-table-border);
+  border-bottom: 1px solid var(--live-md-table-border);
 }
 
 .live-md-codemirror .cm-md-table-preview th:last-child,
@@ -403,8 +441,8 @@
 }
 
 .live-md-codemirror .cm-md-table-preview th {
-  background: #edf3ef;
-  color: #213d37;
+  background: var(--live-md-table-header-bg);
+  color: var(--live-md-table-header-text);
   font-weight: 800;
 }
 
