@@ -1,8 +1,16 @@
-import { Compartment, EditorState, type TransactionSpec } from "@codemirror/state";
-import type { Decoration } from "@codemirror/view";
-import { describe, expect, it } from "vite-plus/test";
-import { SyntaxNode } from "../../language/src/tree.js";
-import { __testBuildLiveMdAnalysis, liveMdAnalysis } from "../src/core/decorations.js";
+// @vitest-environment happy-dom
+
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { ensureSyntaxTree, Tree } from "@codemirror-treesitter/language";
+import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import {
+  __testBuildLiveMdAnalysis,
+  __testBuildVisibleLiveMdAnalysis,
+  __testLiveMdAnalysis,
+  __testVisibleLineRanges,
+  liveMdAnalysis,
+} from "../src/core/decorations.js";
 import {
   codeFenceLanguagesField,
   loadCodeFenceLanguages,
@@ -10,449 +18,92 @@ import {
   setCodeFenceLanguages,
 } from "../src/core/languages.js";
 
+let locationDescriptor: PropertyDescriptor | undefined;
+
+beforeEach(() => {
+  locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: undefined,
+  });
+});
+
+afterEach(() => {
+  document.body.replaceChildren();
+  if (locationDescriptor) {
+    Object.defineProperty(globalThis, "location", locationDescriptor);
+  }
+});
+
 describe("LiveMD analysis snapshot", () => {
-  it("records text dirty ranges while continuing to rebuild the full analysis", () => {
-    let state = analysisState("first\nsecond");
-    let transaction = state.update({
-      changes: { from: 0, to: 5, insert: "changed" },
-    });
-    let analysis = transaction.state.field(liveMdAnalysis);
+  it("builds decorations through query captures without tree iteration", async () => {
+    let state = await markdownAnalysisState(liveMdKitchenSinkDoc(), "After anchor");
+    expect(canonicalAnalysis(state).decorations.length).toBeGreaterThan(0);
+    let iterateDescriptor = Object.getOwnPropertyDescriptor(Tree.prototype, "iterate")!;
 
-    expect(analysis.dirtyRanges).toEqual([{ from: 0, reasons: ["text"], to: 7 }]);
-    expect(Array.from(analysis.activeLines)).toEqual([1]);
-  });
-
-  it("records selection dirty ranges from previous and current active lines", () => {
-    let state = analysisState("first\nsecond\nthird", 1);
-    let transaction = state.update({
-      selection: { anchor: "first\nsecond\n".length },
-    });
-    let analysis = transaction.state.field(liveMdAnalysis);
-
-    expect(analysis.dirtyRanges).toEqual([
-      { from: 0, reasons: ["selection"], to: 5 },
-      { from: 13, reasons: ["selection"], to: 18 },
-    ]);
-    expect(Array.from(analysis.activeLines)).toEqual([3]);
-  });
-
-  it("patches code fence language updates without rebuilding untouched Markdown decorations", async () => {
-    let doc = "```ts\nlet a = 1;\n```\n\n- after";
-    let state = await markdownAnalysisState(doc);
-    let contentLine = state.doc.lineAt(doc.indexOf("let a"));
-    let afterLine = state.doc.lineAt(doc.indexOf("- after"));
-    let before = lineDecorations(state, afterLine.from);
-
-    expect(before.length).toBeGreaterThan(0);
-
-    let transaction = state.update({
-      effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()),
-    });
-    let analysis = transaction.state.field(liveMdAnalysis);
-    let after = lineDecorations(transaction.state, afterLine.from);
-
-    expect(analysis.dirtyRanges).toEqual([
-      { from: contentLine.from, reasons: ["codeFenceLanguages"], to: contentLine.to + 1 },
-    ]);
-    expect(analysis.expandedDirtyRanges).toEqual([
-      { from: contentLine.from, reasons: ["codeFenceLanguages"], to: contentLine.to + 1 },
-    ]);
-    expect(after).toHaveLength(before.length);
-    expect(after[0]).toBe(before[0]);
-  });
-
-  it("records expanded dirty ranges using Markdown feature scopes", async () => {
-    let doc = "![alt](one.png)\nnext";
-    let state = await markdownAnalysisState(doc);
-    let dirtyFrom = doc.indexOf("one");
-    let transaction = state.update({
-      changes: { from: dirtyFrom, to: dirtyFrom + 3, insert: "two" },
-    });
-    let analysis = transaction.state.field(liveMdAnalysis);
-
-    expect(analysis.dirtyRanges).toEqual([
-      { from: dirtyFrom, reasons: ["text"], to: dirtyFrom + 3 },
-    ]);
-    expect(analysis.expandedDirtyRanges).toEqual([
-      { from: 0, reasons: ["text"], to: "![alt](two.png)".length },
-    ]);
-  });
-
-  it("records syntax dirty ranges for Markdown structure changes", async () => {
-    let state = await markdownAnalysisState("plain\nnext");
-    let transaction = state.update({
-      changes: { from: 0, insert: "# " },
-    });
-    let analysis = transaction.state.field(liveMdAnalysis);
-
-    expect(analysis.dirtyRanges.some((range) => range.reasons.includes("syntax"))).toBe(true);
-  });
-
-  it("records syntax dirty ranges when Markdown parsing becomes available", async () => {
-    let markdown = new Compartment();
-    let doc = "- first\n\n- second";
-    let state = EditorState.create({
-      doc,
-      extensions: [codeFenceLanguagesField, liveMdAnalysis, markdown.of([])],
-    });
-    let transaction = state.update({
-      effects: markdown.reconfigure(await loadMarkdownExtension()),
-    });
-    let analysis = transaction.state.field(liveMdAnalysis);
-
-    expect(analysis.dirtyRanges).toEqual([{ from: 0, reasons: ["syntax"], to: doc.length }]);
-  });
-
-  it("patches selection-only updates without rebuilding untouched line decorations", async () => {
-    let doc = "- first\n- second\n- third";
-    let state = await markdownAnalysisState(doc, 2);
-    let untouchedLine = state.doc.line(2);
-    let before = lineDecorations(state, untouchedLine.from);
-
-    expect(before.length).toBeGreaterThan(0);
-
-    let transaction = state.update({
-      selection: { anchor: doc.indexOf("third") },
-    });
-    let after = lineDecorations(transaction.state, transaction.state.doc.line(2).from);
-    let analysis = transaction.state.field(liveMdAnalysis);
-
-    expect(analysis.expandedDirtyRanges).toEqual([
-      { from: 0, reasons: ["selection"], to: 7 },
-      { from: 17, reasons: ["selection"], to: 24 },
-    ]);
-    expect(after).toHaveLength(before.length);
-    expect(after[0]).toBe(before[0]);
-  });
-
-  it("matches full analysis for selection and text updates in later blockquote inline ranges", async () => {
-    let doc = liveMdKitchenSinkDoc();
-    let cases: Array<{ name: string; spec: TransactionSpec }> = [
-      {
-        name: "selection inside strong",
-        spec: { selection: { anchor: doc.indexOf("bold") } },
-      },
-      {
-        name: "insert before inline styles",
-        spec: {
-          changes: { from: doc.indexOf("Quote") + 2, insert: "X" },
-          selection: { anchor: doc.indexOf("Quote") + 3 },
-        },
-      },
-      {
-        name: "delete before inline styles",
-        spec: {
-          changes: { from: doc.indexOf("Quote") + 2, to: doc.indexOf("Quote") + 3 },
-          selection: { anchor: doc.indexOf("Quote") + 2 },
-        },
-      },
-      {
-        name: "paste before inline styles",
-        spec: {
-          changes: { from: doc.indexOf("Quote") + 2, insert: "PASTE" },
-          selection: { anchor: doc.indexOf("Quote") + 7 },
-        },
-      },
-      {
-        name: "insert inside strong",
-        spec: {
-          changes: { from: doc.indexOf("bold") + 1, insert: "X" },
-          selection: { anchor: doc.indexOf("bold") + 2 },
-        },
-      },
-    ];
-
-    for (let testCase of cases) {
-      let state = await markdownAnalysisState(doc, doc.indexOf("After anchor"));
-      let incremental = state.update(testCase.spec).state;
-      let full = __testBuildLiveMdAnalysis(incremental);
-
-      expect(canonicalAnalysis(incremental), testCase.name).toEqual(
-        canonicalAnalysis(incremental, full),
-      );
-    }
-  });
-
-  it("matches full analysis when selection enters and leaves rendered Markdown features", async () => {
-    let doc = liveMdKitchenSinkDoc();
-    let after = doc.indexOf("After anchor");
-    let targets = [
-      ["paragraph emphasis", doc.indexOf("emphasis")],
-      ["inline latex", doc.indexOf("x^2")],
-      ["blockquote strong", doc.indexOf("bold")],
-      ["task item", doc.indexOf("todo item")],
-      ["image", doc.indexOf("Alt image")],
-      ["display latex", doc.indexOf("E = mc")],
-      ["table row", doc.indexOf("alpha")],
-      ["code fence", doc.indexOf("const answer")],
-    ] as const;
-
-    for (let [name, target] of targets) {
-      let state = await markdownAnalysisState(doc, after);
-      let focused = state.update({ selection: { anchor: target } }).state;
-      let fullFocused = __testBuildLiveMdAnalysis(focused);
-
-      expect(canonicalAnalysis(focused), `${name} focused`).toEqual(
-        canonicalAnalysis(focused, fullFocused),
-      );
-
-      let blurred = focused.update({ selection: { anchor: after } }).state;
-      let fullBlurred = __testBuildLiveMdAnalysis(blurred);
-
-      expect(canonicalAnalysis(blurred), `${name} blurred`).toEqual(
-        canonicalAnalysis(blurred, fullBlurred),
-      );
-    }
-  });
-
-  it("patches document edits without rebuilding untouched mapped line decorations", async () => {
-    let doc = "- first\n- second\n- third";
-    let state = await markdownAnalysisState(doc, 2);
-    let before = lineDecorations(state, state.doc.line(2).from);
-
-    expect(before.length).toBeGreaterThan(0);
-
-    let transaction = state.update({
-      changes: { from: 2, to: "first".length + 2, insert: "FIRST!" },
-    });
-    let after = lineDecorations(transaction.state, transaction.state.doc.line(2).from);
-
-    expect(transaction.state.doc.line(2).from).toBe(state.doc.line(2).from + 1);
-    expect(after).toHaveLength(before.length);
-    expect(after[0]).toBe(before[0]);
-  });
-
-  it("keeps paragraph gap analysis local to the dirty range", async () => {
-    let doc = Array.from({ length: 80 }, (_, index) => `paragraph ${index}`).join("\n\n");
-    let state = await markdownAnalysisState(doc);
-    let editFrom = doc.indexOf("paragraph 70");
-    let materializedChildren = 0;
-    let descriptor = Object.getOwnPropertyDescriptor(SyntaxNode.prototype, "children")!;
-
-    Object.defineProperty(SyntaxNode.prototype, "children", {
+    Object.defineProperty(Tree.prototype, "iterate", {
       configurable: true,
-      get(this: SyntaxNode) {
-        let children = descriptor.get!.call(this) as SyntaxNode[];
-        materializedChildren += children.length;
-        return children;
+      value: () => {
+        throw new Error("LiveMD analysis should use tree-sitter queries");
       },
     });
     try {
-      state
-        .update({
-          changes: { from: editFrom, to: editFrom + "paragraph".length, insert: "section" },
-        })
-        .state.field(liveMdAnalysis);
+      expect(
+        canonicalAnalysis(state, __testBuildLiveMdAnalysis(state)).decorations.length,
+      ).toBeGreaterThan(0);
     } finally {
-      Object.defineProperty(SyntaxNode.prototype, "children", descriptor);
+      Object.defineProperty(Tree.prototype, "iterate", iterateDescriptor);
     }
-
-    expect(materializedChildren).toBeLessThan(50);
   });
 
-  it("patches code fence edits without rebuilding untouched mapped code highlights", async () => {
-    let doc = "```ts\nlet a = 1;\n```\n\n```ts\nlet b = 2;\n```\n";
-    let state = await markdownAnalysisState(doc);
-    state = state.update({
-      effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()),
-    }).state;
-    let secondFenceFrom = state.doc.toString().indexOf("let b");
-    let before = decorationsFrom(state, secondFenceFrom);
-
-    expect(before.length).toBeGreaterThan(1);
-
-    let editFrom = doc.indexOf("a = 1");
-    let transaction = state.update({
-      changes: { from: editFrom, to: editFrom + 1, insert: "aa" },
+  it("keeps visible analysis equivalent to a same-range rebuild after document edits", async () => {
+    let doc = liveMdKitchenSinkDoc();
+    let view = await markdownAnalysisView(doc, "After anchor");
+    let editFrom = doc.indexOf("bold");
+    view.dispatch({
+      changes: { from: editFrom, to: editFrom + "bold".length, insert: "stronger" },
+      selection: { anchor: editFrom + "stronger".length },
     });
-    let analysis = transaction.state.field(liveMdAnalysis);
-    let editedLine = transaction.state.doc.lineAt(editFrom);
-    let after = decorationsFrom(transaction.state, secondFenceFrom + 1);
 
-    expect(analysis.expandedDirtyRanges).toEqual([
-      { from: editedLine.from, reasons: ["text"], to: editedLine.to },
-    ]);
-    expect(after).toHaveLength(before.length);
-    expect(after[0]).toBe(before[0]);
-    expect(after[1]).toBe(before[1]);
-  });
-
-  it("patches latex edits without rebuilding untouched mapped latex widgets", async () => {
-    let doc = "$x$\n\n$y$\n\nnext";
-    let state = await markdownAnalysisState(doc, doc.indexOf("next"));
-    let secondLatexFrom = doc.indexOf("$y$");
-    let before = decorationsFrom(state, secondLatexFrom);
-
-    expect(before.length).toBeGreaterThan(0);
-
-    let editFrom = doc.indexOf("x");
-    let transaction = state.update({
-      changes: { from: editFrom, to: editFrom + 1, insert: "xx" },
-    });
-    let analysis = transaction.state.field(liveMdAnalysis);
-    let after = decorationsFrom(transaction.state, secondLatexFrom + 1);
-
-    expect(analysis.expandedDirtyRanges).toEqual([{ from: 0, reasons: ["text"], to: 4 }]);
-    expect(after).toHaveLength(before.length);
-    expect(after[0]).toBe(before[0]);
-  });
-
-  it("patches code fence content edits without rebuilding untouched lines in the same fence", async () => {
-    let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
-    let state = await markdownAnalysisState(doc);
-    state = state.update({
-      effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()),
-    }).state;
-    let secondLineFrom = state.doc.lineAt(doc.indexOf("let b")).from;
-    let before = decorationsFrom(state, secondLineFrom);
-
-    expect(before.length).toBeGreaterThan(1);
-
-    let editFrom = doc.indexOf("a = 1");
-    let transaction = state.update({
-      changes: { from: editFrom, to: editFrom + 1, insert: "aa" },
-    });
-    let analysis = transaction.state.field(liveMdAnalysis);
-    let editedLine = transaction.state.doc.lineAt(editFrom);
-    let after = decorationsFrom(transaction.state, secondLineFrom + 1);
-
-    expect(analysis.expandedDirtyRanges).toEqual([
-      { from: editedLine.from, reasons: ["text"], to: editedLine.to },
-    ]);
-    expect(after).toHaveLength(before.length);
-    expect(after[0]).toBe(before[0]);
-    expect(after[1]).toBe(before[1]);
-  });
-
-  it("rebuilds code fence lines affected by nested syntax changes", async () => {
-    let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
-    let state = await markdownAnalysisState(doc);
-    state = state.update({
-      effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()),
-    }).state;
-    let secondLineFrom = state.doc.lineAt(doc.indexOf("let b")).from;
-    let before = decorationsFrom(state, secondLineFrom);
-
-    expect(before.length).toBeGreaterThan(1);
-
-    let editFrom = doc.indexOf("let a");
-    let transaction = state.update({
-      changes: { from: editFrom, insert: "/* " },
-    });
-    let analysis = transaction.state.field(liveMdAnalysis);
-    let editedLine = transaction.state.doc.lineAt(editFrom);
-    let secondLine = transaction.state.doc.lineAt(secondLineFrom + 3);
-    let after = decorationsFrom(transaction.state, secondLineFrom + 3);
-
-    expect(analysis.expandedDirtyRanges).toEqual([
-      { from: editedLine.from, reasons: ["text", "syntax"], to: secondLine.to + 1 },
-    ]);
-    expect(after.length).toBeGreaterThan(0);
-    expect(after[0]).not.toBe(before[0]);
-  });
-
-  it("rebuilds code fence lines affected by nested template syntax changes", async () => {
-    let doc = "```ts\nconst a = `one`;\nconst b = 2;\n```\n";
-    let state = await markdownAnalysisState(doc);
-    state = state.update({
-      effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()),
-    }).state;
-    let secondLineFrom = state.doc.lineAt(doc.indexOf("const b")).from;
-    let before = decorationsFrom(state, secondLineFrom);
-
-    expect(before.length).toBeGreaterThan(1);
-
-    let editFrom = doc.indexOf("`;\n");
-    let transaction = state.update({
-      changes: { from: editFrom, to: editFrom + 1 },
-    });
-    let analysis = transaction.state.field(liveMdAnalysis);
-    let firstLine = transaction.state.doc.lineAt(editFrom);
-    let secondLine = transaction.state.doc.lineAt(secondLineFrom - 1);
-    let after = decorationsFrom(transaction.state, secondLineFrom - 1);
-
-    expect(analysis.expandedDirtyRanges).toEqual([
-      {
-        from: firstLine.from,
-        reasons: ["text", "syntax"],
-        to: secondLine.to,
-      },
-    ]);
-    expect(after.length).toBeGreaterThan(0);
-    expect(after[0]).not.toBe(before[0]);
-  });
-
-  it("parses edited code fences once when collecting nested syntax dirty ranges", async () => {
-    let doc = "```ts\nconst a = `one`;\nconst b = 2;\n```\n";
-    let parseCalls = 0;
-    let state = await markdownAnalysisState(doc);
-    let languages = new Map(await loadCodeFenceLanguages());
-    let tsParser = languages.get("ts");
-    if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
-    languages.set(
-      "ts",
-      new Proxy(tsParser, {
-        get(target, property, receiver) {
-          if (property == "parse") {
-            return (...args: Parameters<typeof target.parse>) => {
-              parseCalls++;
-              return target.parse(...args);
-            };
-          }
-          return Reflect.get(target, property, receiver);
-        },
-      }),
+    expect(canonicalAnalysis(view.state, __testLiveMdAnalysis(view))).toEqual(
+      canonicalAnalysis(
+        view.state,
+        __testBuildVisibleLiveMdAnalysis(view.state, __testLiveMdAnalysis(view).ranges),
+      ),
     );
-    state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
-    parseCalls = 0;
-
-    let editFrom = doc.indexOf("`;\n");
-    let transaction = state.update({
-      changes: { from: editFrom, to: editFrom + 1 },
-    });
-    transaction.state.field(liveMdAnalysis);
-
-    expect(parseCalls).toBe(1);
+    view.destroy();
   });
 
-  it("reuses the previous code fence tree when reparsing edited code highlights", async () => {
-    let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
-    let oldTrees: unknown[] = [];
-    let state = await markdownAnalysisState(doc);
-    let languages = new Map(await loadCodeFenceLanguages());
-    let tsParser = languages.get("ts");
-    if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
-    languages.set(
-      "ts",
-      new Proxy(tsParser, {
-        get(target, property, receiver) {
-          if (property == "parse") {
-            return (...args: Parameters<typeof target.parse>) => {
-              oldTrees.push(args[1] ?? null);
-              return target.parse(...args);
-            };
-          }
-          return Reflect.get(target, property, receiver);
-        },
-      }),
+  it("keeps visible analysis equivalent to a same-range rebuild after selection-only updates", async () => {
+    let doc = liveMdKitchenSinkDoc();
+    let view = await markdownAnalysisView(doc, "After anchor");
+    view.dispatch({ selection: { anchor: doc.indexOf("Alt image") } });
+
+    expect(canonicalAnalysis(view.state, __testLiveMdAnalysis(view))).toEqual(
+      canonicalAnalysis(
+        view.state,
+        __testBuildVisibleLiveMdAnalysis(view.state, __testLiveMdAnalysis(view).ranges),
+      ),
     );
-    state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
-    oldTrees.length = 0;
-
-    let editFrom = doc.indexOf("a = 1");
-    let transaction = state.update({
-      changes: { from: editFrom, to: editFrom + 1, insert: "aa" },
-    });
-    transaction.state.field(liveMdAnalysis);
-
-    expect(oldTrees).toHaveLength(1);
-    expect(oldTrees[0]).not.toBe(null);
+    view.destroy();
   });
 
-  it("does not reparse code fence highlights for selection-only code line updates", async () => {
-    let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
+  it("limits direct analysis builds to the requested range", async () => {
+    let doc = "# First\n\n# Second\n\n";
+    let state = await markdownAnalysisState(doc);
+    let firstLine = state.doc.line(1);
+    let analysis = __testBuildVisibleLiveMdAnalysis(state, [
+      { from: firstLine.from, to: firstLine.to },
+    ]);
+
+    let secondHeadingFrom = doc.indexOf("# Second");
+    let decorations = canonicalAnalysis(state, analysis).decorations;
+    expect(decorations.some((decoration) => decoration.from >= secondHeadingFrom)).toBe(false);
+  });
+
+  it("parses code fence highlights during visible rebuilds", async () => {
+    let doc = "```ts\nlet a = 1;\n```\n";
     let parseCalls = 0;
-    let state = await markdownAnalysisState(doc, doc.indexOf("let a"));
     let languages = new Map(await loadCodeFenceLanguages());
     let tsParser = languages.get("ts");
     if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
@@ -462,88 +113,177 @@ describe("LiveMD analysis snapshot", () => {
         return tsParser.parse(input);
       },
     } as typeof tsParser);
-    state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
+
+    let view = await markdownAnalysisView(doc);
+    view.dispatch({ effects: setCodeFenceLanguages.of(languages) });
+    expect(__testLiveMdAnalysis(view).codeFenceHighlightTrees).toHaveLength(1);
+    expect(parseCalls).toBe(1);
+
     parseCalls = 0;
-    let secondLine = state.doc.lineAt(doc.indexOf("let b"));
-    let beforeSecondLineDecorations = rangeDecorationsInLine(state, secondLine);
-
-    expect(beforeSecondLineDecorations.length).toBeGreaterThan(1);
-
-    let transaction = state.update({
-      selection: { anchor: doc.indexOf("let b") },
-    });
-    let analysis = transaction.state.field(liveMdAnalysis);
-    let afterSecondLineDecorations = rangeDecorationsInLine(
-      transaction.state,
-      transaction.state.doc.lineAt(doc.indexOf("let b")),
-    );
-
-    expect(analysis.expandedDirtyRanges).toEqual([
-      { from: 6, reasons: ["selection"], to: 16 },
-      { from: 17, reasons: ["selection"], to: 27 },
-    ]);
-    expect(afterSecondLineDecorations.length).toBeGreaterThan(1);
-    expect(parseCalls).toBe(0);
-  });
-
-  it("keeps code fence highlight trees across selection-only updates", async () => {
-    let doc = "```ts\nlet a = 1;\nlet b = 2;\n```\n";
-    let oldTrees: unknown[] = [];
-    let state = await markdownAnalysisState(doc, doc.indexOf("let a"));
-    let languages = new Map(await loadCodeFenceLanguages());
-    let tsParser = languages.get("ts");
-    if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
-    languages.set(
-      "ts",
-      new Proxy(tsParser, {
-        get(target, property, receiver) {
-          if (property == "parse") {
-            return (...args: Parameters<typeof target.parse>) => {
-              oldTrees.push(args[1] ?? null);
-              return target.parse(...args);
-            };
-          }
-          return Reflect.get(target, property, receiver);
-        },
-      }),
-    );
-    state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
-    oldTrees.length = 0;
-
-    state = state.update({ selection: { anchor: doc.indexOf("let b") } }).state;
-    state.field(liveMdAnalysis);
-
     let editFrom = doc.indexOf("a = 1");
-    let transaction = state.update({
+    view.dispatch({
       changes: { from: editFrom, to: editFrom + 1, insert: "aa" },
     });
-    transaction.state.field(liveMdAnalysis);
 
-    expect(oldTrees).toHaveLength(1);
-    expect(oldTrees[0]).not.toBe(null);
+    expect(__testLiveMdAnalysis(view).codeFenceHighlightTrees).toHaveLength(1);
+    expect(parseCalls).toBe(1);
+    view.destroy();
+  });
+
+  it("decorates inline markdown at EOF during visible range rebuilds", async () => {
+    let doc = "cursor here\n\nuse *emphasize* here";
+    let state = await markdownAnalysisState(doc);
+    let tailLine = state.doc.lineAt(doc.indexOf("use"));
+    let decorations = canonicalAnalysis(
+      state,
+      __testBuildVisibleLiveMdAnalysis(state, [{ from: tailLine.from, to: tailLine.to }]),
+    ).decorations;
+    let emphasisFrom = doc.indexOf("*emphasize*");
+    let emphasisTo = emphasisFrom + "*emphasize*".length;
+
+    expect(
+      decorations.some(
+        (decoration) =>
+          decoration.from == emphasisFrom &&
+          decoration.to == emphasisTo &&
+          (decoration.spec as { class?: string }).class == "cm-md-emphasis",
+      ),
+    ).toBe(true);
+  });
+
+  it("renders table previews at EOF without a trailing newline", async () => {
+    let doc = "before\n\n| Name | Value |\n| --- | ---: |\n| alpha | 1 |";
+    let view = await markdownAnalysisView(doc, "before");
+    let table = view.contentDOM.querySelector(".cm-md-table-preview table");
+
+    expect(table?.textContent).toContain("Name");
+    expect(table?.textContent).toContain("alpha");
+    view.destroy();
+  });
+
+  it("keeps table source editable on the trailing blank line", async () => {
+    let doc = "| Name | Value |\n| --- | ---: |\n";
+    let view = await markdownAnalysisView(doc);
+
+    expect(view.contentDOM.querySelector(".cm-md-table-preview")).toBeNull();
+    expect(view.contentDOM.textContent).toContain("| Name | Value |");
+    view.destroy();
+  });
+
+  it("renders task list decorations at EOF without a trailing newline", async () => {
+    let doc = "- [x] done\n- [ ] todo";
+    let view = await markdownAnalysisView(doc, "done");
+
+    expect(view.contentDOM.querySelectorAll(".cm-md-list-line")).toHaveLength(2);
+    expect(view.contentDOM.querySelectorAll(".cm-md-task-line")).toHaveLength(2);
+    expect(view.contentDOM.querySelectorAll(".cm-md-task-toggle")).toHaveLength(2);
+    view.destroy();
+  });
+
+  it("renders task list decorations before trailing EOF blank lines", async () => {
+    let doc = "- [x] done\n- [ ] todo\n\n\n";
+    let state = await markdownAnalysisState(doc);
+    let decorations = canonicalAnalysis(
+      state,
+      __testBuildVisibleLiveMdAnalysis(state, [{ from: 0, to: doc.length }]),
+    ).decorations;
+
+    expect(
+      decorations.filter(
+        (decoration) =>
+          (decoration.spec as { widget?: { name?: string } }).widget?.name == "TaskCheckboxWidget",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("keeps visible line ranges open through EOF blank lines", async () => {
+    let doc = "- [x] done\n- [ ] todo\n\n\n";
+    let state = await markdownAnalysisState(doc);
+    let view = {
+      scrollDOM: { clientHeight: 100 },
+      state,
+      visibleRanges: [{ from: 0, to: doc.length }],
+    } as unknown as EditorView;
+
+    expect(__testVisibleLineRanges(view)).toEqual([{ from: 0, to: doc.length }]);
+  });
+
+  it("keeps the preceding task list item decorated when only EOF blank lines are visible", async () => {
+    let doc = "- [x] done\n- [ ] todo\n\n\n";
+    let state = (await markdownAnalysisState(doc)).update({
+      selection: { anchor: doc.length },
+    }).state;
+    let blankLine = state.doc.line(3);
+    let decorations = canonicalAnalysis(
+      state,
+      __testBuildVisibleLiveMdAnalysis(state, [{ from: blankLine.from, to: doc.length }]),
+    ).decorations;
+
+    expect(
+      decorations.some(
+        (decoration) =>
+          (decoration.spec as { widget?: { name?: string } }).widget?.name == "TaskCheckboxWidget",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the preceding table preview when only EOF blank lines are visible", async () => {
+    let doc = "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\n\n";
+    let state = (await markdownAnalysisState(doc)).update({
+      selection: { anchor: doc.length },
+    }).state;
+    let blankLine = state.doc.line(4);
+    let decorations = canonicalAnalysis(
+      state,
+      __testBuildVisibleLiveMdAnalysis(state, [{ from: blankLine.from, to: doc.length }]),
+    ).decorations;
+
+    expect(
+      decorations.some(
+        (decoration) =>
+          (decoration.spec as { widget?: { name?: string } }).widget?.name == "TablePreviewWidget",
+      ),
+    ).toBe(true);
   });
 });
 
-function analysisState(doc: string, selection = 0) {
-  return EditorState.create({
+async function markdownAnalysisState(doc: string, selectionText = "") {
+  let selection = selectionText ? doc.indexOf(selectionText) : 0;
+  let state = EditorState.create({
     doc,
-    selection: { anchor: selection },
-    extensions: [codeFenceLanguagesField, liveMdAnalysis],
+    extensions: [await loadMarkdownExtension(), codeFenceLanguagesField, liveMdAnalysis],
   });
+  ensureSyntaxTree(state, doc.length, 5_000);
+  return state.update({ selection: { anchor: selection } }).state;
 }
 
-async function markdownAnalysisState(doc: string, selection = 0) {
-  return EditorState.create({
-    doc,
-    selection: { anchor: selection },
-    extensions: [codeFenceLanguagesField, liveMdAnalysis, await loadMarkdownExtension()],
+async function markdownAnalysisView(doc: string, selectionText = "") {
+  let selection = selectionText ? doc.indexOf(selectionText) : 0;
+  let view = new EditorView({
+    parent: document.body.appendChild(document.createElement("div")),
+    state: EditorState.create({
+      doc,
+      selection: { anchor: selection },
+      extensions: [await loadMarkdownExtension(), codeFenceLanguagesField, liveMdAnalysis],
+    }),
   });
+  ensureSyntaxTree(view.state, doc.length, 5_000);
+  view.dispatch({});
+  await waitForLiveMdRanges(view);
+  return view;
+}
+
+async function waitForLiveMdRanges(view: EditorView) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (__testLiveMdAnalysis(view).ranges.length) return;
+  }
 }
 
 function liveMdKitchenSinkDoc() {
   return (
     "# Heading One\n\n" +
-    "Paragraph with _emphasis_, **strong**, ~~strike~~, `code`, [link](https://example.com), <https://example.com>, $x^2$.\n\n" +
+    "Paragraph with _emphasis_, **bold**, ~~strike~~, `code`, [link](https://example.com), <https://example.com>, $x^2$.\n\n" +
     "> Quote line with **bold** and $y$.\n" +
     "> second quote line\n\n" +
     "- item one\n" +
@@ -566,31 +306,7 @@ function liveMdKitchenSinkDoc() {
   );
 }
 
-function lineDecorations(state: EditorState, pos: number) {
-  let values: Decoration[] = [];
-  state.field(liveMdAnalysis).decorations.between(pos, pos, (from, to, value) => {
-    if (from == pos && to == pos) values.push(value);
-  });
-  return values;
-}
-
-function rangeDecorationsInLine(state: EditorState, line: { from: number; to: number }) {
-  let values: Decoration[] = [];
-  state.field(liveMdAnalysis).decorations.between(line.from, line.to, (from, to, value) => {
-    if (from < to) values.push(value);
-  });
-  return values;
-}
-
-function decorationsFrom(state: EditorState, pos: number) {
-  let values: Decoration[] = [];
-  state.field(liveMdAnalysis).decorations.between(pos, state.doc.length, (from, _to, value) => {
-    if (from >= pos) values.push(value);
-  });
-  return values;
-}
-
-function canonicalAnalysis(state: EditorState, analysis = state.field(liveMdAnalysis)) {
+function canonicalAnalysis(state: EditorState, analysis = __testBuildLiveMdAnalysis(state)) {
   let decorations: Array<{ from: number; spec: unknown; to: number }> = [];
   analysis.decorations.between(0, state.doc.length, (from, to, value) => {
     decorations.push({ from, spec: canonicalDecorationSpec(value.spec), to });

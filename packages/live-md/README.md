@@ -104,17 +104,15 @@ The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 - `src/core/editor.ts`: editor controller, persistence, read-only state,
   placeholders, and async language loading.
 - `src/core/extension.ts`, `src/core/decorations.ts`, `src/core/widgets.ts`,
-  `src/core/links.ts`, `src/core/dirty-ranges.ts`, `src/core/features.ts`, and
-  `src/core/languages.ts`: live Markdown extension, decoration pipeline,
-  link interactions, widget rendering, dirty-range tracking, feature registry,
-  and language loading.
+  `src/core/links.ts`, and `src/core/languages.ts`: live Markdown extension,
+  query-based decoration pipeline, link interactions, widget rendering, and
+  language loading.
 - `src/element/*`: custom element implementation and style installation.
 - `src/fixtures/*`: reusable sample content for examples and benchmarks.
 - `vite-plugin.ts`: raw CSS helper used by apps that need to import LiveMD CSS
   in Vite builds.
-- `tests/*`: web component behavior, readonly commands, dirty ranges,
-  Markdown features, code fences, LaTeX, Mermaid, style installation, and
-  paragraph behavior.
+- `tests/*`: web component behavior, readonly commands, Markdown features,
+  code fences, LaTeX, Mermaid, style installation, and paragraph behavior.
 
 ## Relationship to Other Packages
 

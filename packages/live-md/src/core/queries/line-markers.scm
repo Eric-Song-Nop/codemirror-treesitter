@@ -1,0 +1,9 @@
+(block_quote_marker) @quote
+(block_continuation) @quote
+(list_marker_dot) @list
+(list_marker_minus) @list
+(list_marker_parenthesis) @list
+(list_marker_plus) @list
+(list_marker_star) @list
+(task_list_marker_checked) @task.checked
+(task_list_marker_unchecked) @task.unchecked

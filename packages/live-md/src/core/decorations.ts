@@ -1,36 +1,39 @@
 import {
   type ChangeDesc,
-  ChangeSet,
   EditorState,
   RangeSet,
   RangeSetBuilder,
   RangeValue,
+  StateEffect,
   StateField,
   Text,
+  type Extension,
+  type Range,
 } from "@codemirror/state";
 import {
   highlightTree,
-  patchRangeSet,
-  rangesTouch,
+  queryTreeMatches,
   syntaxTree,
-  syntaxTreeChangedRanges,
   type SyntaxNode,
   type Tree,
+  type TreeSitterParser,
+  type TreeSitterQueryCapture,
+  type TreeSitterQueryMatch,
 } from "@codemirror-treesitter/language";
 import { gruvboxLightHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
-import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
+import {
+  Decoration,
+  EditorView,
+  ViewPlugin,
+  WidgetType,
+  type DecorationSet,
+  type ViewUpdate,
+} from "@codemirror/view";
 import {
   codeFenceLanguagesField,
   emptyCodeFenceLanguages,
   type CodeFenceLanguageMap,
 } from "./languages.js";
-import {
-  analyzeLiveMdDirtyRanges,
-  type LiveMdDirtyRange,
-  type LiveMdDirtyReason,
-  type LiveMdDirtySourceRange,
-} from "./dirty-ranges.js";
-import { createLiveMdFeatureRegistry, type LiveMdFeature, type LiveMdScope } from "./features.js";
 import { forEachLineInRange, isWhitespace, isWhitespaceOnly, splitRangeByLine } from "./util.js";
 import { liveMdLinkBaseUrl, liveMdLinkMark } from "./links.js";
 import {
@@ -44,29 +47,24 @@ import {
   type MermaidDiagram,
   type MarkdownTable,
 } from "./widgets.js";
+import liveMdMarkdownInlineQuerySource from "./queries/decorations-markdown-inline.scm?raw";
+import liveMdMarkdownQuerySource from "./queries/decorations-markdown.scm?raw";
 
-type InlineDecoration = {
-  from: number;
-  to: number;
-  decoration: Decoration;
-};
-
-type VisitContext = {
+type LiveMdBuild = {
   activeLines: Set<number>;
-  codeFenceHighlightCache: Map<string, CodeFenceHighlightTree>;
+  atomicRanges: Array<{ from: number; to: number }>;
+  codeFenceHighlightTrees: CodeFenceHighlightTree[];
   codeFenceLanguages: CodeFenceLanguageMap;
-  dirtyRange: LiveMdDirtyRange | null;
-  dirtyReasons: readonly LiveMdDirtyReason[] | null;
+  decorations: Array<Range<Decoration>>;
+  lineClasses: Map<number, Set<string>>;
   linkBaseUrl: string | null;
-  plannedCodeFenceHighlightKeys: Set<string>;
-  previousCodeFenceHighlights: readonly CodeFenceHighlightTree[];
-  changes: ChangeDesc | null;
-  plan: DecorationPlan;
   state: EditorState;
 };
 
-type NodeVisitor = (context: VisitContext, node: SyntaxNode) => false | void;
-type LiveMdNodeFeature = LiveMdFeature<VisitContext, SyntaxNode>;
+type DocRange = {
+  from: number;
+  to: number;
+};
 
 type CodeFenceParser =
   CodeFenceLanguageMap extends ReadonlyMap<string, infer Parser> ? Parser : never;
@@ -78,21 +76,6 @@ type CodeFenceHighlightTree = {
   parser: CodeFenceParser;
   sourceText: Text;
   tree: Tree;
-};
-
-type CodeFenceSyntaxChanges = {
-  highlights: readonly CodeFenceHighlightTree[];
-  sourceRanges: readonly LiveMdDirtySourceRange[];
-};
-
-type CodeFenceContentChangeResult = {
-  changes: ChangeSet;
-  touched: boolean;
-};
-
-const emptyCodeFenceSyntaxChanges: CodeFenceSyntaxChanges = {
-  highlights: [],
-  sourceRanges: [],
 };
 
 const visibleSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-active" });
@@ -109,64 +92,41 @@ type LiveMdAnalysis = {
   codeFenceHighlightTrees: readonly CodeFenceHighlightTree[];
   codeFenceLanguages: CodeFenceLanguageMap;
   decorations: DecorationSet;
-  dirtyRanges: readonly LiveMdDirtyRange[];
-  expandedDirtyRanges: readonly LiveMdDirtyRange[];
+  ranges: readonly DocRange[];
+  tree: Tree;
 };
 
-export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
+const setLiveMdAnalysisRanges = StateEffect.define<readonly DocRange[]>();
+
+const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
   create(state) {
-    return buildLiveMdAnalysis(state, [], []);
+    return buildLiveMdAnalysis(state, getActiveLines(state), fullDocRange(state));
   },
   update(value, transaction) {
-    let codeFenceLanguageUpdate = codeFenceLanguagesChanged(
-      transaction.startState,
-      transaction.state,
-    );
-    let syntaxChangedRanges = syntaxTreeChangedRanges(transaction);
+    let ranges = transaction.docChanged
+      ? mapDocRanges(value.ranges, transaction.changes, transaction.state)
+      : value.ranges;
+    let rangesChanged = false;
+    for (let effect of transaction.effects) {
+      if (effect.is(setLiveMdAnalysisRanges)) {
+        ranges = effect.value;
+        rangesChanged = !sameDocRanges(ranges, value.ranges);
+      }
+    }
+
+    let tree = syntaxTree(transaction.state);
     if (
+      !rangesChanged &&
+      tree == value.tree &&
       !transaction.docChanged &&
       !transaction.selection &&
-      !codeFenceLanguageUpdate &&
-      !syntaxChangedRanges.length
+      !codeFenceLanguagesChanged(transaction.startState, transaction.state) &&
+      transaction.startState.facet(liveMdLinkBaseUrl) == transaction.state.facet(liveMdLinkBaseUrl)
     ) {
       return value;
     }
-    let codeFenceSyntaxChanges =
-      transaction.docChanged && !codeFenceLanguageUpdate
-        ? analyzeCodeFenceSyntaxChanges(
-            transaction.state,
-            transaction.changes,
-            value.codeFenceHighlightTrees,
-          )
-        : emptyCodeFenceSyntaxChanges;
-    let activeLines = getActiveLines(transaction.state);
-    let { dirtyRanges, expandedDirtyRanges } = analyzeLiveMdDirtyRanges({
-      activeLines: transaction.selection ? Array.from(activeLines) : undefined,
-      changes: transaction.changes,
-      invalidations: codeFenceLanguageUpdate
-        ? [
-            {
-              nodes: liveMdFeatureRegistry.invalidatedNodes("codeFenceLanguages"),
-              reason: "codeFenceLanguages",
-            },
-          ]
-        : undefined,
-      previousActiveLines: transaction.selection ? Array.from(value.activeLines) : undefined,
-      registry: liveMdFeatureRegistry,
-      sourceRanges: codeFenceSyntaxChanges.sourceRanges,
-      startState: transaction.startState,
-      state: transaction.state,
-      syntaxChangedRanges,
-    });
-    return patchLiveMdAnalysis(
-      value,
-      transaction.state,
-      transaction.changes,
-      dirtyRanges,
-      expandedDirtyRanges,
-      activeLines,
-      codeFenceSyntaxChanges.highlights,
-    );
+
+    return buildLiveMdAnalysis(transaction.state, getActiveLines(transaction.state), ranges);
   },
   provide(field) {
     return [
@@ -178,59 +138,44 @@ export const liveMdAnalysis = StateField.define<LiveMdAnalysis>({
   },
 });
 
-const liveMdFeatures: readonly LiveMdNodeFeature[] = [
-  feature(["atx_heading"], visitHeading, "line"),
-  feature(["block_continuation"], visitSyntax, "line"),
-  feature(["block_quote"], visitBlockQuote, "container"),
-  feature(["block_quote_marker"], visitSyntax, "line"),
-  feature(["code_span"], visitMark(inlineCodeMark)),
-  feature(["code_span_delimiter"], visitSyntax),
-  feature(["code_fence_content"], undefined, "line", ["codeFenceLanguages"]),
-  feature(["document"], visitDocument, "document"),
-  feature(["emphasis"], visitMark(emphasisMark)),
-  feature(["emphasis_delimiter"], visitSyntax),
-  feature(["fenced_code_block"], visitCodeFence, "node"),
-  feature(
-    [
-      "html_block",
-      "indented_code_block",
-      "link_reference_definition",
-      "minus_metadata",
-      "plus_metadata",
-    ],
-    undefined,
-    "line",
-  ),
-  feature(["image"], visitImage, "line"),
-  feature(["inline_link"], visitInlineLink),
-  feature(["latex_block"], visitLatex, "node"),
-  feature(["latex_span_delimiter"], visitSyntax),
-  feature(["list"], visitList, "container"),
-  feature(["list_item"], visitLineClass("cm-md-list-line"), "block"),
-  feature(
-    [
-      "list_marker_dot",
-      "list_marker_minus",
-      "list_marker_parenthesis",
-      "list_marker_plus",
-      "list_marker_star",
-    ],
-    visitListMarker,
-    "line",
-  ),
-  feature(["pipe_table"], visitTable, "node"),
-  feature(["paragraph"], undefined, "line"),
-  feature(["section"], visitSection, "container"),
-  feature(["setext_heading"], visitSetextHeading, "block"),
-  feature(["strikethrough"], visitMark(strikeMark)),
-  feature(["strong_emphasis"], visitMark(strongMark)),
-  feature(["task_list_marker_checked", "task_list_marker_unchecked"], visitTaskMarker, "line"),
-  feature(["thematic_break"], visitRule, "line"),
-  feature(["uri_autolink"], visitUriAutolink),
-];
+class LiveMdViewportPlugin {
+  private destroyed = false;
+  private pending = false;
 
-const liveMdFeatureRegistry = createLiveMdFeatureRegistry(liveMdFeatures);
-export const __testLiveMdFeatureRegistry = liveMdFeatureRegistry;
+  constructor(readonly view: EditorView) {
+    this.scheduleSync();
+  }
+
+  update(update: ViewUpdate) {
+    if (update.viewportChanged || update.docChanged) this.scheduleSync();
+  }
+
+  private scheduleSync() {
+    if (this.pending) return;
+    this.pending = true;
+    this.view.requestMeasure({
+      read: () => null,
+      write: () => {
+        this.pending = false;
+        setTimeout(() => {
+          if (this.destroyed) return;
+          let ranges = visibleLineRanges(this.view);
+          let current = this.view.state.field(liveMdAnalysisField, false);
+          if (!current || sameDocRanges(ranges, current.ranges)) return;
+          this.view.dispatch({ effects: setLiveMdAnalysisRanges.of(ranges) });
+        }, 0);
+      },
+    });
+  }
+
+  destroy() {
+    this.destroyed = true;
+  }
+}
+
+const liveMdViewportPlugin = ViewPlugin.fromClass(LiveMdViewportPlugin);
+
+export const liveMdAnalysis: Extension = [liveMdAnalysisField, liveMdViewportPlugin];
 
 class AtomicRange extends RangeValue {
   eq(other: RangeValue) {
@@ -240,326 +185,443 @@ class AtomicRange extends RangeValue {
 
 const paragraphBreakAtom = new AtomicRange();
 
-class DecorationPlan {
-  private atomicRanges: Array<{ from: number; to: number }> = [];
-  private codeFenceHighlightTrees: CodeFenceHighlightTree[] = [];
-  private dirtyRange: LiveMdDirtyRange | null = null;
-  private lineClasses = new Map<number, Set<string>>();
-  private ranges: InlineDecoration[] = [];
-  private state: EditorState;
+function createLiveMdBuild(
+  state: EditorState,
+  activeLines: Set<number>,
+  codeFenceLanguages: CodeFenceLanguageMap,
+): LiveMdBuild {
+  return {
+    activeLines,
+    atomicRanges: [],
+    codeFenceHighlightTrees: [],
+    codeFenceLanguages,
+    decorations: [],
+    lineClasses: new Map(),
+    linkBaseUrl: state.facet(liveMdLinkBaseUrl),
+    state,
+  };
+}
 
-  constructor(state: EditorState) {
-    this.state = state;
+function addLineClass(build: LiveMdBuild, lineNumber: number, className: string) {
+  let classes = build.lineClasses.get(lineNumber);
+  if (!classes) build.lineClasses.set(lineNumber, (classes = new Set()));
+  classes.add(className);
+}
+
+function addLineRangeClass(build: LiveMdBuild, from: number, to: number, className: string) {
+  forEachLineInRange(build.state, from, to, (docLine) =>
+    addLineClass(build, docLine.number, className),
+  );
+}
+
+function addAtom(build: LiveMdBuild, from: number, to: number) {
+  if (from < to) build.atomicRanges.push({ from, to });
+}
+
+function addMark(build: LiveMdBuild, from: number, to: number, decoration: Decoration) {
+  if (from < to) build.decorations.push(decoration.range(from, to));
+}
+
+function addMarkByLine(
+  build: LiveMdBuild,
+  from: number,
+  to: number,
+  decorationForLine: (lineNumber: number) => Decoration,
+) {
+  splitRangeByLine(build.state, from, to, (lineNumber, rangeFrom, rangeTo) => {
+    addMark(build, rangeFrom, rangeTo, decorationForLine(lineNumber));
+  });
+}
+
+function addReplace(
+  build: LiveMdBuild,
+  from: number,
+  to: number,
+  widget: WidgetType,
+  block = false,
+) {
+  addMark(build, from, to, Decoration.replace({ block, widget }));
+}
+
+function addSyntax(build: LiveMdBuild, from: number, to: number, decoration?: Decoration) {
+  addMarkByLine(build, from, to, (lineNumber) => {
+    if (decoration) return decoration;
+    return build.activeLines.has(lineNumber) ? visibleSyntax : hiddenSyntax;
+  });
+}
+
+function finishDecorations(build: LiveMdBuild) {
+  let lineDecorations = new RangeSetBuilder<Decoration>();
+  let lineClasses = Array.from(build.lineClasses).sort(
+    ([leftLine], [rightLine]) => leftLine - rightLine,
+  );
+  for (let [lineNumber, classes] of lineClasses) {
+    let docLine = build.state.doc.line(lineNumber);
+    lineDecorations.add(
+      docLine.from,
+      docLine.from,
+      Decoration.line({ class: [...classes].join(" ") }),
+    );
   }
+  return RangeSet.join([lineDecorations.finish(), RangeSet.of(build.decorations, true)]);
+}
 
-  setDirtyRange(range: LiveMdDirtyRange | null) {
-    this.dirtyRange = range;
+function finishAtomicRanges(build: LiveMdBuild) {
+  let builder = new RangeSetBuilder<RangeValue>();
+  build.atomicRanges.sort((left, right) => left.from - right.from || left.to - right.to);
+  for (let { from, to } of build.atomicRanges) {
+    builder.add(from, to, paragraphBreakAtom);
   }
-
-  line(lineNumber: number, className: string) {
-    let line = this.state.doc.line(lineNumber);
-    if (!this.touchesDirtyRange(line.from, line.to)) return;
-
-    let classes = this.lineClasses.get(lineNumber);
-    if (!classes) this.lineClasses.set(lineNumber, (classes = new Set()));
-    classes.add(className);
-  }
-
-  lineClass(from: number, to: number, className: string) {
-    forEachLineInRange(this.state, from, to, (line) => this.line(line.number, className));
-  }
-
-  atom(from: number, to: number) {
-    if (from < to && this.touchesDirtyRange(from, to)) this.atomicRanges.push({ from, to });
-  }
-
-  codeFenceHighlight(tree: CodeFenceHighlightTree) {
-    this.codeFenceHighlightTrees.push(tree);
-  }
-
-  mark(from: number, to: number, decoration: Decoration) {
-    if (from < to && this.touchesDirtyRange(from, to)) {
-      this.ranges.push({ from, to, decoration });
-    }
-  }
-
-  markByLine(from: number, to: number, decorationForLine: (lineNumber: number) => Decoration) {
-    splitRangeByLine(this.state, from, to, (lineNumber, rangeFrom, rangeTo) => {
-      this.mark(rangeFrom, rangeTo, decorationForLine(lineNumber));
-    });
-  }
-
-  replace(from: number, to: number, widget: WidgetType, block = false) {
-    this.mark(from, to, Decoration.replace({ block, widget }));
-  }
-
-  syntax(from: number, to: number, activeLines: Set<number>, decoration?: Decoration) {
-    this.markByLine(from, to, (lineNumber) => {
-      if (decoration) return decoration;
-      return activeLines.has(lineNumber) ? visibleSyntax : hiddenSyntax;
-    });
-  }
-
-  finish() {
-    let builder = new RangeSetBuilder<Decoration>();
-    for (let range of this.finishDecorationRanges()) {
-      builder.add(range.from, range.to, range.value);
-    }
-    return builder.finish();
-  }
-
-  finishDecorationRanges() {
-    let decorations = this.finishDecorationSpecs();
-    return decorations.map(({ from, to, decoration }) => decoration.range(from, to));
-  }
-
-  finishAtomicRanges() {
-    let builder = new RangeSetBuilder<RangeValue>();
-    for (let range of this.finishAtomicRangeValues()) {
-      builder.add(range.from, range.to, range.value);
-    }
-    return builder.finish();
-  }
-
-  finishAtomicRangeValues() {
-    this.atomicRanges.sort((left, right) => left.from - right.from || left.to - right.to);
-    return this.atomicRanges.map(({ from, to }) => paragraphBreakAtom.range(from, to));
-  }
-
-  finishCodeFenceHighlightTrees() {
-    return this.codeFenceHighlightTrees;
-  }
-
-  private finishDecorationSpecs() {
-    let decorations = [...this.ranges];
-    for (let [lineNumber, classes] of this.lineClasses) {
-      let line = this.state.doc.line(lineNumber);
-      decorations.push({
-        from: line.from,
-        to: line.from,
-        decoration: Decoration.line({ class: [...classes].join(" ") }),
-      });
-    }
-
-    decorations.sort((left, right) => left.from - right.from || left.to - right.to);
-    return decorations;
-  }
-
-  private touchesDirtyRange(from: number, to: number) {
-    return !this.dirtyRange || rangesTouch(from, to, this.dirtyRange.from, this.dirtyRange.to);
-  }
+  return builder.finish();
 }
 
 function buildLiveMdAnalysis(
   state: EditorState,
-  dirtyRanges: readonly LiveMdDirtyRange[],
-  expandedDirtyRanges: readonly LiveMdDirtyRange[],
   activeLines = getActiveLines(state),
+  ranges: readonly DocRange[] = fullDocRange(state),
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
-  let plan = buildLiveMdPlan(state, activeLines, codeFenceLanguages);
+  let build = buildLiveMdBuild(
+    state,
+    activeLines,
+    codeFenceLanguages,
+    expandLeadingBlankRanges(state, ranges),
+  );
   return {
     activeLines,
-    atomicRanges: plan.finishAtomicRanges(),
-    codeFenceHighlightTrees: plan.finishCodeFenceHighlightTrees(),
+    atomicRanges: finishAtomicRanges(build),
+    codeFenceHighlightTrees: build.codeFenceHighlightTrees,
     codeFenceLanguages,
-    decorations: plan.finish(),
-    dirtyRanges,
-    expandedDirtyRanges,
+    decorations: finishDecorations(build),
+    ranges,
+    tree: syntaxTree(state),
   };
 }
 
 export function __testBuildLiveMdAnalysis(state: EditorState) {
-  return buildLiveMdAnalysis(state, [], []);
+  return buildLiveMdAnalysis(state);
 }
 
-function patchLiveMdAnalysis(
-  previous: LiveMdAnalysis,
-  state: EditorState,
-  changes: ChangeDesc,
-  dirtyRanges: readonly LiveMdDirtyRange[],
-  expandedDirtyRanges: readonly LiveMdDirtyRange[],
-  activeLines: Set<number>,
-  precomputedCodeFenceHighlights: readonly CodeFenceHighlightTree[] = [],
-): LiveMdAnalysis {
-  let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
-  let plan = buildLiveMdPlan(
-    state,
-    activeLines,
-    codeFenceLanguages,
-    expandedDirtyRanges,
-    previous.codeFenceHighlightTrees,
-    changes,
-    precomputedCodeFenceHighlights,
-  );
-  return {
-    activeLines,
-    atomicRanges: patchRangeSet(
-      previous.atomicRanges.map(changes),
-      expandedDirtyRanges,
-      plan.finishAtomicRangeValues(),
-    ),
-    codeFenceHighlightTrees: mergeCodeFenceHighlightTrees(
-      previous.codeFenceHighlightTrees,
-      changes,
-      expandedDirtyRanges,
-      plan.finishCodeFenceHighlightTrees(),
-    ),
-    codeFenceLanguages,
-    decorations: patchRangeSet(
-      previous.decorations.map(changes),
-      expandedDirtyRanges,
-      plan.finishDecorationRanges(),
-    ),
-    dirtyRanges,
-    expandedDirtyRanges,
-  };
+export function __testBuildVisibleLiveMdAnalysis(state: EditorState, ranges: readonly DocRange[]) {
+  return buildLiveMdAnalysis(state, getActiveLines(state), ranges);
 }
 
-function buildLiveMdPlan(
+export function __testLiveMdAnalysis(view: EditorView): LiveMdAnalysis {
+  return view.state.field(liveMdAnalysisField);
+}
+
+export function __testVisibleLineRanges(view: EditorView): readonly DocRange[] {
+  return visibleLineRanges(view);
+}
+
+function buildLiveMdBuild(
   state: EditorState,
   activeLines: Set<number>,
   codeFenceLanguages: CodeFenceLanguageMap,
-  ranges?: readonly LiveMdDirtyRange[],
-  previousCodeFenceHighlights: readonly CodeFenceHighlightTree[] = [],
-  changes: ChangeDesc | null = null,
-  precomputedCodeFenceHighlights: readonly CodeFenceHighlightTree[] = [],
+  ranges: readonly DocRange[],
 ) {
-  let context: VisitContext = {
-    activeLines,
-    codeFenceHighlightCache: codeFenceHighlightCache(precomputedCodeFenceHighlights),
-    codeFenceLanguages,
-    dirtyRange: null,
-    dirtyReasons: null,
-    linkBaseUrl: state.facet(liveMdLinkBaseUrl),
-    plannedCodeFenceHighlightKeys: new Set(),
-    previousCodeFenceHighlights,
-    changes,
-    plan: new DecorationPlan(state),
-    state,
-  };
+  let build = createLiveMdBuild(state, activeLines, codeFenceLanguages);
 
   let tree = syntaxTree(state);
-  let iterate = (from?: number, to?: number) => {
-    tree.iterate({
-      from,
-      to,
-      enter(node) {
-        return liveMdFeatureRegistry.enter(context, node);
-      },
-    });
-  };
-  if (ranges) {
-    for (let range of ranges) {
-      context.dirtyRange = range;
-      context.dirtyReasons = range.reasons;
-      context.plan.setDirtyRange(range);
-      iterate(range.from, range.to);
-    }
-    context.dirtyRange = null;
-    context.dirtyReasons = null;
-    context.plan.setDirtyRange(null);
-  } else {
-    iterate();
+  let skipped: Array<{ from: number; to: number }> = [];
+  let matches = queryLiveMdMatches(tree, ranges);
+  let paragraphContainers = new Map<string, ParagraphContainer>();
+  let tables = new Map<string, CapturedTable>();
+  for (let match of matches) {
+    collectParagraphContainer(match, paragraphContainers);
+    collectTable(match, tables);
   }
+  let processed = new Set<string>();
+  for (let match of matches) {
+    let root = matchRoot(match);
+    if (root && isInsideSkippedRange(root, skipped)) continue;
+    if (processLiveMdMatch(build, match, tables, processed, skipped) === false && root) {
+      skipped.push({ from: root.from, to: root.to });
+    }
+  }
+  markParagraphBreaks(build, paragraphContainers);
 
-  return context.plan;
+  return build;
 }
 
-function mergeCodeFenceHighlightTrees(
-  previous: readonly CodeFenceHighlightTree[],
-  changes: ChangeDesc,
-  dirtyRanges: readonly LiveMdDirtyRange[],
-  additions: readonly CodeFenceHighlightTree[],
-) {
-  if (!dirtyRanges.length) return previous;
-  let invalidatingDirtyRanges = dirtyRanges.filter(codeFenceHighlightInvalidatingRange);
-  let preserved = previous
-    .map((tree) => ({
-      ...tree,
-      contentFrom: changes.mapPos(tree.contentFrom, 1),
-      contentTo: changes.mapPos(tree.contentTo, -1),
-    }))
-    .filter(
-      (tree) => !touchesAnyDirtyRange(tree.contentFrom, tree.contentTo, invalidatingDirtyRanges),
-    );
-  return [...preserved, ...additions].sort(
-    (left, right) => left.contentFrom - right.contentFrom || left.contentTo - right.contentTo,
+function queryLiveMdMatches(tree: Tree, ranges: readonly DocRange[]) {
+  let matches: TreeSitterQueryMatch[] = [];
+  for (let { from, to } of ranges) {
+    let options = from <= 0 && to >= tree.length ? undefined : { from, to };
+    matches.push(...queryTreeMatches(tree, liveMdQuerySource, options));
+  }
+  return matches;
+}
+
+function fullDocRange(state: EditorState): readonly DocRange[] {
+  return [{ from: 0, to: state.doc.length }];
+}
+
+function visibleLineRanges(view: EditorView): readonly DocRange[] {
+  if (view.scrollDOM.clientHeight == 0) return fullDocRange(view.state);
+  if (!rangesCoverSelection(view.visibleRanges, view.state)) return fullDocRange(view.state);
+
+  let ranges: DocRange[] = [];
+  for (let range of view.visibleRanges) {
+    let from = clamp(range.from, 0, view.state.doc.length);
+    let to = clamp(range.to, 0, view.state.doc.length);
+    if (from > to) continue;
+    let firstLine = view.state.doc.lineAt(from);
+    let lastLine = view.state.doc.lineAt(Math.max(from, to - 1));
+    let lineRange = { from: firstLine.from, to: to >= view.state.doc.length ? to : lastLine.to };
+    let last = ranges[ranges.length - 1];
+    if (last && lineRange.from <= last.to) {
+      last.to = Math.max(last.to, lineRange.to);
+    } else {
+      ranges.push(lineRange);
+    }
+  }
+  return ranges;
+}
+
+function rangesCoverSelection(ranges: readonly DocRange[], state: EditorState) {
+  for (let selectionRange of state.selection.ranges) {
+    let head = selectionRange.head;
+    if (!ranges.some((range) => head >= range.from && head <= range.to)) return false;
+  }
+  return true;
+}
+
+function mapDocRanges(ranges: readonly DocRange[], changes: ChangeDesc, state: EditorState) {
+  return mergeDocRanges(
+    ranges.map((range) =>
+      lineRangeFor(state, changes.mapPos(range.from, -1), changes.mapPos(range.to, 1)),
+    ),
   );
 }
 
-function codeFenceHighlightInvalidatingRange(range: LiveMdDirtyRange) {
-  return range.reasons.some((reason) => reason != "selection");
+function expandLeadingBlankRanges(state: EditorState, ranges: readonly DocRange[]) {
+  return mergeDocRanges(ranges.map((range) => expandLeadingBlankRange(state, range)));
 }
 
-function touchesAnyDirtyRange(from: number, to: number, dirtyRanges: readonly LiveMdDirtyRange[]) {
-  return dirtyRanges.some((range) => rangesTouch(from, to, range.from, range.to));
+function expandLeadingBlankRange(state: EditorState, range: DocRange): DocRange {
+  if (range.from <= 0 || state.doc.length == 0) return range;
+  let from = clamp(range.from, 0, state.doc.length);
+  let to = clamp(range.to, 0, state.doc.length);
+  let firstLine = state.doc.lineAt(Math.min(from, state.doc.length));
+  if (!isWhitespaceOnly(state.sliceDoc(firstLine.from, firstLine.to))) return { from, to };
+
+  let lineNumber = firstLine.number - 1;
+  for (; lineNumber >= 1; lineNumber--) {
+    let line = state.doc.line(lineNumber);
+    from = line.from;
+    if (!isWhitespaceOnly(state.sliceDoc(line.from, line.to))) break;
+  }
+  for (lineNumber--; lineNumber >= 1; lineNumber--) {
+    let line = state.doc.line(lineNumber);
+    if (isWhitespaceOnly(state.sliceDoc(line.from, line.to))) break;
+    from = line.from;
+  }
+  return { from, to };
 }
 
-function analyzeCodeFenceSyntaxChanges(
-  state: EditorState,
-  changes: ChangeDesc,
-  previousHighlights: readonly CodeFenceHighlightTree[],
-): CodeFenceSyntaxChanges {
-  if (!previousHighlights.length) return emptyCodeFenceSyntaxChanges;
+function lineRangeFor(state: EditorState, from: number, to: number): DocRange {
+  let rangeFrom = clamp(from, 0, state.doc.length);
+  let rangeTo = clamp(to, 0, state.doc.length);
+  let firstLine = state.doc.lineAt(rangeFrom);
+  let lastLine = state.doc.lineAt(Math.max(rangeFrom, rangeTo - 1));
+  return { from: firstLine.from, to: rangeTo >= state.doc.length ? rangeTo : lastLine.to };
+}
 
-  let highlights: CodeFenceHighlightTree[] = [];
-  let sourceRanges: LiveMdDirtySourceRange[] = [];
-  for (let previous of previousHighlights) {
-    let contentFrom = changes.mapPos(previous.contentFrom, 1);
-    let contentTo = changes.mapPos(previous.contentTo, -1);
-    if (contentFrom >= contentTo) continue;
+function sameDocRanges(left: readonly DocRange[], right: readonly DocRange[]) {
+  if (left.length != right.length) return false;
+  for (let index = 0; index < left.length; index++) {
+    let leftRange = left[index]!;
+    let rightRange = right[index]!;
+    if (leftRange.from != rightRange.from || leftRange.to != rightRange.to) return false;
+  }
+  return true;
+}
 
-    let contentChanges = codeFenceContentChangeResult(
-      changes,
-      state,
-      previous,
-      contentFrom,
-      contentTo,
-    );
-    if (!contentChanges || !contentChanges.touched) continue;
+function mergeDocRanges(ranges: readonly DocRange[]) {
+  let sorted = ranges.slice().sort((left, right) => left.from - right.from || left.to - right.to);
+  let merged: DocRange[] = [];
+  for (let range of sorted) {
+    let last = merged[merged.length - 1];
+    if (last && range.from <= last.to) {
+      last.to = Math.max(last.to, range.to);
+    } else {
+      merged.push({ from: range.from, to: range.to });
+    }
+  }
+  return merged;
+}
 
-    let sourceText = codeFenceSourceText(state, contentFrom, contentTo);
-    let oldTree = previous.parser.editWrappedTree(
-      previous.tree,
-      contentChanges.changes,
-      previous.sourceText,
-      sourceText,
-    );
-    let tree = previous.parser.parse(sourceText, oldTree);
-    let highlight = {
-      ...previous,
-      contentFrom,
-      contentTo,
-      sourceText,
-      tree,
-    };
-    highlights.push(highlight);
-    let changedRanges = oldTree.tree
-      ? oldTree.tree.getChangedRanges(tree.tree!)
-      : [{ startIndex: 0, endIndex: tree.length }];
-    if (!changedRanges.length) continue;
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
-    let rangeFrom = Math.min(...changedRanges.map((range) => range.startIndex));
-    sourceRanges.push({
-      from: contentFrom + rangeFrom,
-      reason: "syntax",
-      to: codeFenceContentDirtyTo(state, contentTo),
+function liveMdQuerySource(_parser: TreeSitterParser, tree: Tree) {
+  if (tree.topNode.name == "document") return liveMdMarkdownQuerySource;
+  if (tree.topNode.name == "inline") return liveMdMarkdownInlineQuerySource;
+  return null;
+}
+
+function isInsideSkippedRange(node: SyntaxNode, ranges: readonly { from: number; to: number }[]) {
+  return ranges.some((range) => node.from >= range.from && node.to <= range.to);
+}
+
+type ParagraphContainerKind = "block" | "document" | "list" | "listItem";
+
+type ParagraphContainer = {
+  children: SyntaxNode[];
+  kind: ParagraphContainerKind;
+  node: SyntaxNode;
+};
+
+type CapturedTable = {
+  delimiterCells: Map<string, CapturedTableDelimiterCell>;
+  delimiterRow: SyntaxNode | null;
+  headerCells: Map<string, SyntaxNode>;
+  node: SyntaxNode;
+  pipes: Map<string, SyntaxNode>;
+  rows: Map<string, CapturedTableRow>;
+};
+
+type CapturedTableDelimiterCell = {
+  left: boolean;
+  node: SyntaxNode;
+  right: boolean;
+};
+
+type CapturedTableRow = {
+  cells: Map<string, SyntaxNode>;
+  node: SyntaxNode;
+};
+
+type LiveMdMatchKind = "codeFence" | "heading" | "image" | "latex" | "link" | "rule" | "table";
+
+type SimpleCaptureHandler = (build: LiveMdBuild, node: SyntaxNode) => void;
+
+const simpleCaptureHandlers: Record<string, SimpleCaptureHandler> = {
+  blockquote: (build, node) => addLineRangeClass(build, node.from, node.to, "cm-md-blockquote"),
+  "list.item": (build, node) => addLineRangeClass(build, node.from, node.to, "cm-md-list-line"),
+  "list.marker": applyListMarker,
+  "mark.emphasis": (build, node) => addMark(build, node.from, node.to, emphasisMark),
+  "mark.inlineCode": (build, node) => addMark(build, node.from, node.to, inlineCodeMark),
+  "mark.strike": (build, node) => addMark(build, node.from, node.to, strikeMark),
+  "mark.strong": (build, node) => addMark(build, node.from, node.to, strongMark),
+  syntax: (build, node) => addSyntax(build, node.from, node.to),
+  "task.checked": (build, node) => applyTaskMarker(build, node, true),
+  "task.unchecked": (build, node) => applyTaskMarker(build, node, false),
+  uriAutolink: applyUriAutolink,
+};
+
+function collectParagraphContainer(
+  match: TreeSitterQueryMatch,
+  containers: Map<string, ParagraphContainer>,
+) {
+  let containerCapture = capture(match, "paragraph.container");
+  let childCapture = capture(match, "paragraph.child");
+  let kind = match.setProperties?.["paragraph.kind"];
+  if (!containerCapture || !childCapture || typeof kind != "string") return;
+  if (!isParagraphContainerKind(kind)) return;
+
+  let key = nodeKey(containerCapture.node);
+  let container = containers.get(key);
+  if (!container) {
+    container = { children: [], kind, node: containerCapture.node };
+    containers.set(key, container);
+  }
+  container.children.push(childCapture.node);
+}
+
+function collectTable(match: TreeSitterQueryMatch, tables: Map<string, CapturedTable>) {
+  let tableCapture = capture(match, "table");
+  if (!tableCapture) return;
+  let table = capturedTable(tables, tableCapture.node);
+  for (let headerCell of captures(match, "table.header.cell")) {
+    table.headerCells.set(nodeKey(headerCell.node), headerCell.node);
+  }
+  for (let delimiterRow of captures(match, "table.delimiter.row")) {
+    table.delimiterRow = delimiterRow.node;
+  }
+  for (let delimiterCell of captures(match, "table.delimiter.cell")) {
+    let key = nodeKey(delimiterCell.node);
+    table.delimiterCells.set(key, {
+      left: !!capture(match, "table.align.left"),
+      node: delimiterCell.node,
+      right: !!capture(match, "table.align.right"),
     });
   }
-
-  return highlights.length || sourceRanges.length
-    ? { highlights, sourceRanges }
-    : emptyCodeFenceSyntaxChanges;
+  for (let rowCapture of captures(match, "table.row")) {
+    capturedTableRow(table, rowCapture.node);
+  }
+  let rowCapture = capture(match, "table.row");
+  for (let rowCell of captures(match, "table.row.cell")) {
+    let row = rowCapture ? capturedTableRow(table, rowCapture.node) : null;
+    row?.cells.set(nodeKey(rowCell.node), rowCell.node);
+  }
+  for (let pipe of captures(match, "table.pipe")) {
+    table.pipes.set(nodeKey(pipe.node), pipe.node);
+  }
 }
 
-function feature(
-  nodes: readonly string[],
-  enter?: NodeVisitor,
-  scope?: LiveMdScope,
-  invalidatedBy?: readonly string[],
-): LiveMdNodeFeature {
-  return { enter, invalidatedBy, nodes, scope };
+function capturedTable(tables: Map<string, CapturedTable>, node: SyntaxNode) {
+  let key = nodeKey(node);
+  let table = tables.get(key);
+  if (!table) {
+    table = {
+      delimiterCells: new Map(),
+      delimiterRow: null,
+      headerCells: new Map(),
+      node,
+      pipes: new Map(),
+      rows: new Map(),
+    };
+    tables.set(key, table);
+  }
+  return table;
+}
+
+function capturedTableRow(table: CapturedTable, node: SyntaxNode) {
+  let key = nodeKey(node);
+  let row = table.rows.get(key);
+  if (!row) {
+    row = { cells: new Map(), node };
+    table.rows.set(key, row);
+  }
+  return row;
+}
+
+function markParagraphBreaks(
+  build: LiveMdBuild,
+  containers: ReadonlyMap<string, ParagraphContainer>,
+) {
+  for (let container of containers.values()) {
+    if (container.kind == "listItem") continue;
+    let siblings = sortedNodes(container.children);
+    let previousFrom =
+      container.kind == "list"
+        ? (node: SyntaxNode) => blockContainerBreakFrom(build, node, containers)
+        : (node: SyntaxNode) => blockBreakFrom(build, node);
+    for (let index = 1; index < siblings.length; index++) {
+      markParagraphBreakRun(build, previousFrom(siblings[index - 1]!), siblings[index]!.from);
+    }
+    let last = siblings.at(-1);
+    if (last) markParagraphBreakRun(build, previousFrom(last), container.node.to);
+  }
+}
+
+function blockBreakFrom(build: LiveMdBuild, node: SyntaxNode): number {
+  if (node.to <= node.from) return node.to;
+  let before = node.to - 1;
+  if (build.state.sliceDoc(before, node.to) != "\n") return node.to;
+  return build.state.doc.lineAt(before).to;
+}
+
+function blockContainerBreakFrom(
+  build: LiveMdBuild,
+  node: SyntaxNode,
+  containers: ReadonlyMap<string, ParagraphContainer>,
+) {
+  let blocks = sortedNodes(containers.get(nodeKey(node))?.children);
+  return blocks.length ? blockBreakFrom(build, blocks[blocks.length - 1]!) : node.to;
 }
 
 function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) {
@@ -576,143 +638,72 @@ function getActiveLines(state: EditorState) {
   return lines;
 }
 
-function isBlockNode(node: SyntaxNode) {
-  switch (node.name) {
-    case "atx_heading":
-    case "block_quote":
-    case "fenced_code_block":
-    case "list":
-    case "paragraph":
-    case "pipe_table":
-    case "setext_heading":
-    case "thematic_break":
+function matchRoot(match: TreeSitterQueryMatch): SyntaxNode | null {
+  return capture(match, "feature")?.node ?? match.captures[0]?.node ?? null;
+}
+
+function matchKind(match: TreeSitterQueryMatch): LiveMdMatchKind | null {
+  let kind = match.setProperties?.["liveMd.kind"];
+  if (typeof kind != "string" || !isLiveMdMatchKind(kind)) return null;
+  return kind;
+}
+
+function isLiveMdMatchKind(kind: string): kind is LiveMdMatchKind {
+  switch (kind) {
+    case "codeFence":
+    case "heading":
+    case "image":
+    case "latex":
+    case "link":
+    case "rule":
+    case "table":
       return true;
     default:
       return false;
   }
 }
 
-function isDocumentChildNode(node: SyntaxNode) {
-  return node.name == "section" || isBlockNode(node);
-}
-
-function compressGaps(
-  context: VisitContext,
-  parent: SyntaxNode,
-  isSibling: (node: SyntaxNode) => boolean,
-  previousFrom: (context: VisitContext, node: SyntaxNode) => number = blockBreakFrom,
-  containerTo?: number,
-) {
-  let siblings = siblingWindowForGaps(context, parent, isSibling);
-  for (let index = 1; index < siblings.length; index++) {
-    let previous = siblings[index - 1];
-    let current = siblings[index];
-    markDirtyParagraphBreakRun(context, previousFrom(context, previous), current.from);
-  }
-
-  let last = siblings.at(-1);
-  if (last && containerTo != null && !nextMatchingSibling(last, isSibling)) {
-    markDirtyParagraphBreakRun(context, previousFrom(context, last), containerTo);
+function isParagraphContainerKind(kind: string): kind is ParagraphContainerKind {
+  switch (kind) {
+    case "block":
+    case "document":
+    case "list":
+    case "listItem":
+      return true;
+    default:
+      return false;
   }
 }
 
-function visitDocument(context: VisitContext, node: SyntaxNode) {
-  compressGaps(context, node, isDocumentChildNode, blockBreakFrom, node.to);
+function capture(match: TreeSitterQueryMatch, name: string) {
+  return match.captures.find((item) => item.name == name) ?? null;
 }
 
-function visitSection(context: VisitContext, node: SyntaxNode) {
-  compressGaps(context, node, isBlockNode, blockBreakFrom, node.to);
+function captures(match: TreeSitterQueryMatch, name: string) {
+  return match.captures.filter((item) => item.name == name);
 }
 
-function visitList(context: VisitContext, node: SyntaxNode) {
-  compressGaps(
-    context,
-    node,
-    (child) => child.name == "list_item",
-    blockContainerBreakFrom,
-    node.to,
-  );
+function captureKey(capture: TreeSitterQueryCapture) {
+  return `${capture.name}:${nodeKey(capture.node)}`;
 }
 
-function visitBlockQuote(context: VisitContext, node: SyntaxNode) {
-  context.plan.lineClass(node.from, node.to, "cm-md-blockquote");
-  compressGaps(context, node, isBlockNode, blockBreakFrom, node.to);
+function nodeKey(node: SyntaxNode) {
+  return `${node.name}:${node.id}:${node.from}:${node.to}`;
 }
 
-function siblingWindowForGaps(
-  context: VisitContext,
-  parent: SyntaxNode,
-  isSibling: (node: SyntaxNode) => boolean,
-) {
-  let range = context.dirtyRange;
-  if (!range) return matchingChildren(parent, isSibling);
-
-  let seed = firstChildTouchingOrAfter(parent, range.from) ?? parent.lastChild;
-  while (seed && !isSibling(seed)) seed = seed.previousSibling;
-  let first = seed ? (previousMatchingSibling(seed, isSibling) ?? seed) : null;
-  if (!first) first = firstMatchingChild(parent, isSibling);
-
-  let siblings: SyntaxNode[] = [];
-  for (let child = first; child; child = nextMatchingSibling(child, isSibling)) {
-    siblings.push(child);
-    if (child.from > range.to) break;
-  }
-  return siblings;
+function sortedNodes(nodes?: Iterable<SyntaxNode>) {
+  return Array.from(nodes ?? []).sort(compareNodes);
 }
 
-function matchingChildren(parent: SyntaxNode, isSibling: (node: SyntaxNode) => boolean) {
-  let children: SyntaxNode[] = [];
-  for (let child = parent.firstChild; child; child = child.nextSibling) {
-    if (isSibling(child)) children.push(child);
-  }
-  return children;
+function compareNodes(left: SyntaxNode, right: SyntaxNode) {
+  return left.from - right.from || left.to - right.to || left.name.localeCompare(right.name);
 }
 
-function firstMatchingChild(parent: SyntaxNode, isSibling: (node: SyntaxNode) => boolean) {
-  for (let child = parent.firstChild; child; child = child.nextSibling) {
-    if (isSibling(child)) return child;
-  }
-  return null;
-}
-
-function firstChildTouchingOrAfter(parent: SyntaxNode, from: number) {
-  let index = from > parent.from ? from - 1 : from;
-  let child = parent.firstChildForIndex(index);
-  while (child && child.to < from) child = child.nextSibling;
-  return child;
-}
-
-function previousMatchingSibling(node: SyntaxNode, isSibling: (node: SyntaxNode) => boolean) {
-  for (let sibling = node.previousSibling; sibling; sibling = sibling.previousSibling) {
-    if (isSibling(sibling)) return sibling;
-  }
-  return null;
-}
-
-function nextMatchingSibling(node: SyntaxNode, isSibling: (node: SyntaxNode) => boolean) {
-  for (let sibling = node.nextSibling; sibling; sibling = sibling.nextSibling) {
-    if (isSibling(sibling)) return sibling;
-  }
-  return null;
-}
-
-function blockBreakFrom(context: VisitContext, node: SyntaxNode): number {
-  if (node.to <= node.from) return node.to;
-  let before = node.to - 1;
-  if (context.state.sliceDoc(before, node.to) != "\n") return node.to;
-  return context.state.doc.lineAt(before).to;
-}
-
-function blockContainerBreakFrom(context: VisitContext, node: SyntaxNode) {
-  let blocks = node.children.filter(isBlockNode);
-  return blocks.length ? blockBreakFrom(context, blocks[blocks.length - 1]) : node.to;
-}
-
-function markParagraphBreakRun(context: VisitContext, from: number, to: number) {
-  if (from >= to || !isWhitespaceOnly(context.state.sliceDoc(from, to))) return;
+function markParagraphBreakRun(build: LiveMdBuild, from: number, to: number) {
+  if (from >= to || !isWhitespaceOnly(build.state.sliceDoc(from, to))) return;
 
   let newlinePositions: number[] = [];
-  let source = context.state.sliceDoc(from, to);
+  let source = build.state.sliceDoc(from, to);
   for (let index = 0; index < source.length; index++) {
     if (source.charCodeAt(index) == 10) newlinePositions.push(from + index);
   }
@@ -721,153 +712,174 @@ function markParagraphBreakRun(context: VisitContext, from: number, to: number) 
   if (!separatorCount) return;
 
   let blankLines: number[] = [];
-  forEachLineInRange(context.state, from, to, (line) => {
-    if (line.from > from && isWhitespaceOnly(context.state.sliceDoc(line.from, line.to))) {
+  forEachLineInRange(build.state, from, to, (line) => {
+    if (line.from > from && isWhitespaceOnly(build.state.sliceDoc(line.from, line.to))) {
       blankLines.push(line.number);
     }
   });
 
   for (let index = 0; index < separatorCount; index++) {
-    context.plan.atom(newlinePositions[index * 2], newlinePositions[index * 2 + 1] + 1);
+    addAtom(build, newlinePositions[index * 2], newlinePositions[index * 2 + 1] + 1);
 
     let separatorLine = blankLines[index * 2];
     if (separatorLine == null) return;
-    context.plan.line(separatorLine, "cm-md-block-separator");
+    addLineClass(build, separatorLine, "cm-md-block-separator");
   }
 }
 
-function markDirtyParagraphBreakRun(context: VisitContext, from: number, to: number) {
-  let range = context.dirtyRange;
-  if (range && !rangesTouch(from, to, range.from, range.to)) return;
-  markParagraphBreakRun(context, from, to);
+function processLiveMdMatch(
+  build: LiveMdBuild,
+  match: TreeSitterQueryMatch,
+  tables: ReadonlyMap<string, CapturedTable>,
+  processed: Set<string>,
+  skipped: readonly { from: number; to: number }[],
+): false | void {
+  switch (matchKind(match)) {
+    case "codeFence":
+      return applyCodeFence(build, match);
+    case "heading":
+      return applyHeadingMatch(build, match);
+    case "image":
+      return applyImage(build, match);
+    case "latex":
+      return applyLatex(build, match);
+    case "link":
+      return applyInlineLink(build, match);
+    case "rule": {
+      let node = capture(match, "rule")?.node;
+      if (node) return applyRule(build, node);
+      return;
+    }
+    case "table":
+      return applyTable(build, match, tables, processed);
+  }
+
+  for (let item of match.captures) {
+    if (isInsideSkippedRange(item.node, skipped)) continue;
+    let handler = simpleCaptureHandlers[item.name];
+    if (!handler) continue;
+    let key = captureKey(item);
+    if (processed.has(key)) continue;
+    processed.add(key);
+    handler(build, item.node);
+  }
 }
 
-function visitLineClass(className: string): NodeVisitor {
-  return (context, node) => {
-    context.plan.lineClass(node.from, node.to, className);
-  };
+function applyHeadingMatch(build: LiveMdBuild, match: TreeSitterQueryMatch) {
+  let node = capture(match, "heading")?.node;
+  if (!node) return;
+  let level = Number(match.setProperties?.["heading.level"]) || 1;
+  applyHeading(build, node, level, capture(match, "heading.marker")?.node);
 }
 
-function visitMark(decoration: Decoration): NodeVisitor {
-  return (context, node) => {
-    context.plan.mark(node.from, node.to, decoration);
-  };
+function applyHeading(build: LiveMdBuild, node: SyntaxNode, level: number, marker?: SyntaxNode) {
+  addLineRangeClass(build, node.from, node.to, "cm-md-heading");
+  addLineRangeClass(build, node.from, node.to, `cm-md-heading-${level}`);
+  if (marker) addSyntax(build, marker.from, marker.to);
 }
 
-function visitSyntax(context: VisitContext, node: SyntaxNode) {
-  context.plan.syntax(node.from, node.to, context.activeLines);
-}
-
-function visitHeading(context: VisitContext, node: SyntaxNode) {
-  let marker = node.children.find((child) => child.name.startsWith("atx_h"));
-  let level = marker ? Number(marker.name.at(5)) || 1 : 1;
-  context.plan.lineClass(node.from, node.to, "cm-md-heading");
-  context.plan.lineClass(node.from, node.to, `cm-md-heading-${level}`);
-  if (marker) context.plan.syntax(marker.from, marker.to, context.activeLines);
-}
-
-function visitSetextHeading(context: VisitContext, node: SyntaxNode) {
-  let underline = node.children.find((child) => child.name.startsWith("setext_h"));
-  let level = underline?.name == "setext_h2_underline" ? 2 : 1;
-  context.plan.lineClass(node.from, node.to, "cm-md-heading");
-  context.plan.lineClass(node.from, node.to, `cm-md-heading-${level}`);
-  if (underline) context.plan.syntax(underline.from, underline.to, context.activeLines);
-}
-
-function visitListMarker(context: VisitContext, node: SyntaxNode) {
-  let line = context.state.doc.lineAt(node.from);
-  context.plan.line(line.number, "cm-md-list-line");
-  if (context.activeLines.has(line.number)) {
-    context.plan.syntax(node.from, node.to, context.activeLines);
+function applyListMarker(build: LiveMdBuild, node: SyntaxNode) {
+  let line = build.state.doc.lineAt(node.from);
+  addLineClass(build, line.number, "cm-md-list-line");
+  if (build.activeLines.has(line.number)) {
+    addSyntax(build, node.from, node.to);
   } else {
-    context.plan.replace(
+    addReplace(
+      build,
       node.from,
       node.to,
-      new ListMarkerWidget(context.state.sliceDoc(node.from, node.to).trim()),
+      new ListMarkerWidget(build.state.sliceDoc(node.from, node.to).trim()),
     );
   }
 }
 
-function visitTaskMarker(context: VisitContext, node: SyntaxNode) {
-  let line = context.state.doc.lineAt(node.from);
-  let checked = node.name == "task_list_marker_checked";
-  context.plan.line(line.number, "cm-md-list-line");
-  context.plan.line(line.number, "cm-md-task-line");
-  if (checked) context.plan.line(line.number, "is-checked");
-  context.plan.replace(node.from, node.to, new TaskCheckboxWidget(checked));
+function applyTaskMarker(build: LiveMdBuild, node: SyntaxNode, checked: boolean) {
+  let line = build.state.doc.lineAt(node.from);
+  addLineClass(build, line.number, "cm-md-list-line");
+  addLineClass(build, line.number, "cm-md-task-line");
+  if (checked) addLineClass(build, line.number, "is-checked");
+  addReplace(build, node.from, node.to, new TaskCheckboxWidget(checked));
 }
 
-function visitRule(context: VisitContext, node: SyntaxNode): false {
-  context.plan.lineClass(node.from, node.to, "cm-md-rule-line");
-  context.plan.syntax(node.from, node.to, context.activeLines);
+function applyRule(build: LiveMdBuild, node: SyntaxNode): false {
+  addLineRangeClass(build, node.from, node.to, "cm-md-rule-line");
+  addSyntax(build, node.from, node.to);
   return false;
 }
 
-function visitInlineLink(context: VisitContext, node: SyntaxNode) {
-  let text = node.getChild("link_text");
-  let destination = node.getChild("link_destination");
+function applyInlineLink(build: LiveMdBuild, match: TreeSitterQueryMatch) {
+  let node = capture(match, "link")?.node;
+  let text = capture(match, "link.text")?.node;
+  let destination = capture(match, "link.destination")?.node;
+  if (!node) return;
   if (!text) return;
-  context.plan.syntax(node.from, text.from, context.activeLines);
-  context.plan.mark(
+  addSyntax(build, node.from, text.from);
+  addMark(
+    build,
     text.from,
     text.to,
     liveMdLinkMark(
-      destination ? context.state.sliceDoc(destination.from, destination.to) : null,
-      context.linkBaseUrl,
+      destination ? build.state.sliceDoc(destination.from, destination.to) : null,
+      build.linkBaseUrl,
     ),
   );
-  context.plan.syntax(text.to, node.to, context.activeLines);
+  addSyntax(build, text.to, node.to);
 }
 
-function visitUriAutolink(context: VisitContext, node: SyntaxNode) {
+function applyUriAutolink(build: LiveMdBuild, node: SyntaxNode) {
   if (node.to - node.from <= 2) return;
-  context.plan.syntax(node.from, node.from + 1, context.activeLines);
-  context.plan.mark(
+  addSyntax(build, node.from, node.from + 1);
+  addMark(
+    build,
     node.from + 1,
     node.to - 1,
-    liveMdLinkMark(context.state.sliceDoc(node.from + 1, node.to - 1), context.linkBaseUrl),
+    liveMdLinkMark(build.state.sliceDoc(node.from + 1, node.to - 1), build.linkBaseUrl),
   );
-  context.plan.syntax(node.to - 1, node.to, context.activeLines);
+  addSyntax(build, node.to - 1, node.to);
 }
 
-function visitImage(context: VisitContext, node: SyntaxNode): false | void {
-  let description = node.getChild("image_description");
-  let destination = node.getChild("link_destination");
-  let alt = description ? context.state.sliceDoc(description.from, description.to) : "";
-  let src = destination ? context.state.sliceDoc(destination.from, destination.to).trim() : "";
+function applyImage(build: LiveMdBuild, match: TreeSitterQueryMatch): false | void {
+  let node = capture(match, "image")?.node;
+  if (!node) return false;
+  let description = capture(match, "image.description")?.node;
+  let destination = capture(match, "image.destination")?.node;
+  let alt = description ? build.state.sliceDoc(description.from, description.to) : "";
+  let src = destination ? build.state.sliceDoc(destination.from, destination.to).trim() : "";
   if (!src) return false;
 
-  let line = context.state.doc.lineAt(node.from);
-  let active = context.activeLines.has(line.number);
+  let line = build.state.doc.lineAt(node.from);
+  let active = build.activeLines.has(line.number);
   let widget = new ImagePreviewWidget(alt, normalizeImageSource(src));
-  if (
-    !active &&
-    isOnlyVisibleContentOnLine(context.state, line.from, line.to, node.from, node.to)
-  ) {
-    context.plan.replace(line.from, line.to, widget, true);
+  if (!active && isOnlyVisibleContentOnLine(build.state, line.from, line.to, node.from, node.to)) {
+    addReplace(build, line.from, line.to, widget, true);
     return false;
   }
 
   if (!active) {
-    context.plan.replace(node.from, node.to, widget);
+    addReplace(build, node.from, node.to, widget);
     return false;
   }
 
   if (description) {
-    context.plan.syntax(node.from, description.from, context.activeLines);
-    context.plan.mark(description.from, description.to, liveMdLinkMark(null, context.linkBaseUrl));
-    context.plan.syntax(description.to, node.to, context.activeLines);
+    addSyntax(build, node.from, description.from);
+    addMark(build, description.from, description.to, liveMdLinkMark(null, build.linkBaseUrl));
+    addSyntax(build, description.to, node.to);
   }
   return false;
 }
 
-function visitLatex(context: VisitContext, node: SyntaxNode): false | void {
-  let formula = readLatexFormula(context.state, node);
+function applyLatex(build: LiveMdBuild, match: TreeSitterQueryMatch): false | void {
+  let node = capture(match, "latex")?.node;
+  let openingDelimiter = capture(match, "latex.open")?.node;
+  let closingDelimiter = capture(match, "latex.close")?.node;
+  if (!node || !openingDelimiter || !closingDelimiter) return false;
+  let formula = readLatexFormula(build.state, node, openingDelimiter, closingDelimiter);
   if (!formula) return false;
-  if (rangeTouchesActiveLine(context, node.from, node.to)) return;
+  if (rangeTouchesActiveLine(build, node.from, node.to)) return;
 
-  let range = latexReplacementRange(context.state, node, formula.displayMode);
-  context.plan.replace(
+  let range = latexReplacementRange(build.state, node, formula.displayMode);
+  addReplace(
+    build,
     range.from,
     range.to,
     new LatexWidget({ ...formula, block: range.block }),
@@ -876,76 +888,90 @@ function visitLatex(context: VisitContext, node: SyntaxNode): false | void {
   return false;
 }
 
-function visitTable(context: VisitContext, node: SyntaxNode): false {
-  let table = readTableFromNode(context.state, node);
-  if (table && !rangeTouchesActiveLine(context, node.from, node.to)) {
-    context.plan.replace(node.from, node.to, new TablePreviewWidget(table), true);
+function applyTable(
+  build: LiveMdBuild,
+  match: TreeSitterQueryMatch,
+  tables: ReadonlyMap<string, CapturedTable>,
+  processed: Set<string>,
+): false | void {
+  let tableCapture = capture(match, "table");
+  if (!tableCapture) return;
+  let node = tableCapture.node;
+  let key = `table:${nodeKey(node)}`;
+  if (processed.has(key)) return;
+  processed.add(key);
+
+  let captured = tables.get(nodeKey(node));
+  let table = captured ? readTableFromCaptures(build.state, captured) : null;
+  if (table && !tableTouchesActiveLine(build, node.from, node.to, table)) {
+    addReplace(build, node.from, node.to, new TablePreviewWidget(table), true);
     return false;
   }
 
-  let delimiterNode = node.getChild("pipe_table_delimiter_row");
-  context.plan.lineClass(node.from, node.to, "cm-md-table-line");
-  if (delimiterNode) {
-    context.plan.lineClass(delimiterNode.from, delimiterNode.to, "cm-md-table-divider");
+  addLineRangeClass(build, node.from, node.to, "cm-md-table-line");
+  if (captured?.delimiterRow) {
+    addLineRangeClass(
+      build,
+      captured.delimiterRow.from,
+      captured.delimiterRow.to,
+      "cm-md-table-divider",
+    );
   }
-  forEachDescendant(node, (child) => {
-    if (child.name == "|") {
-      context.plan.syntax(child.from, child.to, context.activeLines, tablePipeMark);
-    }
-  });
+  for (let pipe of sortedNodes(captured?.pipes.values())) {
+    addSyntax(build, pipe.from, pipe.to, tablePipeMark);
+  }
   return false;
 }
 
-function visitCodeFence(context: VisitContext, node: SyntaxNode): false {
-  let delimiters = node.children.filter((child) => child.name == "fenced_code_block_delimiter");
-  let openingDelimiter = delimiters[0];
-  if (!openingDelimiter) return false;
+function applyCodeFence(build: LiveMdBuild, match: TreeSitterQueryMatch): false {
+  let node = capture(match, "codeFence")?.node;
+  let openingDelimiter = capture(match, "codeFence.open")?.node;
+  if (!node || !openingDelimiter) return false;
 
-  let closingDelimiter = delimiters[1] ?? null;
-  let content = node.getChild("code_fence_content");
-  let language = readFenceLanguage(context.state, node);
+  let closingDelimiter = capture(match, "codeFence.close")?.node ?? null;
+  let content = capture(match, "codeFence.content")?.node;
+  let language = readFenceLanguage(build.state, capture(match, "codeFence.language")?.node);
 
   if (content && content.from < content.to) {
-    let diagram = readMermaidDiagram(context.state, content, language);
-    if (diagram && !rangeTouchesActiveLine(context, node.from, node.to)) {
-      context.plan.replace(node.from, node.to, new MermaidWidget(diagram), true);
+    let diagram = readMermaidDiagram(build.state, content, language);
+    if (diagram && !rangeTouchesActiveLine(build, node.from, node.to)) {
+      addReplace(build, node.from, node.to, new MermaidWidget(diagram), true);
       return false;
     }
   }
 
-  let openingLineNumber = context.state.doc.lineAt(openingDelimiter.from).number;
+  let openingLineNumber = build.state.doc.lineAt(openingDelimiter.from).number;
   let blockEndLineNumber = openingLineNumber;
 
-  context.plan.line(openingLineNumber, "cm-md-code-fence-line");
-  context.plan.line(openingLineNumber, "cm-md-code-block-start");
-  context.plan.syntax(openingDelimiter.from, openingDelimiter.to, context.activeLines);
+  addLineClass(build, openingLineNumber, "cm-md-code-fence-line");
+  addLineClass(build, openingLineNumber, "cm-md-code-block-start");
+  addSyntax(build, openingDelimiter.from, openingDelimiter.to);
 
   if (content && content.from < content.to) {
-    forEachLineInRange(context.state, content.from, content.to, (line) => {
-      context.plan.line(line.number, "cm-md-code-line");
+    forEachLineInRange(build.state, content.from, content.to, (line) => {
+      addLineClass(build, line.number, "cm-md-code-line");
       blockEndLineNumber = line.number;
     });
-    addCodeFenceHighlights(context, content.from, content.to, language);
+    addCodeFenceHighlights(build, content.from, content.to, language);
   }
 
   if (closingDelimiter) {
-    let closingLineNumber = context.state.doc.lineAt(closingDelimiter.from).number;
+    let closingLineNumber = build.state.doc.lineAt(closingDelimiter.from).number;
     blockEndLineNumber = closingLineNumber;
-    context.plan.line(closingLineNumber, "cm-md-code-fence-line");
-    context.plan.syntax(closingDelimiter.from, closingDelimiter.to, context.activeLines);
+    addLineClass(build, closingLineNumber, "cm-md-code-fence-line");
+    addSyntax(build, closingDelimiter.from, closingDelimiter.to);
   }
 
-  context.plan.line(blockEndLineNumber, "cm-md-code-block-end");
+  addLineClass(build, blockEndLineNumber, "cm-md-code-block-end");
   return false;
 }
 
 function readLatexFormula(
   state: EditorState,
   node: SyntaxNode,
+  openingDelimiter: SyntaxNode,
+  closingDelimiter: SyntaxNode,
 ): Omit<LatexFormula, "block"> | null {
-  let delimiters = node.children.filter((child) => child.name == "latex_span_delimiter");
-  let openingDelimiter = delimiters[0];
-  let closingDelimiter = delimiters[delimiters.length - 1];
   if (!openingDelimiter || !closingDelimiter || openingDelimiter == closingDelimiter) return null;
 
   let source = state.sliceDoc(node.from, node.to);
@@ -976,64 +1002,40 @@ function latexReplacementRange(state: EditorState, node: SyntaxNode, displayMode
   return { block: false, from: node.from, to: node.to };
 }
 
-function isSelectionOnlyVisit(context: VisitContext) {
-  return (
-    context.dirtyReasons != null &&
-    context.dirtyReasons.length > 0 &&
-    context.dirtyReasons.every((reason) => reason == "selection")
-  );
-}
-
-function readTableFromNode(state: EditorState, node: SyntaxNode): MarkdownTable | null {
-  let headerNode = node.getChild("pipe_table_header");
-  let delimiterNode = node.getChild("pipe_table_delimiter_row");
-  if (!headerNode || !delimiterNode) return null;
-
-  let header = tableCellsFromNode(state, headerNode, "pipe_table_cell");
-  let alignments = tableAlignmentsFromNode(delimiterNode);
+function readTableFromCaptures(state: EditorState, table: CapturedTable): MarkdownTable | null {
+  let header = sortedNodes(table.headerCells.values()).map((cell) => tableCellText(state, cell));
+  let alignments = Array.from(table.delimiterCells.values())
+    .sort((left, right) => compareNodes(left.node, right.node))
+    .map(tableAlignment);
   if (header.length < 2 || alignments.length < 2) return null;
 
   let columnCount = Math.max(header.length, alignments.length);
   return {
     alignments: normalizeTableAlignments(alignments, columnCount),
     header: normalizeTableCells(header, columnCount),
-    rows: node.children
-      .filter((child) => child.name == "pipe_table_row")
+    rows: Array.from(table.rows.values())
+      .sort((left, right) => compareNodes(left.node, right.node))
       .map((row) =>
-        normalizeTableCells(tableCellsFromNode(state, row, "pipe_table_cell"), columnCount),
+        normalizeTableCells(
+          sortedNodes(row.cells.values()).map((cell) => tableCellText(state, cell)),
+          columnCount,
+        ),
       ),
   };
 }
 
-function tableCellsFromNode(state: EditorState, node: SyntaxNode, cellName: string) {
-  return node.children
-    .filter((child) => child.name == cellName)
-    .map((cell) => state.sliceDoc(cell.from, cell.to).trim());
+function tableCellText(state: EditorState, node: SyntaxNode) {
+  return state.sliceDoc(node.from, node.to).trim();
 }
 
-function forEachDescendant(node: SyntaxNode, visit: (node: SyntaxNode) => void) {
-  for (let child of node.children) {
-    visit(child);
-    forEachDescendant(child, visit);
-  }
+function tableAlignment(cell: CapturedTableDelimiterCell): "center" | "default" | "left" | "right" {
+  if (cell.left && cell.right) return "center";
+  if (cell.right) return "right";
+  if (cell.left) return "left";
+  return "default";
 }
 
-function tableAlignmentsFromNode(node: SyntaxNode) {
-  return node.children
-    .filter((child) => child.name == "pipe_table_delimiter_cell")
-    .map((cell): "center" | "default" | "left" | "right" => {
-      let left = cell.children.some((child) => child.name == "pipe_table_align_left");
-      let right = cell.children.some((child) => child.name == "pipe_table_align_right");
-      if (left && right) return "center";
-      if (right) return "right";
-      if (left) return "left";
-      return "default";
-    });
-}
-
-function readFenceLanguage(state: EditorState, node: SyntaxNode) {
-  let infoString = node.getChild("info_string");
-  let languageNode = infoString?.getChild("language") ?? infoString;
+function readFenceLanguage(state: EditorState, languageNode?: SyntaxNode) {
   if (!languageNode) return "";
   return normalizeFenceLanguage(state.sliceDoc(languageNode.from, languageNode.to));
 }
@@ -1068,17 +1070,15 @@ function firstToken(value: string) {
 }
 
 function addCodeFenceHighlights(
-  context: VisitContext,
+  build: LiveMdBuild,
   contentFrom: number,
   contentTo: number,
   language: string,
 ) {
-  let highlight = getCodeFenceHighlight(context, contentFrom, contentTo, language);
+  let highlight = getCodeFenceHighlight(build, contentFrom, contentTo, language);
   if (!highlight) return;
 
   let { sourceText, tree } = highlight;
-  let range = codeFenceHighlightRange(context, contentFrom, sourceText.length);
-  if (!range) return;
 
   highlightTree(
     tree,
@@ -1086,38 +1086,25 @@ function addCodeFenceHighlights(
     (from, to, className) => {
       let decoration = Decoration.mark({ class: className });
       splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {
-        context.plan.mark(contentFrom + rangeFrom, contentFrom + rangeTo, decoration);
+        addMark(build, contentFrom + rangeFrom, contentFrom + rangeTo, decoration);
       });
     },
-    range.from,
-    range.to,
+    0,
+    sourceText.length,
   );
 }
 
 function getCodeFenceHighlight(
-  context: VisitContext,
+  build: LiveMdBuild,
   contentFrom: number,
   contentTo: number,
   language: string,
 ) {
-  let parser = context.codeFenceLanguages.get(language);
+  let parser = build.codeFenceLanguages.get(language);
   if (!parser || contentFrom >= contentTo) return null;
 
-  let key = codeFenceHighlightKey(contentFrom, contentTo, language);
-  let cached = context.codeFenceHighlightCache.get(key);
-  if (cached) {
-    recordCodeFenceHighlight(context, key, cached);
-    return cached;
-  }
-
-  let previous = previousCodeFenceHighlight(context, contentFrom, contentTo, language, parser);
-  if (previous && isSelectionOnlyVisit(context)) return previous;
-
-  let sourceText = codeFenceSourceText(context.state, contentFrom, contentTo);
-  let oldTree = previous
-    ? editedPreviousCodeFenceTree(context, previous, contentFrom, contentTo, sourceText)
-    : null;
-  let tree = parser.parse(sourceText, oldTree);
+  let sourceText = codeFenceSourceText(build.state, contentFrom, contentTo);
+  let tree = parser.parse(sourceText);
   let highlight = {
     contentFrom,
     contentTo,
@@ -1126,137 +1113,12 @@ function getCodeFenceHighlight(
     sourceText,
     tree,
   };
-  context.codeFenceHighlightCache.set(key, highlight);
-  recordCodeFenceHighlight(context, key, highlight);
+  build.codeFenceHighlightTrees.push(highlight);
   return highlight;
-}
-
-function recordCodeFenceHighlight(
-  context: VisitContext,
-  key: string,
-  highlight: CodeFenceHighlightTree,
-) {
-  if (context.plannedCodeFenceHighlightKeys.has(key)) return;
-  context.plannedCodeFenceHighlightKeys.add(key);
-  context.plan.codeFenceHighlight(highlight);
-}
-
-function codeFenceHighlightCache(highlights: readonly CodeFenceHighlightTree[]) {
-  return new Map(
-    highlights.map((highlight) => [
-      codeFenceHighlightKey(highlight.contentFrom, highlight.contentTo, highlight.language),
-      highlight,
-    ]),
-  );
-}
-
-function codeFenceHighlightKey(contentFrom: number, contentTo: number, language: string) {
-  return `${contentFrom}:${contentTo}:${language}`;
 }
 
 function codeFenceSourceText(state: EditorState, contentFrom: number, contentTo: number) {
   return Text.of(state.sliceDoc(contentFrom, contentTo).split("\n"));
-}
-
-function codeFenceContentDirtyTo(state: EditorState, contentTo: number) {
-  if (contentTo <= 0) return contentTo;
-  return state.sliceDoc(contentTo - 1, contentTo) == "\n" ? contentTo - 1 : contentTo;
-}
-
-function codeFenceHighlightRange(context: VisitContext, contentFrom: number, sourceLength: number) {
-  let range = context.dirtyRange;
-  if (!range) return { from: 0, to: sourceLength };
-  let from = Math.max(0, range.from - contentFrom);
-  let to = Math.min(sourceLength, range.to - contentFrom);
-  return from < to ? { from, to } : null;
-}
-
-function previousCodeFenceHighlight(
-  context: VisitContext,
-  contentFrom: number,
-  contentTo: number,
-  language: string,
-  parser: CodeFenceParser,
-) {
-  for (let previous of context.previousCodeFenceHighlights) {
-    if (previous.language != language || previous.parser != parser) continue;
-    let mappedFrom = context.changes?.mapPos(previous.contentFrom, 1) ?? previous.contentFrom;
-    let mappedTo = context.changes?.mapPos(previous.contentTo, -1) ?? previous.contentTo;
-    if (rangesTouch(mappedFrom, mappedTo, contentFrom, contentTo)) return previous;
-  }
-  return null;
-}
-
-function editedPreviousCodeFenceTree(
-  context: VisitContext,
-  previous: CodeFenceHighlightTree,
-  contentFrom: number,
-  contentTo: number,
-  sourceText: Text,
-) {
-  if (!context.changes) return previous.tree;
-  let contentChanges = codeFenceContentChanges(context, previous, contentFrom, contentTo);
-  if (!contentChanges) return null;
-  return previous.parser.editWrappedTree(
-    previous.tree,
-    contentChanges,
-    previous.sourceText,
-    sourceText,
-  );
-}
-
-function codeFenceContentChanges(
-  context: VisitContext,
-  previous: CodeFenceHighlightTree,
-  contentFrom: number,
-  contentTo: number,
-) {
-  return (
-    codeFenceContentChangeResult(context.changes, context.state, previous, contentFrom, contentTo)
-      ?.changes ?? null
-  );
-}
-
-function codeFenceContentChangeResult(
-  changes: ChangeDesc | null,
-  state: EditorState,
-  previous: CodeFenceHighlightTree,
-  contentFrom: number,
-  contentTo: number,
-): CodeFenceContentChangeResult | null {
-  if (!changes) {
-    return {
-      changes: ChangeSet.empty(previous.sourceText.length),
-      touched: false,
-    };
-  }
-  let specs: Array<{ from: number; insert: string; to: number }> = [];
-  let touched = false;
-  let usable = true;
-  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-    let oldInside = fromA >= previous.contentFrom && toA <= previous.contentTo;
-    let newInside = fromB >= contentFrom && toB <= contentTo;
-    let touchesOldContent =
-      oldInside || rangesTouch(fromA, toA, previous.contentFrom, previous.contentTo);
-    let touchesNewContent = newInside || rangesTouch(fromB, toB, contentFrom, contentTo);
-    if (!touchesOldContent && !touchesNewContent) return;
-    touched = true;
-    if (!oldInside || !newInside) {
-      usable = false;
-      return;
-    }
-    specs.push({
-      from: fromA - previous.contentFrom,
-      insert: state.sliceDoc(fromB, toB),
-      to: toA - previous.contentFrom,
-    });
-  });
-  return usable
-    ? {
-        changes: ChangeSet.of(specs, previous.sourceText.length),
-        touched,
-      }
-    : null;
 }
 
 function splitTextRangeByLine(
@@ -1274,13 +1136,31 @@ function splitTextRangeByLine(
   }
 }
 
-function rangeTouchesActiveLine(context: VisitContext, from: number, to: number) {
-  let firstLine = context.state.doc.lineAt(from).number;
-  let lastLine = context.state.doc.lineAt(Math.max(from, to - 1)).number;
-  for (let lineNumber of context.activeLines) {
+function rangeTouchesActiveLine(build: LiveMdBuild, from: number, to: number) {
+  let firstLine = build.state.doc.lineAt(from).number;
+  let lastLine = build.state.doc.lineAt(Math.max(from, to - 1)).number;
+  for (let lineNumber of build.activeLines) {
     if (lineNumber >= firstLine && lineNumber <= lastLine) return true;
   }
   return false;
+}
+
+function tableTouchesActiveLine(
+  build: LiveMdBuild,
+  from: number,
+  to: number,
+  table: MarkdownTable,
+) {
+  if (rangeTouchesActiveLine(build, from, to)) return true;
+  if (table.rows.length) return false;
+  let end = Math.min(to, build.state.doc.length);
+  let lastLine = build.state.doc.lineAt(Math.max(from, end - 1));
+  let nextLineNumber = lastLine.number + 1;
+  if (!build.activeLines.has(nextLineNumber) || nextLineNumber > build.state.doc.lines) {
+    return false;
+  }
+  let nextLine = build.state.doc.line(nextLineNumber);
+  return isWhitespaceOnly(build.state.sliceDoc(nextLine.from, nextLine.to));
 }
 
 function isOnlyVisibleContentOnLine(

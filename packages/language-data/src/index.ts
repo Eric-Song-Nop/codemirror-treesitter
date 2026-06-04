@@ -9,14 +9,19 @@ import {
   foldInside,
   foldNodeProp,
   indentNodeProp,
+  queryTreeCaptures,
+  queryTreeMatches,
   tags,
   type DocRange,
   type NestedParserSource,
   type NodePropSource,
-  type SyntaxNode,
   type Tag,
   type Tree,
+  type TreeSitterQueryCapture,
 } from "@codemirror-treesitter/language";
+import markdownInlineInjectionExclusionQuerySource from "./queries/markdown-inline-injection-exclusions.scm?raw";
+import markdownInlineInjectionQuerySource from "./queries/markdown-inline-injections.scm?raw";
+import rawTextQuerySource from "./queries/raw-text.scm?raw";
 
 type AssetLoader = () => Promise<string>;
 type AssetModule = { default: string };
@@ -1405,43 +1410,49 @@ async function nestedParser(spec: LanguageSpec) {
 
 function rawTextRanges(parentName: string) {
   return (tree: Tree): DocRange[] => {
-    let ranges: DocRange[] = [];
-    tree.iterate({
-      enter(node) {
-        if (node.name == "raw_text" && node.parent?.name == parentName) {
-          ranges.push({ from: node.from, to: node.to });
-        }
-      },
-    });
-    return ranges;
+    let captureName = rawTextCaptureByParent.get(parentName);
+    if (!captureName) return [];
+    return queryTreeCaptures(tree, rawTextQuerySource, { includeNested: false })
+      .filter((capture) => capture.name == captureName)
+      .map(captureRange);
   };
 }
+
+const rawTextCaptureByParent = new Map([
+  ["script_element", "script.raw"],
+  ["style_element", "style.raw"],
+]);
 
 function markdownInlineRangeGroups() {
   return (tree: Tree): DocRange[][] => {
-    let groups: DocRange[][] = [];
-    tree.iterate({
-      enter(node) {
-        if (node.name != "inline" && node.name != "pipe_table_cell") return;
-        let ranges = rangesExcludingNamedChildren(node);
-        if (ranges.length) groups.push(ranges);
-        return false;
-      },
+    let exclusions = queryTreeCaptures(tree, markdownInlineInjectionExclusionQuerySource, {
+      includeNested: false,
     });
-    return groups;
+    return queryTreeMatches(tree, markdownInlineInjectionQuerySource, { includeNested: false })
+      .filter((match) => match.setProperties?.["injection.language"] == "markdown_inline")
+      .flatMap((match) =>
+        match.captures
+          .filter((capture) => capture.name == "injection.content")
+          .map((capture) => rangesExcludingCaptures(captureRange(capture), exclusions))
+          .filter((ranges) => ranges.length > 0),
+      );
   };
 }
 
-function rangesExcludingNamedChildren(node: SyntaxNode) {
+function rangesExcludingCaptures(range: DocRange, exclusions: readonly TreeSitterQueryCapture[]) {
   let ranges: DocRange[] = [];
-  let from = node.from;
-  for (let child of node.children) {
-    if (!child.isNamed) continue;
-    if (from < child.from) ranges.push({ from, to: child.from });
-    from = Math.max(from, child.to);
+  let from = range.from;
+  for (let exclusion of exclusions) {
+    if (exclusion.node.from < range.from || exclusion.node.to > range.to) continue;
+    if (from < exclusion.node.from) ranges.push({ from, to: exclusion.node.from });
+    from = Math.max(from, exclusion.node.to);
   }
-  if (from < node.to) ranges.push({ from, to: node.to });
+  if (from < range.to) ranges.push({ from, to: range.to });
   return ranges;
+}
+
+function captureRange(capture: TreeSitterQueryCapture): DocRange {
+  return { from: capture.node.from, to: capture.node.to };
 }
 
 const cssSpec: LanguageSpec = {

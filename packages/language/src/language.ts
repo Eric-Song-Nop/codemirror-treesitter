@@ -15,6 +15,8 @@ import {
   Language as TSLanguage,
   Parser as TSParser,
   Query as TSQuery,
+  type QueryOptions as TSQueryOptions,
+  type QueryProperties as TSQueryProperties,
   type Range as TSRange,
   Tree as TSTree,
   type Point,
@@ -25,9 +27,9 @@ import {
   NodeProp,
   type NodePropSource,
   NodeType,
+  SyntaxNode,
   Tree,
   type TreeConfig,
-  type SyntaxNode,
   pointAfterText,
 } from "./tree.js";
 import { Tag, tagsForCapture } from "./tags.js";
@@ -83,12 +85,39 @@ export type NestedParser =
 
 type NestedParserRanges = readonly DocRange[] | readonly (readonly DocRange[])[];
 
+export type TreeSitterQuerySource =
+  | string
+  | ((parser: TreeSitterParser, tree: Tree) => null | string | undefined);
+
+export type TreeSitterQueryCapture = {
+  name: string;
+  node: SyntaxNode;
+  patternIndex: number;
+};
+
+export type TreeSitterQueryProperties = TSQueryProperties;
+
+export type TreeSitterQueryMatch = {
+  assertedProperties?: TreeSitterQueryProperties;
+  captures: TreeSitterQueryCapture[];
+  patternIndex: number;
+  refutedProperties?: TreeSitterQueryProperties;
+  setProperties?: TreeSitterQueryProperties;
+};
+
+export type TreeSitterQueryOptions = {
+  from?: number;
+  includeNested?: boolean;
+  to?: number;
+};
+
 export interface NestedParserSource {
   parser: NestedParser;
   ranges: (tree: Tree) => NestedParserRanges;
 }
 
 let parserInit: Promise<void> | null = null;
+let queryCache = new WeakMap<TreeSitterParser, Map<string, TSQuery>>();
 
 export class TreeSitterParser implements TreeConfig {
   private readonly typeCache = new Map<string, NodeType>();
@@ -366,6 +395,208 @@ export class TreeSitterParser implements TreeConfig {
   private shouldAppendFinalNewline(doc: Text) {
     return this.implicitFinalNewline && doc.length > 0 && !docEndsWithLineBreak(doc);
   }
+}
+
+export function compileTreeSitterQuery(parser: TreeSitterParser, source: string): TSQuery {
+  if (!parser.language) throw new RangeError("Skipping parsers can not compile queries");
+  let parserCache = queryCache.get(parser);
+  if (!parserCache) queryCache.set(parser, (parserCache = new Map()));
+  let query = parserCache.get(source);
+  if (!query) {
+    query = new TSQuery(parser.language, source);
+    parserCache.set(source, query);
+  }
+  return query;
+}
+
+export function queryTreeCaptures(
+  tree: Tree,
+  source: TreeSitterQuerySource,
+  options: TreeSitterQueryOptions = {},
+): TreeSitterQueryCapture[] {
+  let captures: InternalQueryCapture[] = [];
+  collectTreeCaptures(tree, source, options, captures);
+  captures.sort(compareQueryCaptures);
+  return captures.map(({ order: _order, ...capture }) => capture);
+}
+
+export function queryNodeCaptures(
+  node: SyntaxNode,
+  source: string,
+  options: TreeSitterQueryOptions = {},
+): TreeSitterQueryCapture[] {
+  let parser = parserForTree(node.tree);
+  if (!parser || !node.node || !source) return [];
+  let captures = nodeQueryCaptures(node, parser, source, options);
+  captures.sort(compareQueryCaptures);
+  return captures.map(({ order: _order, ...capture }) => capture);
+}
+
+export function queryTreeMatches(
+  tree: Tree,
+  source: TreeSitterQuerySource,
+  options: TreeSitterQueryOptions = {},
+): TreeSitterQueryMatch[] {
+  let matches: InternalQueryMatch[] = [];
+  collectTreeMatches(tree, source, options, matches);
+  matches.sort(compareQueryMatches);
+  return matches.map(({ order: _order, captures, ...match }) => ({
+    ...match,
+    captures: captures.map(({ order: _captureOrder, ...capture }) => capture),
+  }));
+}
+
+export function queryNodeMatches(
+  node: SyntaxNode,
+  source: string,
+  options: TreeSitterQueryOptions = {},
+): TreeSitterQueryMatch[] {
+  let parser = parserForTree(node.tree);
+  if (!parser || !node.node || !source) return [];
+  let matches = nodeQueryMatches(node, parser, source, options);
+  matches.sort(compareQueryMatches);
+  return matches.map(({ order: _order, captures, ...match }) => ({
+    ...match,
+    captures: captures.map(({ order: _captureOrder, ...capture }) => capture),
+  }));
+}
+
+type InternalQueryCapture = TreeSitterQueryCapture & {
+  order: number;
+};
+
+type InternalQueryMatch = Omit<TreeSitterQueryMatch, "captures"> & {
+  captures: InternalQueryCapture[];
+  order: number;
+};
+
+function collectTreeCaptures(
+  tree: Tree,
+  source: TreeSitterQuerySource,
+  options: TreeSitterQueryOptions,
+  captures: InternalQueryCapture[],
+) {
+  let parser = parserForTree(tree);
+  if (parser && tree.tree) {
+    let querySource = typeof source == "function" ? source(parser, tree) : source;
+    if (querySource) {
+      captures.push(...nodeQueryCaptures(tree.topNode, parser, querySource, options));
+    }
+  }
+
+  if (options.includeNested === false) return;
+  for (let nest of tree.nested) {
+    collectTreeCaptures(nest.tree, source, options, captures);
+  }
+}
+
+function collectTreeMatches(
+  tree: Tree,
+  source: TreeSitterQuerySource,
+  options: TreeSitterQueryOptions,
+  matches: InternalQueryMatch[],
+) {
+  let parser = parserForTree(tree);
+  if (parser && tree.tree) {
+    let querySource = typeof source == "function" ? source(parser, tree) : source;
+    if (querySource) {
+      matches.push(...nodeQueryMatches(tree.topNode, parser, querySource, options));
+    }
+  }
+
+  if (options.includeNested === false) return;
+  for (let nest of tree.nested) {
+    collectTreeMatches(nest.tree, source, options, matches);
+  }
+}
+
+function nodeQueryCaptures(
+  root: SyntaxNode,
+  parser: TreeSitterParser,
+  source: string,
+  options: TreeSitterQueryOptions,
+): InternalQueryCapture[] {
+  if (!root.node || !queryRangeOverlapsNode(root, options)) return [];
+  let query = compileTreeSitterQuery(parser, source);
+  return query.captures(root.node, queryOptions(root, options)).map((capture, order) => ({
+    name: capture.name,
+    node: new SyntaxNode(root.tree, capture.node),
+    order,
+    patternIndex: capture.patternIndex,
+  }));
+}
+
+function nodeQueryMatches(
+  root: SyntaxNode,
+  parser: TreeSitterParser,
+  source: string,
+  options: TreeSitterQueryOptions,
+): InternalQueryMatch[] {
+  if (!root.node || !queryRangeOverlapsNode(root, options)) return [];
+  let query = compileTreeSitterQuery(parser, source);
+  return query.matches(root.node, queryOptions(root, options)).map((match, order) => ({
+    assertedProperties: match.assertedProperties,
+    captures: match.captures.map((capture, captureOrder) => ({
+      name: capture.name,
+      node: new SyntaxNode(root.tree, capture.node),
+      order: captureOrder,
+      patternIndex: capture.patternIndex,
+    })),
+    order,
+    patternIndex: match.patternIndex,
+    refutedProperties: match.refutedProperties,
+    setProperties: match.setProperties,
+  }));
+}
+
+function parserForTree(tree: Tree) {
+  return tree.config instanceof TreeSitterParser ? tree.config : null;
+}
+
+function queryOptions(root: SyntaxNode, options: TreeSitterQueryOptions): TSQueryOptions {
+  let queryOptions: TSQueryOptions = {};
+  if (options.from != null && options.from > root.from) queryOptions.startIndex = options.from;
+  if (options.to != null && options.to < queryNodeEnd(root)) queryOptions.endIndex = options.to;
+  return queryOptions;
+}
+
+function queryRangeOverlapsNode(root: SyntaxNode, options: TreeSitterQueryOptions) {
+  let from = options.from ?? 0;
+  let to = options.to ?? Number.POSITIVE_INFINITY;
+  return from <= queryNodeEnd(root) && to >= root.from;
+}
+
+function queryNodeEnd(root: SyntaxNode) {
+  return Math.min(root.to, root.tree.length);
+}
+
+function compareQueryCaptures(left: InternalQueryCapture, right: InternalQueryCapture) {
+  return (
+    left.node.from - right.node.from ||
+    right.node.to - left.node.to ||
+    left.patternIndex - right.patternIndex ||
+    left.order - right.order
+  );
+}
+
+function compareQueryMatches(left: InternalQueryMatch, right: InternalQueryMatch) {
+  return (
+    queryMatchFrom(left) - queryMatchFrom(right) ||
+    queryMatchTo(right) - queryMatchTo(left) ||
+    left.patternIndex - right.patternIndex ||
+    left.order - right.order
+  );
+}
+
+function queryMatchFrom(match: InternalQueryMatch) {
+  return match.captures.reduce(
+    (from, capture) => Math.min(from, capture.node.from),
+    Number.POSITIVE_INFINITY,
+  );
+}
+
+function queryMatchTo(match: InternalQueryMatch) {
+  return match.captures.reduce((to, capture) => Math.max(to, capture.node.to), 0);
 }
 
 export function __testResolveWasmPath(wasm: string | Uint8Array) {
