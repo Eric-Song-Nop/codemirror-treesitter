@@ -5,6 +5,7 @@ import { liveMdKeymap } from "./commands.js";
 import { liveMdAnalysis } from "./decorations.js";
 import { codeFenceLanguagesField } from "./languages.js";
 import { liveMdLinkBase, liveMdLinkInteractions, type LiveMdLinkBaseUrl } from "./links.js";
+import { liveMdSearch } from "./search.js";
 
 export type LiveMarkdownOptions = {
   ariaLabel?: string;
@@ -31,6 +32,7 @@ export function liveMarkdown(options: LiveMarkdownOptions = {}): Extension {
     }),
     liveMdLinkBase(options.linkBaseUrl),
     liveMdLinkInteractions(),
+    liveMdSearch,
     liveMdAnalysis,
   ];
 
