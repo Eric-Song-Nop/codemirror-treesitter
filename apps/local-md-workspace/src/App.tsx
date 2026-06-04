@@ -226,10 +226,9 @@ export function App() {
       setTree(nextTree);
       setFiles(nextFiles);
 
-      let nextSelectedFile =
-        (nextSelectedPath && nextFiles.find((file) => file.path == nextSelectedPath)) ??
-        nextFiles[0] ??
-        null;
+      let nextSelectedFile = nextSelectedPath
+        ? (nextFiles.find((file) => file.path == nextSelectedPath) ?? null)
+        : null;
 
       if (nextSelectedFile) {
         await loadFile(nextSelectedFile, { saveCurrent: options.saveBeforeSelect ?? true });
@@ -246,7 +245,7 @@ export function App() {
           version: current.version + 1,
         }));
         setSaveStateSynced("idle");
-        setStatusMessage("No markdown files");
+        setStatusMessage(nextFiles.length ? "No file selected" : "No markdown files");
       }
     },
     [loadFile, setSaveStateSynced],
@@ -576,6 +575,7 @@ export function App() {
               <WorkspaceEmpty
                 browserSupported={browserSupported}
                 busy={busy}
+                fileCount={files.length}
                 hasWorkspace={Boolean(rootHandle)}
                 restoreAvailable={restoreAvailable}
                 restoreChecking={restoreChecking}
@@ -653,6 +653,7 @@ function TooltipIconButton({ children, label, ...props }: TooltipIconButtonProps
 type WorkspaceEmptyProps = {
   browserSupported: boolean;
   busy: boolean;
+  fileCount: number;
   hasWorkspace: boolean;
   restoreAvailable: boolean;
   restoreChecking: boolean;
@@ -664,6 +665,7 @@ type WorkspaceEmptyProps = {
 function WorkspaceEmpty({
   browserSupported,
   busy,
+  fileCount,
   hasWorkspace,
   restoreAvailable,
   restoreChecking,
@@ -677,7 +679,7 @@ function WorkspaceEmpty({
         <EmptyMedia variant="icon">
           <FolderOpenIcon />
         </EmptyMedia>
-        <EmptyTitle>{hasWorkspace ? "No markdown files" : "No folder open"}</EmptyTitle>
+        <EmptyTitle>{emptyTitle(hasWorkspace, fileCount)}</EmptyTitle>
         {!browserSupported && (
           <EmptyDescription>File System Access API is unavailable.</EmptyDescription>
         )}
@@ -711,6 +713,11 @@ function WorkspaceEmpty({
       </EmptyContent>
     </Empty>
   );
+}
+
+function emptyTitle(hasWorkspace: boolean, fileCount: number) {
+  if (!hasWorkspace) return "No folder open";
+  return fileCount ? "No file selected" : "No markdown files";
 }
 
 type FileNameDialogProps = {
