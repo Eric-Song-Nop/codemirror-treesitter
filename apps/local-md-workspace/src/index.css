@@ -157,3 +157,19 @@
   --live-md-font-body: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
   --live-md-font-ui: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
 }
+
+.local-md-file-tree {
+  --trees-accent-override: var(--primary);
+  --trees-bg-override: var(--sidebar);
+  --trees-bg-muted-override: var(--sidebar-accent);
+  --trees-border-color-override: var(--sidebar-border);
+  --trees-fg-override: var(--sidebar-foreground);
+  --trees-fg-muted-override: color-mix(in oklch, var(--sidebar-foreground) 56%, transparent);
+  --trees-file-icon-color-markdown: var(--primary);
+  --trees-font-family-override: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --trees-font-size-override: 13px;
+  --trees-item-margin-x-override: 8px;
+  --trees-padding-inline-override: 0px;
+  --trees-selected-bg-override: var(--sidebar-accent);
+  --trees-selected-fg-override: var(--sidebar-accent-foreground);
+}
