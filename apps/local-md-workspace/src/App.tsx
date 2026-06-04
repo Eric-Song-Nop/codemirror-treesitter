@@ -109,6 +109,8 @@ export function App() {
 
   let selectedPath = selectedFile?.path ?? null;
   let rootName = tree?.name ?? storedWorkspaceHandle?.name ?? "Local Markdown";
+  let selectedPathLabel =
+    selectedFile?.path ?? (rootHandle ? "No file selected" : "No folder selected");
   let browserSupported = supportsDirectoryPicker();
 
   let setSaveStateSynced = useCallback((nextState: SaveState) => {
@@ -520,9 +522,7 @@ export function App() {
               <div className="truncate text-sm font-medium">
                 {selectedFile?.name ?? "Local Markdown"}
               </div>
-              <div className="truncate text-xs text-muted-foreground">
-                {selectedFile?.path ?? "No folder selected"}
-              </div>
+              <div className="truncate text-xs text-muted-foreground">{selectedPathLabel}</div>
             </div>
             <Badge variant={saveState == "error" ? "destructive" : "secondary"}>
               <SaveIcon data-icon="inline-start" />
