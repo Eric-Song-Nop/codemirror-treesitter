@@ -71,10 +71,14 @@ export async function pickWorkspaceDirectory() {
 }
 
 export async function ensureReadWritePermission(handle: AccessDirectoryHandle) {
-  if (!handle.queryPermission) return true;
-  if ((await handle.queryPermission({ mode: "readwrite" })) == "granted") return true;
+  if ((await queryReadWritePermission(handle)) == "granted") return true;
   if (!handle.requestPermission) return false;
   return (await handle.requestPermission({ mode: "readwrite" })) == "granted";
+}
+
+export async function queryReadWritePermission(handle: AccessDirectoryHandle) {
+  if (!handle.queryPermission) return "granted";
+  return handle.queryPermission({ mode: "readwrite" });
 }
 
 export async function readWorkspaceTree(

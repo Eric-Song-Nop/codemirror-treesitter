@@ -48,6 +48,7 @@ import {
   ensureReadWritePermission,
   flattenMarkdownFiles,
   pickWorkspaceDirectory,
+  queryReadWritePermission,
   readMarkdownFile,
   readWorkspaceTree,
   renameMarkdownFile,
@@ -58,6 +59,7 @@ import {
   type MarkdownFileNode,
 } from "@/lib/file-system";
 import { cn } from "@/lib/utils";
+import { loadStoredWorkspaceHandle, saveStoredWorkspaceHandle } from "@/lib/workspace-store";
 
 type SaveState = "idle" | "pending" | "saving" | "saved" | "error";
 type FileDialogMode = "create" | "rename";
@@ -70,6 +72,9 @@ type EditorDocument = {
 
 export function App() {
   let [rootHandle, setRootHandle] = useState<AccessDirectoryHandle | null>(null);
+  let [storedWorkspaceHandle, setStoredWorkspaceHandle] = useState<AccessDirectoryHandle | null>(
+    null,
+  );
   let [tree, setTree] = useState<MarkdownDirectoryNode | null>(null);
   let [files, setFiles] = useState<MarkdownFileNode[]>([]);
   let [selectedFile, setSelectedFile] = useState<MarkdownFileNode | null>(null);
@@ -82,6 +87,7 @@ export function App() {
   let [statusMessage, setStatusMessage] = useState("No folder open");
   let [errorMessage, setErrorMessage] = useState("");
   let [busy, setBusy] = useState(false);
+  let [restoreChecking, setRestoreChecking] = useState(false);
   let [sidebarOpen, setSidebarOpen] = useState(true);
   let [fileDialogMode, setFileDialogMode] = useState<FileDialogMode | null>(null);
   let [fileDialogValue, setFileDialogValue] = useState("");
@@ -102,7 +108,7 @@ export function App() {
   }, [selectedFile]);
 
   let selectedPath = selectedFile?.path ?? null;
-  let rootName = tree?.name ?? "Local Markdown";
+  let rootName = tree?.name ?? storedWorkspaceHandle?.name ?? "Local Markdown";
   let browserSupported = supportsDirectoryPicker();
 
   let setSaveStateSynced = useCallback((nextState: SaveState) => {
@@ -246,6 +252,11 @@ export function App() {
     [loadFile, setSaveStateSynced],
   );
 
+  let rememberWorkspaceHandle = useCallback((handle: AccessDirectoryHandle) => {
+    setStoredWorkspaceHandle(handle);
+    void saveStoredWorkspaceHandle(handle).catch(() => {});
+  }, []);
+
   let openWorkspace = useCallback(async () => {
     setErrorMessage("");
     if (!supportsDirectoryPicker()) {
@@ -261,6 +272,7 @@ export function App() {
         return;
       }
       setRootHandle(handle);
+      rememberWorkspaceHandle(handle);
       setSidebarOpen(true);
       await loadTree(handle, null);
     } catch (error) {
@@ -268,7 +280,29 @@ export function App() {
     } finally {
       setBusy(false);
     }
-  }, [loadTree]);
+  }, [loadTree, rememberWorkspaceHandle]);
+
+  let restoreStoredWorkspace = useCallback(async () => {
+    if (!storedWorkspaceHandle) return;
+
+    setBusy(true);
+    setErrorMessage("");
+    try {
+      if (!(await ensureReadWritePermission(storedWorkspaceHandle))) {
+        setStatusMessage("Folder permission needed");
+        setErrorMessage("Read-write folder permission was not granted.");
+        return;
+      }
+
+      setRootHandle(storedWorkspaceHandle);
+      setSidebarOpen(true);
+      await loadTree(storedWorkspaceHandle, null, { saveBeforeSelect: false });
+    } catch (error) {
+      setErrorMessage(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [loadTree, storedWorkspaceHandle]);
 
   let refreshWorkspace = useCallback(async () => {
     if (!rootHandle || !(await saveCurrentFile())) return;
@@ -283,6 +317,40 @@ export function App() {
       setBusy(false);
     }
   }, [loadTree, rootHandle, saveCurrentFile]);
+
+  useEffect(() => {
+    if (!browserSupported) return;
+
+    let canceled = false;
+    setRestoreChecking(true);
+
+    void (async () => {
+      try {
+        let handle = await loadStoredWorkspaceHandle();
+        if (canceled || !handle) return;
+
+        setStoredWorkspaceHandle(handle);
+
+        if ((await queryReadWritePermission(handle)) != "granted") {
+          if (!canceled) setStatusMessage("Folder permission needed");
+          return;
+        }
+        if (canceled) return;
+
+        setRootHandle(handle);
+        setSidebarOpen(true);
+        await loadTree(handle, null, { saveBeforeSelect: false });
+      } catch (error) {
+        if (!canceled) setErrorMessage(errorToMessage(error));
+      } finally {
+        if (!canceled) setRestoreChecking(false);
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [browserSupported, loadTree]);
 
   useEffect(
     () => () => {
@@ -364,6 +432,7 @@ export function App() {
   };
 
   let saveLabel = useMemo(() => saveStateLabel(saveState, selectedFile), [saveState, selectedFile]);
+  let restoreAvailable = Boolean(storedWorkspaceHandle);
 
   return (
     <TooltipProvider>
@@ -405,10 +474,25 @@ export function App() {
             <FileTree root={tree} selectedPath={selectedPath} onSelectFile={selectFile} />
           ) : (
             <div className="flex min-h-0 flex-1 items-center justify-center p-4">
-              <Button onClick={() => void openWorkspace()} disabled={!browserSupported || busy}>
-                <FolderOpenIcon data-icon="inline-start" />
-                Open folder
-              </Button>
+              <div className="flex w-full max-w-48 flex-col gap-2">
+                {restoreAvailable && (
+                  <Button
+                    onClick={() => void restoreStoredWorkspace()}
+                    disabled={!browserSupported || busy || restoreChecking}
+                  >
+                    <FolderOpenIcon data-icon="inline-start" />
+                    Restore folder
+                  </Button>
+                )}
+                <Button
+                  variant={restoreAvailable ? "outline" : "default"}
+                  onClick={() => void openWorkspace()}
+                  disabled={!browserSupported || busy}
+                >
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Open folder
+                </Button>
+              </div>
             </div>
           )}
         </aside>
@@ -491,9 +575,13 @@ export function App() {
             ) : (
               <WorkspaceEmpty
                 browserSupported={browserSupported}
+                busy={busy}
                 hasWorkspace={Boolean(rootHandle)}
+                restoreAvailable={restoreAvailable}
+                restoreChecking={restoreChecking}
                 onCreateFile={openCreateDialog}
                 onOpenFolder={() => void openWorkspace()}
+                onRestoreFolder={() => void restoreStoredWorkspace()}
               />
             )}
           </section>
@@ -564,16 +652,24 @@ function TooltipIconButton({ children, label, ...props }: TooltipIconButtonProps
 
 type WorkspaceEmptyProps = {
   browserSupported: boolean;
+  busy: boolean;
   hasWorkspace: boolean;
+  restoreAvailable: boolean;
+  restoreChecking: boolean;
   onCreateFile: () => void;
   onOpenFolder: () => void;
+  onRestoreFolder: () => void;
 };
 
 function WorkspaceEmpty({
   browserSupported,
+  busy,
   hasWorkspace,
+  restoreAvailable,
+  restoreChecking,
   onCreateFile,
   onOpenFolder,
+  onRestoreFolder,
 }: WorkspaceEmptyProps) {
   return (
     <Empty className="h-full rounded-none border-0">
@@ -588,12 +684,26 @@ function WorkspaceEmpty({
       </EmptyHeader>
       <EmptyContent>
         {hasWorkspace ? (
-          <Button onClick={onCreateFile}>
+          <Button onClick={onCreateFile} disabled={busy}>
             <PlusIcon data-icon="inline-start" />
             New file
           </Button>
+        ) : restoreAvailable ? (
+          <div className="flex flex-col gap-2">
+            <Button
+              onClick={onRestoreFolder}
+              disabled={!browserSupported || busy || restoreChecking}
+            >
+              <FolderOpenIcon data-icon="inline-start" />
+              Restore folder
+            </Button>
+            <Button variant="outline" onClick={onOpenFolder} disabled={!browserSupported || busy}>
+              <FolderOpenIcon data-icon="inline-start" />
+              Open folder
+            </Button>
+          </div>
         ) : (
-          <Button onClick={onOpenFolder} disabled={!browserSupported}>
+          <Button onClick={onOpenFolder} disabled={!browserSupported || busy}>
             <FolderOpenIcon data-icon="inline-start" />
             Open folder
           </Button>
