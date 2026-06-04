@@ -8,6 +8,7 @@ import {
   __testBuildLiveMdAnalysis,
   __testBuildVisibleLiveMdAnalysis,
   __testLiveMdAnalysis,
+  __testVisibleLineRanges,
   liveMdAnalysis,
 } from "../src/core/decorations.js";
 import {
@@ -127,6 +128,122 @@ describe("LiveMD analysis snapshot", () => {
     expect(__testLiveMdAnalysis(view).codeFenceHighlightTrees).toHaveLength(1);
     expect(parseCalls).toBe(1);
     view.destroy();
+  });
+
+  it("decorates inline markdown at EOF during visible range rebuilds", async () => {
+    let doc = "cursor here\n\nuse *emphasize* here";
+    let state = await markdownAnalysisState(doc);
+    let tailLine = state.doc.lineAt(doc.indexOf("use"));
+    let decorations = canonicalAnalysis(
+      state,
+      __testBuildVisibleLiveMdAnalysis(state, [{ from: tailLine.from, to: tailLine.to }]),
+    ).decorations;
+    let emphasisFrom = doc.indexOf("*emphasize*");
+    let emphasisTo = emphasisFrom + "*emphasize*".length;
+
+    expect(
+      decorations.some(
+        (decoration) =>
+          decoration.from == emphasisFrom &&
+          decoration.to == emphasisTo &&
+          (decoration.spec as { class?: string }).class == "cm-md-emphasis",
+      ),
+    ).toBe(true);
+  });
+
+  it("renders table previews at EOF without a trailing newline", async () => {
+    let doc = "before\n\n| Name | Value |\n| --- | ---: |\n| alpha | 1 |";
+    let view = await markdownAnalysisView(doc, "before");
+    let table = view.contentDOM.querySelector(".cm-md-table-preview table");
+
+    expect(table?.textContent).toContain("Name");
+    expect(table?.textContent).toContain("alpha");
+    view.destroy();
+  });
+
+  it("keeps table source editable on the trailing blank line", async () => {
+    let doc = "| Name | Value |\n| --- | ---: |\n";
+    let view = await markdownAnalysisView(doc);
+
+    expect(view.contentDOM.querySelector(".cm-md-table-preview")).toBeNull();
+    expect(view.contentDOM.textContent).toContain("| Name | Value |");
+    view.destroy();
+  });
+
+  it("renders task list decorations at EOF without a trailing newline", async () => {
+    let doc = "- [x] done\n- [ ] todo";
+    let view = await markdownAnalysisView(doc, "done");
+
+    expect(view.contentDOM.querySelectorAll(".cm-md-list-line")).toHaveLength(2);
+    expect(view.contentDOM.querySelectorAll(".cm-md-task-line")).toHaveLength(2);
+    expect(view.contentDOM.querySelectorAll(".cm-md-task-toggle")).toHaveLength(2);
+    view.destroy();
+  });
+
+  it("renders task list decorations before trailing EOF blank lines", async () => {
+    let doc = "- [x] done\n- [ ] todo\n\n\n";
+    let state = await markdownAnalysisState(doc);
+    let decorations = canonicalAnalysis(
+      state,
+      __testBuildVisibleLiveMdAnalysis(state, [{ from: 0, to: doc.length }]),
+    ).decorations;
+
+    expect(
+      decorations.filter(
+        (decoration) =>
+          (decoration.spec as { widget?: { name?: string } }).widget?.name == "TaskCheckboxWidget",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("keeps visible line ranges open through EOF blank lines", async () => {
+    let doc = "- [x] done\n- [ ] todo\n\n\n";
+    let state = await markdownAnalysisState(doc);
+    let view = {
+      scrollDOM: { clientHeight: 100 },
+      state,
+      visibleRanges: [{ from: 0, to: doc.length }],
+    } as unknown as EditorView;
+
+    expect(__testVisibleLineRanges(view)).toEqual([{ from: 0, to: doc.length }]);
+  });
+
+  it("keeps the preceding task list item decorated when only EOF blank lines are visible", async () => {
+    let doc = "- [x] done\n- [ ] todo\n\n\n";
+    let state = (await markdownAnalysisState(doc)).update({
+      selection: { anchor: doc.length },
+    }).state;
+    let blankLine = state.doc.line(3);
+    let decorations = canonicalAnalysis(
+      state,
+      __testBuildVisibleLiveMdAnalysis(state, [{ from: blankLine.from, to: doc.length }]),
+    ).decorations;
+
+    expect(
+      decorations.some(
+        (decoration) =>
+          (decoration.spec as { widget?: { name?: string } }).widget?.name == "TaskCheckboxWidget",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the preceding table preview when only EOF blank lines are visible", async () => {
+    let doc = "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\n\n";
+    let state = (await markdownAnalysisState(doc)).update({
+      selection: { anchor: doc.length },
+    }).state;
+    let blankLine = state.doc.line(4);
+    let decorations = canonicalAnalysis(
+      state,
+      __testBuildVisibleLiveMdAnalysis(state, [{ from: blankLine.from, to: doc.length }]),
+    ).decorations;
+
+    expect(
+      decorations.some(
+        (decoration) =>
+          (decoration.spec as { widget?: { name?: string } }).widget?.name == "TablePreviewWidget",
+      ),
+    ).toBe(true);
   });
 });
 

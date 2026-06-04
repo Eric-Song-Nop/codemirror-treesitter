@@ -119,6 +119,10 @@ function continueMarkdownBlock(view: EditorView) {
     return insertContinuation(view, cursor, state.sliceDoc(line.from, markers.quoteTo));
   }
 
+  if (cursor == line.to && isPotentialPipeTableRow(state.sliceDoc(line.from, line.to))) {
+    return false;
+  }
+
   if (cursor == line.to) {
     return insertParagraphBreak(view, cursor);
   }
@@ -172,6 +176,12 @@ function insertMarkdownSoftBreak(view: EditorView) {
     }),
   );
   return true;
+}
+
+function isPotentialPipeTableRow(text: string) {
+  let trimmed = text.trim();
+  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return false;
+  return trimmed.indexOf("|", 1) < trimmed.length - 1;
 }
 
 function nextMarker(marker: string) {

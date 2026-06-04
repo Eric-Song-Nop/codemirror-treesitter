@@ -516,9 +516,9 @@ function nodeQueryCaptures(
   source: string,
   options: TreeSitterQueryOptions,
 ): InternalQueryCapture[] {
-  if (!root.node) return [];
+  if (!root.node || !queryRangeOverlapsNode(root, options)) return [];
   let query = compileTreeSitterQuery(parser, source);
-  return query.captures(root.node, queryOptions(options)).map((capture, order) => ({
+  return query.captures(root.node, queryOptions(root, options)).map((capture, order) => ({
     name: capture.name,
     node: new SyntaxNode(root.tree, capture.node),
     order,
@@ -532,9 +532,9 @@ function nodeQueryMatches(
   source: string,
   options: TreeSitterQueryOptions,
 ): InternalQueryMatch[] {
-  if (!root.node) return [];
+  if (!root.node || !queryRangeOverlapsNode(root, options)) return [];
   let query = compileTreeSitterQuery(parser, source);
-  return query.matches(root.node, queryOptions(options)).map((match, order) => ({
+  return query.matches(root.node, queryOptions(root, options)).map((match, order) => ({
     assertedProperties: match.assertedProperties,
     captures: match.captures.map((capture, captureOrder) => ({
       name: capture.name,
@@ -553,11 +553,21 @@ function parserForTree(tree: Tree) {
   return tree.config instanceof TreeSitterParser ? tree.config : null;
 }
 
-function queryOptions(options: TreeSitterQueryOptions): TSQueryOptions {
+function queryOptions(root: SyntaxNode, options: TreeSitterQueryOptions): TSQueryOptions {
   let queryOptions: TSQueryOptions = {};
-  if (options.from != null) queryOptions.startIndex = options.from;
-  if (options.to != null) queryOptions.endIndex = options.to;
+  if (options.from != null && options.from > root.from) queryOptions.startIndex = options.from;
+  if (options.to != null && options.to < queryNodeEnd(root)) queryOptions.endIndex = options.to;
   return queryOptions;
+}
+
+function queryRangeOverlapsNode(root: SyntaxNode, options: TreeSitterQueryOptions) {
+  let from = options.from ?? 0;
+  let to = options.to ?? Number.POSITIVE_INFINITY;
+  return from <= queryNodeEnd(root) && to >= root.from;
+}
+
+function queryNodeEnd(root: SyntaxNode) {
+  return Math.min(root.to, root.tree.length);
 }
 
 function compareQueryCaptures(left: InternalQueryCapture, right: InternalQueryCapture) {

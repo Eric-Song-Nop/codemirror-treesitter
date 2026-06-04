@@ -281,7 +281,12 @@ function buildLiveMdAnalysis(
   ranges: readonly DocRange[] = fullDocRange(state),
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
-  let build = buildLiveMdBuild(state, activeLines, codeFenceLanguages, ranges);
+  let build = buildLiveMdBuild(
+    state,
+    activeLines,
+    codeFenceLanguages,
+    expandLeadingBlankRanges(state, ranges),
+  );
   return {
     activeLines,
     atomicRanges: finishAtomicRanges(build),
@@ -303,6 +308,10 @@ export function __testBuildVisibleLiveMdAnalysis(state: EditorState, ranges: rea
 
 export function __testLiveMdAnalysis(view: EditorView): LiveMdAnalysis {
   return view.state.field(liveMdAnalysisField);
+}
+
+export function __testVisibleLineRanges(view: EditorView): readonly DocRange[] {
+  return visibleLineRanges(view);
 }
 
 function buildLiveMdBuild(
@@ -338,8 +347,7 @@ function buildLiveMdBuild(
 function queryLiveMdMatches(tree: Tree, ranges: readonly DocRange[]) {
   let matches: TreeSitterQueryMatch[] = [];
   for (let { from, to } of ranges) {
-    let options =
-      from <= 0 && to >= tree.length ? undefined : { from, to: to >= tree.length ? to + 1 : to };
+    let options = from <= 0 && to >= tree.length ? undefined : { from, to };
     matches.push(...queryTreeMatches(tree, liveMdQuerySource, options));
   }
   return matches;
@@ -360,7 +368,7 @@ function visibleLineRanges(view: EditorView): readonly DocRange[] {
     if (from > to) continue;
     let firstLine = view.state.doc.lineAt(from);
     let lastLine = view.state.doc.lineAt(Math.max(from, to - 1));
-    let lineRange = { from: firstLine.from, to: lastLine.to };
+    let lineRange = { from: firstLine.from, to: to >= view.state.doc.length ? to : lastLine.to };
     let last = ranges[ranges.length - 1];
     if (last && lineRange.from <= last.to) {
       last.to = Math.max(last.to, lineRange.to);
@@ -387,12 +395,37 @@ function mapDocRanges(ranges: readonly DocRange[], changes: ChangeDesc, state: E
   );
 }
 
+function expandLeadingBlankRanges(state: EditorState, ranges: readonly DocRange[]) {
+  return mergeDocRanges(ranges.map((range) => expandLeadingBlankRange(state, range)));
+}
+
+function expandLeadingBlankRange(state: EditorState, range: DocRange): DocRange {
+  if (range.from <= 0 || state.doc.length == 0) return range;
+  let from = clamp(range.from, 0, state.doc.length);
+  let to = clamp(range.to, 0, state.doc.length);
+  let firstLine = state.doc.lineAt(Math.min(from, state.doc.length));
+  if (!isWhitespaceOnly(state.sliceDoc(firstLine.from, firstLine.to))) return { from, to };
+
+  let lineNumber = firstLine.number - 1;
+  for (; lineNumber >= 1; lineNumber--) {
+    let line = state.doc.line(lineNumber);
+    from = line.from;
+    if (!isWhitespaceOnly(state.sliceDoc(line.from, line.to))) break;
+  }
+  for (lineNumber--; lineNumber >= 1; lineNumber--) {
+    let line = state.doc.line(lineNumber);
+    if (isWhitespaceOnly(state.sliceDoc(line.from, line.to))) break;
+    from = line.from;
+  }
+  return { from, to };
+}
+
 function lineRangeFor(state: EditorState, from: number, to: number): DocRange {
   let rangeFrom = clamp(from, 0, state.doc.length);
   let rangeTo = clamp(to, 0, state.doc.length);
   let firstLine = state.doc.lineAt(rangeFrom);
   let lastLine = state.doc.lineAt(Math.max(rangeFrom, rangeTo - 1));
-  return { from: firstLine.from, to: lastLine.to };
+  return { from: firstLine.from, to: rangeTo >= state.doc.length ? rangeTo : lastLine.to };
 }
 
 function sameDocRanges(left: readonly DocRange[], right: readonly DocRange[]) {
@@ -870,7 +903,7 @@ function applyTable(
 
   let captured = tables.get(nodeKey(node));
   let table = captured ? readTableFromCaptures(build.state, captured) : null;
-  if (table && !rangeTouchesActiveLine(build, node.from, node.to)) {
+  if (table && !tableTouchesActiveLine(build, node.from, node.to, table)) {
     addReplace(build, node.from, node.to, new TablePreviewWidget(table), true);
     return false;
   }
@@ -1110,6 +1143,24 @@ function rangeTouchesActiveLine(build: LiveMdBuild, from: number, to: number) {
     if (lineNumber >= firstLine && lineNumber <= lastLine) return true;
   }
   return false;
+}
+
+function tableTouchesActiveLine(
+  build: LiveMdBuild,
+  from: number,
+  to: number,
+  table: MarkdownTable,
+) {
+  if (rangeTouchesActiveLine(build, from, to)) return true;
+  if (table.rows.length) return false;
+  let end = Math.min(to, build.state.doc.length);
+  let lastLine = build.state.doc.lineAt(Math.max(from, end - 1));
+  let nextLineNumber = lastLine.number + 1;
+  if (!build.activeLines.has(nextLineNumber) || nextLineNumber > build.state.doc.lines) {
+    return false;
+  }
+  let nextLine = build.state.doc.line(nextLineNumber);
+  return isWhitespaceOnly(build.state.sliceDoc(nextLine.from, nextLine.to));
 }
 
 function isOnlyVisibleContentOnLine(

@@ -64,6 +64,14 @@ describe("paragraph breaks", () => {
     expect(editor.value).toBe("first\n");
   });
 
+  it("lets pipe table rows continue with a normal newline", async () => {
+    let editor = await mountEditor("| Name | Value |");
+
+    pressKey(editor.view, "Enter");
+
+    expect(editor.value).toBe("| Name | Value |\n");
+  });
+
   it("keeps list continuation behavior on Enter", async () => {
     let editor = await mountEditor("- first");
 

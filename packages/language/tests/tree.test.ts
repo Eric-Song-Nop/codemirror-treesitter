@@ -729,6 +729,25 @@ describe("tree-sitter tree wrapper", () => {
     expect(identifiers).toEqual(["second"]);
   });
 
+  it("queries nested trees through ranges ending at the nested range", async () => {
+    let doc = "<main><script>let value = 1;</script><p>text</p></main>";
+    let { state } = await mixedHtmlState(doc);
+    let scriptFrom = doc.indexOf("let value");
+    let scriptTo = doc.indexOf("</script>");
+    let matches = queryTreeMatches(
+      syntaxTree(state),
+      (_parser, tree) => (tree.topNode.name == "program" ? "(identifier) @name" : null),
+      {
+        from: scriptFrom,
+        to: scriptTo,
+      },
+    );
+
+    expect(matches.map((match) => match.captures.map((capture) => capture.node.text))).toEqual([
+      ["value"],
+    ]);
+  });
+
   it("supports balanced enter and leave traversal callbacks", async () => {
     let doc = "let value = [1, 2];\n";
     let state = await javascriptState(doc);
