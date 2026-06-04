@@ -46,6 +46,10 @@
   --live-md-table-border: #d9e0dc;
   --live-md-table-header-bg: #edf3ef;
   --live-md-table-header-text: #213d37;
+  --live-md-content-width: 880px;
+  --live-md-content-padding-block-start: clamp(34px, 6vw, 72px);
+  --live-md-content-padding-inline: clamp(22px, 7vw, 78px);
+  --live-md-content-padding-block-end: 120px;
   --live-md-font-body: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --live-md-font-ui: "Avenir Next", "Gill Sans", ui-sans-serif, system-ui, sans-serif;
   --live-md-font-code: "SFMono-Regular", "Cascadia Code", ui-monospace, monospace;
@@ -95,15 +99,20 @@
 
 .live-md-codemirror .cm-scroller {
   font-family: var(--live-md-font-body);
+  justify-content: center;
   line-height: 1.72;
   overflow: auto;
 }
 
 .live-md-codemirror .cm-content {
-  width: min(100%, 880px);
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--live-md-content-width);
   min-height: 100%;
   margin: 0 auto;
-  padding: clamp(34px, 6vw, 72px) clamp(22px, 7vw, 78px) 120px;
+  padding-block-start: var(--live-md-content-padding-block-start);
+  padding-block-end: var(--live-md-content-padding-block-end);
+  padding-inline: var(--live-md-content-padding-inline);
   caret-color: var(--live-md-cursor);
 }
 

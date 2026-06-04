@@ -189,6 +189,8 @@
   --live-md-table-border: #665c54;
   --live-md-table-header-bg: #3c3836;
   --live-md-table-header-text: #fabd2f;
+  --live-md-content-width: 820px;
+  --live-md-content-padding-inline: clamp(24px, 5vw, 56px);
   --live-md-font-body: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
   --live-md-font-ui: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
 }
