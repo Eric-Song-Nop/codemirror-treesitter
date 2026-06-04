@@ -123,9 +123,9 @@ const enum CompositionState {
 
 export const completionPlugin = ViewPlugin.fromClass(
   class implements PluginValue {
-    debounceUpdate = -1;
+    debounceUpdate: ReturnType<typeof setTimeout> | null = null;
     running: RunningQuery[] = [];
-    debounceAccept = -1;
+    debounceAccept: ReturnType<typeof setTimeout> | null = null;
     pendingStart = false;
     composing = CompositionState.None;
 
@@ -173,7 +173,7 @@ export const completionPlugin = ViewPlugin.fromClass(
         }
       }
 
-      if (this.debounceUpdate > -1) clearTimeout(this.debounceUpdate);
+      if (this.debounceUpdate != null) clearTimeout(this.debounceUpdate);
       if (update.transactions.some((tr) => tr.effects.some((e) => e.is(startCompletionEffect))))
         this.pendingStart = true;
       let delay = this.pendingStart ? 50 : conf.activateOnTypingDelay;
@@ -181,7 +181,7 @@ export const completionPlugin = ViewPlugin.fromClass(
         (a) => a.isPending && !this.running.some((q) => q.active.source == a.source),
       )
         ? setTimeout(() => this.startUpdate(), delay)
-        : -1;
+        : null;
 
       if (this.composing != CompositionState.None)
         for (let tr of update.transactions) {
@@ -192,7 +192,7 @@ export const completionPlugin = ViewPlugin.fromClass(
     }
 
     startUpdate() {
-      this.debounceUpdate = -1;
+      this.debounceUpdate = null;
       this.pendingStart = false;
       let { state } = this.view,
         cState = state.field(completionState);
@@ -229,7 +229,7 @@ export const completionPlugin = ViewPlugin.fromClass(
 
     scheduleAccept() {
       if (this.running.every((q) => q.done !== undefined)) this.accept();
-      else if (this.debounceAccept < 0)
+      else if (this.debounceAccept == null)
         this.debounceAccept = setTimeout(
           () => this.accept(),
           this.view.state.facet(completionConfig).updateSyncTime,
@@ -239,8 +239,8 @@ export const completionPlugin = ViewPlugin.fromClass(
     // For each finished query in this.running, try to create a result
     // or, if appropriate, restart the query.
     accept() {
-      if (this.debounceAccept > -1) clearTimeout(this.debounceAccept);
-      this.debounceAccept = -1;
+      if (this.debounceAccept != null) clearTimeout(this.debounceAccept);
+      this.debounceAccept = null;
 
       let updated: ActiveSource[] = [];
       let conf = this.view.state.facet(completionConfig),

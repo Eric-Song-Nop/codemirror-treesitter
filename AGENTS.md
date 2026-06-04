@@ -59,6 +59,8 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   entry, CSS export, and fixtures.
 - `packages/live-md-loro`: Optional Loro collaboration bindings for LiveMD.
 - `apps/basic-editor`: Minimal `<live-md-editor>` smoke app.
+- `apps/local-md-workspace`: React shadcn/ui local-first Markdown workspace
+  using LiveMD and the browser File System Access API for `.md` files.
 - `apps/examples`: Side-by-side local-vs-official CodeMirror comparison app.
 - `apps/live-md-benchmark`: LiveMD benchmark harness.
 - `apps/live-md-loro-demo`: Local two-peer Loro collaboration demo.
@@ -101,6 +103,7 @@ Useful task selectors:
 ```bash
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
+vp run local-md-workspace#dev
 vp run examples#dev
 vp run live-md-benchmark#benchmark
 vp run live-md-loro-demo#dev
