@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { FileTree as TreesFileTree } from "@pierre/trees";
+import type { ContextMenuOpenContext } from "@pierre/trees";
 import type {
   MarkdownDirectoryNode,
   MarkdownFileNode,
@@ -19,26 +20,6 @@ export type FileTreeDeleteTarget = {
   name: string;
   path: string;
 };
-
-const fileTreeIconSpriteSheet = `<svg data-icon-sprite aria-hidden="true" width="0" height="0">
-  <symbol id="local-md-icon-trash" viewBox="0 0 24 24">
-    <path d="M3 6h18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
-    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
-    <path d="m19 6-1 14c-.1 1.1-1 2-2 2H8c-1.1 0-1.9-.9-2-2L5 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
-    <path d="M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
-  </symbol>
-</svg>`;
-
-const fileTreeUnsafeCSS = `
-  [data-type='context-menu-trigger'] {
-    border-radius: 6px;
-  }
-
-  [data-type='context-menu-trigger']:hover,
-  [data-type='context-menu-trigger'][aria-expanded='true'] {
-    color: #ef4444;
-  }
-`;
 
 export const FileTree = memo(function FileTree({
   onDeleteEntry,
@@ -82,23 +63,17 @@ export const FileTree = memo(function FileTree({
         contextMenu: {
           buttonVisibility: "when-needed",
           enabled: true,
-          onOpen(item, context) {
-            context.close({ restoreFocus: false });
-            latestSelectionRef.current.onDeleteEntry(normalizeDeleteTarget(item));
+          render(item, context) {
+            return renderDeleteContextMenu(item, context, (target) => {
+              latestSelectionRef.current.onDeleteEntry(normalizeDeleteTarget(target));
+            });
           },
           triggerMode: "button",
         },
       },
       icons: {
         colored: true,
-        remap: {
-          "file-tree-icon-ellipsis": {
-            name: "local-md-icon-trash",
-            viewBox: "0 0 24 24",
-          },
-        },
         set: "complete",
-        spriteSheet: fileTreeIconSpriteSheet,
       },
       initialExpandedPaths: expandedPaths,
       initialSelectedPaths: selectedPath ? [selectedPath] : [],
@@ -124,7 +99,6 @@ export const FileTree = memo(function FileTree({
         let file = latestFilesByPath.get(nextPath);
         if (file) latestOnSelectFile(file);
       },
-      unsafeCSS: fileTreeUnsafeCSS,
     });
 
     modelRef.current = model;
@@ -168,6 +142,32 @@ export const FileTree = memo(function FileTree({
 
   return <div ref={containerRef} className="local-md-file-tree min-h-0 flex-1 overflow-auto" />;
 });
+
+function renderDeleteContextMenu(
+  target: FileTreeDeleteTarget,
+  context: ContextMenuOpenContext,
+  onDelete: (target: FileTreeDeleteTarget) => void,
+) {
+  let menu = document.createElement("div");
+  menu.className = "local-md-file-tree-context-menu";
+  menu.setAttribute("role", "menu");
+  menu.tabIndex = -1;
+
+  let deleteButton = document.createElement("button");
+  deleteButton.className = "local-md-file-tree-context-menu-item";
+  deleteButton.setAttribute("role", "menuitem");
+  deleteButton.type = "button";
+  deleteButton.textContent = target.kind == "directory" ? "Delete folder" : "Delete file";
+  deleteButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    context.close();
+    onDelete(target);
+  });
+
+  menu.append(deleteButton);
+  return menu;
+}
 
 function normalizeDeleteTarget(target: FileTreeDeleteTarget): FileTreeDeleteTarget {
   return {

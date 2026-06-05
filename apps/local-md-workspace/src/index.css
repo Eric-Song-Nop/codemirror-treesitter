@@ -206,9 +206,44 @@
   --trees-focus-ring-color-override: #fe8019;
   --trees-font-family-override: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
   --trees-font-size-override: 13px;
-  --trees-item-margin-x-override: 8px;
-  --trees-padding-inline-override: 0px;
+  --trees-padding-inline-override: 8px;
   --trees-selected-bg-override: #504945;
   --trees-selected-fg-override: #fbf1c7;
   --trees-selected-focused-border-color-override: #fe8019;
+}
+
+.local-md-file-tree-context-menu {
+  display: flex;
+  min-width: 128px;
+  translate: calc(-100% + 18px) 2px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid #665c54;
+  border-radius: 6px;
+  background: #282828;
+  box-shadow: 0 12px 24px rgb(0 0 0 / 35%);
+  color: #ebdbb2;
+}
+
+.local-md-file-tree-context-menu-item {
+  display: flex;
+  min-height: 28px;
+  width: 100%;
+  align-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0 8px;
+  text-align: left;
+}
+
+.local-md-file-tree-context-menu-item:hover,
+.local-md-file-tree-context-menu-item:focus-visible {
+  outline: none;
+  background: #3c3836;
+  color: #fb4934;
 }
