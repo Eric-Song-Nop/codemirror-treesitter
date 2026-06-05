@@ -55,6 +55,14 @@ syntax-tree navigation, bracket matching, and comment token data. It is used by
 `@codemirror-treesitter/basic-setup`, `@codemirror-treesitter/live-md`, and the
 apps.
 
+## Local Commands
+
+```bash
+vp run @codemirror-treesitter/commands#check
+vp run @codemirror-treesitter/commands#test
+vp run @codemirror-treesitter/commands#build
+```
+
 ## Validation
 
 Run from the workspace root:

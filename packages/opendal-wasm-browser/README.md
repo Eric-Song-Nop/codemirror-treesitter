@@ -6,6 +6,18 @@ The goal is to prove whether an OpenDAL `wasm32-unknown-unknown` build can power
 cloud-backed Markdown workspaces in `apps/local-md-workspace` without a server
 gateway.
 
+## Stack and Boundaries
+
+- Private workspace package built as ES modules for the TypeScript wrapper.
+- Rust/WASM output is generated separately by `wasm-pack` into ignored `pkg/`
+  files.
+- The TypeScript API normalizes provider config, dynamically loads the
+  generated WASM module, and exposes a narrow Markdown-workspace-oriented
+  operator surface.
+- OAuth and user credential handling belong in consuming apps such as
+  `apps/local-md-workspace`; this package receives provider credentials after
+  the app has acquired them.
+
 ## Current Status
 
 - Phase 1 wrapper spike is implemented.
@@ -105,6 +117,16 @@ The generated TypeScript wrapper dynamically imports
 `pkg/opendal_wasm_browser.js` by default. Callers can override
 `generatedModuleUrl` or `wasmModuleUrl` when a bundler or deployment path needs
 explicit asset URLs.
+
+## Local Commands
+
+```bash
+vp run @codemirror-treesitter/opendal-wasm-browser#check
+vp run @codemirror-treesitter/opendal-wasm-browser#build:ts
+vp run @codemirror-treesitter/opendal-wasm-browser#build:wasm
+vp run @codemirror-treesitter/opendal-wasm-browser#check:wasm
+vp run @codemirror-treesitter/opendal-wasm-browser#validate:dropbox
+```
 
 ## Smoke Fixture
 

@@ -131,6 +131,14 @@ LiveMD composes `basic-setup`, `language`, `language-data`, `commands`,
 `@codemirror-treesitter/live-md-loro` so this package stays independent of Loro
 and Cloudflare-specific code.
 
+## Local Commands
+
+```bash
+vp run @codemirror-treesitter/live-md#check
+vp run @codemirror-treesitter/live-md#test
+vp run @codemirror-treesitter/live-md#build
+```
+
 ## Validation
 
 Run from the workspace root:

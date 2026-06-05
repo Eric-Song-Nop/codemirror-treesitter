@@ -48,6 +48,14 @@ This package composes local `language`, `commands`, and `autocomplete` with
 official CodeMirror packages that do not introduce Lezer into the local
 implementation path. It is used directly by examples and by LiveMD.
 
+## Local Commands
+
+```bash
+vp run @codemirror-treesitter/basic-setup#check
+vp run @codemirror-treesitter/basic-setup#test
+vp run @codemirror-treesitter/basic-setup#build
+```
+
 ## Validation
 
 Run from the workspace root:

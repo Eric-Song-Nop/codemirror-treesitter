@@ -52,6 +52,14 @@ This package depends on the local language package for Tree-sitter-backed
 syntax highlighting of deleted text. It is exercised in the examples app
 against the official merge package.
 
+## Local Commands
+
+```bash
+vp run @codemirror-treesitter/merge#check
+vp run @codemirror-treesitter/merge#test
+vp run @codemirror-treesitter/merge#build
+```
+
 ## Validation
 
 Run from the workspace root:

@@ -65,6 +65,14 @@ This package depends on `@codemirror-treesitter/language` and returns
 apps, examples, LiveMD, and any caller that wants a registry of language
 loaders.
 
+## Local Commands
+
+```bash
+vp run @codemirror-treesitter/language-data#check
+vp run @codemirror-treesitter/language-data#test
+vp run @codemirror-treesitter/language-data#build
+```
+
 ## Validation
 
 Run from the workspace root:

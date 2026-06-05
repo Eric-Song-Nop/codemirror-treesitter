@@ -57,6 +57,14 @@ context. It is used by `@codemirror-treesitter/basic-setup`,
 `@codemirror-treesitter/lsp-client`, `@codemirror-treesitter/live-md`, and the
 apps.
 
+## Local Commands
+
+```bash
+vp run @codemirror-treesitter/autocomplete#check
+vp run @codemirror-treesitter/autocomplete#test
+vp run @codemirror-treesitter/autocomplete#build
+```
+
 ## Validation
 
 Run from the workspace root:

@@ -59,6 +59,14 @@ This package depends on local `language` and `autocomplete` for syntax-aware
 features and completion UI. It is exercised in the examples app against the
 official LSP client package.
 
+## Local Commands
+
+```bash
+vp run @codemirror-treesitter/lsp-client#check
+vp run @codemirror-treesitter/lsp-client#test
+vp run @codemirror-treesitter/lsp-client#build
+```
+
 ## Validation
 
 Run from the workspace root:

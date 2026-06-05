@@ -60,14 +60,21 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `packages/live-md-loro`: Optional Loro collaboration bindings for LiveMD.
 - `packages/opendal-wasm-browser`: Experimental browser WASM wrapper for
   OpenDAL-backed cloud workspace storage.
-- `apps/basic-editor`: Minimal `<live-md-editor>` smoke app.
+- `apps/basic-editor`: Minimal `<live-md-editor>` smoke app with a local
+  README.
 - `apps/local-md-workspace`: React shadcn/ui local-first Markdown workspace
-  using LiveMD and the browser File System Access API for `.md` files.
-- `apps/examples`: Side-by-side local-vs-official CodeMirror comparison app.
-- `apps/live-md-benchmark`: LiveMD benchmark harness.
-- `apps/live-md-loro-demo`: Local two-peer Loro collaboration demo.
+  using LiveMD, the browser File System Access API for `.md` files, and
+  optional Dropbox/OpenDAL support documented in its README.
+- `apps/examples`: Side-by-side local-vs-official CodeMirror comparison app;
+  this is the app-level exception that may depend on official Lezer language
+  packages for parity checks.
+- `apps/live-md-benchmark`: LiveMD benchmark harness with a browser automation
+  API documented in its README.
+- `apps/live-md-loro-demo`: Local two-peer Loro collaboration demo documented
+  separately from the Cloudflare collaboration app.
 - `apps/collab-editor`: Cloudflare collaboration app with Durable Object room
-  persistence and WebSocket Loro sync.
+  persistence and WebSocket Loro sync; Wrangler config and deploy notes live in
+  its README.
 - `tools/audit.mjs`: Network-aware parity and boundary audit for packages,
   language-data coverage, examples, benchmark wiring, and Lezer-free rules.
 
@@ -103,9 +110,13 @@ vp run ready
 Useful task selectors:
 
 ```bash
+vp run basic-editor#dev
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
+vp run @codemirror-treesitter/opendal-wasm-browser#build:wasm
+vp run @codemirror-treesitter/opendal-wasm-browser#check:wasm
 vp run local-md-workspace#dev
+vp run local-md-workspace#smoke:ui
 vp run examples#dev
 vp run live-md-benchmark#benchmark
 vp run live-md-loro-demo#dev
@@ -121,7 +132,11 @@ vp run collab-editor#types
   validation workflow, or LiveMD public API changes.
 - Update package READMEs when public exports, source layout, dependencies, or
   package responsibilities change.
+- Update app READMEs when app purpose, runtime stack, source layout,
+  environment variables, validation tasks, deploy tasks, or browser automation
+  expectations change.
 - Update this file when agent-facing setup, validation, dependency boundaries,
   or app/task workflows change.
 - Keep docs in sync with `package.json`, `vite.config.ts`, `vite.shared.ts`,
-  package `src/index.ts` files, and `tools/audit.mjs`.
+  package `src/index.ts` files, app entry points, Wrangler config, smoke
+  scripts, and `tools/audit.mjs`.

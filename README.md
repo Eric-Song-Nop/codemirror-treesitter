@@ -160,22 +160,26 @@ entry points, dependency boundaries, source layout, and validation notes.
 
 - `apps/basic-editor`: Minimal Tree-sitter-only editor that imports
   `@codemirror-treesitter/live-md/register` and renders one
-  `<live-md-editor>` element.
+  `<live-md-editor>` element. See `apps/basic-editor/README.md`.
 - `apps/local-md-workspace`: React, Vite+, and shadcn/ui local-first Markdown
   workspace that opens a browser-granted local folder, edits `.md` files with
   LiveMD, supports image insert/paste/drop through sibling `assets/`
   directories, and supports file create, rename, delete, tree browsing, and
-  autosave through the File System Access API.
+  autosave through the File System Access API. It also documents optional
+  Dropbox/OpenDAL configuration in `apps/local-md-workspace/README.md`.
 - `apps/examples`: Side-by-side workbench comparing the local Tree-sitter
   implementation with official CodeMirror/Lezer behavior on parser-relevant
-  examples, package coverage, merge/LSP behavior, and benchmark metrics.
+  examples, package coverage, merge/LSP behavior, and benchmark metrics. See
+  `apps/examples/README.md`.
 - `apps/live-md-benchmark`: LiveMD performance benchmark harness for rendering,
-  editing, deletion, clipboard, and selection workflows.
+  editing, deletion, clipboard, and selection workflows. See
+  `apps/live-md-benchmark/README.md`.
 - `apps/live-md-loro-demo`: Two-peer LiveMD collaboration demo with simulated
-  latency, offline queueing, and Loro snapshot resync.
+  latency, offline queueing, and Loro snapshot resync. See
+  `apps/live-md-loro-demo/README.md`.
 - `apps/collab-editor`: Cloudflare Workers app with a Durable Object room,
   WebSocket Loro sync, local snapshot recovery, shareable room URLs, and
-  deployment/types tasks through Wrangler.
+  deployment/types tasks through Wrangler. See `apps/collab-editor/README.md`.
 - `tools/audit.mjs`: Repository audit that checks package names, Lezer-free
   guarantees, public export parity, command and autocomplete stubs, basic setup
   parity, language-data metadata/load coverage, example coverage, merge/LSP
@@ -403,6 +407,7 @@ vp run ready
 Useful task selectors:
 
 ```bash
+vp run basic-editor#dev
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
 vp run @codemirror-treesitter/opendal-wasm-browser#auth:dropbox-token
@@ -433,6 +438,8 @@ standard app path or the Playwright browser cache.
   validation expectations, package boundaries, and app task notes.
 - `packages/*/README.md`: package-local API, source layout, dependencies, and
   validation commands.
+- `apps/*/README.md`: app-local purpose, source layout, runtime boundaries,
+  environment notes, and Vite+/Wrangler commands.
 - `packages/live-md-loro/README.md`: optional collaboration binding docs.
 - `packages/opendal-wasm-browser/README.md`: browser OpenDAL WASM wrapper API,
   build commands, and validation notes.

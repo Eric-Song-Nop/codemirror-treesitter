@@ -78,6 +78,14 @@ document.body.append(editor);
 collaboration demo. `apps/collab-editor` uses it with Cloudflare Durable
 Objects and WebSockets to persist and relay Loro updates between clients.
 
+## Local Commands
+
+```bash
+vp run @codemirror-treesitter/live-md-loro#check
+vp run @codemirror-treesitter/live-md-loro#test
+vp run @codemirror-treesitter/live-md-loro#build
+```
+
 ## Validation
 
 Run from the workspace root:

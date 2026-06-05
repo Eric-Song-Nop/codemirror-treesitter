@@ -74,6 +74,14 @@ Every package that needs syntax information depends on this one. It is consumed
 by `language-data`, `commands`, `autocomplete`, `basic-setup`, `merge`,
 `lsp-client`, `theme-gruvbox`, `live-md`, and the apps.
 
+## Local Commands
+
+```bash
+vp run @codemirror-treesitter/language#check
+vp run @codemirror-treesitter/language#test
+vp run @codemirror-treesitter/language#build
+```
+
 ## Validation
 
 Run from the workspace root:

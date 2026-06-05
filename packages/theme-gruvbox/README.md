@@ -45,6 +45,14 @@ This package depends on `@codemirror-treesitter/language` for
 `HighlightStyle`, `syntaxHighlighting`, and `tags`. It is used by the examples
 app and LiveMD.
 
+## Local Commands
+
+```bash
+vp run @codemirror-treesitter/theme-gruvbox#check
+vp run @codemirror-treesitter/theme-gruvbox#test
+vp run @codemirror-treesitter/theme-gruvbox#build
+```
+
 ## Validation
 
 Run from the workspace root:
