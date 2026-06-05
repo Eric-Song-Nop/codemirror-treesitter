@@ -4,10 +4,12 @@ type AccessPermissionDescriptor = {
   mode?: AccessPermissionMode;
 };
 
+type AccessWritableFileData = Blob | BufferSource | string;
+
 type AccessWritableFileStream = {
   abort?: () => Promise<void>;
   close: () => Promise<void>;
-  write: (data: string) => Promise<void>;
+  write: (data: AccessWritableFileData) => Promise<void>;
 };
 
 type AccessHandleBase = {
@@ -37,6 +39,12 @@ export type AccessDirectoryHandle = AccessHandleBase & {
 export type MarkdownFileNode = {
   handle: AccessFileHandle;
   kind: "file";
+  name: string;
+  path: string;
+};
+
+export type WorkspaceImageNode = {
+  handle: AccessFileHandle;
   name: string;
   path: string;
 };
@@ -93,6 +101,14 @@ export async function readWorkspaceTree(
   };
 }
 
+export async function readWorkspaceImages(handle: AccessDirectoryHandle) {
+  let images: WorkspaceImageNode[] = [];
+  await collectWorkspaceImages(handle, "", images);
+  return images.sort((left, right) =>
+    left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
+  );
+}
+
 export function flattenMarkdownFiles(tree: MarkdownDirectoryNode) {
   let files: MarkdownFileNode[] = [];
   collectMarkdownFiles(tree.children, files);
@@ -104,14 +120,43 @@ export async function readMarkdownFile(handle: AccessFileHandle) {
 }
 
 export async function writeMarkdownFile(handle: AccessFileHandle, value: string) {
+  await writeFileData(handle, value);
+}
+
+export async function writeFileData(handle: AccessFileHandle, data: AccessWritableFileData) {
   let writable = await handle.createWritable();
   try {
-    await writable.write(value);
+    await writable.write(data);
     await writable.close();
   } catch (error) {
     await writable.abort?.();
     throw error;
   }
+}
+
+export async function createImageAsset(
+  rootHandle: AccessDirectoryHandle,
+  markdownFile: MarkdownFileNode,
+  imageFile: File,
+) {
+  if (!isImageFile(imageFile)) {
+    throw new Error(`${imageFile.name || "Dropped file"} is not a supported image.`);
+  }
+
+  let { directory, parentPath } = await resolveParentDirectory(rootHandle, markdownFile.path, true);
+  let assetsDirectory = await directory.getDirectoryHandle("assets", { create: true });
+  let { baseName, extension } = imageAssetNameParts(imageFile);
+  let fileName = await nextAvailableFileName(assetsDirectory, baseName, extension);
+  let handle = await assetsDirectory.getFileHandle(fileName, { create: true });
+  await writeFileData(handle, imageFile);
+
+  let path = joinPath(joinPath(parentPath, "assets"), fileName);
+  return {
+    handle,
+    markdownReference: `assets/${fileName}`,
+    name: fileName,
+    path,
+  } satisfies WorkspaceImageNode & { markdownReference: string };
 }
 
 export async function createMarkdownFile(rootHandle: AccessDirectoryHandle, rawPath: string) {
@@ -177,13 +222,16 @@ async function readDirectoryChildren(handle: AccessDirectoryHandle, path: string
   for await (let entry of handle.values()) {
     let entryPath = joinPath(path, entry.name);
     if (entry.kind == "directory") {
-      children.push({
-        children: await readDirectoryChildren(entry, entryPath),
-        handle: entry,
-        kind: "directory",
-        name: entry.name,
-        path: entryPath,
-      });
+      let directoryChildren = await readDirectoryChildren(entry, entryPath);
+      if (directoryChildren.length) {
+        children.push({
+          children: directoryChildren,
+          handle: entry,
+          kind: "directory",
+          name: entry.name,
+          path: entryPath,
+        });
+      }
     } else if (/\.md$/i.test(entry.name)) {
       children.push({
         handle: entry,
@@ -195,6 +243,91 @@ async function readDirectoryChildren(handle: AccessDirectoryHandle, path: string
   }
 
   return children.sort(compareTreeNodes);
+}
+
+async function collectWorkspaceImages(
+  handle: AccessDirectoryHandle,
+  path: string,
+  images: WorkspaceImageNode[],
+) {
+  for await (let entry of handle.values()) {
+    let entryPath = joinPath(path, entry.name);
+    if (entry.kind == "directory") {
+      await collectWorkspaceImages(entry, entryPath, images);
+    } else if (isImageFileName(entry.name)) {
+      images.push({
+        handle: entry,
+        name: entry.name,
+        path: entryPath,
+      });
+    }
+  }
+}
+
+function isImageFile(file: File) {
+  return file.type.startsWith("image/") || isImageFileName(file.name);
+}
+
+function isImageFileName(fileName: string) {
+  return /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(fileName);
+}
+
+function imageAssetNameParts(file: File) {
+  let extension = imageFileExtension(file);
+  let name = file.name.replace(/\.[^.]*$/, "");
+  let baseName = sanitizeImageAssetBaseName(name || "image");
+  return { baseName, extension };
+}
+
+function imageFileExtension(file: File) {
+  let nameExtension = file.name.match(/\.[^.]+$/)?.[0]?.toLowerCase();
+  if (nameExtension && isImageFileName(`image${nameExtension}`)) return nameExtension;
+
+  switch (file.type) {
+    case "image/avif":
+      return ".avif";
+    case "image/bmp":
+      return ".bmp";
+    case "image/gif":
+      return ".gif";
+    case "image/jpeg":
+      return ".jpg";
+    case "image/png":
+      return ".png";
+    case "image/svg+xml":
+      return ".svg";
+    case "image/webp":
+      return ".webp";
+    default:
+      return ".png";
+  }
+}
+
+function sanitizeImageAssetBaseName(value: string) {
+  return (
+    value
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase() || "image"
+  );
+}
+
+async function nextAvailableFileName(
+  directory: AccessDirectoryHandle,
+  baseName: string,
+  extension: string,
+) {
+  let fileName = `${baseName}${extension}`;
+  if (!(await fileExists(directory, fileName))) return fileName;
+
+  for (let index = 2; index < 10_000; index++) {
+    fileName = `${baseName}-${index}${extension}`;
+    if (!(await fileExists(directory, fileName))) return fileName;
+  }
+
+  throw new Error("Could not allocate an image file name.");
 }
 
 function collectMarkdownFiles(nodes: MarkdownTreeNode[], files: MarkdownFileNode[]) {

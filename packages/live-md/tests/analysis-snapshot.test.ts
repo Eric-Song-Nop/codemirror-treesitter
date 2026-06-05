@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { ensureSyntaxTree, Tree } from "@codemirror-treesitter/language";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -11,6 +11,7 @@ import {
   __testVisibleLineRanges,
   liveMdAnalysis,
 } from "../src/core/decorations.js";
+import { liveMdImageSource, normalizeMarkdownImageSource } from "../src/core/images.js";
 import {
   codeFenceLanguagesField,
   loadCodeFenceLanguages,
@@ -245,32 +246,84 @@ describe("LiveMD analysis snapshot", () => {
       ),
     ).toBe(true);
   });
+
+  it("normalizes Markdown image destinations for preview widgets", async () => {
+    expect(normalizeMarkdownImageSource("</asset/icon.svg>")).toBe("/asset/icon.svg");
+    expect(normalizeMarkdownImageSource("/images/photo\\(copy\\).png")).toBe(
+      "/images/photo(copy).png",
+    );
+
+    let doc =
+      "![Angle](</asset/icon.svg>)\n\n" + "![Escaped](/images/photo\\(copy\\).png)\n\n" + "after";
+    let state = await markdownAnalysisState(doc, "after");
+
+    expect(imagePreviewSources(state)).toEqual(["/asset/icon.svg", "/images/photo(copy).png"]);
+  });
+
+  it("rebuilds image previews when the image source resolver changes", async () => {
+    let imageSourceCompartment = new Compartment();
+    let view = await markdownAnalysisView("![Local](assets/local.png)\n\nafter", "after", [
+      imageSourceCompartment.of(liveMdImageSource((source) => `blob:first/${source}`)),
+    ]);
+
+    expect(imagePreviewSources(view.state)).toEqual(["blob:first/assets/local.png"]);
+
+    view.dispatch({
+      effects: imageSourceCompartment.reconfigure(
+        liveMdImageSource((source) => `blob:second/${source}`),
+      ),
+    });
+
+    expect(imagePreviewSources(view.state)).toEqual(["blob:second/assets/local.png"]);
+    view.destroy();
+  });
 });
 
-async function markdownAnalysisState(doc: string, selectionText = "") {
+async function markdownAnalysisState(doc: string, selectionText = "", extensions: Extension = []) {
   let selection = selectionText ? doc.indexOf(selectionText) : 0;
   let state = EditorState.create({
     doc,
-    extensions: [await loadMarkdownExtension(), codeFenceLanguagesField, liveMdAnalysis],
+    extensions: [
+      await loadMarkdownExtension(),
+      codeFenceLanguagesField,
+      extensions,
+      liveMdAnalysis,
+    ],
   });
   ensureSyntaxTree(state, doc.length, 5_000);
   return state.update({ selection: { anchor: selection } }).state;
 }
 
-async function markdownAnalysisView(doc: string, selectionText = "") {
+async function markdownAnalysisView(doc: string, selectionText = "", extensions: Extension = []) {
   let selection = selectionText ? doc.indexOf(selectionText) : 0;
   let view = new EditorView({
     parent: document.body.appendChild(document.createElement("div")),
     state: EditorState.create({
       doc,
       selection: { anchor: selection },
-      extensions: [await loadMarkdownExtension(), codeFenceLanguagesField, liveMdAnalysis],
+      extensions: [
+        await loadMarkdownExtension(),
+        codeFenceLanguagesField,
+        extensions,
+        liveMdAnalysis,
+      ],
     }),
   });
   ensureSyntaxTree(view.state, doc.length, 5_000);
   view.dispatch({});
   await waitForLiveMdRanges(view);
   return view;
+}
+
+function imagePreviewSources(state: EditorState) {
+  let sources: string[] = [];
+  __testBuildLiveMdAnalysis(state).decorations.between(0, state.doc.length, (_from, _to, value) => {
+    let widget = (value.spec as { widget?: unknown }).widget;
+    if (widget && widget.constructor.name == "ImagePreviewWidget") {
+      sources.push((widget as { src: string }).src);
+    }
+  });
+  return sources;
 }
 
 async function waitForLiveMdRanges(view: EditorView) {

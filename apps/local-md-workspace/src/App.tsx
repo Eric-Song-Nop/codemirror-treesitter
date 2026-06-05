@@ -1,6 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ComponentProps,
+} from "react";
 import {
   FolderOpenIcon,
+  ImagePlusIcon,
   MenuIcon,
   PencilIcon,
   PlusIcon,
@@ -8,6 +17,11 @@ import {
   SaveIcon,
   Trash2Icon,
 } from "lucide-react";
+import type { EditorView } from "@codemirror/view";
+import type {
+  LiveMdEditorElement,
+  LiveMdImageSourceResolver,
+} from "@codemirror-treesitter/live-md";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,8 +55,9 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { FileTree } from "@/components/FileTree";
-import { LiveMdEditor } from "@/components/LiveMdEditor";
+import { LiveMdEditor, type LiveMdImageFilesInput } from "@/components/LiveMdEditor";
 import {
+  createImageAsset,
   createMarkdownFile,
   deleteMarkdownFile,
   ensureReadWritePermission,
@@ -50,6 +65,7 @@ import {
   pickWorkspaceDirectory,
   queryReadWritePermission,
   readMarkdownFile,
+  readWorkspaceImages,
   readWorkspaceTree,
   renameMarkdownFile,
   supportsDirectoryPicker,
@@ -57,6 +73,7 @@ import {
   type AccessDirectoryHandle,
   type MarkdownDirectoryNode,
   type MarkdownFileNode,
+  type WorkspaceImageNode,
 } from "@/lib/file-system";
 import { cn } from "@/lib/utils";
 import { loadStoredWorkspaceHandle, saveStoredWorkspaceHandle } from "@/lib/workspace-store";
@@ -68,6 +85,10 @@ type EditorDocument = {
   path: string;
   value: string;
   version: number;
+};
+
+type WorkspaceImageAsset = WorkspaceImageNode & {
+  url: string;
 };
 
 export function App() {
@@ -93,7 +114,9 @@ export function App() {
   let [fileDialogValue, setFileDialogValue] = useState("");
   let [fileDialogError, setFileDialogError] = useState("");
   let [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  let [imageAssetVersion, setImageAssetVersion] = useState(0);
 
+  let editorElementRef = useRef<LiveMdEditorElement | null>(null);
   let selectedFileRef = useRef<MarkdownFileNode | null>(null);
   let editorValueRef = useRef("");
   let cleanValueRef = useRef("");
@@ -102,10 +125,20 @@ export function App() {
   let saveStateRef = useRef<SaveState>("idle");
   let saveTimerRef = useRef<number | null>(null);
   let saveOperationRef = useRef(0);
+  let imageAssetsRef = useRef(new Map<string, WorkspaceImageAsset>());
+  let imageInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     selectedFileRef.current = selectedFile;
   }, [selectedFile]);
+
+  useEffect(
+    () => () => {
+      revokeImageAssetUrls(imageAssetsRef.current);
+      imageAssetsRef.current = new Map();
+    },
+    [],
+  );
 
   let selectedPath = selectedFile?.path ?? null;
   let rootName = tree?.name ?? storedWorkspaceHandle?.name ?? "Local Markdown";
@@ -122,6 +155,23 @@ export function App() {
     if (saveStateRef.current == nextState) return;
     saveStateRef.current = nextState;
     setSaveState(nextState);
+  }, []);
+
+  let replaceImageAssets = useCallback((nextAssets: WorkspaceImageAsset[]) => {
+    revokeImageAssetUrls(imageAssetsRef.current);
+    imageAssetsRef.current = new Map(nextAssets.map((asset) => [asset.path, asset]));
+    setImageAssetVersion((version) => version + 1);
+  }, []);
+
+  let upsertImageAssets = useCallback((nextAssets: WorkspaceImageAsset[]) => {
+    let assets = new Map(imageAssetsRef.current);
+    for (let asset of nextAssets) {
+      let previous = assets.get(asset.path);
+      if (previous) URL.revokeObjectURL(previous.url);
+      assets.set(asset.path, asset);
+    }
+    imageAssetsRef.current = assets;
+    setImageAssetVersion((version) => version + 1);
   }, []);
 
   let saveCurrentFile = useCallback(async () => {
@@ -228,7 +278,11 @@ export function App() {
       nextSelectedPath?: null | string,
       options: { saveBeforeSelect?: boolean } = {},
     ) => {
-      let nextTree = await readWorkspaceTree(handle);
+      let [nextTree, nextImageNodes] = await Promise.all([
+        readWorkspaceTree(handle),
+        readWorkspaceImages(handle),
+      ]);
+      replaceImageAssets(await createWorkspaceImageAssets(nextImageNodes));
       let nextFiles = flattenMarkdownFiles(nextTree);
       setTree(nextTree);
       setFiles(nextFiles);
@@ -255,7 +309,7 @@ export function App() {
         setStatusMessage(nextFiles.length ? "No file selected" : "No markdown files");
       }
     },
-    [loadFile, setSaveStateSynced],
+    [loadFile, replaceImageAssets, setSaveStateSynced],
   );
 
   let rememberWorkspaceHandle = useCallback((handle: AccessDirectoryHandle) => {
@@ -437,6 +491,73 @@ export function App() {
     }
   };
 
+  let resolveImageSource = useMemo<LiveMdImageSourceResolver>(() => {
+    return (source) => {
+      let imagePath = workspaceImagePathForSource(source, editorDocument.path);
+      if (!imagePath) return source;
+      return imageAssetsRef.current.get(imagePath)?.url ?? source;
+    };
+  }, [editorDocument.path, imageAssetVersion]);
+
+  let handleEditorReady = useCallback((editor: LiveMdEditorElement | null) => {
+    editorElementRef.current = editor;
+  }, []);
+
+  let insertImageFiles = useCallback(
+    async (files: File[], options: { position?: number; view?: EditorView } = {}) => {
+      let file = selectedFileRef.current;
+      if (!rootHandle || !file) return;
+
+      let imageFiles = files.filter(isImageFile);
+      if (!imageFiles.length) return;
+
+      setBusy(true);
+      setErrorMessage("");
+      setStatusMessage(imageFiles.length == 1 ? "Importing image" : "Importing images");
+
+      try {
+        let insertedAssets: Array<WorkspaceImageAsset & { markdownReference: string }> = [];
+        for (let imageFile of imageFiles) {
+          let asset = await createImageAsset(rootHandle, file, imageFile);
+          insertedAssets.push({
+            ...asset,
+            url: URL.createObjectURL(imageFile),
+          });
+        }
+
+        upsertImageAssets(insertedAssets);
+        insertImageMarkdown(
+          options.view ?? editorElementRef.current?.view ?? null,
+          insertedAssets,
+          options.position,
+        );
+        setStatusMessage(insertedAssets.length == 1 ? "Inserted image" : "Inserted images");
+      } catch (error) {
+        setErrorMessage(errorToMessage(error));
+        setStatusMessage("Image insert failed");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [rootHandle, upsertImageAssets],
+  );
+
+  let handleEditorImageFiles = useCallback(
+    ({ files, position, view }: LiveMdImageFilesInput) => {
+      void insertImageFiles(files, { position, view });
+    },
+    [insertImageFiles],
+  );
+
+  let handleImageInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      let files = Array.from(event.currentTarget.files ?? []);
+      event.currentTarget.value = "";
+      void insertImageFiles(files);
+    },
+    [insertImageFiles],
+  );
+
   let saveLabel = useMemo(() => saveStateLabel(saveState, selectedFile), [saveState, selectedFile]);
   let restoreAvailable = Boolean(storedWorkspaceHandle);
 
@@ -534,6 +655,23 @@ export function App() {
               <SaveIcon data-icon="inline-start" />
               {saveLabel}
             </Badge>
+            <input
+              ref={imageInputRef}
+              className="sr-only"
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleImageInputChange}
+            />
+            <TooltipIconButton
+              label="Insert image"
+              size="icon-sm"
+              variant="ghost"
+              disabled={!rootHandle || !selectedFile || busy}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <ImagePlusIcon data-icon="inline-start" />
+            </TooltipIconButton>
             <TooltipIconButton
               label="Refresh"
               size="icon-sm"
@@ -573,8 +711,11 @@ export function App() {
             {selectedFile ? (
               <LiveMdEditor
                 documentKey={`${editorDocument.path}:${editorDocument.version}`}
+                imageSource={resolveImageSource}
                 initialValue={editorDocument.value}
                 placeholder="Start writing..."
+                onEditorReady={handleEditorReady}
+                onImageFiles={handleEditorImageFiles}
                 onInput={handleEditorInput}
               />
             ) : (
@@ -792,6 +933,124 @@ function FileNameDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+async function createWorkspaceImageAssets(nodes: WorkspaceImageNode[]) {
+  let assets: WorkspaceImageAsset[] = [];
+  for (let node of nodes) {
+    assets.push({
+      ...node,
+      url: URL.createObjectURL(await node.handle.getFile()),
+    });
+  }
+  return assets;
+}
+
+function revokeImageAssetUrls(assets: ReadonlyMap<string, WorkspaceImageAsset>) {
+  for (let asset of assets.values()) {
+    URL.revokeObjectURL(asset.url);
+  }
+}
+
+function insertImageMarkdown(
+  view: EditorView | null,
+  assets: Array<WorkspaceImageAsset & { markdownReference: string }>,
+  position?: number,
+) {
+  if (!view || !assets.length) return;
+
+  let selection = view.state.selection.main;
+  let from = position ?? selection.from;
+  let to = position ?? selection.to;
+  let markdown = assets.map(imageAssetMarkdown).join("\n\n");
+  let insert = blockInsertText(view.state.doc, from, to, markdown);
+
+  view.dispatch({
+    changes: { from, insert, to },
+    scrollIntoView: true,
+    selection: { anchor: from + insert.length },
+    userEvent: "input.image",
+  });
+  view.focus();
+}
+
+function imageAssetMarkdown(asset: WorkspaceImageAsset & { markdownReference: string }) {
+  return `![${imageAltText(asset.name)}](${asset.markdownReference})`;
+}
+
+function imageAltText(fileName: string) {
+  return fileName
+    .replace(/\.[^.]+$/, "")
+    .replace(/[-_]+/g, " ")
+    .trim();
+}
+
+function blockInsertText(
+  doc: EditorView["state"]["doc"],
+  from: number,
+  to: number,
+  markdown: string,
+) {
+  let before = doc.sliceString(Math.max(0, from - 2), from);
+  let after = doc.sliceString(to, Math.min(doc.length, to + 2));
+  let prefix = from == 0 || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+  let suffix =
+    to == doc.length || after.startsWith("\n\n") ? "" : after.startsWith("\n") ? "\n" : "\n\n";
+  return `${prefix}${markdown}${suffix}`;
+}
+
+function workspaceImagePathForSource(source: string, documentPath: string) {
+  if (!documentPath || isExternalImageSource(source)) return null;
+
+  let path = stripImageSourceSuffix(source);
+  if (!path || path.startsWith("//")) return null;
+
+  try {
+    path = decodeURI(path);
+  } catch {
+    return null;
+  }
+
+  return normalizeWorkspacePath(
+    path.startsWith("/") ? path.slice(1) : joinWorkspacePath(directoryPath(documentPath), path),
+  );
+}
+
+function isExternalImageSource(source: string) {
+  return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(source);
+}
+
+function stripImageSourceSuffix(source: string) {
+  let suffixIndex = source.search(/[?#]/);
+  return suffixIndex == -1 ? source : source.slice(0, suffixIndex);
+}
+
+function normalizeWorkspacePath(path: string) {
+  let parts: string[] = [];
+  for (let part of path.replace(/\\/g, "/").split("/")) {
+    if (!part || part == ".") continue;
+    if (part == "..") {
+      if (!parts.length) return null;
+      parts.pop();
+    } else {
+      parts.push(part);
+    }
+  }
+  return parts.join("/");
+}
+
+function directoryPath(path: string) {
+  return path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+}
+
+function joinWorkspacePath(parent: string, child: string) {
+  return parent ? `${parent}/${child}` : child;
+}
+
+function isImageFile(file: File) {
+  return (
+    file.type.startsWith("image/") || /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(file.name)
   );
 }
 

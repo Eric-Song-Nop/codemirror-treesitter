@@ -162,7 +162,8 @@ entry points, dependency boundaries, source layout, and validation notes.
   `<live-md-editor>` element.
 - `apps/local-md-workspace`: React, Vite+, and shadcn/ui local-first Markdown
   workspace that opens a browser-granted local folder, edits `.md` files with
-  LiveMD, and supports file create, rename, delete, tree browsing, and
+  LiveMD, supports image insert/paste/drop through sibling `assets/`
+  directories, and supports file create, rename, delete, tree browsing, and
   autosave through the File System Access API.
 - `apps/examples`: Side-by-side workbench comparing the local Tree-sitter
   implementation with official CodeMirror/Lezer behavior on parser-relevant
@@ -263,9 +264,13 @@ custom properties on the host element.
 ```ts
 import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
 
+const imageAssetUrlMap = new Map<string, string>();
 const controller = createLiveMdEditor({
   parent: document.body,
   defaultValue: "# Draft",
+  imageSource(source) {
+    return imageAssetUrlMap.get(source) ?? source;
+  },
   linkBaseUrl: "https://docs.example/notes/current.md",
   placeholder: "Start writing...",
   persistKey: "draft",
@@ -282,7 +287,9 @@ controller.destroy();
 
 `createLiveMdEditor()` accepts `value`, `doc`, `defaultValue`, `persistKey`,
 `placeholder`, `readOnly`, `autofocus`, `focus`, `root`, `extensions`,
-`linkBaseUrl`, `onChange`, and `onBlur`. `linkBaseUrl` is used to resolve
+`imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`. `imageSource` maps
+normalized Markdown image destinations to preview URLs, which host apps can use
+for local blob URLs or uploaded assets. `linkBaseUrl` is used to resolve
 relative Markdown links for Shift-click link jumps. The controller exposes
 `view`, `value`, `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`,
 `setPlaceholder()`, `setReadOnly()`, and `destroy()`.

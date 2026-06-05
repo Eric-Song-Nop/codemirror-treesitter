@@ -38,6 +38,7 @@ and a CSS export.
 import {
   createLiveMdEditor,
   defineLiveMdEditor,
+  liveMdImageSource,
   liveMarkdown,
 } from "@codemirror-treesitter/live-md";
 ```
@@ -55,9 +56,13 @@ and benchmark content.
 ```ts
 import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
 
+const imageAssetUrlMap = new Map<string, string>();
 const editor = createLiveMdEditor({
   parent: document.body,
   defaultValue: "# Draft",
+  imageSource(source) {
+    return imageAssetUrlMap.get(source) ?? source;
+  },
   linkBaseUrl: "https://docs.example/notes/current.md",
   placeholder: "Start writing...",
   persistKey: "draft",
@@ -73,9 +78,11 @@ editor.destroy();
 
 `createLiveMdEditor()` accepts `value`, `doc`, `defaultValue`, `persistKey`,
 `placeholder`, `readOnly`, `autofocus`, `focus`, `root`, `extensions`,
-`linkBaseUrl`, `onChange`, and `onBlur`. `linkBaseUrl` is used to resolve
-relative Markdown links for Shift-click link jumps. The controller exposes
-`view`, `value`, `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`,
+`imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`. `imageSource` maps
+normalized Markdown image destinations to preview URLs, which lets host apps
+serve local files through blob URLs. `linkBaseUrl` is used to resolve relative
+Markdown links for Shift-click link jumps. The controller exposes `view`,
+`value`, `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`,
 `setPlaceholder()`, `setReadOnly()`, and `destroy()`.
 
 ## Web Component
@@ -92,6 +99,9 @@ The element reflects the runtime API through `value`, `defaultValue`,
 `selectionEnd`, `view`, `extensions`, `ready`, `markClean()`,
 `setSelectionRange(...)`, and `select()`.
 
+JavaScript hosts can add `liveMdImageSource(...)` to the `extensions` property
+when a web component needs custom image preview URL resolution.
+
 The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 `select`. Styling is installed into Shadow DOM and can be themed with
 `--live-md-*` CSS custom properties on the host.
@@ -104,9 +114,9 @@ The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 - `src/core/editor.ts`: editor controller, persistence, read-only state,
   placeholders, and async language loading.
 - `src/core/extension.ts`, `src/core/decorations.ts`, `src/core/widgets.ts`,
-  `src/core/links.ts`, and `src/core/languages.ts`: live Markdown extension,
-  query-based decoration pipeline, link interactions, widget rendering, and
-  language loading.
+  `src/core/images.ts`, `src/core/links.ts`, and `src/core/languages.ts`: live
+  Markdown extension, query-based decoration pipeline, image source resolution,
+  link interactions, widget rendering, and language loading.
 - `src/element/*`: custom element implementation and style installation.
 - `src/fixtures/*`: reusable sample content for examples and benchmarks.
 - `vite-plugin.ts`: raw CSS helper used by apps that need to import LiveMD CSS

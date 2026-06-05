@@ -2,6 +2,7 @@ import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { minimalSetup } from "@codemirror-treesitter/basic-setup";
 import { EditorView, placeholder as placeholderExtension, type ViewUpdate } from "@codemirror/view";
 import { liveMarkdown } from "./extension.js";
+import type { LiveMdImageSourceResolver } from "./images.js";
 import {
   codeFenceHighlightModule,
   loadCodeFenceLanguages,
@@ -22,6 +23,7 @@ export type LiveMdEditorOptions = {
   doc?: string;
   extensions?: Extension;
   focus?: boolean;
+  imageSource?: LiveMdImageSourceResolver | null;
   linkBaseUrl?: LiveMdLinkBaseUrl | null;
   onBlur?: (view: EditorView) => void;
   onChange?: (change: LiveMdEditorChange) => void;
@@ -64,7 +66,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
     state: EditorState.create({
       doc: initialValue,
       extensions: [
-        liveMarkdown({ linkBaseUrl: options.linkBaseUrl }),
+        liveMarkdown({ imageSource: options.imageSource, linkBaseUrl: options.linkBaseUrl }),
         codeFenceHighlightModule,
         markdownCompartment.of([]),
         placeholderCompartment.of(placeholderValue(options.placeholder)),
