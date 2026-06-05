@@ -1,4 +1,4 @@
-use opendal::services::S3;
+use opendal::services::{Dropbox, S3};
 use opendal::{Entry, Metadata, Operator};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -6,11 +6,12 @@ use wasm_bindgen::prelude::*;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OpendalBrowserOperatorConfig {
+    access_token: Option<String>,
     access_key_id: Option<String>,
-    bucket: String,
-    endpoint: String,
+    bucket: Option<String>,
+    endpoint: Option<String>,
     provider: String,
-    region: String,
+    region: Option<String>,
     root: Option<String>,
     secret_access_key: Option<String>,
     session_token: Option<String>,
@@ -51,40 +52,61 @@ impl WasmOpendalBrowserOperator {
         let config: OpendalBrowserOperatorConfig =
             serde_wasm_bindgen::from_value(config).map_err(js_error)?;
 
-        if config.provider != "s3" {
-            return Err(js_error(format!(
-                "unsupported OpenDAL browser provider: {}",
-                config.provider
-            )));
-        }
+        let provider = config.provider.trim().to_string();
+        let operator = match provider.as_str() {
+            "dropbox" => build_dropbox_operator(config)?,
+            "s3" => build_s3_operator(config)?,
+            provider => {
+                return Err(js_error(format!(
+                    "unsupported OpenDAL browser provider: {provider}"
+                )));
+            }
+        };
 
-        let mut builder = S3::default()
-            .disable_config_load()
-            .disable_ec2_metadata()
-            .bucket(&required("bucket", &config.bucket)?)
-            .endpoint(&required("endpoint", &config.endpoint)?)
-            .region(&required("region", &config.region)?);
-
-        if let Some(root) = optional_root(config.root.as_deref())? {
-            builder = builder.root(&root);
-        }
-
-        if let Some(access_key_id) = optional_text(config.access_key_id.as_deref()) {
-            builder = builder.access_key_id(access_key_id);
-        }
-
-        if let Some(secret_access_key) = optional_text(config.secret_access_key.as_deref()) {
-            builder = builder.secret_access_key(secret_access_key);
-        }
-
-        if let Some(session_token) = optional_text(config.session_token.as_deref()) {
-            builder = builder.session_token(session_token);
-        }
-
-        let operator = Operator::new(builder).map_err(js_error)?.finish();
         Ok(WasmOpendalBrowserOperator { operator })
     }
+}
 
+fn build_dropbox_operator(config: OpendalBrowserOperatorConfig) -> Result<Operator, JsValue> {
+    let mut builder =
+        Dropbox::default().access_token(required("accessToken", config.access_token.as_deref())?);
+
+    if let Some(root) = optional_root(config.root.as_deref())? {
+        builder = builder.root(&root);
+    }
+
+    Ok(Operator::new(builder).map_err(js_error)?.finish())
+}
+
+fn build_s3_operator(config: OpendalBrowserOperatorConfig) -> Result<Operator, JsValue> {
+    let mut builder = S3::default()
+        .disable_config_load()
+        .disable_ec2_metadata()
+        .bucket(required("bucket", config.bucket.as_deref())?)
+        .endpoint(required("endpoint", config.endpoint.as_deref())?)
+        .region(required("region", config.region.as_deref())?);
+
+    if let Some(root) = optional_root(config.root.as_deref())? {
+        builder = builder.root(&root);
+    }
+
+    if let Some(access_key_id) = optional_text(config.access_key_id.as_deref()) {
+        builder = builder.access_key_id(access_key_id);
+    }
+
+    if let Some(secret_access_key) = optional_text(config.secret_access_key.as_deref()) {
+        builder = builder.secret_access_key(secret_access_key);
+    }
+
+    if let Some(session_token) = optional_text(config.session_token.as_deref()) {
+        builder = builder.session_token(session_token);
+    }
+
+    Ok(Operator::new(builder).map_err(js_error)?.finish())
+}
+
+#[wasm_bindgen(js_class = OpendalBrowserOperator)]
+impl WasmOpendalBrowserOperator {
     pub fn capabilities(&self) -> Result<JsValue, JsValue> {
         let cap = self.operator.info().native_capability();
         to_js_value(OpendalBrowserCapabilities {
@@ -120,6 +142,14 @@ impl WasmOpendalBrowserOperator {
             .await
             .map_err(js_error)?;
         String::from_utf8(bytes.to_vec()).map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = createDir)]
+    pub async fn create_dir(&self, path: String) -> Result<(), JsValue> {
+        self.operator
+            .create_dir(&normalize_dir_path(&path)?)
+            .await
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = writeText)]
@@ -217,8 +247,16 @@ fn normalize_list_prefix(path: &str) -> Result<String, JsValue> {
     }
 }
 
-fn required<'a>(label: &str, value: &'a str) -> Result<&'a str, JsValue> {
-    optional_text(Some(value))
+fn normalize_dir_path(path: &str) -> Result<String, JsValue> {
+    let path = normalize_storage_path(path)?;
+    if path.is_empty() {
+        return Err(js_error("expected a directory path"));
+    }
+    Ok(format!("{path}/"))
+}
+
+fn required<'a>(label: &str, value: Option<&'a str>) -> Result<&'a str, JsValue> {
+    optional_text(value)
         .ok_or_else(|| js_error(format!("OpenDAL browser config requires {label}.")))
 }
 

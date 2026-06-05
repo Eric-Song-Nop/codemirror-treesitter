@@ -405,7 +405,10 @@ Useful task selectors:
 ```bash
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
+vp run @codemirror-treesitter/opendal-wasm-browser#auth:dropbox-token
+vp run @codemirror-treesitter/opendal-wasm-browser#validate:dropbox
 vp run local-md-workspace#dev
+vp run local-md-workspace#smoke:ui
 vp run examples#dev
 vp run live-md-benchmark#benchmark
 vp run live-md-loro-demo#dev
@@ -414,6 +417,15 @@ vp run collab-editor#types
 ```
 
 `vp run` with no task lists all available package and app tasks.
+
+`vp run local-md-workspace#smoke:ui` expects the local Markdown workspace dev
+server to be running at `http://127.0.0.1:5173/` by default. It runs without
+cloud credentials for the local workspace and Dropbox entry/config checks. To
+include the credential-gated Dropbox app flow, set
+`LOCAL_MD_WORKSPACE_DROPBOX_ACCESS_TOKEN` or `OPENDAL_DROPBOX_ACCESS_TOKEN`;
+`LOCAL_MD_WORKSPACE_DROPBOX_ROOT` can limit the temporary smoke file to a
+specific Dropbox root. Set `CHROME_PATH` if Chromium is not available in a
+standard app path or the Playwright browser cache.
 
 ## Documentation Map
 

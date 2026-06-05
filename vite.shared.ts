@@ -16,6 +16,10 @@ export const workspaceAliases = {
   "@codemirror-treesitter/lsp-client": new URL("packages/lsp-client/src/index.ts", import.meta.url)
     .pathname,
   "@codemirror-treesitter/merge": new URL("packages/merge/src/index.ts", import.meta.url).pathname,
+  "@codemirror-treesitter/opendal-wasm-browser": new URL(
+    "packages/opendal-wasm-browser/src/index.ts",
+    import.meta.url,
+  ).pathname,
   "@codemirror-treesitter/theme-gruvbox": new URL(
     "packages/theme-gruvbox/src/index.ts",
     import.meta.url,

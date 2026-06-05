@@ -1,15 +1,23 @@
-export type OpendalBrowserProvider = "s3";
+export type OpendalBrowserProvider = "dropbox" | "s3";
 
-export type OpendalBrowserOperatorConfig = {
+export type OpendalDropboxOperatorConfig = {
+  accessToken: string;
+  provider: "dropbox";
+  root?: string;
+};
+
+export type OpendalS3OperatorConfig = {
   accessKeyId?: string;
   bucket: string;
   endpoint: string;
-  provider: OpendalBrowserProvider;
+  provider: "s3";
   region: string;
   root?: string;
   secretAccessKey?: string;
   sessionToken?: string;
 };
+
+export type OpendalBrowserOperatorConfig = OpendalDropboxOperatorConfig | OpendalS3OperatorConfig;
 
 export type OpendalBrowserCapabilities = {
   nativeCopy: boolean;
@@ -30,6 +38,7 @@ export type OpendalBrowserEntry = {
 
 export type OpendalBrowserOperator = {
   capabilities(): OpendalBrowserCapabilities;
+  createDir(path: string): Promise<void>;
   delete(path: string): Promise<void>;
   list(prefix: string): Promise<OpendalBrowserEntry[]>;
   readText(path: string): Promise<string>;
@@ -45,6 +54,7 @@ export type CreateOpendalBrowserOperatorOptions = {
 
 type GeneratedOperator = {
   capabilities(): unknown;
+  createDir(path: string): Promise<void>;
   delete(path: string): Promise<void>;
   list(prefix: string): Promise<unknown>;
   readText(path: string): Promise<string>;
@@ -94,6 +104,10 @@ class WasmOpendalBrowserOperator implements OpendalBrowserOperator {
     return parseCapabilities(this.operator.capabilities());
   }
 
+  async createDir(path: string) {
+    await this.operator.createDir(path);
+  }
+
   async delete(path: string) {
     await this.operator.delete(path);
   }
@@ -122,20 +136,30 @@ class WasmOpendalBrowserOperator implements OpendalBrowserOperator {
 function normalizeConfig(config: OpendalBrowserOperatorConfig): OpendalBrowserOperatorConfig {
   let rawProvider = (config as { provider?: unknown }).provider;
   let provider = typeof rawProvider == "string" ? rawProvider : "";
-  if (provider != "s3") {
-    throw new Error(`Unsupported OpenDAL browser provider: ${provider}`);
+
+  if (provider == "dropbox") {
+    return {
+      accessToken: requireText((config as OpendalDropboxOperatorConfig).accessToken, "accessToken"),
+      provider: "dropbox",
+      root: normalizeRoot(config.root),
+    };
   }
 
-  return {
-    accessKeyId: emptyToUndefined(config.accessKeyId),
-    bucket: requireText(config.bucket, "bucket"),
-    endpoint: requireText(config.endpoint, "endpoint"),
-    provider: "s3",
-    region: requireText(config.region, "region"),
-    root: normalizeRoot(config.root),
-    secretAccessKey: emptyToUndefined(config.secretAccessKey),
-    sessionToken: emptyToUndefined(config.sessionToken),
-  };
+  if (provider == "s3") {
+    let s3Config = config as OpendalS3OperatorConfig;
+    return {
+      accessKeyId: emptyToUndefined(s3Config.accessKeyId),
+      bucket: requireText(s3Config.bucket, "bucket"),
+      endpoint: requireText(s3Config.endpoint, "endpoint"),
+      provider: "s3",
+      region: requireText(s3Config.region, "region"),
+      root: normalizeRoot(s3Config.root),
+      secretAccessKey: emptyToUndefined(s3Config.secretAccessKey),
+      sessionToken: emptyToUndefined(s3Config.sessionToken),
+    };
+  }
+
+  throw new Error(`Unsupported OpenDAL browser provider: ${provider}`);
 }
 
 function parseCapabilities(value: unknown): OpendalBrowserCapabilities {

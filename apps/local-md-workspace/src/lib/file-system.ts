@@ -1,3 +1,16 @@
+import {
+  joinWorkspacePath,
+  normalizeMarkdownFileName,
+  normalizeMarkdownPath,
+  sortMarkdownTreeNodes,
+  starterMarkdown,
+  type CreatedWorkspaceImageNode,
+  type MarkdownDirectoryNode,
+  type MarkdownTreeNode,
+  type WorkspaceBackend,
+  type WorkspaceImageNode,
+} from "@/lib/workspace-backend";
+
 type AccessPermissionMode = "read" | "readwrite";
 
 type AccessPermissionDescriptor = {
@@ -36,29 +49,6 @@ export type AccessDirectoryHandle = AccessHandleBase & {
   values: () => AsyncIterable<AccessDirectoryHandle | AccessFileHandle>;
 };
 
-export type MarkdownFileNode = {
-  handle: AccessFileHandle;
-  kind: "file";
-  name: string;
-  path: string;
-};
-
-export type WorkspaceImageNode = {
-  handle: AccessFileHandle;
-  name: string;
-  path: string;
-};
-
-export type MarkdownDirectoryNode = {
-  children: MarkdownTreeNode[];
-  handle: AccessDirectoryHandle;
-  kind: "directory";
-  name: string;
-  path: string;
-};
-
-export type MarkdownTreeNode = MarkdownDirectoryNode | MarkdownFileNode;
-
 type PickerWindow = Window &
   typeof globalThis & {
     showDirectoryPicker?: (options?: {
@@ -89,19 +79,33 @@ export async function queryReadWritePermission(handle: AccessDirectoryHandle) {
   return handle.queryPermission({ mode: "readwrite" });
 }
 
-export async function readWorkspaceTree(
-  handle: AccessDirectoryHandle,
-): Promise<MarkdownDirectoryNode> {
+export function createLocalWorkspaceBackend(handle: AccessDirectoryHandle): WorkspaceBackend {
+  return {
+    id: `local:${handle.name || "workspace"}`,
+    kind: "local",
+    name: handle.name || "Workspace",
+    createFile: (path) => createMarkdownFile(handle, path),
+    createImageAsset: (markdownFilePath, imageFile) =>
+      createImageAsset(handle, markdownFilePath, imageFile),
+    deleteFile: (path) => deleteMarkdownFile(handle, path),
+    readFile: (path) => readMarkdownPath(handle, path),
+    readImages: () => readWorkspaceImages(handle),
+    readTree: () => readWorkspaceTree(handle),
+    renameFile: (path, rawName) => renameMarkdownFile(handle, path, rawName),
+    writeFile: (path, value) => writeMarkdownPath(handle, path, value),
+  };
+}
+
+async function readWorkspaceTree(handle: AccessDirectoryHandle): Promise<MarkdownDirectoryNode> {
   return {
     children: await readDirectoryChildren(handle, ""),
-    handle,
     kind: "directory",
     name: handle.name || "Workspace",
     path: "",
   };
 }
 
-export async function readWorkspaceImages(handle: AccessDirectoryHandle) {
+async function readWorkspaceImages(handle: AccessDirectoryHandle) {
   let images: WorkspaceImageNode[] = [];
   await collectWorkspaceImages(handle, "", images);
   return images.sort((left, right) =>
@@ -109,21 +113,15 @@ export async function readWorkspaceImages(handle: AccessDirectoryHandle) {
   );
 }
 
-export function flattenMarkdownFiles(tree: MarkdownDirectoryNode) {
-  let files: MarkdownFileNode[] = [];
-  collectMarkdownFiles(tree.children, files);
-  return files;
+async function readMarkdownPath(rootHandle: AccessDirectoryHandle, path: string) {
+  return (await resolveFileHandle(rootHandle, path)).getFile().then((file) => file.text());
 }
 
-export async function readMarkdownFile(handle: AccessFileHandle) {
-  return (await handle.getFile()).text();
+async function writeMarkdownPath(rootHandle: AccessDirectoryHandle, path: string, value: string) {
+  await writeFileData(await resolveFileHandle(rootHandle, path), value);
 }
 
-export async function writeMarkdownFile(handle: AccessFileHandle, value: string) {
-  await writeFileData(handle, value);
-}
-
-export async function writeFileData(handle: AccessFileHandle, data: AccessWritableFileData) {
+async function writeFileData(handle: AccessFileHandle, data: AccessWritableFileData) {
   let writable = await handle.createWritable();
   try {
     await writable.write(data);
@@ -134,32 +132,32 @@ export async function writeFileData(handle: AccessFileHandle, data: AccessWritab
   }
 }
 
-export async function createImageAsset(
+async function createImageAsset(
   rootHandle: AccessDirectoryHandle,
-  markdownFile: MarkdownFileNode,
+  markdownFilePath: string,
   imageFile: File,
-) {
+): Promise<CreatedWorkspaceImageNode> {
   if (!isImageFile(imageFile)) {
     throw new Error(`${imageFile.name || "Dropped file"} is not a supported image.`);
   }
 
-  let { directory, parentPath } = await resolveParentDirectory(rootHandle, markdownFile.path, true);
+  let { directory, parentPath } = await resolveParentDirectory(rootHandle, markdownFilePath, true);
   let assetsDirectory = await directory.getDirectoryHandle("assets", { create: true });
   let { baseName, extension } = imageAssetNameParts(imageFile);
   let fileName = await nextAvailableFileName(assetsDirectory, baseName, extension);
   let handle = await assetsDirectory.getFileHandle(fileName, { create: true });
   await writeFileData(handle, imageFile);
 
-  let path = joinPath(joinPath(parentPath, "assets"), fileName);
+  let path = joinWorkspacePath(joinWorkspacePath(parentPath, "assets"), fileName);
   return {
-    handle,
+    file: imageFile,
     markdownReference: `assets/${fileName}`,
     name: fileName,
     path,
-  } satisfies WorkspaceImageNode & { markdownReference: string };
+  };
 }
 
-export async function createMarkdownFile(rootHandle: AccessDirectoryHandle, rawPath: string) {
+async function createMarkdownFile(rootHandle: AccessDirectoryHandle, rawPath: string) {
   let path = normalizeMarkdownPath(rawPath);
   let { directory, fileName } = await resolveParentDirectory(rootHandle, path, true);
   if (await fileExists(directory, fileName)) {
@@ -167,66 +165,46 @@ export async function createMarkdownFile(rootHandle: AccessDirectoryHandle, rawP
   }
 
   let handle = await directory.getFileHandle(fileName, { create: true });
-  await writeMarkdownFile(handle, starterMarkdown(path));
+  await writeFileData(handle, starterMarkdown(path));
   return path;
 }
 
-export async function deleteMarkdownFile(
-  rootHandle: AccessDirectoryHandle,
-  file: MarkdownFileNode,
-) {
-  let { directory } = await resolveParentDirectory(rootHandle, file.path, false);
-  await directory.removeEntry(file.name);
+async function deleteMarkdownFile(rootHandle: AccessDirectoryHandle, path: string) {
+  let { directory, fileName } = await resolveParentDirectory(rootHandle, path, false);
+  await directory.removeEntry(fileName);
 }
 
-export async function renameMarkdownFile(
+async function renameMarkdownFile(
   rootHandle: AccessDirectoryHandle,
-  file: MarkdownFileNode,
+  path: string,
   rawName: string,
 ) {
   let fileName = normalizeMarkdownFileName(rawName);
-  if (fileName == file.name) return file.path;
+  let currentName = path.split("/").at(-1);
+  if (!currentName) throw new Error("Enter a file name.");
+  if (fileName == currentName) return path;
 
-  let { directory, parentPath } = await resolveParentDirectory(rootHandle, file.path, false);
+  let { directory, parentPath } = await resolveParentDirectory(rootHandle, path, false);
   if (await fileExists(directory, fileName)) {
     throw new Error(`${fileName} already exists.`);
   }
 
   let nextHandle = await directory.getFileHandle(fileName, { create: true });
-  await writeMarkdownFile(nextHandle, await readMarkdownFile(file.handle));
-  await directory.removeEntry(file.name);
-  return joinPath(parentPath, fileName);
-}
-
-export function normalizeMarkdownPath(rawPath: string) {
-  let parts = splitUserPath(rawPath);
-  if (!parts.length) throw new Error("Enter a file name.");
-
-  let fileName = parts[parts.length - 1]!;
-  if (!/\.md$/i.test(fileName)) fileName = `${fileName}.md`;
-  parts[parts.length - 1] = fileName;
-  return parts.join("/");
-}
-
-function normalizeMarkdownFileName(rawName: string) {
-  let parts = splitUserPath(rawName);
-  if (parts.length != 1) throw new Error("Enter a file name, not a path.");
-
-  let fileName = parts[0]!;
-  return /\.md$/i.test(fileName) ? fileName : `${fileName}.md`;
+  await writeFileData(nextHandle, await readMarkdownPath(rootHandle, path));
+  await directory.removeEntry(currentName);
+  return joinWorkspacePath(parentPath, fileName);
 }
 
 async function readDirectoryChildren(handle: AccessDirectoryHandle, path: string) {
   let children: MarkdownTreeNode[] = [];
 
   for await (let entry of handle.values()) {
-    let entryPath = joinPath(path, entry.name);
+    let entryPath = joinWorkspacePath(path, entry.name);
     if (entry.kind == "directory") {
       let directoryChildren = await readDirectoryChildren(entry, entryPath);
       if (directoryChildren.length) {
         children.push({
           children: directoryChildren,
-          handle: entry,
           kind: "directory",
           name: entry.name,
           path: entryPath,
@@ -234,7 +212,6 @@ async function readDirectoryChildren(handle: AccessDirectoryHandle, path: string
       }
     } else if (/\.md$/i.test(entry.name)) {
       children.push({
-        handle: entry,
         kind: "file",
         name: entry.name,
         path: entryPath,
@@ -242,7 +219,7 @@ async function readDirectoryChildren(handle: AccessDirectoryHandle, path: string
     }
   }
 
-  return children.sort(compareTreeNodes);
+  return sortMarkdownTreeNodes(children);
 }
 
 async function collectWorkspaceImages(
@@ -251,12 +228,12 @@ async function collectWorkspaceImages(
   images: WorkspaceImageNode[],
 ) {
   for await (let entry of handle.values()) {
-    let entryPath = joinPath(path, entry.name);
+    let entryPath = joinWorkspacePath(path, entry.name);
     if (entry.kind == "directory") {
       await collectWorkspaceImages(entry, entryPath, images);
     } else if (isImageFileName(entry.name)) {
       images.push({
-        handle: entry,
+        file: await entry.getFile(),
         name: entry.name,
         path: entryPath,
       });
@@ -330,14 +307,9 @@ async function nextAvailableFileName(
   throw new Error("Could not allocate an image file name.");
 }
 
-function collectMarkdownFiles(nodes: MarkdownTreeNode[], files: MarkdownFileNode[]) {
-  for (let node of nodes) {
-    if (node.kind == "file") {
-      files.push(node);
-    } else {
-      collectMarkdownFiles(node.children, files);
-    }
-  }
+async function resolveFileHandle(rootHandle: AccessDirectoryHandle, path: string) {
+  let { directory, fileName } = await resolveParentDirectory(rootHandle, path, false);
+  return directory.getFileHandle(fileName);
 }
 
 async function resolveParentDirectory(
@@ -369,37 +341,4 @@ async function fileExists(directory: AccessDirectoryHandle, fileName: string) {
     if (error instanceof DOMException && error.name == "NotFoundError") return false;
     throw error;
   }
-}
-
-function splitUserPath(rawPath: string) {
-  let normalized = rawPath
-    .trim()
-    .replace(/\\/g, "/")
-    .split("/")
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  if (normalized.some((part) => part == "." || part == "..")) {
-    throw new Error("File paths cannot include . or ..");
-  }
-
-  return normalized;
-}
-
-function starterMarkdown(path: string) {
-  let title = path.split("/").at(-1)!.replace(/\.md$/i, "").replace(/[-_]+/g, " ").trim();
-
-  return title ? `# ${title}\n` : "";
-}
-
-function joinPath(parentPath: string, name: string) {
-  return parentPath ? `${parentPath}/${name}` : name;
-}
-
-function compareTreeNodes(a: MarkdownTreeNode, b: MarkdownTreeNode) {
-  if (a.kind != b.kind) return a.kind == "directory" ? -1 : 1;
-  return a.name.localeCompare(b.name, undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
 }

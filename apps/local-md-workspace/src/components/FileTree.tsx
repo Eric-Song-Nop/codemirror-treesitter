@@ -1,6 +1,10 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { FileTree as TreesFileTree } from "@pierre/trees";
-import type { MarkdownDirectoryNode, MarkdownFileNode, MarkdownTreeNode } from "@/lib/file-system";
+import type {
+  MarkdownDirectoryNode,
+  MarkdownFileNode,
+  MarkdownTreeNode,
+} from "@/lib/workspace-backend";
 
 type FileTreeProps = {
   root: MarkdownDirectoryNode | null;
