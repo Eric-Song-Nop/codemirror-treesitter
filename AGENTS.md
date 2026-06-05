@@ -58,6 +58,8 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `packages/live-md`: Live Markdown editor runtime, web component, registration
   entry, CSS export, and fixtures.
 - `packages/live-md-loro`: Optional Loro collaboration bindings for LiveMD.
+- `packages/opendal-wasm-browser`: Experimental browser WASM wrapper for
+  OpenDAL-backed cloud workspace storage.
 - `apps/basic-editor`: Minimal `<live-md-editor>` smoke app.
 - `apps/local-md-workspace`: React shadcn/ui local-first Markdown workspace
   using LiveMD and the browser File System Access API for `.md` files.

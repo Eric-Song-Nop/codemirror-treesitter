@@ -1,0 +1,31 @@
+{
+  "name": "@codemirror-treesitter/opendal-wasm-browser",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Experimental browser WASM wrapper for OpenDAL-backed cloud workspace storage",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "pkg",
+    "README.md",
+    "PLAN.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build:ts": "vp pack",
+    "build:wasm": "PATH=\"$(dirname $(rustup which cargo)):$PATH\" RUSTC=\"$(rustup which rustc)\" bun x wasm-pack build --target web --out-dir pkg --out-name opendal_wasm_browser",
+    "check": "vp check",
+    "check:wasm": "RUSTC=\"$(rustup which rustc)\" rustup run stable cargo check --target wasm32-unknown-unknown"
+  },
+  "devDependencies": {
+    "@typescript/native-preview": "7.0.0-dev.20260509.2",
+    "typescript": "^6.0.3",
+    "vite-plus": "catalog:"
+  }
+}
