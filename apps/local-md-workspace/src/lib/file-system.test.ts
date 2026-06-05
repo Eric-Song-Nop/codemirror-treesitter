@@ -64,6 +64,37 @@ describe("local workspace backend", () => {
       path: "",
     });
   });
+
+  it("renames folders recursively", async () => {
+    let root = new MemoryDirectoryHandle("Workspace");
+    let backend = createLocalWorkspaceBackend(root);
+
+    await backend.createFile("notes/daily/today.md");
+    expect(backend.renameDirectory).toBeDefined();
+    await expect(backend.renameDirectory!("notes", "docs")).resolves.toBe("docs");
+
+    await expect(backend.readFile("docs/daily/today.md")).resolves.toBe("# today\n");
+    await expect(backend.readTree()).resolves.toMatchObject({
+      children: [
+        {
+          children: [
+            {
+              children: [{ kind: "file", name: "today.md", path: "docs/daily/today.md" }],
+              kind: "directory",
+              name: "daily",
+              path: "docs/daily",
+            },
+          ],
+          kind: "directory",
+          name: "docs",
+          path: "docs",
+        },
+      ],
+      kind: "directory",
+      name: "Workspace",
+      path: "",
+    });
+  });
 });
 
 class MemoryFileHandle {

@@ -39,6 +39,7 @@ export type WorkspaceBackend = {
   readFile(path: string): Promise<string>;
   readImages?: () => Promise<WorkspaceImageNode[]>;
   readTree(): Promise<MarkdownDirectoryNode>;
+  renameDirectory?: (path: string, rawName: string) => Promise<string>;
   renameFile(path: string, rawName: string): Promise<string>;
   writeFile(path: string, value: string): Promise<void>;
 };
@@ -98,6 +99,12 @@ export function normalizeMarkdownFileName(rawName: string) {
 
   let fileName = parts[0]!;
   return /\.md$/i.test(fileName) ? fileName : `${fileName}.md`;
+}
+
+export function normalizeWorkspaceDirectoryName(rawName: string) {
+  let parts = splitUserPath(rawName);
+  if (parts.length != 1) throw new Error("Enter a folder name, not a path.");
+  return parts[0]!;
 }
 
 export function starterMarkdown(path: string) {

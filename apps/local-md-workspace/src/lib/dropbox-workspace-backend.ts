@@ -8,6 +8,7 @@ import type { DropboxAccessToken } from "./dropbox-oauth.ts";
 import {
   buildMarkdownTreeFromEntries,
   normalizeMarkdownFileName,
+  normalizeWorkspaceDirectoryName,
   normalizeWorkspaceCreateTarget,
   starterMarkdown,
   type WorkspaceBackend,
@@ -193,6 +194,18 @@ export function createDropboxWorkspaceBackend(
       let entries = await withDropboxRetry((operator) => operator.list(""));
       return buildMarkdownTreeFromEntries(options.name ?? "Dropbox", entries);
     },
+    async renameDirectory(path, rawName) {
+      let normalized = normalizeDropboxDirectoryPath(path);
+      if (!normalized) throw new Error("Enter a folder name.");
+
+      let nextName = normalizeWorkspaceDirectoryName(rawName);
+      let nextPath = replaceFileName(normalized, nextName);
+      if (nextPath == normalized) return normalized;
+
+      await withDropboxRetry((operator) => operator.rename(normalized, nextPath));
+      renameCreatedDirectory(normalized, nextPath, createdDirectories);
+      return nextPath;
+    },
     async renameFile(path, rawName) {
       let nextName = normalizeMarkdownFileName(rawName);
       let nextPath = replaceFileName(path, nextName);
@@ -214,6 +227,17 @@ function forgetCreatedDirectory(path: string, directories: Set<string>) {
       directories.delete(directory);
     }
   }
+}
+
+function renameCreatedDirectory(path: string, nextPath: string, directories: Set<string>) {
+  let updates: string[] = [];
+  for (let directory of directories) {
+    if (directory == path || directory.startsWith(`${path}/`)) {
+      directories.delete(directory);
+      updates.push(`${nextPath}${directory.slice(path.length)}`);
+    }
+  }
+  for (let directory of updates) directories.add(directory);
 }
 
 function dropboxOperatorConfig(

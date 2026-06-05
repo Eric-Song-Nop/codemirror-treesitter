@@ -8,12 +8,16 @@ import type {
 } from "@/lib/workspace-backend";
 
 type FileTreeProps = {
+  onCreateEntry: (target: FileTreeDeleteTarget, kind: FileTreeCreateKind) => void;
   onDeleteEntry: (target: FileTreeDeleteTarget) => void;
+  onRenameEntry: (target: FileTreeDeleteTarget) => void;
   onSelectEntry: (target: FileTreeDeleteTarget) => void;
   root: MarkdownDirectoryNode | null;
   selectedPath: null | string;
   onSelectFile: (file: MarkdownFileNode) => void;
 };
+
+export type FileTreeCreateKind = "directory" | "file";
 
 export type FileTreeDeleteTarget = {
   kind: "directory" | "file";
@@ -22,7 +26,9 @@ export type FileTreeDeleteTarget = {
 };
 
 export const FileTree = memo(function FileTree({
+  onCreateEntry,
   onDeleteEntry,
+  onRenameEntry,
   onSelectEntry,
   root,
   selectedPath,
@@ -34,7 +40,9 @@ export const FileTree = memo(function FileTree({
   let containerRef = useRef<HTMLDivElement | null>(null);
   let latestSelectionRef = useRef({
     filesByPath,
+    onCreateEntry,
     onDeleteEntry,
+    onRenameEntry,
     onSelectEntry,
     onSelectFile,
     selectedPath,
@@ -45,12 +53,22 @@ export const FileTree = memo(function FileTree({
   useEffect(() => {
     latestSelectionRef.current = {
       filesByPath,
+      onCreateEntry,
       onDeleteEntry,
+      onRenameEntry,
       onSelectEntry,
       onSelectFile,
       selectedPath,
     };
-  }, [filesByPath, onDeleteEntry, onSelectEntry, onSelectFile, selectedPath]);
+  }, [
+    filesByPath,
+    onCreateEntry,
+    onDeleteEntry,
+    onRenameEntry,
+    onSelectEntry,
+    onSelectFile,
+    selectedPath,
+  ]);
 
   useEffect(() => {
     let container = containerRef.current;
@@ -64,8 +82,16 @@ export const FileTree = memo(function FileTree({
           buttonVisibility: "when-needed",
           enabled: true,
           render(item, context) {
-            return renderDeleteContextMenu(item, context, (target) => {
-              latestSelectionRef.current.onDeleteEntry(normalizeDeleteTarget(target));
+            return renderFileTreeContextMenu(item, context, {
+              create(target, kind) {
+                latestSelectionRef.current.onCreateEntry(normalizeDeleteTarget(target), kind);
+              },
+              delete(target) {
+                latestSelectionRef.current.onDeleteEntry(normalizeDeleteTarget(target));
+              },
+              rename(target) {
+                latestSelectionRef.current.onRenameEntry(normalizeDeleteTarget(target));
+              },
             });
           },
           triggerMode: "button",
@@ -143,30 +169,56 @@ export const FileTree = memo(function FileTree({
   return <div ref={containerRef} className="local-md-file-tree min-h-0 flex-1 overflow-auto" />;
 });
 
-function renderDeleteContextMenu(
+function renderFileTreeContextMenu(
   target: FileTreeDeleteTarget,
   context: ContextMenuOpenContext,
-  onDelete: (target: FileTreeDeleteTarget) => void,
+  actions: {
+    create: (target: FileTreeDeleteTarget, kind: FileTreeCreateKind) => void;
+    delete: (target: FileTreeDeleteTarget) => void;
+    rename: (target: FileTreeDeleteTarget) => void;
+  },
 ) {
   let menu = document.createElement("div");
   menu.className = "local-md-file-tree-context-menu";
   menu.setAttribute("role", "menu");
   menu.tabIndex = -1;
 
-  let deleteButton = document.createElement("button");
-  deleteButton.className = "local-md-file-tree-context-menu-item";
-  deleteButton.setAttribute("role", "menuitem");
-  deleteButton.type = "button";
-  deleteButton.textContent = target.kind == "directory" ? "Delete folder" : "Delete file";
-  deleteButton.addEventListener("click", (event) => {
+  menu.append(
+    renderContextMenuItem("New file", context, () => actions.create(target, "file")),
+    renderContextMenuItem("New folder", context, () => actions.create(target, "directory")),
+    renderContextMenuItem("Rename", context, () => actions.rename(target)),
+    renderContextMenuSeparator(),
+    renderContextMenuItem("Delete", context, () => actions.delete(target), { destructive: true }),
+  );
+  return menu;
+}
+
+function renderContextMenuItem(
+  label: string,
+  context: ContextMenuOpenContext,
+  onSelect: () => void,
+  options: { destructive?: boolean } = {},
+) {
+  let button = document.createElement("button");
+  button.className = "local-md-file-tree-context-menu-item";
+  if (options.destructive) button.dataset.destructive = "true";
+  button.setAttribute("role", "menuitem");
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     context.close();
-    onDelete(target);
+    onSelect();
   });
+  return button;
+}
 
-  menu.append(deleteButton);
-  return menu;
+function renderContextMenuSeparator() {
+  let separator = document.createElement("div");
+  separator.className = "local-md-file-tree-context-menu-separator";
+  separator.setAttribute("role", "separator");
+  return separator;
 }
 
 function normalizeDeleteTarget(target: FileTreeDeleteTarget): FileTreeDeleteTarget {

@@ -178,6 +178,27 @@ describe("Dropbox workspace backend", () => {
     expect(deletes).toEqual(["notes/daily"]);
   });
 
+  it("renames folder paths", async () => {
+    let renames: Array<[string, string]> = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async rename(from, to) {
+            renames.push([from, to]);
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    expect(backend.renameDirectory).toBeDefined();
+    await expect(backend.renameDirectory!("notes/daily/", "archive")).resolves.toBe(
+      "notes/archive",
+    );
+
+    expect(renames).toEqual([["notes/daily", "notes/archive"]]);
+  });
+
   it("does not create parent directories when the operator cannot create them", async () => {
     let createDirCalls = 0;
     let writes: string[] = [];

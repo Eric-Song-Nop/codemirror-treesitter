@@ -245,5 +245,14 @@
 .local-md-file-tree-context-menu-item:focus-visible {
   outline: none;
   background: #3c3836;
+}
+
+.local-md-file-tree-context-menu-item[data-destructive="true"] {
   color: #fb4934;
+}
+
+.local-md-file-tree-context-menu-separator {
+  height: 1px;
+  margin: 4px -4px;
+  background: #3c3836;
 }

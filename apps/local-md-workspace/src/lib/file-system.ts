@@ -1,6 +1,7 @@
 import {
   joinWorkspacePath,
   normalizeMarkdownFileName,
+  normalizeWorkspaceDirectoryName,
   normalizeWorkspaceCreateTarget,
   sortMarkdownTreeNodes,
   starterMarkdown,
@@ -92,6 +93,7 @@ export function createLocalWorkspaceBackend(handle: AccessDirectoryHandle): Work
     readFile: (path) => readMarkdownPath(handle, path),
     readImages: () => readWorkspaceImages(handle),
     readTree: () => readWorkspaceTree(handle),
+    renameDirectory: (path, rawName) => renameMarkdownDirectory(handle, path, rawName),
     renameFile: (path, rawName) => renameMarkdownFile(handle, path, rawName),
     writeFile: (path, value) => writeMarkdownPath(handle, path, value),
   };
@@ -213,6 +215,45 @@ async function renameMarkdownFile(
   await writeFileData(nextHandle, await readMarkdownPath(rootHandle, path));
   await directory.removeEntry(currentName);
   return joinWorkspacePath(parentPath, fileName);
+}
+
+async function renameMarkdownDirectory(
+  rootHandle: AccessDirectoryHandle,
+  path: string,
+  rawName: string,
+) {
+  let directoryName = normalizeWorkspaceDirectoryName(rawName);
+  let targetPath = normalizeWorkspaceDirectoryPath(path);
+  let currentName = targetPath.split("/").at(-1);
+  if (!currentName) throw new Error("Enter a folder name.");
+  if (directoryName == currentName) return targetPath;
+
+  let { directory, parentPath } = await resolveParentDirectory(rootHandle, targetPath, false);
+  if (await entryExists(directory, directoryName)) {
+    throw new Error(`${directoryName} already exists.`);
+  }
+
+  let currentDirectory = await directory.getDirectoryHandle(currentName);
+  let nextDirectory = await directory.getDirectoryHandle(directoryName, { create: true });
+  await copyDirectoryEntries(currentDirectory, nextDirectory);
+  await directory.removeEntry(currentName, { recursive: true });
+  return joinWorkspacePath(parentPath, directoryName);
+}
+
+async function copyDirectoryEntries(source: AccessDirectoryHandle, target: AccessDirectoryHandle) {
+  for await (let entry of source.values()) {
+    if (entry.kind == "directory") {
+      await copyDirectoryEntries(
+        entry,
+        await target.getDirectoryHandle(entry.name, { create: true }),
+      );
+    } else {
+      await writeFileData(
+        await target.getFileHandle(entry.name, { create: true }),
+        await entry.getFile(),
+      );
+    }
+  }
 }
 
 async function readDirectoryChildren(handle: AccessDirectoryHandle, path: string) {
@@ -365,7 +406,34 @@ async function fileExists(directory: AccessDirectoryHandle, fileName: string) {
     await directory.getFileHandle(fileName);
     return true;
   } catch (error) {
-    if (error instanceof DOMException && error.name == "NotFoundError") return false;
+    if (isNotFoundError(error)) return false;
     throw error;
   }
+}
+
+async function entryExists(directory: AccessDirectoryHandle, name: string) {
+  try {
+    await directory.getFileHandle(name);
+    return true;
+  } catch (error) {
+    if (isEntryTypeMismatchError(error)) return true;
+    if (!isNotFoundError(error)) throw error;
+  }
+
+  try {
+    await directory.getDirectoryHandle(name);
+    return true;
+  } catch (error) {
+    if (isNotFoundError(error)) return false;
+    if (isEntryTypeMismatchError(error)) return true;
+    throw error;
+  }
+}
+
+function isNotFoundError(error: unknown) {
+  return error instanceof DOMException && error.name == "NotFoundError";
+}
+
+function isEntryTypeMismatchError(error: unknown) {
+  return error instanceof DOMException && error.name == "TypeMismatchError";
 }

@@ -56,7 +56,11 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { FileTree, type FileTreeDeleteTarget } from "@/components/FileTree";
+import {
+  FileTree,
+  type FileTreeCreateKind,
+  type FileTreeDeleteTarget,
+} from "@/components/FileTree";
 import { LiveMdEditor, type LiveMdImageFilesInput } from "@/components/LiveMdEditor";
 import {
   authorizeDropboxWithPkce,
@@ -133,6 +137,7 @@ export function App() {
   let [restoreChecking, setRestoreChecking] = useState(false);
   let [sidebarOpen, setSidebarOpen] = useState(true);
   let [fileDialogMode, setFileDialogMode] = useState<FileDialogMode | null>(null);
+  let [fileDialogTarget, setFileDialogTarget] = useState<FileTreeDeleteTarget | null>(null);
   let [fileDialogValue, setFileDialogValue] = useState("");
   let [fileDialogError, setFileDialogError] = useState("");
   let [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
@@ -669,16 +674,32 @@ export function App() {
     [loadFile, workspaceBackend],
   );
 
-  let openCreateDialog = () => {
+  let openCreateDialog = (
+    target: FileTreeDeleteTarget | null = treeSelection,
+    kind: FileTreeCreateKind = "file",
+  ) => {
     setFileDialogError("");
-    setFileDialogValue(defaultNewFilePath(files, treeSelection));
+    setFileDialogTarget(null);
+    setFileDialogValue(
+      kind == "directory" ? defaultNewFolderPath(tree, target) : defaultNewFilePath(files, target),
+    );
     setFileDialogMode("create");
   };
 
-  let openRenameDialog = () => {
-    if (!selectedFile) return;
+  let openRenameDialog = (target?: FileTreeDeleteTarget) => {
+    let renameTarget =
+      target ??
+      (selectedFile
+        ? {
+            kind: "file" as const,
+            name: selectedFile.name,
+            path: selectedFile.path,
+          }
+        : null);
+    if (!renameTarget) return;
     setFileDialogError("");
-    setFileDialogValue(selectedFile.name);
+    setFileDialogTarget(renameTarget);
+    setFileDialogValue(renameTarget.name);
     setFileDialogMode("rename");
   };
 
@@ -698,6 +719,7 @@ export function App() {
   let closeFileDialog = (open: boolean) => {
     if (!open) {
       setFileDialogMode(null);
+      setFileDialogTarget(null);
       setFileDialogError("");
     }
   };
@@ -709,15 +731,27 @@ export function App() {
     setFileDialogError("");
     setBusy(true);
     try {
+      let currentTarget = fileDialogTarget;
       let nextPath =
         fileDialogMode == "create"
           ? await workspaceBackend.createFile(value)
-          : selectedFile
-            ? await workspaceBackend.renameFile(selectedFile.path, value)
-            : null;
+          : currentTarget?.kind == "file"
+            ? await workspaceBackend.renameFile(currentTarget.path, value)
+            : currentTarget?.kind == "directory"
+              ? await renameWorkspaceDirectory(workspaceBackend, currentTarget.path, value)
+              : null;
+      let nextSelectedPath =
+        currentTarget?.kind == "directory" && nextPath
+          ? pathAfterDirectoryRename(
+              selectedFileRef.current?.path ?? null,
+              currentTarget.path,
+              nextPath,
+            )
+          : nextPath;
 
       setFileDialogMode(null);
-      await loadTree(workspaceBackend, nextPath ?? selectedFileRef.current?.path ?? null, {
+      setFileDialogTarget(null);
+      await loadTree(workspaceBackend, nextSelectedPath ?? selectedFileRef.current?.path ?? null, {
         saveBeforeSelect: false,
       });
     } catch (error) {
@@ -878,7 +912,7 @@ export function App() {
               label="New file"
               size="icon-sm"
               variant="ghost"
-              onClick={openCreateDialog}
+              onClick={() => openCreateDialog()}
               disabled={!workspaceBackend || busy}
             >
               <PlusIcon data-icon="inline-start" />
@@ -889,7 +923,9 @@ export function App() {
             <FileTree
               root={tree}
               selectedPath={selectedPath}
+              onCreateEntry={(target, kind) => openCreateDialog(target, kind)}
               onDeleteEntry={requestDeleteEntry}
+              onRenameEntry={openRenameDialog}
               onSelectEntry={setTreeSelection}
               onSelectFile={selectFile}
             />
@@ -998,7 +1034,7 @@ export function App() {
               size="icon-sm"
               variant="ghost"
               disabled={!selectedFile || busy}
-              onClick={openRenameDialog}
+              onClick={() => openRenameDialog()}
             >
               <PencilIcon data-icon="inline-start" />
             </TooltipIconButton>
@@ -1031,7 +1067,7 @@ export function App() {
                 dropboxRestoreAvailable={dropboxRestoreAvailable}
                 restoreAvailable={restoreAvailable}
                 restoreChecking={restoreChecking}
-                onCreateFile={openCreateDialog}
+                onCreateFile={() => openCreateDialog()}
                 onOpenDropbox={connectDropbox}
                 onOpenFolder={() => void openWorkspace()}
                 onRestoreDropbox={() => void restoreDropboxWorkspace()}
@@ -1255,16 +1291,16 @@ function FileNameDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>{createMode ? "New file or folder" : "Rename file"}</DialogTitle>
+            <DialogTitle>{createMode ? "New file or folder" : "Rename"}</DialogTitle>
             <DialogDescription className="sr-only">
               {createMode
                 ? "Create a Markdown file or folder path."
-                : "Rename the selected Markdown file."}
+                : "Rename the selected file or folder."}
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
             <Field data-invalid={Boolean(error)}>
-              <FieldLabel htmlFor={inputId}>{createMode ? "Path" : "File name"}</FieldLabel>
+              <FieldLabel htmlFor={inputId}>{createMode ? "Path" : "Name"}</FieldLabel>
               <Input
                 id={inputId}
                 aria-invalid={Boolean(error)}
@@ -1412,6 +1448,20 @@ function isPathInsideDirectory(path: string, directory: string) {
   return path == normalizedDirectory || path.startsWith(`${normalizedDirectory}/`);
 }
 
+async function renameWorkspaceDirectory(backend: WorkspaceBackend, path: string, rawName: string) {
+  if (!backend.renameDirectory) throw new Error("This workspace cannot rename folders.");
+  return backend.renameDirectory(path, rawName);
+}
+
+function pathAfterDirectoryRename(
+  selectedPath: string | null,
+  currentDirectoryPath: string,
+  nextDirectoryPath: string,
+) {
+  if (!selectedPath?.startsWith(`${currentDirectoryPath}/`)) return selectedPath;
+  return `${nextDirectoryPath}${selectedPath.slice(currentDirectoryPath.length)}`;
+}
+
 function isImageFile(file: File) {
   return (
     file.type.startsWith("image/") || /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(file.name)
@@ -1436,6 +1486,40 @@ function defaultNewFilePath(files: MarkdownFileNode[], selection: FileTreeDelete
   }
 
   return joinWorkspacePath(parentPath, "Untitled.md");
+}
+
+function defaultNewFolderPath(
+  tree: MarkdownDirectoryNode | null,
+  selection: FileTreeDeleteTarget | null,
+) {
+  let parentPath =
+    selection?.kind == "directory"
+      ? selection.path
+      : selection?.kind == "file"
+        ? directoryPath(selection.path)
+        : "";
+  let directoryPaths = tree ? collectDirectoryPaths(tree) : new Set<string>();
+  let basePath = joinWorkspacePath(parentPath, "New folder");
+  if (!directoryPaths.has(basePath)) return `${basePath}/`;
+
+  for (let index = 2; index < 1000; index += 1) {
+    let path = joinWorkspacePath(parentPath, `New folder ${index}`);
+    if (!directoryPaths.has(path)) return `${path}/`;
+  }
+
+  return joinWorkspacePath(parentPath, "Untitled folder/");
+}
+
+function collectDirectoryPaths(root: MarkdownDirectoryNode) {
+  let paths = new Set<string>();
+  let visit = (directory: MarkdownDirectoryNode) => {
+    if (directory.path) paths.add(directory.path);
+    for (let child of directory.children) {
+      if (child.kind == "directory") visit(child);
+    }
+  };
+  visit(root);
+  return paths;
 }
 
 function saveStateLabel(saveState: SaveState, selectedFile: MarkdownFileNode | null) {
