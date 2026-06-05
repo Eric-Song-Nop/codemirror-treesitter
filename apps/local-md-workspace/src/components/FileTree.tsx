@@ -1,14 +1,35 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { FileTree as TreesFileTree } from "@pierre/trees";
-import type { MarkdownDirectoryNode, MarkdownFileNode, MarkdownTreeNode } from "@/lib/file-system";
+import type { ContextMenuOpenContext } from "@pierre/trees";
+import type {
+  MarkdownDirectoryNode,
+  MarkdownFileNode,
+  MarkdownTreeNode,
+} from "@/lib/workspace-backend";
 
 type FileTreeProps = {
+  onCreateEntry: (target: FileTreeDeleteTarget, kind: FileTreeCreateKind) => void;
+  onDeleteEntry: (target: FileTreeDeleteTarget) => void;
+  onRenameEntry: (target: FileTreeDeleteTarget) => void;
+  onSelectEntry: (target: FileTreeDeleteTarget) => void;
   root: MarkdownDirectoryNode | null;
   selectedPath: null | string;
   onSelectFile: (file: MarkdownFileNode) => void;
 };
 
+export type FileTreeCreateKind = "directory" | "file";
+
+export type FileTreeDeleteTarget = {
+  kind: "directory" | "file";
+  name: string;
+  path: string;
+};
+
 export const FileTree = memo(function FileTree({
+  onCreateEntry,
+  onDeleteEntry,
+  onRenameEntry,
+  onSelectEntry,
   root,
   selectedPath,
   onSelectFile,
@@ -19,6 +40,10 @@ export const FileTree = memo(function FileTree({
   let containerRef = useRef<HTMLDivElement | null>(null);
   let latestSelectionRef = useRef({
     filesByPath,
+    onCreateEntry,
+    onDeleteEntry,
+    onRenameEntry,
+    onSelectEntry,
     onSelectFile,
     selectedPath,
   });
@@ -28,10 +53,22 @@ export const FileTree = memo(function FileTree({
   useEffect(() => {
     latestSelectionRef.current = {
       filesByPath,
+      onCreateEntry,
+      onDeleteEntry,
+      onRenameEntry,
+      onSelectEntry,
       onSelectFile,
       selectedPath,
     };
-  }, [filesByPath, onSelectFile, selectedPath]);
+  }, [
+    filesByPath,
+    onCreateEntry,
+    onDeleteEntry,
+    onRenameEntry,
+    onSelectEntry,
+    onSelectFile,
+    selectedPath,
+  ]);
 
   useEffect(() => {
     let container = containerRef.current;
@@ -40,9 +77,29 @@ export const FileTree = memo(function FileTree({
     let model = new TreesFileTree({
       density: "compact",
       flattenEmptyDirectories: true,
+      composition: {
+        contextMenu: {
+          buttonVisibility: "when-needed",
+          enabled: true,
+          render(item, context) {
+            return renderFileTreeContextMenu(item, context, {
+              create(target, kind) {
+                latestSelectionRef.current.onCreateEntry(normalizeDeleteTarget(target), kind);
+              },
+              delete(target) {
+                latestSelectionRef.current.onDeleteEntry(normalizeDeleteTarget(target));
+              },
+              rename(target) {
+                latestSelectionRef.current.onRenameEntry(normalizeDeleteTarget(target));
+              },
+            });
+          },
+          triggerMode: "button",
+        },
+      },
       icons: {
         colored: true,
-        set: "minimal",
+        set: "complete",
       },
       initialExpandedPaths: expandedPaths,
       initialSelectedPaths: selectedPath ? [selectedPath] : [],
@@ -58,8 +115,11 @@ export const FileTree = memo(function FileTree({
         let {
           filesByPath: latestFilesByPath,
           onSelectFile: latestOnSelectFile,
+          onSelectEntry: latestOnSelectEntry,
           selectedPath,
         } = latestSelectionRef.current;
+        let target = resolveSelectionTarget(nextPath, latestFilesByPath);
+        if (target) latestOnSelectEntry(target);
         if (nextPath == selectedPath) return;
 
         let file = latestFilesByPath.get(nextPath);
@@ -108,6 +168,88 @@ export const FileTree = memo(function FileTree({
 
   return <div ref={containerRef} className="local-md-file-tree min-h-0 flex-1 overflow-auto" />;
 });
+
+function renderFileTreeContextMenu(
+  target: FileTreeDeleteTarget,
+  context: ContextMenuOpenContext,
+  actions: {
+    create: (target: FileTreeDeleteTarget, kind: FileTreeCreateKind) => void;
+    delete: (target: FileTreeDeleteTarget) => void;
+    rename: (target: FileTreeDeleteTarget) => void;
+  },
+) {
+  let menu = document.createElement("div");
+  menu.className = "local-md-file-tree-context-menu";
+  menu.setAttribute("role", "menu");
+  menu.tabIndex = -1;
+
+  menu.append(
+    renderContextMenuItem("New file", context, () => actions.create(target, "file")),
+    renderContextMenuItem("New folder", context, () => actions.create(target, "directory")),
+    renderContextMenuItem("Rename", context, () => actions.rename(target)),
+    renderContextMenuSeparator(),
+    renderContextMenuItem("Delete", context, () => actions.delete(target), { destructive: true }),
+  );
+  return menu;
+}
+
+function renderContextMenuItem(
+  label: string,
+  context: ContextMenuOpenContext,
+  onSelect: () => void,
+  options: { destructive?: boolean } = {},
+) {
+  let button = document.createElement("button");
+  button.className = "local-md-file-tree-context-menu-item";
+  if (options.destructive) button.dataset.destructive = "true";
+  button.setAttribute("role", "menuitem");
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    context.close();
+    onSelect();
+  });
+  return button;
+}
+
+function renderContextMenuSeparator() {
+  let separator = document.createElement("div");
+  separator.className = "local-md-file-tree-context-menu-separator";
+  separator.setAttribute("role", "separator");
+  return separator;
+}
+
+function normalizeDeleteTarget(target: FileTreeDeleteTarget): FileTreeDeleteTarget {
+  return {
+    ...target,
+    path: target.kind == "directory" ? target.path.replace(/\/+$/g, "") : target.path,
+  };
+}
+
+function resolveSelectionTarget(
+  path: string,
+  filesByPath: Map<string, MarkdownFileNode>,
+): FileTreeDeleteTarget | null {
+  let file = filesByPath.get(path);
+  if (file) {
+    return {
+      kind: "file",
+      name: file.name,
+      path: file.path,
+    };
+  }
+
+  let directoryPath = path.replace(/\/+$/g, "");
+  if (!directoryPath) return null;
+
+  return {
+    kind: "directory",
+    name: directoryPath.split("/").at(-1) ?? directoryPath,
+    path: directoryPath,
+  };
+}
 
 function collectTreePaths(nodes: MarkdownTreeNode[]) {
   let paths: string[] = [];

@@ -1,0 +1,70 @@
+import {
+  createOpendalBrowserOperator,
+  defaultGeneratedModuleUrl,
+  type OpendalBrowserOperatorConfig,
+} from "../src/index.js";
+
+let output = document.querySelector("#output");
+
+let config = readSmokeConfig();
+if (output) {
+  output.textContent = config
+    ? "Smoke config found. Click the document body to run the full operation smoke."
+    : "Set OPENDAL_BROWSER_SMOKE_CONFIG in localStorage before running.";
+}
+
+document.body.addEventListener("click", () => {
+  void runSmoke();
+});
+
+async function runSmoke() {
+  if (!output || !config) return;
+  output.textContent = "Loading WASM...";
+
+  let operator: Awaited<ReturnType<typeof createOpendalBrowserOperator>> | null = null;
+  let cleanupPaths: string[] = [];
+
+  try {
+    operator = await createOpendalBrowserOperator(config, {
+      generatedModuleUrl: defaultGeneratedModuleUrl(),
+    });
+    let firstPath = `opendal-browser-smoke-${Date.now()}.md`;
+    let renamedPath = firstPath.replace(/\.md$/, "-renamed.md");
+    let value = "# OpenDAL browser smoke\n";
+    cleanupPaths = [firstPath, renamedPath];
+
+    let initialEntries = await operator.list("");
+    await operator.writeText(firstPath, value);
+    let readValue = await operator.readText(firstPath);
+    await operator.rename(firstPath, renamedPath);
+    let renamedStat = await operator.stat(renamedPath);
+    let renamedEntries = await operator.list("");
+    await operator.delete(renamedPath);
+    cleanupPaths = [];
+
+    output.textContent = JSON.stringify(
+      {
+        capabilities: operator.capabilities(),
+        initialEntryCount: initialEntries.length,
+        readMatchesWrite: readValue == value,
+        renamedEntryFound: renamedEntries.some((entry) => entry.path == renamedPath),
+        renamedStat,
+      },
+      null,
+      2,
+    );
+  } catch (error) {
+    if (operator) {
+      for (let path of cleanupPaths) {
+        await operator.delete(path).catch(() => {});
+      }
+    }
+    output.textContent = error instanceof Error ? error.message : String(error);
+  }
+}
+
+function readSmokeConfig() {
+  let raw = window.localStorage.getItem("OPENDAL_BROWSER_SMOKE_CONFIG");
+  if (!raw) return null;
+  return JSON.parse(raw) as OpendalBrowserOperatorConfig;
+}

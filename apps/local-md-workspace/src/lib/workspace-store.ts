@@ -4,6 +4,12 @@ const DB_NAME = "local-md-workspace";
 const DB_VERSION = 1;
 const STORE_NAME = "workspace";
 const HANDLE_KEY = "directory-handle";
+const DROPBOX_CONFIG_KEY = "local-md-workspace:dropbox-config";
+
+export type StoredDropboxWorkspaceConfig = {
+  appKey: string;
+  root?: string;
+};
 
 export async function loadStoredWorkspaceHandle() {
   if (!canUseIndexedDb()) return null;
@@ -31,8 +37,53 @@ export async function saveStoredWorkspaceHandle(handle: AccessDirectoryHandle) {
   }
 }
 
+export function loadStoredDropboxWorkspaceConfig() {
+  if (!canUseLocalStorage()) return null;
+
+  try {
+    let raw = window.localStorage.getItem(DROPBOX_CONFIG_KEY);
+    if (!raw) return null;
+    return parseDropboxWorkspaceConfig(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+export function saveStoredDropboxWorkspaceConfig(config: StoredDropboxWorkspaceConfig) {
+  if (!canUseLocalStorage()) return;
+
+  let normalized = parseDropboxWorkspaceConfig(config);
+  if (!normalized) return;
+  try {
+    window.localStorage.setItem(DROPBOX_CONFIG_KEY, JSON.stringify(normalized));
+  } catch {}
+}
+
 function canUseIndexedDb() {
   return typeof window != "undefined" && Boolean(window.indexedDB);
+}
+
+function canUseLocalStorage() {
+  return typeof window != "undefined" && Boolean(window.localStorage);
+}
+
+function parseDropboxWorkspaceConfig(value: unknown): StoredDropboxWorkspaceConfig | null {
+  if (!value || typeof value != "object") return null;
+  let record = value as Record<string, unknown>;
+  if (typeof record.appKey != "string") return null;
+
+  let appKey = record.appKey.trim();
+  if (!appKey) return null;
+
+  let root =
+    typeof record.root == "string"
+      ? record.root
+          .trim()
+          .replace(/\\/g, "/")
+          .replace(/^\/+|\/+$/g, "")
+      : "";
+
+  return root ? { appKey, root } : { appKey };
 }
 
 function openWorkspaceDatabase() {

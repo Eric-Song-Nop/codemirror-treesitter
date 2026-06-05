@@ -34,6 +34,11 @@ import {
   emptyCodeFenceLanguages,
   type CodeFenceLanguageMap,
 } from "./languages.js";
+import {
+  liveMdImageSourceResolver,
+  resolveLiveMdImageSource,
+  type LiveMdImageSourceResolver,
+} from "./images.js";
 import { forEachLineInRange, isWhitespace, isWhitespaceOnly, splitRangeByLine } from "./util.js";
 import { liveMdLinkBaseUrl, liveMdLinkMark } from "./links.js";
 import {
@@ -56,6 +61,7 @@ type LiveMdBuild = {
   codeFenceHighlightTrees: CodeFenceHighlightTree[];
   codeFenceLanguages: CodeFenceLanguageMap;
   decorations: Array<Range<Decoration>>;
+  imageSourceResolver: LiveMdImageSourceResolver | null;
   lineClasses: Map<number, Set<string>>;
   linkBaseUrl: string | null;
   state: EditorState;
@@ -121,6 +127,8 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
       !transaction.docChanged &&
       !transaction.selection &&
       !codeFenceLanguagesChanged(transaction.startState, transaction.state) &&
+      transaction.startState.facet(liveMdImageSourceResolver) ==
+        transaction.state.facet(liveMdImageSourceResolver) &&
       transaction.startState.facet(liveMdLinkBaseUrl) == transaction.state.facet(liveMdLinkBaseUrl)
     ) {
       return value;
@@ -196,6 +204,7 @@ function createLiveMdBuild(
     codeFenceHighlightTrees: [],
     codeFenceLanguages,
     decorations: [],
+    imageSourceResolver: state.facet(liveMdImageSourceResolver),
     lineClasses: new Map(),
     linkBaseUrl: state.facet(liveMdLinkBaseUrl),
     state,
@@ -849,7 +858,10 @@ function applyImage(build: LiveMdBuild, match: TreeSitterQueryMatch): false | vo
 
   let line = build.state.doc.lineAt(node.from);
   let active = build.activeLines.has(line.number);
-  let widget = new ImagePreviewWidget(alt, normalizeImageSource(src));
+  let widget = new ImagePreviewWidget(
+    alt,
+    resolveLiveMdImageSource(src, build.imageSourceResolver),
+  );
   if (!active && isOnlyVisibleContentOnLine(build.state, line.from, line.to, node.from, node.to)) {
     addReplace(build, line.from, line.to, widget, true);
     return false;
@@ -1174,10 +1186,6 @@ function isOnlyVisibleContentOnLine(
     isWhitespaceOnly(state.sliceDoc(lineFrom, contentFrom)) &&
     isWhitespaceOnly(state.sliceDoc(contentTo, lineTo))
   );
-}
-
-function normalizeImageSource(source: string) {
-  return source.trim();
 }
 
 function normalizeTableCells(cells: string[], columnCount: number) {
