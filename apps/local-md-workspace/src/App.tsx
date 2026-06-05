@@ -87,11 +87,6 @@ import {
   type WorkspaceImageNode,
 } from "@/lib/workspace-backend";
 import { workspaceErrorMessage } from "@/lib/workspace-errors";
-import {
-  createWorkspaceProviderStatus,
-  type DropboxWorkspaceSession,
-  type WorkspaceProviderStatus,
-} from "@/lib/workspace-status";
 import { cn } from "@/lib/utils";
 import {
   loadStoredDropboxWorkspaceConfig,
@@ -131,7 +126,6 @@ export function App() {
     version: 0,
   });
   let [saveState, setSaveState] = useState<SaveState>("idle");
-  let [statusMessage, setStatusMessage] = useState("No folder open");
   let [errorMessage, setErrorMessage] = useState("");
   let [busy, setBusy] = useState(false);
   let [dropboxConnecting, setDropboxConnecting] = useState(false);
@@ -140,8 +134,6 @@ export function App() {
   let [fileDialogMode, setFileDialogMode] = useState<FileDialogMode | null>(null);
   let [fileDialogValue, setFileDialogValue] = useState("");
   let [fileDialogError, setFileDialogError] = useState("");
-  let [dropboxSession, setDropboxSession] = useState<DropboxWorkspaceSession | null>(null);
-  let [statusNow, setStatusNow] = useState(() => Date.now());
   let [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   let [imageAssetVersion, setImageAssetVersion] = useState(0);
 
@@ -235,13 +227,11 @@ export function App() {
     if (value == cleanValueRef.current) {
       dirtyRef.current = false;
       setSaveStateSynced("saved");
-      setStatusMessage(savedStatusMessage(backend));
       return true;
     }
 
     let operation = ++saveOperationRef.current;
     setSaveStateSynced("saving");
-    setStatusMessage("Saving");
 
     try {
       await backend.writeFile(file.path, value);
@@ -250,13 +240,11 @@ export function App() {
         if (editVersion == editVersionRef.current) {
           dirtyRef.current = false;
           setSaveStateSynced("saved");
-          setStatusMessage(savedStatusMessage(backend));
         }
       }
       return true;
     } catch (error) {
       setSaveStateSynced("error");
-      setStatusMessage("Save failed");
       setErrorMessage(errorToMessage(error));
       return false;
     }
@@ -280,7 +268,6 @@ export function App() {
 
       if (saveStateRef.current != "pending") {
         setSaveStateSynced("pending");
-        setStatusMessage("Unsaved changes");
       }
 
       scheduleAutoSave();
@@ -313,7 +300,6 @@ export function App() {
           version: current.version + 1,
         }));
         setSaveStateSynced("saved");
-        setStatusMessage(savedStatusMessage(backend));
       } catch (error) {
         setErrorMessage(errorToMessage(error));
       } finally {
@@ -360,7 +346,6 @@ export function App() {
           version: current.version + 1,
         }));
         setSaveStateSynced("idle");
-        setStatusMessage(nextFiles.length ? "No file selected" : "No markdown files");
       }
     },
     [loadFile, replaceImageAssets, setSaveStateSynced],
@@ -400,14 +385,6 @@ export function App() {
       let token = await promise;
       dropboxTokenRef.current = token;
       dropboxTokenAppKeyRef.current = normalizedAppKey;
-      setDropboxSession((session) =>
-        session
-          ? {
-              ...session,
-              expiresAt: token.expiresAt,
-            }
-          : session,
-      );
       return token;
     } finally {
       if (dropboxAuthPromiseRef.current == promise) dropboxAuthPromiseRef.current = null;
@@ -433,13 +410,11 @@ export function App() {
       if (draft.dirtyValue == cleanValueRef.current) {
         dirtyRef.current = false;
         setSaveStateSynced("saved");
-        setStatusMessage(savedStatusMessage(backend));
         return true;
       }
 
       dirtyRef.current = true;
       setSaveStateSynced("pending");
-      setStatusMessage("Unsaved changes restored");
       scheduleAutoSave();
       return true;
     },
@@ -463,7 +438,6 @@ export function App() {
       let backend = createLocalWorkspaceBackend(handle);
       dropboxTokenRef.current = null;
       dropboxTokenAppKeyRef.current = "";
-      setDropboxSession(null);
       setWorkspaceBackend(backend);
       rememberWorkspaceHandle(handle);
       setSidebarOpen(true);
@@ -495,7 +469,6 @@ export function App() {
 
       setBusy(true);
       setDropboxConnecting(true);
-      setStatusMessage("Connecting Dropbox");
 
       try {
         let refreshAccessToken = () => authorizeDropboxAccess(appKey, root);
@@ -511,7 +484,7 @@ export function App() {
           return refreshAccessToken();
         };
 
-        let accessToken = await getAccessToken();
+        await getAccessToken();
         let backend = createDropboxWorkspaceBackend({
           getAccessToken,
           name: "Dropbox",
@@ -527,15 +500,9 @@ export function App() {
           saveBeforeSelect: false,
         });
         if (options.restoreDraft) restoreDropboxRedirectEditorDraft(backend, options.restoreDraft);
-        setDropboxSession({
-          expiresAt: accessToken.expiresAt,
-          root,
-        });
-        setStatusMessage("Dropbox connected");
         return true;
       } catch (error) {
         setErrorMessage(errorToMessage(error));
-        setStatusMessage("Dropbox connection failed");
         return false;
       } finally {
         setDropboxConnecting(false);
@@ -552,7 +519,6 @@ export function App() {
     setErrorMessage("");
     try {
       if (!(await ensureReadWritePermission(storedWorkspaceHandle))) {
-        setStatusMessage("Folder permission needed");
         setErrorMessage("Read-write folder permission was not granted.");
         return;
       }
@@ -560,7 +526,6 @@ export function App() {
       let backend = createLocalWorkspaceBackend(storedWorkspaceHandle);
       dropboxTokenRef.current = null;
       dropboxTokenAppKeyRef.current = "";
-      setDropboxSession(null);
       setWorkspaceBackend(backend);
       setSidebarOpen(true);
       await loadTree(backend, null, { saveBeforeSelect: false });
@@ -609,7 +574,6 @@ export function App() {
     setBusy(true);
     setDropboxConnecting(true);
     setErrorMessage("");
-    setStatusMessage("Completing Dropbox authorization");
 
     void (async () => {
       try {
@@ -637,7 +601,6 @@ export function App() {
       } catch (error) {
         if (!canceled) {
           setErrorMessage(errorToMessage(error));
-          setStatusMessage("Dropbox connection failed");
         }
       } finally {
         dropboxRedirectPendingRef.current = false;
@@ -667,7 +630,6 @@ export function App() {
         setStoredWorkspaceHandle(handle);
 
         if ((await queryReadWritePermission(handle)) != "granted") {
-          if (!canceled) setStatusMessage("Folder permission needed");
           return;
         }
         if (canceled) return;
@@ -675,7 +637,6 @@ export function App() {
         let backend = createLocalWorkspaceBackend(handle);
         dropboxTokenRef.current = null;
         dropboxTokenAppKeyRef.current = "";
-        setDropboxSession(null);
         setWorkspaceBackend(backend);
         setSidebarOpen(true);
         await loadTree(backend, null, { saveBeforeSelect: false });
@@ -697,14 +658,6 @@ export function App() {
     },
     [],
   );
-
-  useEffect(() => {
-    if (workspaceBackend?.kind != "opendal-dropbox" || !dropboxSession) return;
-
-    setStatusNow(Date.now());
-    let timer = window.setInterval(() => setStatusNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, [dropboxSession, workspaceBackend?.kind]);
 
   let selectFile = useCallback(
     (file: MarkdownFileNode) => {
@@ -814,7 +767,6 @@ export function App() {
 
       setBusy(true);
       setErrorMessage("");
-      setStatusMessage(imageFiles.length == 1 ? "Importing image" : "Importing images");
 
       try {
         let insertedAssets: Array<WorkspaceImageAsset & { markdownReference: string }> = [];
@@ -832,10 +784,8 @@ export function App() {
           insertedAssets,
           options.position,
         );
-        setStatusMessage(insertedAssets.length == 1 ? "Inserted image" : "Inserted images");
       } catch (error) {
         setErrorMessage(errorToMessage(error));
-        setStatusMessage("Image insert failed");
       } finally {
         setBusy(false);
       }
@@ -860,10 +810,6 @@ export function App() {
   );
 
   let saveLabel = useMemo(() => saveStateLabel(saveState, selectedFile), [saveState, selectedFile]);
-  let providerStatus = useMemo(
-    () => createWorkspaceProviderStatus(workspaceBackend, dropboxSession, statusNow),
-    [dropboxSession, statusNow, workspaceBackend],
-  );
   let restoreAvailable = Boolean(storedWorkspaceHandle);
   let dropboxRestoreAvailable = Boolean(storedDropboxConfig);
 
@@ -1069,14 +1015,6 @@ export function App() {
               />
             )}
           </section>
-
-          <footer className="flex h-8 shrink-0 items-center gap-3 border-t px-3 text-xs text-muted-foreground">
-            <span className="min-w-0 flex-1 truncate">{statusMessage}</span>
-            <WorkspaceProviderBadge status={providerStatus} />
-            <span className="min-w-0 flex-1 truncate text-right">
-              {selectedFile?.path ?? rootName}
-            </span>
-          </footer>
         </main>
 
         <FileNameDialog
@@ -1134,21 +1072,6 @@ function TooltipIconButton({ children, label, ...props }: TooltipIconButtonProps
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
-  );
-}
-
-function WorkspaceProviderBadge({ status }: { status: WorkspaceProviderStatus | null }) {
-  if (!status) return null;
-
-  let Icon = status.icon == "cloud" ? CloudIcon : FolderOpenIcon;
-  return (
-    <Badge
-      variant={status.state == "expired" ? "destructive" : "secondary"}
-      className="hidden max-w-[min(22rem,42vw)] shrink sm:inline-flex"
-    >
-      <Icon data-icon="inline-start" />
-      <span className="truncate">{status.label}</span>
-    </Badge>
   );
 }
 
@@ -1481,10 +1404,6 @@ function saveStateLabel(saveState: SaveState, selectedFile: MarkdownFileNode | n
     case "saved":
       return "Saved";
   }
-}
-
-function savedStatusMessage(backend: WorkspaceBackend | null) {
-  return backend?.kind == "opendal-dropbox" ? "Saved to Dropbox" : "Saved to disk";
 }
 
 function defaultDropboxAppKey() {
