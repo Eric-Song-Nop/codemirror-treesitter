@@ -34,6 +34,7 @@ export type WorkspaceBackend = {
     markdownFilePath: string,
     imageFile: File,
   ) => Promise<CreatedWorkspaceImageNode>;
+  deleteDirectory?: (path: string) => Promise<void>;
   deleteFile(path: string): Promise<void>;
   readFile(path: string): Promise<string>;
   readImages?: () => Promise<WorkspaceImageNode[]>;

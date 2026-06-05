@@ -163,7 +163,7 @@ impl WasmOpendalBrowserOperator {
 
     pub async fn delete(&self, path: String) -> Result<(), JsValue> {
         self.operator
-            .delete(&normalize_file_path(&path)?)
+            .delete(&normalize_delete_path(&path)?)
             .await
             .map_err(js_error)
     }
@@ -235,6 +235,14 @@ fn normalize_file_path(path: &str) -> Result<String, JsValue> {
     let path = normalize_storage_path(path)?;
     if path.is_empty() || path.ends_with('/') {
         return Err(js_error("expected a file path"));
+    }
+    Ok(path)
+}
+
+fn normalize_delete_path(path: &str) -> Result<String, JsValue> {
+    let path = normalize_storage_path(path)?;
+    if path.is_empty() {
+        return Err(js_error("expected a path"));
     }
     Ok(path)
 }

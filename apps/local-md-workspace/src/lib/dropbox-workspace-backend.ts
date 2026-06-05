@@ -176,6 +176,13 @@ export function createDropboxWorkspaceBackend(
       await queueWrite(nextPath, starterMarkdown(nextPath));
       return nextPath;
     },
+    async deleteDirectory(path) {
+      let normalized = normalizeDropboxDirectoryPath(path);
+      if (!normalized) throw new Error("Enter a folder name.");
+
+      await withDropboxRetry((operator) => operator.delete(normalized));
+      forgetCreatedDirectory(normalized, createdDirectories);
+    },
     async deleteFile(path) {
       await withDropboxRetry((operator) => operator.delete(path));
     },
@@ -199,6 +206,14 @@ export function createDropboxWorkspaceBackend(
       await queueWrite(path, value);
     },
   };
+}
+
+function forgetCreatedDirectory(path: string, directories: Set<string>) {
+  for (let directory of directories) {
+    if (directory == path || directory.startsWith(`${path}/`)) {
+      directories.delete(directory);
+    }
+  }
 }
 
 function dropboxOperatorConfig(

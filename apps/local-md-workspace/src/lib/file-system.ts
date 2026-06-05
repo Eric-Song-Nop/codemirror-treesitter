@@ -87,6 +87,7 @@ export function createLocalWorkspaceBackend(handle: AccessDirectoryHandle): Work
     createFile: (path) => createMarkdownFile(handle, path),
     createImageAsset: (markdownFilePath, imageFile) =>
       createImageAsset(handle, markdownFilePath, imageFile),
+    deleteDirectory: (path) => deleteMarkdownDirectory(handle, path),
     deleteFile: (path) => deleteMarkdownFile(handle, path),
     readFile: (path) => readMarkdownPath(handle, path),
     readImages: () => readWorkspaceImages(handle),
@@ -178,6 +179,19 @@ async function createMarkdownFile(rootHandle: AccessDirectoryHandle, rawPath: st
 async function deleteMarkdownFile(rootHandle: AccessDirectoryHandle, path: string) {
   let { directory, fileName } = await resolveParentDirectory(rootHandle, path, false);
   await directory.removeEntry(fileName);
+}
+
+async function deleteMarkdownDirectory(rootHandle: AccessDirectoryHandle, path: string) {
+  let targetPath = normalizeWorkspaceDirectoryPath(path);
+  let { directory, fileName } = await resolveParentDirectory(rootHandle, targetPath, false);
+  await directory.removeEntry(fileName, { recursive: true });
+}
+
+function normalizeWorkspaceDirectoryPath(path: string) {
+  let normalized = path.trim().replace(/\/+$/g, "");
+  let target = normalizeWorkspaceCreateTarget(`${normalized}/`);
+  if (target.kind != "directory") throw new Error("Enter a folder name.");
+  return target.path;
 }
 
 async function renameMarkdownFile(

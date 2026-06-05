@@ -56,7 +56,7 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { FileTree } from "@/components/FileTree";
+import { FileTree, type FileTreeDeleteTarget } from "@/components/FileTree";
 import { LiveMdEditor, type LiveMdImageFilesInput } from "@/components/LiveMdEditor";
 import {
   authorizeDropboxWithPkce,
@@ -120,6 +120,7 @@ export function App() {
   let [tree, setTree] = useState<MarkdownDirectoryNode | null>(null);
   let [files, setFiles] = useState<MarkdownFileNode[]>([]);
   let [selectedFile, setSelectedFile] = useState<MarkdownFileNode | null>(null);
+  let [treeSelection, setTreeSelection] = useState<FileTreeDeleteTarget | null>(null);
   let [editorDocument, setEditorDocument] = useState<EditorDocument>({
     path: "",
     value: "",
@@ -134,7 +135,7 @@ export function App() {
   let [fileDialogMode, setFileDialogMode] = useState<FileDialogMode | null>(null);
   let [fileDialogValue, setFileDialogValue] = useState("");
   let [fileDialogError, setFileDialogError] = useState("");
-  let [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  let [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
   let [imageAssetVersion, setImageAssetVersion] = useState(0);
 
   let editorElementRef = useRef<LiveMdEditorElement | null>(null);
@@ -294,6 +295,7 @@ export function App() {
         dirtyRef.current = false;
         editVersionRef.current = 0;
         setSelectedFile(file);
+        setTreeSelection({ kind: "file", name: file.name, path: file.path });
         setEditorDocument((current) => ({
           path: file.path,
           value,
@@ -340,6 +342,7 @@ export function App() {
         dirtyRef.current = false;
         editVersionRef.current = 0;
         setSelectedFile(null);
+        setTreeSelection(null);
         setEditorDocument((current) => ({
           path: "",
           value: "",
@@ -668,7 +671,7 @@ export function App() {
 
   let openCreateDialog = () => {
     setFileDialogError("");
-    setFileDialogValue(defaultNewFileName(files));
+    setFileDialogValue(defaultNewFilePath(files, treeSelection));
     setFileDialogMode("create");
   };
 
@@ -724,8 +727,20 @@ export function App() {
     }
   };
 
-  let deleteSelectedFile = async () => {
-    if (!workspaceBackend || !selectedFile) return;
+  let requestDeleteEntry = useCallback((target: FileTreeDeleteTarget) => {
+    setErrorMessage("");
+    setDeleteTarget(target);
+  }, []);
+
+  let closeDeleteDialog = (open: boolean) => {
+    if (!open) setDeleteTarget(null);
+  };
+
+  let deleteWorkspaceEntry = async () => {
+    let backend = workspaceBackend;
+    let target = deleteTarget;
+    if (!backend || !target) return;
+    if (!(await saveCurrentFile())) return;
 
     setBusy(true);
     setErrorMessage("");
@@ -735,9 +750,20 @@ export function App() {
     }
     saveOperationRef.current += 1;
     try {
-      await workspaceBackend.deleteFile(selectedFile.path);
-      setDeleteDialogOpen(false);
-      await loadTree(workspaceBackend, null, { saveBeforeSelect: false });
+      let nextSelectedPath = selectedFileRef.current?.path ?? null;
+      if (target.kind == "directory") {
+        if (!backend.deleteDirectory) throw new Error("This workspace cannot delete folders.");
+        await backend.deleteDirectory(target.path);
+        if (nextSelectedPath && isPathInsideDirectory(nextSelectedPath, target.path)) {
+          nextSelectedPath = null;
+        }
+      } else {
+        await backend.deleteFile(target.path);
+        if (nextSelectedPath == target.path) nextSelectedPath = null;
+      }
+
+      setDeleteTarget(null);
+      await loadTree(backend, nextSelectedPath, { saveBeforeSelect: false });
     } catch (error) {
       setErrorMessage(errorToMessage(error));
     } finally {
@@ -860,7 +886,13 @@ export function App() {
           </div>
           <Separator />
           {tree ? (
-            <FileTree root={tree} selectedPath={selectedPath} onSelectFile={selectFile} />
+            <FileTree
+              root={tree}
+              selectedPath={selectedPath}
+              onDeleteEntry={requestDeleteEntry}
+              onSelectEntry={setTreeSelection}
+              onSelectFile={selectFile}
+            />
           ) : (
             <div className="flex min-h-0 flex-1 items-center justify-center p-4">
               <div className="flex w-full max-w-48 flex-col gap-2">
@@ -970,15 +1002,6 @@ export function App() {
             >
               <PencilIcon data-icon="inline-start" />
             </TooltipIconButton>
-            <TooltipIconButton
-              label="Delete file"
-              size="icon-sm"
-              variant="ghost"
-              disabled={!selectedFile || busy}
-              onClick={() => setDeleteDialogOpen(true)}
-            >
-              <Trash2Icon data-icon="inline-start" />
-            </TooltipIconButton>
           </header>
 
           {errorMessage && (
@@ -1029,14 +1052,22 @@ export function App() {
           onValueChange={setFileDialogValue}
         />
 
-        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialog open={deleteTarget != null} onOpenChange={closeDeleteDialog}>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogMedia>
                 <Trash2Icon />
               </AlertDialogMedia>
-              <AlertDialogTitle>Delete file?</AlertDialogTitle>
-              <AlertDialogDescription>{selectedFile?.path}</AlertDialogDescription>
+              <AlertDialogTitle>
+                {deleteTarget?.kind == "directory" ? "Delete folder?" : "Delete file?"}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {deleteTarget
+                  ? deleteTarget.kind == "directory"
+                    ? `${deleteTarget.path} and all files inside it will be deleted.`
+                    : deleteTarget.path
+                  : ""}
+              </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
@@ -1045,7 +1076,7 @@ export function App() {
                 disabled={busy}
                 onClick={(event) => {
                   event.preventDefault();
-                  void deleteSelectedFile();
+                  void deleteWorkspaceEntry();
                 }}
               >
                 Delete
@@ -1376,23 +1407,35 @@ function joinWorkspacePath(parent: string, child: string) {
   return parent ? `${parent}/${child}` : child;
 }
 
+function isPathInsideDirectory(path: string, directory: string) {
+  let normalizedDirectory = directory.replace(/\/+$/g, "");
+  return path == normalizedDirectory || path.startsWith(`${normalizedDirectory}/`);
+}
+
 function isImageFile(file: File) {
   return (
     file.type.startsWith("image/") || /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(file.name)
   );
 }
 
-function defaultNewFileName(files: MarkdownFileNode[]) {
+function defaultNewFilePath(files: MarkdownFileNode[], selection: FileTreeDeleteTarget | null) {
   let today = new Date().toISOString().slice(0, 10);
+  let parentPath =
+    selection?.kind == "directory"
+      ? selection.path
+      : selection?.kind == "file"
+        ? directoryPath(selection.path)
+        : "";
   let baseName = `${today}.md`;
-  if (!files.some((file) => file.path == baseName)) return baseName;
+  let basePath = joinWorkspacePath(parentPath, baseName);
+  if (!files.some((file) => file.path == basePath)) return basePath;
 
   for (let index = 2; index < 1000; index += 1) {
-    let name = `${today}-${index}.md`;
-    if (!files.some((file) => file.path == name)) return name;
+    let path = joinWorkspacePath(parentPath, `${today}-${index}.md`);
+    if (!files.some((file) => file.path == path)) return path;
   }
 
-  return "Untitled.md";
+  return joinWorkspacePath(parentPath, "Untitled.md");
 }
 
 function saveStateLabel(saveState: SaveState, selectedFile: MarkdownFileNode | null) {

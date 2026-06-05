@@ -159,6 +159,25 @@ describe("Dropbox workspace backend", () => {
     expect(writes).toEqual([]);
   });
 
+  it("deletes folder paths", async () => {
+    let deletes: string[] = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async delete(path) {
+            deletes.push(path);
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    expect(backend.deleteDirectory).toBeDefined();
+    await backend.deleteDirectory!("notes/daily/");
+
+    expect(deletes).toEqual(["notes/daily"]);
+  });
+
   it("does not create parent directories when the operator cannot create them", async () => {
     let createDirCalls = 0;
     let writes: string[] = [];

@@ -7,12 +7,43 @@ import type {
 } from "@/lib/workspace-backend";
 
 type FileTreeProps = {
+  onDeleteEntry: (target: FileTreeDeleteTarget) => void;
+  onSelectEntry: (target: FileTreeDeleteTarget) => void;
   root: MarkdownDirectoryNode | null;
   selectedPath: null | string;
   onSelectFile: (file: MarkdownFileNode) => void;
 };
 
+export type FileTreeDeleteTarget = {
+  kind: "directory" | "file";
+  name: string;
+  path: string;
+};
+
+const fileTreeIconSpriteSheet = `<svg data-icon-sprite aria-hidden="true" width="0" height="0">
+  <symbol id="local-md-icon-trash" viewBox="0 0 24 24">
+    <path d="M3 6h18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+    <path d="m19 6-1 14c-.1 1.1-1 2-2 2H8c-1.1 0-1.9-.9-2-2L5 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+    <path d="M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+  </symbol>
+</svg>`;
+
+const fileTreeUnsafeCSS = `
+  [data-type='context-menu-trigger'] {
+    border-radius: 6px;
+  }
+
+  [data-type='context-menu-trigger']:hover,
+  [data-type='context-menu-trigger'][aria-expanded='true'] {
+    color: #ef4444;
+    background: color-mix(in srgb, #ef4444 12%, transparent);
+  }
+`;
+
 export const FileTree = memo(function FileTree({
+  onDeleteEntry,
+  onSelectEntry,
   root,
   selectedPath,
   onSelectFile,
@@ -23,6 +54,8 @@ export const FileTree = memo(function FileTree({
   let containerRef = useRef<HTMLDivElement | null>(null);
   let latestSelectionRef = useRef({
     filesByPath,
+    onDeleteEntry,
+    onSelectEntry,
     onSelectFile,
     selectedPath,
   });
@@ -32,10 +65,12 @@ export const FileTree = memo(function FileTree({
   useEffect(() => {
     latestSelectionRef.current = {
       filesByPath,
+      onDeleteEntry,
+      onSelectEntry,
       onSelectFile,
       selectedPath,
     };
-  }, [filesByPath, onSelectFile, selectedPath]);
+  }, [filesByPath, onDeleteEntry, onSelectEntry, onSelectFile, selectedPath]);
 
   useEffect(() => {
     let container = containerRef.current;
@@ -44,9 +79,27 @@ export const FileTree = memo(function FileTree({
     let model = new TreesFileTree({
       density: "compact",
       flattenEmptyDirectories: true,
+      composition: {
+        contextMenu: {
+          buttonVisibility: "when-needed",
+          enabled: true,
+          onOpen(item, context) {
+            context.close({ restoreFocus: false });
+            latestSelectionRef.current.onDeleteEntry(normalizeDeleteTarget(item));
+          },
+          triggerMode: "button",
+        },
+      },
       icons: {
         colored: true,
-        set: "minimal",
+        remap: {
+          "file-tree-icon-ellipsis": {
+            name: "local-md-icon-trash",
+            viewBox: "0 0 24 24",
+          },
+        },
+        set: "complete",
+        spriteSheet: fileTreeIconSpriteSheet,
       },
       initialExpandedPaths: expandedPaths,
       initialSelectedPaths: selectedPath ? [selectedPath] : [],
@@ -62,13 +115,17 @@ export const FileTree = memo(function FileTree({
         let {
           filesByPath: latestFilesByPath,
           onSelectFile: latestOnSelectFile,
+          onSelectEntry: latestOnSelectEntry,
           selectedPath,
         } = latestSelectionRef.current;
+        let target = resolveSelectionTarget(nextPath, latestFilesByPath);
+        if (target) latestOnSelectEntry(target);
         if (nextPath == selectedPath) return;
 
         let file = latestFilesByPath.get(nextPath);
         if (file) latestOnSelectFile(file);
       },
+      unsafeCSS: fileTreeUnsafeCSS,
     });
 
     modelRef.current = model;
@@ -112,6 +169,36 @@ export const FileTree = memo(function FileTree({
 
   return <div ref={containerRef} className="local-md-file-tree min-h-0 flex-1 overflow-auto" />;
 });
+
+function normalizeDeleteTarget(target: FileTreeDeleteTarget): FileTreeDeleteTarget {
+  return {
+    ...target,
+    path: target.kind == "directory" ? target.path.replace(/\/+$/g, "") : target.path,
+  };
+}
+
+function resolveSelectionTarget(
+  path: string,
+  filesByPath: Map<string, MarkdownFileNode>,
+): FileTreeDeleteTarget | null {
+  let file = filesByPath.get(path);
+  if (file) {
+    return {
+      kind: "file",
+      name: file.name,
+      path: file.path,
+    };
+  }
+
+  let directoryPath = path.replace(/\/+$/g, "");
+  if (!directoryPath) return null;
+
+  return {
+    kind: "directory",
+    name: directoryPath.split("/").at(-1) ?? directoryPath,
+    path: directoryPath,
+  };
+}
 
 function collectTreePaths(nodes: MarkdownTreeNode[]) {
   let paths: string[] = [];

@@ -48,6 +48,22 @@ describe("local workspace backend", () => {
       ],
     });
   });
+
+  it("deletes folders recursively", async () => {
+    let root = new MemoryDirectoryHandle("Workspace");
+    let backend = createLocalWorkspaceBackend(root);
+
+    await backend.createFile("notes/daily/today.md");
+    expect(backend.deleteDirectory).toBeDefined();
+    await expect(backend.deleteDirectory!("notes")).resolves.toBeUndefined();
+
+    await expect(backend.readTree()).resolves.toMatchObject({
+      children: [],
+      kind: "directory",
+      name: "Workspace",
+      path: "",
+    });
+  });
 });
 
 class MemoryFileHandle {
@@ -115,8 +131,16 @@ class MemoryDirectoryHandle implements AccessDirectoryHandle {
     return "granted" as const;
   }
 
-  async removeEntry(name: string) {
-    if (this.files.delete(name) || this.directories.delete(name)) return;
+  async removeEntry(name: string, options: { recursive?: boolean } = {}) {
+    if (this.files.delete(name)) return;
+    let directory = this.directories.get(name);
+    if (directory) {
+      if (!options.recursive && !directory.isEmpty()) {
+        throw new DOMException("Directory is not empty.", "InvalidModificationError");
+      }
+      this.directories.delete(name);
+      return;
+    }
     throw new DOMException("Entry not found.", "NotFoundError");
   }
 
@@ -127,5 +151,9 @@ class MemoryDirectoryHandle implements AccessDirectoryHandle {
   async *values() {
     for (let directory of this.directories.values()) yield directory;
     for (let name of this.files.keys()) yield new MemoryFileHandle(name, this.files);
+  }
+
+  private isEmpty() {
+    return this.directories.size == 0 && this.files.size == 0;
   }
 }
