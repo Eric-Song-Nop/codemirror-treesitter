@@ -713,9 +713,10 @@ export function App() {
             ? await workspaceBackend.renameFile(selectedFile.path, value)
             : null;
 
-      if (!nextPath) return;
       setFileDialogMode(null);
-      await loadTree(workspaceBackend, nextPath);
+      await loadTree(workspaceBackend, nextPath ?? selectedFileRef.current?.path ?? null, {
+        saveBeforeSelect: false,
+      });
     } catch (error) {
       setFileDialogError(errorToMessage(error));
     } finally {
@@ -1223,18 +1224,21 @@ function FileNameDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>{createMode ? "New file" : "Rename file"}</DialogTitle>
+            <DialogTitle>{createMode ? "New file or folder" : "Rename file"}</DialogTitle>
             <DialogDescription className="sr-only">
-              {createMode ? "Create a Markdown file." : "Rename the selected Markdown file."}
+              {createMode
+                ? "Create a Markdown file or folder path."
+                : "Rename the selected Markdown file."}
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
             <Field data-invalid={Boolean(error)}>
-              <FieldLabel htmlFor={inputId}>File name</FieldLabel>
+              <FieldLabel htmlFor={inputId}>{createMode ? "Path" : "File name"}</FieldLabel>
               <Input
                 id={inputId}
                 aria-invalid={Boolean(error)}
                 autoFocus
+                placeholder={createMode ? "file.md, dir/, or dir/file.md" : undefined}
                 value={value}
                 onChange={(event) => onValueChange(event.target.value)}
               />

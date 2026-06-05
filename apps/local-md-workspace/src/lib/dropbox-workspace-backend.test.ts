@@ -75,6 +75,7 @@ describe("Dropbox workspace backend", () => {
       { isDirectory: false, isFile: true, path: "notes/today.md" },
       { isDirectory: false, isFile: true, path: "notes/tomorrow.txt" },
       { isDirectory: true, isFile: false, path: "notes" },
+      { isDirectory: true, isFile: false, path: "drafts" },
       { isDirectory: false, isFile: true, path: "root.md" },
     ];
     let backend = createDropboxWorkspaceBackend({
@@ -91,6 +92,12 @@ describe("Dropbox workspace backend", () => {
 
     await expect(backend.readTree()).resolves.toMatchObject({
       children: [
+        {
+          children: [],
+          kind: "directory",
+          name: "drafts",
+          path: "drafts",
+        },
         {
           children: [{ kind: "file", name: "today.md", path: "notes/today.md" }],
           kind: "directory",
@@ -125,8 +132,31 @@ describe("Dropbox workspace backend", () => {
     await backend.createFile("notes/daily/today.md");
     await backend.writeFile("notes/daily/today.md", "# updated\n");
 
-    expect(createdDirectories).toEqual(["notes/daily"]);
+    expect(createdDirectories).toEqual(["notes", "notes/daily"]);
     expect(writes).toEqual(["notes/daily/today.md", "notes/daily/today.md"]);
+  });
+
+  it("creates folder paths from trailing-slash create targets", async () => {
+    let createdDirectories: string[] = [];
+    let writes: string[] = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async createDir(path) {
+            createdDirectories.push(path);
+          },
+          async writeText(path) {
+            writes.push(path);
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await expect(backend.createFile("notes/daily/")).resolves.toBeNull();
+
+    expect(createdDirectories).toEqual(["notes", "notes/daily"]);
+    expect(writes).toEqual([]);
   });
 
   it("does not create parent directories when the operator cannot create them", async () => {

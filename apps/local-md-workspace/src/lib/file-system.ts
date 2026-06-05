@@ -1,7 +1,7 @@
 import {
   joinWorkspacePath,
   normalizeMarkdownFileName,
-  normalizeMarkdownPath,
+  normalizeWorkspaceCreateTarget,
   sortMarkdownTreeNodes,
   starterMarkdown,
   type CreatedWorkspaceImageNode,
@@ -9,7 +9,7 @@ import {
   type MarkdownTreeNode,
   type WorkspaceBackend,
   type WorkspaceImageNode,
-} from "@/lib/workspace-backend";
+} from "./workspace-backend.ts";
 
 type AccessPermissionMode = "read" | "readwrite";
 
@@ -158,7 +158,13 @@ async function createImageAsset(
 }
 
 async function createMarkdownFile(rootHandle: AccessDirectoryHandle, rawPath: string) {
-  let path = normalizeMarkdownPath(rawPath);
+  let target = normalizeWorkspaceCreateTarget(rawPath);
+  if (target.kind == "directory") {
+    await resolveDirectoryPath(rootHandle, target.path, true);
+    return null;
+  }
+
+  let path = target.path;
   let { directory, fileName } = await resolveParentDirectory(rootHandle, path, true);
   if (await fileExists(directory, fileName)) {
     throw new Error(`${path} already exists.`);
@@ -202,14 +208,12 @@ async function readDirectoryChildren(handle: AccessDirectoryHandle, path: string
     let entryPath = joinWorkspacePath(path, entry.name);
     if (entry.kind == "directory") {
       let directoryChildren = await readDirectoryChildren(entry, entryPath);
-      if (directoryChildren.length) {
-        children.push({
-          children: directoryChildren,
-          kind: "directory",
-          name: entry.name,
-          path: entryPath,
-        });
-      }
+      children.push({
+        children: directoryChildren,
+        kind: "directory",
+        name: entry.name,
+        path: entryPath,
+      });
     } else if (/\.md$/i.test(entry.name)) {
       children.push({
         kind: "file",
@@ -312,6 +316,18 @@ async function resolveFileHandle(rootHandle: AccessDirectoryHandle, path: string
   return directory.getFileHandle(fileName);
 }
 
+async function resolveDirectoryPath(
+  rootHandle: AccessDirectoryHandle,
+  path: string,
+  create: boolean,
+) {
+  let directory = rootHandle;
+  for (let part of path.split("/").filter(Boolean)) {
+    directory = await directory.getDirectoryHandle(part, { create });
+  }
+  return directory;
+}
+
 async function resolveParentDirectory(
   rootHandle: AccessDirectoryHandle,
   path: string,
@@ -321,10 +337,7 @@ async function resolveParentDirectory(
   let fileName = parts.pop();
   if (!fileName) throw new Error("Enter a file name.");
 
-  let directory = rootHandle;
-  for (let part of parts) {
-    directory = await directory.getDirectoryHandle(part, { create });
-  }
+  let directory = await resolveDirectoryPath(rootHandle, parts.join("/"), create);
 
   return {
     directory,

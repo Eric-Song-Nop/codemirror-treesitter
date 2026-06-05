@@ -29,7 +29,7 @@ export type WorkspaceBackend = {
   id: string;
   kind: WorkspaceBackendKind;
   name: string;
-  createFile(path: string): Promise<string>;
+  createFile(path: string): Promise<string | null>;
   createImageAsset?: (
     markdownFilePath: string,
     imageFile: File,
@@ -41,6 +41,16 @@ export type WorkspaceBackend = {
   renameFile(path: string, rawName: string): Promise<string>;
   writeFile(path: string, value: string): Promise<void>;
 };
+
+export type WorkspaceCreateTarget =
+  | {
+      kind: "directory";
+      path: string;
+    }
+  | {
+      kind: "file";
+      path: string;
+    };
 
 export function flattenMarkdownFiles(tree: MarkdownDirectoryNode) {
   let files: MarkdownFileNode[] = [];
@@ -56,6 +66,29 @@ export function normalizeMarkdownPath(rawPath: string) {
   if (!/\.md$/i.test(fileName)) fileName = `${fileName}.md`;
   parts[parts.length - 1] = fileName;
   return parts.join("/");
+}
+
+export function normalizeWorkspaceCreateTarget(rawPath: string): WorkspaceCreateTarget {
+  let trimmed = rawPath.trim().replace(/\\/g, "/");
+  let parts = splitUserPath(trimmed);
+  let createDirectory = trimmed.endsWith("/");
+  if (!parts.length)
+    throw new Error(createDirectory ? "Enter a folder name." : "Enter a file name.");
+
+  if (createDirectory) {
+    return {
+      kind: "directory",
+      path: parts.join("/"),
+    };
+  }
+
+  let fileName = parts[parts.length - 1]!;
+  if (!/\.md$/i.test(fileName)) fileName = `${fileName}.md`;
+  parts[parts.length - 1] = fileName;
+  return {
+    kind: "file",
+    path: parts.join("/"),
+  };
 }
 
 export function normalizeMarkdownFileName(rawName: string) {
@@ -88,6 +121,24 @@ export function compareMarkdownTreeNodes(a: MarkdownTreeNode, b: MarkdownTreeNod
 }
 
 export function buildMarkdownTreeFromPaths(name: string, paths: string[]) {
+  return buildMarkdownTreeFromEntries(
+    name,
+    paths.map((path) => ({
+      isDirectory: false,
+      isFile: true,
+      path,
+    })),
+  );
+}
+
+export function buildMarkdownTreeFromEntries(
+  name: string,
+  entries: Array<{
+    isDirectory: boolean;
+    isFile: boolean;
+    path: string;
+  }>,
+) {
   let root: MarkdownDirectoryNode = {
     children: [],
     kind: "directory",
@@ -97,33 +148,44 @@ export function buildMarkdownTreeFromPaths(name: string, paths: string[]) {
 
   let directories = new Map<string, MarkdownDirectoryNode>([["", root]]);
 
-  for (let rawPath of paths) {
-    let path = normalizeBackendPath(rawPath);
-    if (!path || !/\.md$/i.test(path)) continue;
-
-    let parts = path.split("/");
-    let fileName = parts.pop();
-    if (!fileName) continue;
-
+  let ensureDirectory = (directoryPath: string) => {
     let parent = root;
     let parentPath = "";
-    for (let part of parts) {
-      let directoryPath = joinWorkspacePath(parentPath, part);
-      let directory = directories.get(directoryPath);
+    for (let part of directoryPath.split("/").filter(Boolean)) {
+      let path = joinWorkspacePath(parentPath, part);
+      let directory = directories.get(path);
       if (!directory) {
         directory = {
           children: [],
           kind: "directory",
           name: part,
-          path: directoryPath,
+          path,
         };
-        directories.set(directoryPath, directory);
+        directories.set(path, directory);
         parent.children.push(directory);
       }
 
       parent = directory;
-      parentPath = directoryPath;
+      parentPath = path;
     }
+    return parent;
+  };
+
+  for (let entry of entries) {
+    let path = normalizeBackendPath(entry.path);
+    if (!path) continue;
+
+    if (entry.isDirectory) {
+      ensureDirectory(path);
+      continue;
+    }
+    if (!entry.isFile || !/\.md$/i.test(path)) continue;
+
+    let parts = path.split("/");
+    let fileName = parts.pop();
+    if (!fileName) continue;
+
+    let parent = ensureDirectory(parts.join("/"));
 
     parent.children.push({
       kind: "file",

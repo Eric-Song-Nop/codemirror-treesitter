@@ -6,9 +6,9 @@ import type {
 } from "@codemirror-treesitter/opendal-wasm-browser";
 import type { DropboxAccessToken } from "./dropbox-oauth.ts";
 import {
-  buildMarkdownTreeFromPaths,
+  buildMarkdownTreeFromEntries,
   normalizeMarkdownFileName,
-  normalizeMarkdownPath,
+  normalizeWorkspaceCreateTarget,
   starterMarkdown,
   type WorkspaceBackend,
 } from "./workspace-backend.ts";
@@ -91,10 +91,28 @@ export function createDropboxWorkspaceBackend(
     let parent = parentDirectory(path);
     if (!parent || createdDirectories.has(parent)) return;
 
+    await createDirectory(parent, false);
+  }
+
+  async function createDirectory(path: string, allowImplicitParent = true) {
+    let normalized = normalizeDropboxDirectoryPath(path);
+    if (!normalized || createdDirectories.has(normalized)) return;
+
     await withDropboxRetry(async (operator) => {
-      if (!operator.capabilities().nativeCreateDir) return;
-      await operator.createDir(parent);
-      createdDirectories.add(parent);
+      if (!operator.capabilities().nativeCreateDir) {
+        if (allowImplicitParent) {
+          throw new Error("OpenDAL backend does not support folder creation.");
+        }
+        return;
+      }
+
+      let current = "";
+      for (let part of normalized.split("/")) {
+        current = current ? `${current}/${part}` : part;
+        if (createdDirectories.has(current)) continue;
+        await operator.createDir(current);
+        createdDirectories.add(current);
+      }
     });
   }
 
@@ -148,7 +166,13 @@ export function createDropboxWorkspaceBackend(
     kind: "opendal-dropbox",
     name: options.name ?? "Dropbox",
     async createFile(path) {
-      let nextPath = normalizeMarkdownPath(path);
+      let target = normalizeWorkspaceCreateTarget(path);
+      if (target.kind == "directory") {
+        await createDirectory(target.path);
+        return null;
+      }
+
+      let nextPath = target.path;
       await queueWrite(nextPath, starterMarkdown(nextPath));
       return nextPath;
     },
@@ -160,10 +184,7 @@ export function createDropboxWorkspaceBackend(
     },
     async readTree() {
       let entries = await withDropboxRetry((operator) => operator.list(""));
-      return buildMarkdownTreeFromPaths(
-        options.name ?? "Dropbox",
-        entries.filter((entry) => entry.isFile).map((entry) => entry.path),
-      );
+      return buildMarkdownTreeFromEntries(options.name ?? "Dropbox", entries);
     },
     async renameFile(path, rawName) {
       let nextName = normalizeMarkdownFileName(rawName);
@@ -207,6 +228,14 @@ function replaceFileName(path: string, nextName: string) {
 function parentDirectory(path: string) {
   let index = path.lastIndexOf("/");
   return index == -1 ? "" : path.slice(0, index);
+}
+
+function normalizeDropboxDirectoryPath(path: string) {
+  let normalized = path
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "");
+  return normalized || "";
 }
 
 function isDropboxExpiredTokenError(error: unknown) {

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  buildMarkdownTreeFromEntries,
   buildMarkdownTreeFromPaths,
   flattenMarkdownFiles,
   normalizeMarkdownFileName,
   normalizeMarkdownPath,
+  normalizeWorkspaceCreateTarget,
   starterMarkdown,
 } from "./workspace-backend.ts";
 
@@ -15,8 +17,26 @@ describe("workspace backend path helpers", () => {
     expect(normalizeMarkdownFileName("daily.md")).toBe("daily.md");
   });
 
+  it("normalizes create targets for files and folders", () => {
+    expect(normalizeWorkspaceCreateTarget(" file.md ")).toEqual({
+      kind: "file",
+      path: "file.md",
+    });
+    expect(normalizeWorkspaceCreateTarget("notes/daily")).toEqual({
+      kind: "file",
+      path: "notes/daily.md",
+    });
+    expect(normalizeWorkspaceCreateTarget(" notes\\daily/ ")).toEqual({
+      kind: "directory",
+      path: "notes/daily",
+    });
+  });
+
   it("rejects traversal and path-like file names", () => {
     expect(() => normalizeMarkdownPath("../secret.md")).toThrow("File paths cannot include");
+    expect(() => normalizeWorkspaceCreateTarget("../secret.md")).toThrow(
+      "File paths cannot include",
+    );
     expect(() => normalizeMarkdownFileName("notes/daily.md")).toThrow(
       "Enter a file name, not a path.",
     );
@@ -61,6 +81,27 @@ describe("workspace backend path helpers", () => {
       "notes/10.md",
       "notes/today.md",
       "root.md",
+    ]);
+  });
+
+  it("synthesizes empty directories from backend entries", () => {
+    let tree = buildMarkdownTreeFromEntries("Dropbox", [
+      { isDirectory: true, isFile: false, path: "drafts" },
+      { isDirectory: true, isFile: false, path: "notes/archive" },
+      { isDirectory: false, isFile: true, path: "notes/today.md" },
+    ]);
+
+    expect(tree.children).toMatchObject([
+      { children: [], kind: "directory", name: "drafts", path: "drafts" },
+      {
+        children: [
+          { children: [], kind: "directory", name: "archive", path: "notes/archive" },
+          { kind: "file", name: "today.md", path: "notes/today.md" },
+        ],
+        kind: "directory",
+        name: "notes",
+        path: "notes",
+      },
     ]);
   });
 });

@@ -187,7 +187,7 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
     sessionId,
   );
 
-  if (!state.body.includes("Saved to disk") || state.savedValue != nextValue) {
+  if (!state.body.includes("Saved") || state.savedValue != nextValue) {
     throw new Error(
       `Local workspace flow did not save through the backend: ${JSON.stringify(state)}`,
     );
