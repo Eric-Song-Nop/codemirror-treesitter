@@ -37,7 +37,6 @@ const fileTreeUnsafeCSS = `
   [data-type='context-menu-trigger']:hover,
   [data-type='context-menu-trigger'][aria-expanded='true'] {
     color: #ef4444;
-    background: color-mix(in srgb, #ef4444 12%, transparent);
   }
 `;
 
