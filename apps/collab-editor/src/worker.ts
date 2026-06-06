@@ -69,6 +69,9 @@ const updatedAtKey = "updatedAt";
 const initializedAtKey = "initializedAt";
 const schemaVersionKey = "schemaVersion";
 const sessionKeyPrefix = "session:";
+const updateLogEntryPrefix = "update:";
+const updateLogBytesKey = "updateLogBytes";
+const updateLogSequenceKey = "updateLogSequence";
 const schemaVersion = 1;
 const saveDebounceMs = 750;
 const saveMaxWaitMs = 5000;
@@ -78,6 +81,8 @@ const shareSocketTag = "share";
 const shareAuthTimeoutMs = 10_000;
 const shareStatusBroadcastMinIntervalMs = 250;
 const maxAuthVersionVectorEntries = 128;
+const maxStoredUpdateLogBytes = maxSnapshotBytes;
+const maxStoredUpdateLogEntries = 256;
 const requestBodyTooLarge = Symbol("requestBodyTooLarge");
 
 export class CollabRoom extends DurableObject<Env> {
@@ -98,14 +103,19 @@ export class CollabRoom extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     void ctx.blockConcurrencyWhile(async () => {
-      let [snapshot, initializedAt, shareRecord, pendingHostSave] = await Promise.all([
+      let [snapshot, initializedAt, shareRecord, pendingHostSave, updateLog] = await Promise.all([
         this.ctx.storage.get<Uint8Array | ArrayBuffer>(snapshotKey),
         this.ctx.storage.get<number>(initializedAtKey),
         this.ctx.storage.get<ShareRecord>(shareRecordKey),
         this.ctx.storage.get<boolean>(pendingHostSaveKey),
+        this.ctx.storage.list<Uint8Array | ArrayBuffer>({ prefix: updateLogEntryPrefix }),
       ]);
       if (snapshot) this.doc.import(toUint8Array(snapshot));
-      this.initialized = initializedAt != null || snapshot != null;
+      let updates = [...updateLog.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([, update]) => toUint8Array(update));
+      if (updates.length) this.doc.importBatch(updates);
+      this.initialized = initializedAt != null || snapshot != null || updates.length > 0;
       this.shareRecord = shareRecord ?? null;
       this.pendingHostSave = pendingHostSave ?? false;
       await this.scheduleShareMaintenance();
@@ -389,6 +399,8 @@ export class CollabRoom extends DurableObject<Env> {
     if (!this.ensureSocketShareAuthorization(ws)) return;
 
     let relay: WireMessage[] = [];
+    let acceptedDocumentUpdates: Uint8Array[] = [];
+    let acceptedSnapshot: Uint8Array | null = null;
     let documentChanged = false;
     let hostSaveAcked = false;
     let relayAckSequence: number | null = null;
@@ -424,7 +436,12 @@ export class CollabRoom extends DurableObject<Env> {
         if (this.shareRecord && !this.enforceDocumentSnapshotLimit(ws)) return;
         this.initialized = true;
         documentChanged = this.shareRecord != null;
-        this.markDirty();
+        if (this.shareRecord) {
+          if (item.kind == WireKind.Snapshot) acceptedSnapshot = item.payload;
+          else acceptedDocumentUpdates.push(item.payload);
+        } else {
+          this.markDirty();
+        }
         relay.push(item);
       } else if (item.kind == WireKind.Presence) {
         relay.push(item);
@@ -445,10 +462,28 @@ export class CollabRoom extends DurableObject<Env> {
       }
     }
 
-    if (relay.length) this.broadcast(ws, encodeWireBatch(relay));
     if (this.shareRecord && (documentChanged || hostSaveAcked)) {
+      if (documentChanged) {
+        try {
+          if (acceptedSnapshot) {
+            await this.persistShareSnapshot(acceptedSnapshot);
+          } else {
+            let updateLogBytes = await this.appendStoredDocumentUpdates(acceptedDocumentUpdates);
+            if (updateLogBytes >= maxStoredUpdateLogBytes) {
+              await this.flushSnapshot({ force: true });
+            }
+          }
+        } catch (error: unknown) {
+          console.error("Failed to persist shared file update log", error);
+          ws.close(1011, "Failed to persist shared file update");
+          return;
+        }
+      }
+      if (relay.length) this.broadcast(ws, encodeWireBatch(relay));
       await this.setPendingHostSave(documentChanged && !hostSaveAcked);
       this.broadcastShareStatus();
+    } else if (relay.length) {
+      this.broadcast(ws, encodeWireBatch(relay));
     }
     if (relayAckSequence != null) this.sendRelayAck(ws, relayAckSequence);
   }
@@ -460,11 +495,16 @@ export class CollabRoom extends DurableObject<Env> {
     _wasClean: boolean,
   ): Promise<void> {
     this.sockets.delete(ws);
+    if (this.shareRecord) return;
     await this.flushSnapshot();
   }
 
   async webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
     this.sockets.delete(ws);
+    if (this.shareRecord) {
+      ws.close(1011, "WebSocket error");
+      return;
+    }
     await this.flushSnapshot();
     ws.close(1011, "WebSocket error");
   }
@@ -563,6 +603,7 @@ export class CollabRoom extends DurableObject<Env> {
     this.closeShareSockets(1008, "Share retention expired");
 
     let sessionRecords = await this.ctx.storage.list({ prefix: sessionKeyPrefix });
+    let updateLogRecords = await this.ctx.storage.list({ prefix: updateLogEntryPrefix });
     await this.ctx.storage.delete([
       shareRecordKey,
       pendingHostSaveKey,
@@ -570,7 +611,10 @@ export class CollabRoom extends DurableObject<Env> {
       updatedAtKey,
       initializedAtKey,
       schemaVersionKey,
+      updateLogBytesKey,
+      updateLogSequenceKey,
       ...sessionRecords.keys(),
+      ...updateLogRecords.keys(),
     ]);
     await this.ctx.storage.deleteAlarm();
 
@@ -791,10 +835,10 @@ export class CollabRoom extends DurableObject<Env> {
     }
   }
 
-  private async flushSnapshot(): Promise<void> {
+  private async flushSnapshot(options: { force?: boolean } = {}): Promise<void> {
     if (this.saving) return;
     this.clearSaveTimers();
-    if (!this.dirty) return;
+    if (!this.dirty && !options.force) return;
 
     this.saving = true;
     this.dirty = false;
@@ -806,6 +850,7 @@ export class CollabRoom extends DurableObject<Env> {
         this.ctx.storage.put(updatedAtKey, Date.now()),
         this.ctx.storage.put(initializedAtKey, Date.now()),
         this.ctx.storage.put(schemaVersionKey, schemaVersion),
+        this.deleteStoredUpdateLog(),
       ]);
       this.firstDirtyAt = 0;
       this.retryDelayMs = 1000;
@@ -819,6 +864,57 @@ export class CollabRoom extends DurableObject<Env> {
         this.scheduleSave();
       }
     }
+  }
+
+  private async persistShareSnapshot(snapshot: Uint8Array) {
+    await Promise.all([
+      this.ctx.storage.put(snapshotKey, snapshot),
+      this.ctx.storage.put(updatedAtKey, Date.now()),
+      this.ctx.storage.put(initializedAtKey, Date.now()),
+      this.ctx.storage.put(schemaVersionKey, schemaVersion),
+      this.deleteStoredUpdateLog(),
+    ]);
+    this.dirty = false;
+    this.firstDirtyAt = 0;
+  }
+
+  private async appendStoredDocumentUpdates(updates: Uint8Array[]) {
+    if (!updates.length) return (await this.ctx.storage.get<number>(updateLogBytesKey)) ?? 0;
+
+    let [previousSequence, previousBytes, existingEntries] = await Promise.all([
+      this.ctx.storage.get<number>(updateLogSequenceKey),
+      this.ctx.storage.get<number>(updateLogBytesKey),
+      this.ctx.storage.list({ prefix: updateLogEntryPrefix }),
+    ]);
+    if (existingEntries.size + updates.length > maxStoredUpdateLogEntries) {
+      await this.flushSnapshot({ force: true });
+      return 0;
+    }
+
+    let nextSequence = previousSequence ?? 0;
+    let nextBytes = previousBytes ?? 0;
+    let writes: Array<Promise<void>> = [];
+    for (let update of updates) {
+      nextSequence += 1;
+      let payload = new Uint8Array(update);
+      nextBytes += payload.byteLength;
+      writes.push(this.ctx.storage.put(updateLogEntryKey(nextSequence), payload));
+    }
+    writes.push(
+      this.ctx.storage.put(updateLogSequenceKey, nextSequence),
+      this.ctx.storage.put(updateLogBytesKey, nextBytes),
+      this.ctx.storage.put(updatedAtKey, Date.now()),
+      this.ctx.storage.put(initializedAtKey, Date.now()),
+      this.ctx.storage.put(schemaVersionKey, schemaVersion),
+    );
+    await Promise.all(writes);
+    return nextBytes;
+  }
+
+  private async deleteStoredUpdateLog() {
+    let updateLogRecords = await this.ctx.storage.list({ prefix: updateLogEntryPrefix });
+    let keys = [...updateLogRecords.keys(), updateLogBytesKey, updateLogSequenceKey];
+    if (keys.length) await this.ctx.storage.delete(keys);
   }
 
   private async handleControlMessage(ws: WebSocket, message: string) {
@@ -1006,6 +1102,10 @@ function shareFromPath(pathname: string) {
 
 function sessionKey(tokenHash: string) {
   return `${sessionKeyPrefix}${tokenHash}`;
+}
+
+function updateLogEntryKey(sequence: number) {
+  return `${updateLogEntryPrefix}${String(sequence).padStart(12, "0")}`;
 }
 
 function parseRelayAckRequest(payload: Uint8Array) {
