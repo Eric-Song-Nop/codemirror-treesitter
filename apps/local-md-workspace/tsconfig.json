@@ -18,6 +18,7 @@
         "../../packages/opendal-wasm-browser/src/index.ts"
       ],
       "@codemirror-treesitter/theme-gruvbox": ["../../packages/theme-gruvbox/src/index.ts"],
+      "loro-codemirror": ["./src/loro-codemirror.d.ts"],
       "@/*": ["./src/*"]
     }
   },

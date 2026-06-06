@@ -8,19 +8,27 @@ import {
   type ComponentProps,
 } from "react";
 import {
+  CheckCircle2Icon,
   CloudIcon,
+  Clock3Icon,
   CopyIcon,
+  FileTextIcon,
   FolderOpenIcon,
   ImagePlusIcon,
+  LinkIcon,
   MenuIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
   SaveIcon,
   Share2Icon,
+  ShieldCheckIcon,
   Trash2Icon,
   TriangleAlertIcon,
+  UserRoundIcon,
+  UsersRoundIcon,
   WrenchIcon,
+  type LucideIcon,
 } from "lucide-react";
 import type { Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
@@ -2119,99 +2127,150 @@ function ShareFileDialog({
 }: ShareFileDialogProps) {
   let expirationId = "shared-file-expiration";
   let linkId = "shared-file-link";
+  let filePath = file?.path ?? "No file selected";
+  let pendingHostSave = activeShare?.pendingHostSave;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <div className="flex flex-col gap-4">
-          <DialogHeader>
-            <DialogTitle>Share file</DialogTitle>
-            <DialogDescription className="sr-only">
-              Create an edit link for the selected Markdown file.
-            </DialogDescription>
+      <DialogContent className="overflow-hidden p-0 sm:max-w-xl">
+        <div className="flex max-h-[min(720px,calc(100svh-2rem))] flex-col">
+          <DialogHeader className="border-b bg-muted/30 px-5 py-4 pr-12">
+            <div className="flex items-start gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
+                <Share2Icon className="size-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <DialogTitle className="text-lg">Share file</DialogTitle>
+                  <Badge variant={shared ? "default" : "secondary"}>
+                    {shared ? "Active" : "Not shared"}
+                  </Badge>
+                </div>
+                <DialogDescription className="mt-1 flex min-w-0 items-center gap-1.5">
+                  <FileTextIcon className="size-3.5 shrink-0" />
+                  <span className="truncate">{filePath}</span>
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
-          <FieldGroup>
-            <Field>
-              <FieldLabel>File</FieldLabel>
-              <div className="truncate rounded-md border bg-muted/30 px-3 py-2 text-sm">
-                {file?.path ?? "No file selected"}
-              </div>
-            </Field>
-            <Field>
-              <FieldLabel>Permission</FieldLabel>
-              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-                Anyone with this link can edit
-              </div>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor={expirationId}>Expiration</FieldLabel>
-              <select
-                id={expirationId}
-                className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={busy}
-                value={expiration}
-                onChange={(event) =>
-                  onExpirationChange(event.currentTarget.value as ShareExpirationOption)
-                }
+          <div className="flex flex-col gap-4 overflow-y-auto px-5 py-4">
+            {error && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
               >
-                <option value="24h">24 hours</option>
-                <option value="7d">7 days</option>
-                <option value="30d">30 days</option>
-                <option value="never">Never</option>
-              </select>
-            </Field>
-            {link && (
-              <Field>
-                <FieldLabel htmlFor={linkId}>Link</FieldLabel>
-                <div className="flex gap-2">
-                  <Input id={linkId} readOnly value={link} />
-                  <Button type="button" variant="outline" disabled={busy} onClick={onCopyLink}>
+                <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {link ? (
+              <div className="rounded-lg border bg-card/60 p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <LinkIcon className="size-4 shrink-0 text-primary" />
+                    <div className="text-sm font-medium">Edit link</div>
+                  </div>
+                  <Badge variant="outline">Anyone can edit</Badge>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    id={linkId}
+                    readOnly
+                    value={link}
+                    className="h-8 min-w-0 flex-1 bg-background/70 font-mono text-xs text-muted-foreground"
+                  />
+                  <Button type="button" disabled={busy} onClick={onCopyLink}>
                     <CopyIcon data-icon="inline-start" />
-                    {copied ? "Copied" : "Copy"}
+                    {copied ? "Copied" : "Copy link"}
                   </Button>
                 </div>
-              </Field>
+              </div>
+            ) : shared ? (
+              <div className="flex items-start gap-3 rounded-lg border bg-card/60 p-3">
+                <CheckCircle2Icon className="mt-0.5 size-4 shrink-0 text-primary" />
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">Link is active</div>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Rotate the link to copy a fresh guest URL.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start gap-3 rounded-lg border border-primary/20 bg-primary/10 p-3">
+                <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">Create an edit link</div>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Guests only see this file. They do not get your workspace or Dropbox mirror.
+                  </p>
+                </div>
+              </div>
             )}
-            {shared && !link && (
-              <Field>
-                <FieldLabel>Status</FieldLabel>
-                <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-                  Link active. Rotate to copy a new link.
+
+            {shared && (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <ShareStatusMetric
+                  icon={UsersRoundIcon}
+                  label="Peers"
+                  value={formatPeerCount(activeShare?.peerCount)}
+                />
+                <ShareStatusMetric
+                  icon={UserRoundIcon}
+                  label="Guests"
+                  value={formatGuestCount(activeShare?.guestCount)}
+                />
+                <ShareStatusMetric
+                  icon={pendingHostSave ? Clock3Icon : CheckCircle2Icon}
+                  label="Host save"
+                  tone={pendingHostSave ? "attention" : "good"}
+                  value={formatOwnerShareSaveStatus(pendingHostSave)}
+                />
+              </div>
+            )}
+
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
+                <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">Permission</div>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Anyone with this link can edit this file.
+                  </p>
+                </div>
+              </div>
+              <Field className="rounded-lg border bg-muted/20 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <FieldLabel htmlFor={expirationId}>Expires</FieldLabel>
+                    <p className="text-xs text-muted-foreground">
+                      {formatExpirationHint(expiration)}
+                    </p>
+                  </div>
+                  <select
+                    id={expirationId}
+                    className="h-8 rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={busy}
+                    value={expiration}
+                    onChange={(event) =>
+                      onExpirationChange(event.currentTarget.value as ShareExpirationOption)
+                    }
+                  >
+                    <option value="24h">24h</option>
+                    <option value="7d">7 days</option>
+                    <option value="30d">30 days</option>
+                    <option value="never">Never</option>
+                  </select>
                 </div>
               </Field>
-            )}
-            {shared && (
-              <>
-                <Field>
-                  <FieldLabel>Peers online</FieldLabel>
-                  <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-                    {formatPeerCount(activeShare?.peerCount)}
-                  </div>
-                </Field>
-                <Field>
-                  <FieldLabel>Guests online</FieldLabel>
-                  <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-                    {formatGuestCount(activeShare?.guestCount)}
-                  </div>
-                </Field>
-                <Field>
-                  <FieldLabel>Save status</FieldLabel>
-                  <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-                    {formatOwnerShareSaveStatus(activeShare?.pendingHostSave)}
-                  </div>
-                </Field>
-              </>
-            )}
-            <Field data-invalid={Boolean(error)}>
-              <FieldError>{error}</FieldError>
-            </Field>
-          </FieldGroup>
+            </div>
+          </div>
 
-          <DialogFooter>
+          <DialogFooter className="mx-0 mb-0 rounded-none bg-muted/30 px-5 py-3 sm:items-center sm:justify-between">
             <Button
               type="button"
-              variant="outline"
+              variant="ghost"
               disabled={busy}
               onClick={() => onOpenChange(false)}
             >
@@ -2222,8 +2281,8 @@ function ShareFileDialog({
                 <Button type="button" variant="destructive" disabled={busy} onClick={onStopSharing}>
                   Stop sharing
                 </Button>
-                <Button type="button" disabled={busy} onClick={onRotateLink}>
-                  <Share2Icon data-icon="inline-start" />
+                <Button type="button" variant="outline" disabled={busy} onClick={onRotateLink}>
+                  <RefreshCwIcon data-icon="inline-start" />
                   Rotate link
                 </Button>
               </>
@@ -2240,6 +2299,31 @@ function ShareFileDialog({
   );
 }
 
+type ShareStatusMetricProps = {
+  icon: LucideIcon;
+  label: string;
+  tone?: "attention" | "good" | "neutral";
+  value: string;
+};
+
+function ShareStatusMetric({ icon: Icon, label, tone = "neutral", value }: ShareStatusMetricProps) {
+  return (
+    <div className="rounded-lg border bg-muted/20 p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Icon
+          className={cn(
+            "size-3.5",
+            tone == "good" && "text-primary",
+            tone == "attention" && "text-foreground",
+          )}
+        />
+        {label}
+      </div>
+      <div className="truncate text-sm font-medium">{value}</div>
+    </div>
+  );
+}
+
 function formatPeerCount(count: number | undefined) {
   if (count == null) return "Unknown";
   return count == 1 ? "1 peer" : `${count} peers`;
@@ -2253,6 +2337,19 @@ function formatGuestCount(count: number | undefined) {
 function formatOwnerShareSaveStatus(pendingHostSave: boolean | undefined) {
   if (pendingHostSave == null) return "Waiting for relay status";
   return pendingHostSave ? "Waiting for host" : "Saved to host";
+}
+
+function formatExpirationHint(expiration: ShareExpirationOption) {
+  switch (expiration) {
+    case "24h":
+      return "Short review";
+    case "7d":
+      return "Default";
+    case "30d":
+      return "Long-running";
+    case "never":
+      return "Manual revoke";
+  }
 }
 
 async function createWorkspaceImageAssets(nodes: WorkspaceImageNode[]) {
