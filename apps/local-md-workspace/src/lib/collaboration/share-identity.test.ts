@@ -52,7 +52,6 @@ describe("shared file identity", () => {
     expect(shareExpiresAt("24h", now)).toBe(now + 24 * 60 * 60 * 1000);
     expect(shareExpiresAt("7d", now)).toBe(now + 7 * 24 * 60 * 60 * 1000);
     expect(shareExpiresAt("30d", now)).toBe(now + 30 * 24 * 60 * 60 * 1000);
-    expect(shareExpiresAt("never", now)).toBeNull();
   });
 
   it("hashes secrets without returning the raw capability", async () => {

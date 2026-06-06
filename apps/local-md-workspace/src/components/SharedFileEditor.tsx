@@ -298,6 +298,7 @@ function sharedFileRouteFromHref(href: string): SharedFileRoute {
 function connectionStatusLabel(state: ShareRelayConnectionState) {
   if (state == "connected") return "Connected";
   if (state == "connecting") return "Connecting";
+  if (state == "resync-required") return "Reconnect required";
   return "Offline";
 }
 

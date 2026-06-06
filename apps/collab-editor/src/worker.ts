@@ -28,12 +28,24 @@ import {
   type ShareRole,
   type ShareSessionRecord,
 } from "./share.ts";
+import {
+  maxCreateShareBodyBytes,
+  maxShareControlBodyBytes,
+  maxShareGuestPeers,
+  maxShareSessions,
+  maxSnapshotBytes,
+  maxUpdateFrameBurst,
+  maxUpdateFramesPerMinute,
+  validateWireFrameLimits,
+} from "./share-limits.ts";
 
 type ConnectionAttachment = {
   clientId: string;
   joinedAt: number;
   role?: ShareRole;
   secretHash?: string;
+  updateTokens?: number;
+  updateTokensAt?: number;
 };
 
 type ControlMessage = {
@@ -58,6 +70,7 @@ const saveMaxWaitMs = 5000;
 const maxRetryDelayMs = 30_000;
 const markdownTextKey = "markdown";
 const shareSocketTag = "share";
+const requestBodyTooLarge = Symbol("requestBodyTooLarge");
 
 export class CollabRoom extends DurableObject<Env> {
   private dirty = false;
@@ -119,6 +132,7 @@ export class CollabRoom extends DurableObject<Env> {
     let clientId = normalizeClientId(url.searchParams.get("clientId"));
     let roomId = roomIdFromRequestPath(url.pathname);
     if (!roomId) return new Response("Invalid room id", { status: 400 });
+    if (this.shareRecord) return new Response("Share session required", { status: 403 });
     await this.ensureInitialized(request, roomId, url.searchParams.get("hasLocalSnapshot") == "1");
 
     let pair = new WebSocketPair();
@@ -155,7 +169,11 @@ export class CollabRoom extends DurableObject<Env> {
   }
 
   private async handleCreateShare(request: Request, shareId: string): Promise<Response> {
-    let body = parseCreateShareRequest(await readJson(request));
+    let json = await readJson(request, maxCreateShareBodyBytes);
+    if (json === requestBodyTooLarge)
+      return jsonResponse({ error: "Request too large" }, 413, request);
+
+    let body = parseCreateShareRequest(json);
     if (!body || body.shareId != shareId)
       return jsonResponse({ error: "Invalid share" }, 400, request);
     if (this.shareRecord || this.initialized) {
@@ -164,6 +182,9 @@ export class CollabRoom extends DurableObject<Env> {
 
     let snapshot = decodeBase64(body.snapshot);
     if (!snapshot) return jsonResponse({ error: "Invalid snapshot" }, 400, request);
+    if (snapshot.byteLength > maxSnapshotBytes) {
+      return jsonResponse({ error: "Snapshot too large" }, 413, request);
+    }
 
     let nextDoc = new LoroDoc();
     try {
@@ -214,13 +235,23 @@ export class CollabRoom extends DurableObject<Env> {
     if (!share || share.shareId != shareId)
       return jsonResponse({ error: "Share unavailable" }, 404, request);
 
-    let body = parseCreateSessionRequest(await readJson(request));
+    let json = await readJson(request, maxShareControlBodyBytes);
+    if (json === requestBodyTooLarge)
+      return jsonResponse({ error: "Request too large" }, 413, request);
+
+    let body = parseCreateSessionRequest(json);
     if (!body) return jsonResponse({ error: "Invalid session" }, 400, request);
 
     let secretHash = await hashShareSecret(body.secret);
     let expectedHash = body.role == "host" ? share.hostSecretHash : share.guestSecretHash;
     if (!timingSafeEqualString(secretHash, expectedHash)) {
       return jsonResponse({ error: "Invalid session" }, 403, request);
+    }
+    if (body.role == "guest" && this.shareSocketCount("guest") >= maxShareGuestPeers) {
+      return jsonResponse({ error: "Share is full" }, 429, request);
+    }
+    if ((await this.activeShareSessionCount()) >= maxShareSessions) {
+      return jsonResponse({ error: "Too many active sessions" }, 429, request);
     }
 
     let sessionToken = createSessionToken();
@@ -255,7 +286,11 @@ export class CollabRoom extends DurableObject<Env> {
     let share = this.activeShareRecord();
     if (!share) return jsonResponse({ error: "Share unavailable" }, 404, request);
 
-    let body = parseRotateShareRequest(await readJson(request));
+    let json = await readJson(request, maxShareControlBodyBytes);
+    if (json === requestBodyTooLarge)
+      return jsonResponse({ error: "Request too large" }, 413, request);
+
+    let body = parseRotateShareRequest(json);
     if (!body) return jsonResponse({ error: "Invalid rotate request" }, 400, request);
     if (!(await this.verifyHostSecret(share, body.hostSecret))) {
       return jsonResponse({ error: "Invalid host secret" }, 403, request);
@@ -279,7 +314,11 @@ export class CollabRoom extends DurableObject<Env> {
     let share = this.shareRecord;
     if (!share) return jsonResponse({ error: "Share unavailable" }, 404, request);
 
-    let body = parseRevokeShareRequest(await readJson(request));
+    let json = await readJson(request, maxShareControlBodyBytes);
+    if (json === requestBodyTooLarge)
+      return jsonResponse({ error: "Request too large" }, 413, request);
+
+    let body = parseRevokeShareRequest(json);
     if (!body) return jsonResponse({ error: "Invalid revoke request" }, 400, request);
     if (!(await this.verifyHostSecret(share, body.hostSecret))) {
       return jsonResponse({ error: "Invalid host secret" }, 403, request);
@@ -305,6 +344,9 @@ export class CollabRoom extends DurableObject<Env> {
 
     let session = await this.validateShareSession(url.searchParams.get("sessionToken"));
     if (!session) return new Response("Invalid session", { status: 403 });
+    if (session.role == "guest" && this.shareSocketCount("guest") >= maxShareGuestPeers) {
+      return new Response("Share is full", { status: 429 });
+    }
 
     let pair = new WebSocketPair();
     let [client, server] = Object.values(pair) as [WebSocket, WebSocket];
@@ -313,6 +355,8 @@ export class CollabRoom extends DurableObject<Env> {
       joinedAt: Date.now(),
       role: session.role,
       secretHash: session.secretHash,
+      updateTokens: maxUpdateFrameBurst,
+      updateTokensAt: Date.now(),
     };
 
     this.ctx.acceptWebSocket(server, [shareSocketTag, session.role]);
@@ -339,16 +383,26 @@ export class CollabRoom extends DurableObject<Env> {
     let relayAckSequence: number | null = null;
     let messages: WireMessage[];
 
+    let frame = toUint8Array(message);
     try {
-      messages = decodeWireFrame(message);
+      messages = decodeWireFrame(frame);
     } catch (error: unknown) {
       console.warn("Dropping malformed collaboration frame", error);
       ws.close(1003, "Malformed collaboration frame");
       return;
     }
+    let limits = validateWireFrameLimits(frame.byteLength, messages);
+    if (!limits.ok) {
+      ws.close(limits.closeCode, limits.reason);
+      return;
+    }
 
     for (let item of messages) {
       if (item.kind == WireKind.Doc || item.kind == WireKind.Snapshot) {
+        if (item.kind == WireKind.Doc && !this.consumeUpdateToken(ws)) {
+          ws.close(1008, "Document update rate limit exceeded");
+          return;
+        }
         try {
           this.doc.import(item.payload);
         } catch (error: unknown) {
@@ -500,11 +554,15 @@ export class CollabRoom extends DurableObject<Env> {
     for (let socket of this.shareSockets()) {
       socket.close(code, reason);
     }
-    this.sockets.clear();
+    for (let socket of this.shareSockets()) this.sockets.delete(socket);
   }
 
   private shareSockets() {
-    return new Set([...this.ctx.getWebSockets(shareSocketTag), ...this.sockets]);
+    return new Set(
+      [...this.ctx.getWebSockets(shareSocketTag), ...this.sockets].filter((socket) =>
+        Boolean(this.socketRole(socket)),
+      ),
+    );
   }
 
   private hasHostSocket() {
@@ -559,7 +617,11 @@ export class CollabRoom extends DurableObject<Env> {
 
   private ensureSocketShareAuthorization(socket: WebSocket) {
     let attachment = socket.deserializeAttachment() as ConnectionAttachment | undefined;
-    if (!attachment?.role) return true;
+    if (!this.shareRecord) return true;
+    if (!attachment?.role || !attachment.secretHash) {
+      socket.close(1008, "Share session required");
+      return false;
+    }
 
     let share = this.shareRecord;
     let expectedHash =
@@ -593,6 +655,42 @@ export class CollabRoom extends DurableObject<Env> {
     let expectedHash = session.role == "host" ? share.hostSecretHash : share.guestSecretHash;
     if (!timingSafeEqualString(session.secretHash, expectedHash)) return null;
     return session;
+  }
+
+  private async activeShareSessionCount() {
+    let now = Date.now();
+    let sessions = await this.ctx.storage.list<ShareSessionRecord>({ prefix: sessionKeyPrefix });
+    let expiredKeys: string[] = [];
+    let count = 0;
+
+    for (let [key, session] of sessions) {
+      if (session.expiresAt <= now) expiredKeys.push(key);
+      else count++;
+    }
+    if (expiredKeys.length) await this.ctx.storage.delete(expiredKeys);
+    return count;
+  }
+
+  private consumeUpdateToken(socket: WebSocket) {
+    let attachment = socket.deserializeAttachment() as ConnectionAttachment | undefined;
+    if (!attachment) return false;
+
+    let now = Date.now();
+    let previousTokens = attachment.updateTokens ?? maxUpdateFrameBurst;
+    let previousAt = attachment.updateTokensAt ?? now;
+    let refill = ((now - previousAt) / 60_000) * maxUpdateFramesPerMinute;
+    let nextTokens = Math.min(maxUpdateFrameBurst, previousTokens + refill);
+    if (nextTokens < 1) {
+      socket.serializeAttachment({ ...attachment, updateTokens: nextTokens, updateTokensAt: now });
+      return false;
+    }
+
+    socket.serializeAttachment({
+      ...attachment,
+      updateTokens: nextTokens - 1,
+      updateTokensAt: now,
+    });
+    return true;
   }
 
   private async verifyHostSecret(share: ShareRecord, hostSecret: string) {
@@ -723,14 +821,18 @@ export default {
     }
 
     if (createSharePattern.test(url.pathname) && request.method == "POST") {
-      let body = parseCreateShareRequest(await readJson(request));
+      let json = await readJson(request, maxCreateShareBodyBytes);
+      if (json === requestBodyTooLarge)
+        return jsonResponse({ error: "Request too large" }, 413, request);
+
+      let body = parseCreateShareRequest(json);
       if (!body) return jsonResponse({ error: "Invalid share" }, 400, request);
 
       let shareUrl = new URL(`/api/shares/${encodeURIComponent(body.shareId)}`, url);
       return env.COLLAB_ROOMS.getByName(body.shareId).fetch(
         new Request(shareUrl, {
           body: JSON.stringify(body),
-          headers: request.headers,
+          headers: forwardedJsonHeaders(request),
           method: "POST",
         }),
       );
@@ -790,12 +892,50 @@ function parseRelayAckRequest(payload: Uint8Array) {
   }
 }
 
-async function readJson(request: Request) {
+async function readJson(request: Request, maxBytes: number) {
+  let declaredLength = request.headers.get("Content-Length");
+  if (declaredLength != null && Number(declaredLength) > maxBytes) return requestBodyTooLarge;
+
+  let body = await readTextBody(request, maxBytes);
+  if (body === requestBodyTooLarge) return requestBodyTooLarge;
+
   try {
-    return await request.json();
+    return JSON.parse(body);
   } catch {
     return null;
   }
+}
+
+async function readTextBody(request: Request, maxBytes: number) {
+  if (!request.body) return "";
+
+  let reader = request.body.getReader();
+  let decoder = new TextDecoder();
+  let byteLength = 0;
+  let chunks = "";
+
+  for (;;) {
+    let { done, value } = await reader.read();
+    if (done) break;
+
+    let chunk = value!;
+    byteLength += chunk.byteLength;
+    if (byteLength > maxBytes) {
+      await reader.cancel();
+      return requestBodyTooLarge;
+    }
+    chunks += decoder.decode(chunk, { stream: true });
+  }
+
+  chunks += decoder.decode();
+  return chunks;
+}
+
+function forwardedJsonHeaders(request: Request) {
+  let headers = new Headers({ "Content-Type": "application/json" });
+  let origin = request.headers.get("Origin");
+  if (origin) headers.set("Origin", origin);
+  return headers;
 }
 
 function jsonResponse(value: unknown, status: number, request: Request) {

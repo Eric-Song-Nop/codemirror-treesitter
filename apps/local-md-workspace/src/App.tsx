@@ -2260,7 +2260,6 @@ function ShareFileDialog({
                     <option value="24h">24h</option>
                     <option value="7d">7 days</option>
                     <option value="30d">30 days</option>
-                    <option value="never">Never</option>
                   </select>
                 </div>
               </Field>
@@ -2347,8 +2346,6 @@ function formatExpirationHint(expiration: ShareExpirationOption) {
       return "Default";
     case "30d":
       return "Long-running";
-    case "never":
-      return "Manual revoke";
   }
 }
 

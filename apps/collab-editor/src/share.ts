@@ -1,3 +1,9 @@
+import {
+  estimatedDecodedBase64Bytes,
+  isShareExpirationWithinLimit,
+  maxSnapshotBytes,
+} from "./share-limits.ts";
+
 export type ShareRole = "guest" | "host";
 
 export type ShareRecord = {
@@ -62,9 +68,9 @@ export function parseCreateShareRequest(value: unknown): CreateShareRequest | nu
     record.displayName.length > maxDisplayNameLength ||
     !isValidShareSecretHash(record.guestSecretHash) ||
     !isValidShareSecretHash(record.hostSecretHash) ||
-    (record.expiresAt != null &&
-      (!Number.isFinite(record.expiresAt) || record.expiresAt <= Date.now())) ||
-    typeof record.snapshot != "string"
+    !isShareExpirationWithinLimit(record.expiresAt) ||
+    typeof record.snapshot != "string" ||
+    (estimatedDecodedBase64Bytes(record.snapshot) ?? maxSnapshotBytes + 1) > maxSnapshotBytes
   ) {
     return null;
   }
@@ -95,9 +101,7 @@ export function parseRotateShareRequest(value: unknown): RotateShareRequest | nu
   if (
     !isValidShareSecret(record.hostSecret) ||
     !isValidShareSecretHash(record.nextGuestSecretHash) ||
-    (record.expiresAt !== undefined &&
-      record.expiresAt !== null &&
-      (!Number.isFinite(record.expiresAt) || record.expiresAt <= Date.now()))
+    (record.expiresAt !== undefined && !isShareExpirationWithinLimit(record.expiresAt))
   ) {
     return null;
   }

@@ -7,7 +7,7 @@ import {
 } from "./relay-protocol.ts";
 import { shareRelayWebSocketUrl } from "./share-relay-client.ts";
 
-export type ShareRelayConnectionState = "connected" | "connecting" | "offline";
+export type ShareRelayConnectionState = "connected" | "connecting" | "offline" | "resync-required";
 
 export type ShareRelayStatus = {
   displayName: string;
@@ -46,7 +46,11 @@ type QueuedRelayMessage = RelayWireMessage & {
 
 const clientCloseCodeMalformed = 4003;
 const clientCloseCodePolicy = 4008;
+const clientCloseCodeResyncRequired = 4009;
 const clientCloseCodeStale = 4001;
+export const maxQueuedRelayMessages = 512;
+export const maxQueuedRelayBytes = 1024 * 1024;
+export const maxSingleQueuedDocumentUpdateBytes = 256 * 1024;
 
 export class ShareRelayConnection {
   private activeGeneration = 0;
@@ -55,6 +59,8 @@ export class ShareRelayConnection {
   private lastMessageAt = 0;
   private latestLocalDocumentSequence = 0;
   private queue: QueuedRelayMessage[] = [];
+  private queuedBytes = 0;
+  private queueRequiresResync = false;
   private reconnectAttempt = 0;
   private reconnectTimer: number | null = null;
   private receivedServerSnapshot = false;
@@ -72,6 +78,11 @@ export class ShareRelayConnection {
   }
 
   connect() {
+    if (this.queueRequiresResync) {
+      this.options.onConnectionState?.("resync-required");
+      return;
+    }
+
     if (navigator.onLine === false) {
       this.pause();
       return;
@@ -124,6 +135,10 @@ export class ShareRelayConnection {
         this.options.onConnectionState?.("offline");
         return;
       }
+      if (event.code == clientCloseCodeResyncRequired) {
+        this.options.onConnectionState?.("resync-required");
+        return;
+      }
       this.scheduleReconnect();
     });
 
@@ -134,18 +149,36 @@ export class ShareRelayConnection {
   }
 
   enqueueDocumentUpdate(payload: Uint8Array) {
+    if (payload.byteLength > maxSingleQueuedDocumentUpdateBytes) {
+      this.enterResyncRequired("Shared file update is too large to send through the relay.");
+      return null;
+    }
+    if (!this.canQueueMessage(payload)) {
+      this.enterResyncRequired("Shared file edits exceeded the offline queue limit.");
+      return null;
+    }
+
     let localSequence = ++this.latestLocalDocumentSequence;
-    this.queue.push({
+    let message = {
       kind: RelayWireKind.Doc,
       localSequence,
       payload: new Uint8Array(payload),
-    });
+    };
+    this.queue.push(message);
+    this.queuedBytes += queuedMessageBytes(message);
     this.scheduleFlush();
     return localSequence;
   }
 
   enqueueHostSaveAck(payload: Uint8Array = new Uint8Array()) {
-    this.queue.push({ kind: RelayWireKind.HostSaveAck, payload: new Uint8Array(payload) });
+    if (!this.canQueueMessage(payload)) {
+      this.enterResyncRequired("Shared file host acknowledgements exceeded the queue limit.");
+      return;
+    }
+
+    let message = { kind: RelayWireKind.HostSaveAck, payload: new Uint8Array(payload) };
+    this.queue.push(message);
+    this.queuedBytes += queuedMessageBytes(message);
     this.scheduleFlush();
   }
 
@@ -154,6 +187,10 @@ export class ShareRelayConnection {
     this.stopHeartbeat();
     this.socket?.close(1000, "Offline");
     this.socket = null;
+    if (this.queueRequiresResync) {
+      this.options.onConnectionState?.("resync-required");
+      return;
+    }
     this.options.onConnectionState?.("offline");
   }
 
@@ -172,6 +209,7 @@ export class ShareRelayConnection {
     if (!this.queue.length || !this.readyToSend()) return;
 
     let messages = this.queue.splice(0);
+    this.queuedBytes = 0;
     let latestLocalSequence = latestQueuedLocalSequence(messages);
     let frameMessages: RelayWireMessage[] = messages.map(({ kind, payload }) => ({
       kind,
@@ -189,8 +227,28 @@ export class ShareRelayConnection {
       this.socket!.send(frame);
     } catch {
       this.queue.unshift(...messages);
+      this.queuedBytes += queuedMessagesBytes(messages);
       this.socket?.close();
     }
+  }
+
+  private canQueueMessage(payload: Uint8Array) {
+    return (
+      !this.queueRequiresResync &&
+      this.queue.length < maxQueuedRelayMessages &&
+      this.queuedBytes + payload.byteLength <= maxQueuedRelayBytes
+    );
+  }
+
+  private enterResyncRequired(message: string) {
+    this.queue = [];
+    this.queuedBytes = 0;
+    this.queueRequiresResync = true;
+    this.clearFlushTimer();
+    this.clearReconnectTimer();
+    this.options.onError?.(message);
+    this.options.onConnectionState?.("resync-required");
+    this.socket?.close(clientCloseCodeResyncRequired, "Resync required");
   }
 
   private handleMessage(data: ArrayBuffer | string) {
@@ -369,6 +427,16 @@ function latestQueuedLocalSequence(messages: readonly QueuedRelayMessage[]) {
     latest = Math.max(latest ?? 0, message.localSequence);
   }
   return latest;
+}
+
+function queuedMessageBytes(message: QueuedRelayMessage) {
+  return message.payload.byteLength;
+}
+
+function queuedMessagesBytes(messages: readonly QueuedRelayMessage[]) {
+  let byteLength = 0;
+  for (let message of messages) byteLength += queuedMessageBytes(message);
+  return byteLength;
 }
 
 function relayAckRequestPayload(sequence: number) {

@@ -1,5 +1,12 @@
+import { LoroDoc } from "loro-crdt";
 import { describe, expect, it } from "vite-plus/test";
-import { parseShareRelayAck, parseShareRelayStatus } from "./share-relay-connection.ts";
+import {
+  ShareRelayConnection,
+  maxQueuedRelayMessages,
+  maxSingleQueuedDocumentUpdateBytes,
+  parseShareRelayAck,
+  parseShareRelayStatus,
+} from "./share-relay-connection.ts";
 
 describe("shared file relay connection helpers", () => {
   it("parses share status frames", () => {
@@ -77,5 +84,48 @@ describe("shared file relay connection helpers", () => {
   it("rejects malformed relay acknowledgement frames", () => {
     expect(() => parseShareRelayAck(new TextEncoder().encode("{}"))).toThrow("Invalid relay ack.");
     expect(() => parseShareRelayAck(new TextEncoder().encode("not json"))).toThrow();
+  });
+
+  it("enters resync-required when one local update exceeds the relay queue limit", () => {
+    let states: string[] = [];
+    let errors: string[] = [];
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc: new LoroDoc(),
+      onConnectionState: (state) => states.push(state),
+      onError: (message) => errors.push(message),
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+
+    expect(
+      connection.enqueueDocumentUpdate(new Uint8Array(maxSingleQueuedDocumentUpdateBytes + 1)),
+    ).toBeNull();
+    expect(states).toEqual(["resync-required"]);
+    expect(errors).toEqual(["Shared file update is too large to send through the relay."]);
+
+    connection.connect();
+    connection.pause();
+    expect(states).toEqual(["resync-required", "resync-required", "resync-required"]);
+  });
+
+  it("enters resync-required when the offline relay queue reaches its message limit", () => {
+    let states: string[] = [];
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc: new LoroDoc(),
+      onConnectionState: (state) => states.push(state),
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+
+    for (let index = 0; index < maxQueuedRelayMessages; index++) {
+      expect(connection.enqueueDocumentUpdate(new Uint8Array([index & 0xff]))).toBe(index + 1);
+    }
+
+    expect(connection.enqueueDocumentUpdate(new Uint8Array([1]))).toBeNull();
+    expect(states).toEqual(["resync-required"]);
   });
 });
