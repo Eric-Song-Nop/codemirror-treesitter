@@ -72,6 +72,8 @@ describe("Dropbox workspace backend", () => {
 
   it("builds a Markdown-only tree from Dropbox entries", async () => {
     let entries: OpendalBrowserEntry[] = [
+      { isDirectory: true, isFile: false, path: ".livemd" },
+      { isDirectory: false, isFile: true, path: ".livemd/manifest.json" },
       { isDirectory: false, isFile: true, path: "notes/today.md" },
       { isDirectory: false, isFile: true, path: "notes/tomorrow.txt" },
       { isDirectory: true, isFile: false, path: "notes" },
@@ -110,6 +112,80 @@ describe("Dropbox workspace backend", () => {
       name: "Dropbox Test",
       path: "",
     });
+  });
+
+  it("stores sidecar bytes as base64 text files", async () => {
+    let files = new Map<string, string>();
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () => fakeMapOperator(files),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await backend.writeBytes!(".livemd/docs/doc.snapshot.b64", new Uint8Array([1, 2, 3, 255]));
+
+    expect(files.get(".livemd/docs/doc.snapshot.b64")).toBe("AQID/w==");
+    await expect(backend.readBytes!(".livemd/docs/doc.snapshot.b64")).resolves.toEqual(
+      new Uint8Array([1, 2, 3, 255]),
+    );
+    await expect(backend.stat!(".livemd/missing.snapshot.b64")).resolves.toMatchObject({
+      exists: false,
+      path: ".livemd/missing.snapshot.b64",
+    });
+    expect([...files.keys()].filter((path) => path.includes(".next."))).toEqual([]);
+    expect([...files.keys()].filter((path) => path.startsWith(".livemd/tmp/"))).toEqual([]);
+  });
+
+  it("commits sidecar writes through a tmp file and prepared next file", async () => {
+    let files = new Map<string, string>();
+    let operations: string[] = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () => fakeMapOperator(files, operations),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await backend.writeBytes!(".livemd/workspace.snapshot.b64", new Uint8Array([9, 8, 7]));
+
+    expect(files.get(".livemd/workspace.snapshot.b64")).toBe("CQgH");
+    expect(operations.some((operation) => /^write \.livemd\/tmp\/[^/]+\//.test(operation))).toBe(
+      true,
+    );
+    expect(operations).toContain(
+      "rename .livemd/workspace.next.snapshot.b64 .livemd/workspace.snapshot.b64",
+    );
+  });
+
+  it("recovers a prepared sidecar next file before reading", async () => {
+    let files = new Map<string, string>([[".livemd/docs/doc.next.snapshot.b64", "AQID"]]);
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () => fakeMapOperator(files),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await expect(backend.readBytes!(".livemd/docs/doc.snapshot.b64")).resolves.toEqual(
+      new Uint8Array([1, 2, 3]),
+    );
+    expect(files.get(".livemd/docs/doc.snapshot.b64")).toBe("AQID");
+    expect(files.has(".livemd/docs/doc.next.snapshot.b64")).toBe(false);
+  });
+
+  it("deletes both final and prepared sidecar files", async () => {
+    let files = new Map<string, string>([
+      [".livemd/docs/doc.snapshot.b64", "AQID"],
+      [".livemd/docs/doc.next.snapshot.b64", "BAUG"],
+    ]);
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () => fakeMapOperator(files),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await backend.deleteEntry!(".livemd/docs/doc.snapshot.b64");
+
+    expect(files.has(".livemd/docs/doc.snapshot.b64")).toBe(false);
+    expect(files.has(".livemd/docs/doc.next.snapshot.b64")).toBe(false);
   });
 
   it("creates missing parent directories before nested writes", async () => {
@@ -238,6 +314,38 @@ function token(accessToken: string) {
     accessToken,
     expiresAt: Date.now() + 60 * 60 * 1000,
   };
+}
+
+function fakeMapOperator(files: Map<string, string>, operations: string[] = []) {
+  return fakeOperator({
+    async createDir(path) {
+      operations.push(`createDir ${path}`);
+    },
+    async delete(path) {
+      operations.push(`delete ${path}`);
+      if (!files.delete(path)) throw new Error("not_found");
+    },
+    async readText(path) {
+      let value = files.get(path);
+      if (value == null) throw new Error("not_found");
+      return value;
+    },
+    async rename(from, to) {
+      operations.push(`rename ${from} ${to}`);
+      let value = files.get(from);
+      if (value == null) throw new Error("not_found");
+      files.delete(from);
+      files.set(to, value);
+    },
+    async stat(path) {
+      if (!files.has(path)) throw new Error("not_found");
+      return { isDirectory: false, isFile: true, path };
+    },
+    async writeText(path, value) {
+      operations.push(`write ${path}`);
+      files.set(path, value);
+    },
+  });
 }
 
 function fakeOperator(overrides: Partial<OpendalBrowserOperator>): OpendalBrowserOperator {

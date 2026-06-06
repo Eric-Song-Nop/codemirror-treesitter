@@ -8,6 +8,8 @@ import {
   type CreatedWorkspaceImageNode,
   type MarkdownDirectoryNode,
   type MarkdownTreeNode,
+  type WorkspaceEntry,
+  type WorkspaceEntryStat,
   type WorkspaceBackend,
   type WorkspaceImageNode,
 } from "./workspace-backend.ts";
@@ -85,17 +87,26 @@ export function createLocalWorkspaceBackend(handle: AccessDirectoryHandle): Work
     id: `local:${handle.name || "workspace"}`,
     kind: "local",
     name: handle.name || "Workspace",
+    createDirectory: (path) => createWorkspaceDirectory(handle, path),
     createFile: (path) => createMarkdownFile(handle, path),
     createImageAsset: (markdownFilePath, imageFile) =>
       createImageAsset(handle, markdownFilePath, imageFile),
+    deleteEntry: (path, options) => deleteWorkspaceEntry(handle, path, options),
     deleteDirectory: (path) => deleteMarkdownDirectory(handle, path),
     deleteFile: (path) => deleteMarkdownFile(handle, path),
+    listEntries: (path) => listWorkspaceEntries(handle, path),
+    readBytes: (path) => readWorkspaceBytes(handle, path),
     readFile: (path) => readMarkdownPath(handle, path),
     readImages: () => readWorkspaceImages(handle),
+    readTextFile: (path) => readMarkdownPath(handle, path),
     readTree: () => readWorkspaceTree(handle),
+    renameEntry: (from, to) => renameWorkspaceEntry(handle, from, to),
     renameDirectory: (path, rawName) => renameMarkdownDirectory(handle, path, rawName),
     renameFile: (path, rawName) => renameMarkdownFile(handle, path, rawName),
+    stat: (path) => statWorkspaceEntry(handle, path),
+    writeBytes: (path, bytes) => writeWorkspaceBytes(handle, path, bytes),
     writeFile: (path, value) => writeMarkdownPath(handle, path, value),
+    writeTextFile: (path, value) => writeWorkspaceText(handle, path, value),
   };
 }
 
@@ -124,6 +135,27 @@ async function writeMarkdownPath(rootHandle: AccessDirectoryHandle, path: string
   await writeFileData(await resolveFileHandle(rootHandle, path), value);
 }
 
+async function readWorkspaceBytes(rootHandle: AccessDirectoryHandle, path: string) {
+  let file = await (await resolveFileHandle(rootHandle, path)).getFile();
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+async function writeWorkspaceBytes(
+  rootHandle: AccessDirectoryHandle,
+  path: string,
+  bytes: Uint8Array,
+) {
+  let { directory, fileName } = await resolveParentDirectory(rootHandle, path, true);
+  let buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  await writeFileData(await directory.getFileHandle(fileName, { create: true }), buffer);
+}
+
+async function writeWorkspaceText(rootHandle: AccessDirectoryHandle, path: string, value: string) {
+  let { directory, fileName } = await resolveParentDirectory(rootHandle, path, true);
+  await writeFileData(await directory.getFileHandle(fileName, { create: true }), value);
+}
+
 async function writeFileData(handle: AccessFileHandle, data: AccessWritableFileData) {
   let writable = await handle.createWritable();
   try {
@@ -133,6 +165,103 @@ async function writeFileData(handle: AccessFileHandle, data: AccessWritableFileD
     await writable.abort?.();
     throw error;
   }
+}
+
+async function createWorkspaceDirectory(rootHandle: AccessDirectoryHandle, path: string) {
+  await resolveDirectoryPath(rootHandle, normalizeDirectoryPath(path), true);
+}
+
+async function deleteWorkspaceEntry(
+  rootHandle: AccessDirectoryHandle,
+  path: string,
+  options: { recursive?: boolean } = {},
+) {
+  let { directory, fileName } = await resolveParentDirectory(rootHandle, path, false);
+  await directory.removeEntry(fileName, options);
+}
+
+async function listWorkspaceEntries(rootHandle: AccessDirectoryHandle, path: string) {
+  let directory = await resolveDirectoryPath(rootHandle, normalizeDirectoryPath(path), false);
+  let entries: WorkspaceEntry[] = [];
+
+  for await (let entry of directory.values()) {
+    entries.push({
+      isDirectory: entry.kind == "directory",
+      isFile: entry.kind == "file",
+      path: joinWorkspacePath(path, entry.name),
+    });
+  }
+
+  return entries.sort((left, right) =>
+    left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
+  );
+}
+
+async function renameWorkspaceEntry(rootHandle: AccessDirectoryHandle, from: string, to: string) {
+  let source = await statWorkspaceEntry(rootHandle, from);
+  if (!source.exists) throw new DOMException("Entry not found.", "NotFoundError");
+
+  if (source.isDirectory) {
+    let { directory, fileName } = await resolveParentDirectory(rootHandle, from, false);
+    let { directory: targetDirectory, fileName: targetName } = await resolveParentDirectory(
+      rootHandle,
+      to,
+      true,
+    );
+    if (await entryExists(targetDirectory, targetName)) {
+      throw new Error(`${to} already exists.`);
+    }
+    let currentDirectory = await directory.getDirectoryHandle(fileName);
+    let nextDirectory = await targetDirectory.getDirectoryHandle(targetName, { create: true });
+    await copyDirectoryEntries(currentDirectory, nextDirectory);
+    await directory.removeEntry(fileName, { recursive: true });
+    return;
+  }
+
+  let { directory, fileName } = await resolveParentDirectory(rootHandle, from, false);
+  let { directory: targetDirectory, fileName: targetName } = await resolveParentDirectory(
+    rootHandle,
+    to,
+    true,
+  );
+  if (await entryExists(targetDirectory, targetName)) throw new Error(`${to} already exists.`);
+  let nextHandle = await targetDirectory.getFileHandle(targetName, { create: true });
+  await writeFileData(nextHandle, await readWorkspaceBytes(rootHandle, from));
+  await directory.removeEntry(fileName);
+}
+
+async function statWorkspaceEntry(
+  rootHandle: AccessDirectoryHandle,
+  path: string,
+): Promise<WorkspaceEntryStat> {
+  let normalized = normalizeEntryPath(path);
+  if (!normalized) {
+    return { exists: true, isDirectory: true, isFile: false, path: "" };
+  }
+
+  try {
+    let file = await resolveFileHandle(rootHandle, normalized);
+    let blob = await file.getFile();
+    return {
+      exists: true,
+      isDirectory: false,
+      isFile: true,
+      mtime: blob.lastModified || undefined,
+      path: normalized,
+      size: blob.size,
+    };
+  } catch (error) {
+    if (!isNotFoundError(error) && !isEntryTypeMismatchError(error)) throw error;
+  }
+
+  try {
+    await resolveDirectoryPath(rootHandle, normalized, false);
+    return { exists: true, isDirectory: true, isFile: false, path: normalized };
+  } catch (error) {
+    if (!isNotFoundError(error) && !isEntryTypeMismatchError(error)) throw error;
+  }
+
+  return { exists: false, isDirectory: false, isFile: false, path: normalized };
 }
 
 async function createImageAsset(
@@ -260,6 +389,7 @@ async function readDirectoryChildren(handle: AccessDirectoryHandle, path: string
   let children: MarkdownTreeNode[] = [];
 
   for await (let entry of handle.values()) {
+    if (isLiveMdEntry(path, entry.name)) continue;
     let entryPath = joinWorkspacePath(path, entry.name);
     if (entry.kind == "directory") {
       let directoryChildren = await readDirectoryChildren(entry, entryPath);
@@ -287,6 +417,7 @@ async function collectWorkspaceImages(
   images: WorkspaceImageNode[],
 ) {
   for await (let entry of handle.values()) {
+    if (isLiveMdEntry(path, entry.name)) continue;
     let entryPath = joinWorkspacePath(path, entry.name);
     if (entry.kind == "directory") {
       await collectWorkspaceImages(entry, entryPath, images);
@@ -298,6 +429,21 @@ async function collectWorkspaceImages(
       });
     }
   }
+}
+
+function normalizeDirectoryPath(path: string) {
+  return normalizeEntryPath(path).replace(/\/+$/g, "");
+}
+
+function normalizeEntryPath(path: string) {
+  return path
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "");
+}
+
+function isLiveMdEntry(parentPath: string, name: string) {
+  return !parentPath && name == ".livemd";
 }
 
 function isImageFile(file: File) {

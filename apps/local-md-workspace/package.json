@@ -4,13 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vp dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:frontend": "vp dev",
     "build": "tsc && vp build",
     "preview": "vp preview",
     "smoke:ui": "node smoke/ui-smoke.mjs"
   },
   "dependencies": {
     "@codemirror-treesitter/live-md": "workspace:*",
+    "@codemirror-treesitter/live-md-loro": "workspace:*",
     "@codemirror-treesitter/opendal-wasm-browser": "workspace:*",
     "@codemirror-treesitter/theme-gruvbox": "workspace:*",
     "@codemirror/state": "^6.6.0",
@@ -19,6 +21,7 @@
     "@pierre/trees": "1.0.0-beta.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "loro-crdt": "^1.12.3",
     "lucide-react": "^1.17.0",
     "radix-ui": "^1.4.3",
     "react": "^19.2.7",

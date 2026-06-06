@@ -13,7 +13,7 @@ export function workspaceErrorMessage(error: unknown) {
   }
 
   if (matchesAny(normalized, ["authorization was closed", "closed before it completed"])) {
-    return "Dropbox authorization was closed before it completed. Reconnect Dropbox to continue.";
+    return "Dropbox authorization was closed before it completed. Reconnect Dropbox mirror to continue.";
   }
 
   if (matchesAny(normalized, ["authorization was denied", "access denied"])) {
@@ -23,11 +23,11 @@ export function workspaceErrorMessage(error: unknown) {
   if (matchesAny(normalized, ["missing scope", "insufficient scope"]) || isMissingScope(message)) {
     return `Dropbox app is missing required file permissions: ${DROPBOX_REQUIRED_SCOPES.join(
       ", ",
-    )}. Enable those scopes and reconnect Dropbox.`;
+    )}. Enable those scopes and reconnect Dropbox mirror.`;
   }
 
   if (matchesAny(normalized, ["expired access token", "access token expired", "token expired"])) {
-    return "Dropbox access token expired. Reconnect Dropbox to continue.";
+    return "Dropbox access token expired. Reconnect Dropbox mirror to continue.";
   }
 
   if (
@@ -38,7 +38,7 @@ export function workspaceErrorMessage(error: unknown) {
       "access token is invalid",
     ])
   ) {
-    return "Dropbox authorization is invalid or was revoked. Reconnect Dropbox to continue.";
+    return "Dropbox authorization is invalid or was revoked. Reconnect Dropbox mirror to continue.";
   }
 
   if (
@@ -49,7 +49,7 @@ export function workspaceErrorMessage(error: unknown) {
       "invalid client",
     ])
   ) {
-    return "Dropbox token exchange failed. Check the app key and reconnect Dropbox.";
+    return "Dropbox token exchange failed. Check the app key and reconnect Dropbox mirror.";
   }
 
   if (

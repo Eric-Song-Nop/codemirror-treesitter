@@ -49,6 +49,37 @@ describe("local workspace backend", () => {
     });
   });
 
+  it("supports hidden collaboration sidecar files without exposing them in the tree", async () => {
+    let root = new MemoryDirectoryHandle("Workspace");
+    let backend = createLocalWorkspaceBackend(root);
+
+    await backend.createFile("notes/today.md");
+    await backend.createDirectory!(".livemd/docs");
+    await backend.writeTextFile!(".livemd/manifest.json", "{}\n");
+    await backend.writeBytes!(".livemd/docs/doc.snapshot.b64", new Uint8Array([1, 2, 3]));
+
+    await expect(backend.readTextFile!(".livemd/manifest.json")).resolves.toBe("{}\n");
+    await expect(backend.readBytes!(".livemd/docs/doc.snapshot.b64")).resolves.toEqual(
+      new Uint8Array([1, 2, 3]),
+    );
+    await expect(backend.stat!(".livemd/docs/doc.snapshot.b64")).resolves.toMatchObject({
+      exists: true,
+      isFile: true,
+      path: ".livemd/docs/doc.snapshot.b64",
+      size: 3,
+    });
+    await expect(backend.readTree()).resolves.toMatchObject({
+      children: [
+        {
+          children: [{ kind: "file", name: "today.md", path: "notes/today.md" }],
+          kind: "directory",
+          name: "notes",
+          path: "notes",
+        },
+      ],
+    });
+  });
+
   it("deletes folders recursively", async () => {
     let root = new MemoryDirectoryHandle("Workspace");
     let backend = createLocalWorkspaceBackend(root);

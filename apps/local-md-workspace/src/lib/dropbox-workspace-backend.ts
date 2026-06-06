@@ -15,6 +15,8 @@ import {
 } from "./workspace-backend.ts";
 
 const TOKEN_EXPIRY_SKEW_MS = 5 * 60 * 1000;
+const livemdDirectory = ".livemd";
+const livemdTmpDirectory = `${livemdDirectory}/tmp`;
 const generatedModuleUrl = new URL(
   "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser.js",
   import.meta.url,
@@ -37,6 +39,10 @@ type DropboxOperatorFactory = (
   options: CreateOpendalBrowserOperatorOptions,
 ) => Promise<OpendalBrowserOperator>;
 
+type DropboxOperatorFactoryWindow = Window & {
+  __localMdWorkspaceTestDropboxOperatorFactory?: DropboxOperatorFactory;
+};
+
 type DropboxWriteQueue = {
   pending?: DropboxPendingWrite;
   running: boolean;
@@ -56,7 +62,8 @@ export function createDropboxWorkspaceBackend(
   let createdDirectories = new Set<string>();
   let writeQueues = new Map<string, DropboxWriteQueue>();
   let root = normalizeDropboxRoot(options.root);
-  let createOperator = options.createOperator ?? createOpendalBrowserOperator;
+  let createOperator =
+    options.createOperator ?? devTestDropboxOperatorFactory() ?? createOpendalBrowserOperator;
 
   async function ensureOperator(forceRefresh = false) {
     if (forceRefresh || !token || token.expiresAt <= Date.now() + TOKEN_EXPIRY_SKEW_MS) {
@@ -86,6 +93,88 @@ export function createDropboxWorkspaceBackend(
   async function writeText(path: string, value: string) {
     await ensureParentDirectory(path);
     await withDropboxRetry((operator) => operator.writeText(path, value));
+  }
+
+  async function writeQueuedText(path: string, value: string) {
+    if (isTransactionalSidecarPath(path)) {
+      await writeTransactionalSidecarText(path, value);
+      return;
+    }
+
+    await writeText(path, value);
+  }
+
+  async function writeTransactionalSidecarText(path: string, value: string) {
+    await recoverTransactionalSidecarText(path);
+
+    let nextPath = nextSidecarPath(path);
+    let transactionDirectory = `${livemdTmpDirectory}/${createDropboxTransactionId()}`;
+    let tempPath = `${transactionDirectory}/${sidecarFileName(path)}`;
+
+    await createDirectory(transactionDirectory);
+    try {
+      await writeText(tempPath, value);
+      await deleteIfPresent(nextPath);
+      await renamePath(tempPath, nextPath);
+      await deleteIfPresent(path);
+      await renamePath(nextPath, path);
+    } catch (error) {
+      await deleteIfPresent(tempPath).catch(() => {});
+      throw error;
+    } finally {
+      await deleteIfPresent(transactionDirectory).catch(() => {});
+      forgetCreatedDirectory(transactionDirectory, createdDirectories);
+    }
+  }
+
+  async function recoverTransactionalSidecarText(path: string) {
+    let nextPath = nextSidecarPath(path);
+    if (!(await pathExists(nextPath))) return;
+
+    await deleteIfPresent(path);
+    try {
+      await renamePath(nextPath, path);
+    } catch (error) {
+      if (isDropboxNotFoundError(error) && (await pathExists(path))) return;
+      throw error;
+    }
+  }
+
+  async function readTransactionalSidecarText(path: string) {
+    await recoverTransactionalSidecarText(path);
+    return withDropboxRetry((operator) => operator.readText(path));
+  }
+
+  async function deleteTransactionalSidecarText(path: string) {
+    await deleteIfPresent(path);
+    await deleteIfPresent(nextSidecarPath(path));
+  }
+
+  async function renamePath(from: string, to: string) {
+    await ensureParentDirectory(to);
+    await withDropboxRetry((operator) => operator.rename(from, to));
+  }
+
+  async function deletePath(path: string) {
+    await withDropboxRetry((operator) => operator.delete(normalizeDropboxDirectoryPath(path)));
+  }
+
+  async function deleteIfPresent(path: string) {
+    try {
+      await deletePath(path);
+    } catch (error) {
+      if (!isDropboxNotFoundError(error)) throw error;
+    }
+  }
+
+  async function pathExists(path: string) {
+    try {
+      await withDropboxRetry((operator) => operator.stat(path));
+      return true;
+    } catch (error) {
+      if (isDropboxNotFoundError(error)) return false;
+      throw error;
+    }
   }
 
   async function ensureParentDirectory(path: string) {
@@ -146,7 +235,7 @@ export function createDropboxWorkspaceBackend(
         queue.pending = undefined;
 
         try {
-          await writeText(path, pending.value);
+          await writeQueuedText(path, pending.value);
           for (let resolve of pending.resolves) resolve();
         } catch (error) {
           for (let reject of pending.rejects) reject(error);
@@ -166,6 +255,7 @@ export function createDropboxWorkspaceBackend(
     id: `dropbox:${root || "/"}`,
     kind: "opendal-dropbox",
     name: options.name ?? "Dropbox",
+    createDirectory: (path) => createDirectory(path),
     async createFile(path) {
       let target = normalizeWorkspaceCreateTarget(path);
       if (target.kind == "directory") {
@@ -177,22 +267,49 @@ export function createDropboxWorkspaceBackend(
       await queueWrite(nextPath, starterMarkdown(nextPath));
       return nextPath;
     },
+    async deleteEntry(path, options) {
+      if (isTransactionalSidecarPath(path)) {
+        await deleteTransactionalSidecarText(path);
+        return;
+      }
+
+      await deletePath(path);
+      if (options?.recursive)
+        forgetCreatedDirectory(normalizeDropboxDirectoryPath(path), createdDirectories);
+    },
     async deleteDirectory(path) {
       let normalized = normalizeDropboxDirectoryPath(path);
       if (!normalized) throw new Error("Enter a folder name.");
 
-      await withDropboxRetry((operator) => operator.delete(normalized));
+      await deletePath(normalized);
       forgetCreatedDirectory(normalized, createdDirectories);
     },
     async deleteFile(path) {
-      await withDropboxRetry((operator) => operator.delete(path));
+      await deletePath(path);
+    },
+    async listEntries(path) {
+      let prefix = normalizeDropboxDirectoryPath(path);
+      return withDropboxRetry((operator) => operator.list(prefix));
+    },
+    async readBytes(path) {
+      let value = isTransactionalSidecarPath(path)
+        ? await readTransactionalSidecarText(path)
+        : await withDropboxRetry((operator) => operator.readText(path));
+      return decodeBase64(value);
     },
     async readFile(path) {
+      return withDropboxRetry((operator) => operator.readText(path));
+    },
+    async readTextFile(path) {
+      if (isTransactionalSidecarPath(path)) return readTransactionalSidecarText(path);
       return withDropboxRetry((operator) => operator.readText(path));
     },
     async readTree() {
       let entries = await withDropboxRetry((operator) => operator.list(""));
       return buildMarkdownTreeFromEntries(options.name ?? "Dropbox", entries);
+    },
+    async renameEntry(from, to) {
+      await renamePath(from, to);
     },
     async renameDirectory(path, rawName) {
       let normalized = normalizeDropboxDirectoryPath(path);
@@ -202,7 +319,7 @@ export function createDropboxWorkspaceBackend(
       let nextPath = replaceFileName(normalized, nextName);
       if (nextPath == normalized) return normalized;
 
-      await withDropboxRetry((operator) => operator.rename(normalized, nextPath));
+      await renamePath(normalized, nextPath);
       renameCreatedDirectory(normalized, nextPath, createdDirectories);
       return nextPath;
     },
@@ -211,11 +328,33 @@ export function createDropboxWorkspaceBackend(
       let nextPath = replaceFileName(path, nextName);
       if (nextPath == path) return path;
 
-      await ensureParentDirectory(nextPath);
-      await withDropboxRetry((operator) => operator.rename(path, nextPath));
+      await renamePath(path, nextPath);
       return nextPath;
     },
     async writeFile(path, value) {
+      await queueWrite(path, value);
+    },
+    async stat(path) {
+      try {
+        if (isTransactionalSidecarPath(path)) await recoverTransactionalSidecarText(path);
+        let entry = await withDropboxRetry((operator) => operator.stat(path));
+        return { ...entry, exists: true };
+      } catch (error) {
+        if (isDropboxNotFoundError(error)) {
+          return {
+            exists: false,
+            isDirectory: false,
+            isFile: false,
+            path,
+          };
+        }
+        throw error;
+      }
+    },
+    async writeBytes(path, bytes) {
+      await queueWrite(path, encodeBase64(bytes));
+    },
+    async writeTextFile(path, value) {
       await queueWrite(path, value);
     },
   };
@@ -251,6 +390,13 @@ function dropboxOperatorConfig(
   };
 }
 
+function devTestDropboxOperatorFactory() {
+  if (!import.meta.env.DEV || typeof window == "undefined") return null;
+  let factory = (window as DropboxOperatorFactoryWindow)
+    .__localMdWorkspaceTestDropboxOperatorFactory;
+  return typeof factory == "function" ? factory : null;
+}
+
 function normalizeDropboxRoot(value: string | undefined) {
   let root = value
     ?.trim()
@@ -269,6 +415,32 @@ function parentDirectory(path: string) {
   return index == -1 ? "" : path.slice(0, index);
 }
 
+function isTransactionalSidecarPath(path: string) {
+  let normalized = normalizeDropboxDirectoryPath(path);
+  return (
+    normalized.startsWith(`${livemdDirectory}/`) &&
+    !normalized.startsWith(`${livemdTmpDirectory}/`) &&
+    (normalized.endsWith(".snapshot.b64") || normalized.endsWith(".updates.b64")) &&
+    !normalized.includes(".next.")
+  );
+}
+
+function nextSidecarPath(path: string) {
+  if (path.endsWith(".snapshot.b64")) return path.replace(/\.snapshot\.b64$/, ".next.snapshot.b64");
+  if (path.endsWith(".updates.b64")) return path.replace(/\.updates\.b64$/, ".next.updates.b64");
+  return `${path}.next`;
+}
+
+function sidecarFileName(path: string) {
+  let normalized = normalizeDropboxDirectoryPath(path);
+  let index = normalized.lastIndexOf("/");
+  return index == -1 ? normalized : normalized.slice(index + 1);
+}
+
+function createDropboxTransactionId() {
+  return crypto.randomUUID();
+}
+
 function normalizeDropboxDirectoryPath(path: string) {
   let normalized = path
     .trim()
@@ -280,4 +452,26 @@ function normalizeDropboxDirectoryPath(path: string) {
 function isDropboxExpiredTokenError(error: unknown) {
   let message = error instanceof Error ? error.message : String(error);
   return /expired|expired_access_token|invalid_access_token/i.test(message);
+}
+
+function isDropboxNotFoundError(error: unknown) {
+  let message = error instanceof Error ? error.message : String(error);
+  return /not.?found|not_found|404/i.test(message);
+}
+
+function decodeBase64(value: string) {
+  let binary = atob(value);
+  let bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function encodeBase64(bytes: Uint8Array) {
+  let chunks: string[] = [];
+  for (let offset = 0; offset < bytes.byteLength; offset += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
+  }
+  return btoa(chunks.join(""));
 }
