@@ -1,4 +1,4 @@
-import type { LoroDoc } from "loro-crdt";
+import type { LoroDoc, VersionVector } from "loro-crdt";
 import {
   RelayWireKind,
   decodeRelayWireFrame,
@@ -58,12 +58,14 @@ export class ShareRelayConnection {
   private heartbeatTimer: number | null = null;
   private lastMessageAt = 0;
   private latestLocalDocumentSequence = 0;
+  private offlineBaseVersion: VersionVector | null = null;
   private queue: QueuedRelayMessage[] = [];
+  private queuedMergedDocumentSequence: number | null = null;
   private queuedBytes = 0;
   private queueRequiresResync = false;
   private reconnectAttempt = 0;
   private reconnectTimer: number | null = null;
-  private receivedServerSnapshot = false;
+  private receivedInitialSync = false;
   private socket: WebSocket | null = null;
 
   constructor(private readonly options: ShareRelayConnectionOptions) {}
@@ -100,7 +102,6 @@ export class ShareRelayConnection {
         shareRelayWebSocketUrl(
           this.options.relayOrigin,
           this.options.shareId,
-          this.options.sessionToken,
           this.options.clientId,
         ),
       );
@@ -111,12 +112,20 @@ export class ShareRelayConnection {
 
     socket.binaryType = "arraybuffer";
     this.socket = socket;
-    this.receivedServerSnapshot = false;
+    this.receivedInitialSync = false;
     this.lastMessageAt = Date.now();
 
     socket.addEventListener("open", () => {
       if (!this.isActive(generation, socket)) return;
       this.reconnectAttempt = 0;
+      socket.send(
+        JSON.stringify({
+          clientId: this.options.clientId,
+          sessionToken: this.options.sessionToken,
+          type: "auth",
+          versionVector: serializeDocVersionVector(this.options.doc),
+        }),
+      );
       this.startHeartbeat(generation, socket);
     });
 
@@ -153,12 +162,17 @@ export class ShareRelayConnection {
       this.enterResyncRequired("Shared file update is too large to send through the relay.");
       return null;
     }
+    let localSequence = ++this.latestLocalDocumentSequence;
+    if (this.offlineBaseVersion) {
+      this.queuedMergedDocumentSequence = localSequence;
+      this.scheduleFlush();
+      return localSequence;
+    }
     if (!this.canQueueMessage(payload)) {
       this.enterResyncRequired("Shared file edits exceeded the offline queue limit.");
       return null;
     }
 
-    let localSequence = ++this.latestLocalDocumentSequence;
     let message = {
       kind: RelayWireKind.Doc,
       localSequence,
@@ -183,6 +197,7 @@ export class ShareRelayConnection {
   }
 
   pause() {
+    this.captureOfflineBaseVersion();
     this.clearReconnectTimer();
     this.stopHeartbeat();
     this.socket?.close(1000, "Offline");
@@ -206,7 +221,7 @@ export class ShareRelayConnection {
 
   private flushQueue() {
     this.flushTimer = null;
-    if (!this.queue.length || !this.readyToSend()) return;
+    if (!this.hasQueuedMessages() || !this.readyToSend()) return;
 
     let messages = this.queue.splice(0);
     this.queuedBytes = 0;
@@ -215,6 +230,29 @@ export class ShareRelayConnection {
       kind,
       payload,
     }));
+    let mergedDocumentSequence = this.queuedMergedDocumentSequence;
+    if (this.offlineBaseVersion && mergedDocumentSequence != null) {
+      let mergedUpdate = this.options.doc.export({
+        from: this.offlineBaseVersion,
+        mode: "update",
+      });
+      if (mergedUpdate.byteLength > maxQueuedRelayBytes) {
+        this.enterResyncRequired("Shared file edits exceeded the offline queue limit.");
+        return;
+      }
+      if (mergedUpdate.byteLength > maxSingleQueuedDocumentUpdateBytes) {
+        this.enterResyncRequired("Shared file update is too large to send through the relay.");
+        return;
+      }
+      if (mergedUpdate.byteLength) {
+        frameMessages.unshift({
+          kind: RelayWireKind.Doc,
+          payload: mergedUpdate,
+        });
+      }
+      latestLocalSequence = Math.max(latestLocalSequence ?? 0, mergedDocumentSequence);
+    }
+    if (!frameMessages.length && latestLocalSequence == null) return;
     if (latestLocalSequence != null) {
       frameMessages.push({
         kind: RelayWireKind.RelayAckRequest,
@@ -225,6 +263,10 @@ export class ShareRelayConnection {
 
     try {
       this.socket!.send(frame);
+      if (mergedDocumentSequence != null) {
+        this.offlineBaseVersion = null;
+        this.queuedMergedDocumentSequence = null;
+      }
     } catch {
       this.queue.unshift(...messages);
       this.queuedBytes += queuedMessagesBytes(messages);
@@ -238,6 +280,11 @@ export class ShareRelayConnection {
       this.queue.length < maxQueuedRelayMessages &&
       this.queuedBytes + payload.byteLength <= maxQueuedRelayBytes
     );
+  }
+
+  private captureOfflineBaseVersion() {
+    if (this.offlineBaseVersion || this.queueRequiresResync) return;
+    this.offlineBaseVersion = this.options.doc.oplogVersion();
   }
 
   private enterResyncRequired(message: string) {
@@ -284,19 +331,22 @@ export class ShareRelayConnection {
         this.handleRelayAck(message.payload);
       }
 
-      if (message.kind == RelayWireKind.Snapshot && !this.receivedServerSnapshot) {
-        this.receivedServerSnapshot = true;
-        this.options.onConnectionState?.("connected");
-        this.scheduleFlush();
+      if (message.kind == RelayWireKind.Doc || message.kind == RelayWireKind.Snapshot) {
+        this.completeInitialSync();
       }
     }
   }
 
   private handleControlMessage(data: string) {
+    let message: { type?: unknown };
     try {
-      JSON.parse(data);
+      message = JSON.parse(data) as { type?: unknown };
     } catch {
       this.socket?.close(clientCloseCodeMalformed, "Malformed control message");
+      return;
+    }
+    if (message.type == "sync-ready") {
+      this.completeInitialSync();
     }
   }
 
@@ -328,7 +378,14 @@ export class ShareRelayConnection {
   }
 
   private readyToSend() {
-    return this.socket?.readyState == WebSocket.OPEN && this.receivedServerSnapshot;
+    return this.socket?.readyState == WebSocket.OPEN && this.receivedInitialSync;
+  }
+
+  private completeInitialSync() {
+    if (this.receivedInitialSync) return;
+    this.receivedInitialSync = true;
+    this.options.onConnectionState?.("connected");
+    this.scheduleFlush();
   }
 
   private reconnectDelay() {
@@ -343,6 +400,7 @@ export class ShareRelayConnection {
   }
 
   private scheduleReconnect() {
+    this.captureOfflineBaseVersion();
     if (this.reconnectTimer != null || navigator.onLine === false) {
       this.options.onConnectionState?.("offline");
       return;
@@ -370,6 +428,10 @@ export class ShareRelayConnection {
   private stopHeartbeat() {
     if (this.heartbeatTimer != null) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
+  }
+
+  private hasQueuedMessages() {
+    return this.queue.length > 0 || this.queuedMergedDocumentSequence != null;
   }
 }
 
@@ -441,6 +503,10 @@ function queuedMessagesBytes(messages: readonly QueuedRelayMessage[]) {
 
 function relayAckRequestPayload(sequence: number) {
   return new TextEncoder().encode(JSON.stringify({ sequence }));
+}
+
+function serializeDocVersionVector(doc: LoroDoc) {
+  return [...doc.oplogVersion().toJSON()].map(([peer, counter]) => [String(peer), counter]);
 }
 
 function errorToMessage(error: unknown) {

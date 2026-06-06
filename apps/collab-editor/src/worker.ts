@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { LoroDoc } from "loro-crdt";
+import { LoroDoc, VersionVector } from "loro-crdt";
 import {
   WireKind,
   decodeWireFrame,
@@ -30,6 +30,7 @@ import {
 } from "./share.ts";
 import {
   maxCreateShareBodyBytes,
+  maxDocumentUpdateBytes,
   maxShareControlBodyBytes,
   maxShareGuestPeers,
   maxShareSessions,
@@ -42,6 +43,7 @@ import {
 type ConnectionAttachment = {
   clientId: string;
   joinedAt: number;
+  pendingShareAuth?: boolean;
   role?: ShareRole;
   secretHash?: string;
   updateTokens?: number;
@@ -49,7 +51,10 @@ type ConnectionAttachment = {
 };
 
 type ControlMessage = {
+  clientId?: unknown;
+  sessionToken?: unknown;
   type?: string;
+  versionVector?: unknown;
 };
 
 const roomPattern = /^\/api\/doc\/([^/]+)\/ws$/;
@@ -70,6 +75,9 @@ const saveMaxWaitMs = 5000;
 const maxRetryDelayMs = 30_000;
 const markdownTextKey = "markdown";
 const shareSocketTag = "share";
+const shareAuthTimeoutMs = 10_000;
+const shareStatusBroadcastMinIntervalMs = 250;
+const maxAuthVersionVectorEntries = 128;
 const requestBodyTooLarge = Symbol("requestBodyTooLarge");
 
 export class CollabRoom extends DurableObject<Env> {
@@ -83,6 +91,8 @@ export class CollabRoom extends DurableObject<Env> {
   private saving = false;
   private pendingHostSave = false;
   private shareRecord: ShareRecord | null = null;
+  private shareStatusTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastShareStatusBroadcastAt = 0;
   private sockets = new Set<WebSocket>();
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -304,7 +314,7 @@ export class CollabRoom extends DurableObject<Env> {
     this.shareRecord = next;
     await this.ctx.storage.put(shareRecordKey, next);
     await this.scheduleShareMaintenance();
-    this.broadcastShareStatus();
+    this.broadcastShareStatus(undefined, { immediate: true });
     this.closeShareSockets(1008, "Share link rotated");
 
     return jsonResponse({ expiresAt: next.expiresAt, shareId: next.shareId }, 200, request);
@@ -328,7 +338,7 @@ export class CollabRoom extends DurableObject<Env> {
     this.shareRecord = next;
     await this.ctx.storage.put(shareRecordKey, next);
     await this.scheduleShareMaintenance();
-    this.broadcastShareStatus();
+    this.broadcastShareStatus(undefined, { immediate: true });
     this.closeShareSockets(1008, "Sharing stopped");
 
     return jsonResponse({ revokedAt: next.revokedAt, shareId: next.shareId }, 200, request);
@@ -342,36 +352,37 @@ export class CollabRoom extends DurableObject<Env> {
     let share = this.activeShareRecord();
     if (!share) return new Response("Share unavailable", { status: 404 });
 
-    let session = await this.validateShareSession(url.searchParams.get("sessionToken"));
-    if (!session) return new Response("Invalid session", { status: 403 });
-    if (session.role == "guest" && this.shareSocketCount("guest") >= maxShareGuestPeers) {
-      return new Response("Share is full", { status: 429 });
-    }
-
     let pair = new WebSocketPair();
     let [client, server] = Object.values(pair) as [WebSocket, WebSocket];
     let attachment: ConnectionAttachment = {
       clientId: normalizeClientId(url.searchParams.get("clientId")),
       joinedAt: Date.now(),
-      role: session.role,
-      secretHash: session.secretHash,
-      updateTokens: maxUpdateFrameBurst,
-      updateTokensAt: Date.now(),
+      pendingShareAuth: true,
     };
 
-    this.ctx.acceptWebSocket(server, [shareSocketTag, session.role]);
+    this.ctx.acceptWebSocket(server, [shareSocketTag]);
     this.sockets.add(server);
     server.serializeAttachment(attachment);
-    server.send(encodeWireMessage(WireKind.ShareStatus, this.shareStatusPayload()));
-    server.send(encodeWireMessage(WireKind.Snapshot, this.doc.export({ mode: "snapshot" })));
-    this.broadcastShareStatus(server);
+    setTimeout(() => {
+      if (server.readyState != WebSocket.OPEN) return;
+      let next = server.deserializeAttachment() as ConnectionAttachment | undefined;
+      if (next?.pendingShareAuth) server.close(1008, "Share authentication required");
+    }, shareAuthTimeoutMs);
 
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
     if (typeof message == "string") {
-      this.handleControlMessage(ws, message);
+      if (new TextEncoder().encode(message).byteLength > maxShareControlBodyBytes) {
+        ws.close(1009, "Control message too large");
+        return;
+      }
+      await this.handleControlMessage(ws, message);
+      return;
+    }
+    if (this.isPendingShareSocket(ws)) {
+      ws.close(1008, "Share authentication required");
       return;
     }
     if (this.socketRole(ws)) await this.refreshShareRecord();
@@ -410,6 +421,7 @@ export class CollabRoom extends DurableObject<Env> {
           ws.close(1003, "Malformed collaboration payload");
           return;
         }
+        if (this.shareRecord && !this.enforceDocumentSnapshotLimit(ws)) return;
         this.initialized = true;
         documentChanged = this.shareRecord != null;
         this.markDirty();
@@ -466,8 +478,29 @@ export class CollabRoom extends DurableObject<Env> {
     }
   }
 
-  private broadcastShareStatus(sender?: WebSocket) {
+  private broadcastShareStatus(sender?: WebSocket, options: { immediate?: boolean } = {}) {
     if (!this.shareRecord) return;
+    if (options.immediate) {
+      this.clearShareStatusTimer();
+      this.sendShareStatus(sender);
+      return;
+    }
+
+    let elapsed = Date.now() - this.lastShareStatusBroadcastAt;
+    if (elapsed >= shareStatusBroadcastMinIntervalMs) {
+      this.sendShareStatus(sender);
+      return;
+    }
+    if (this.shareStatusTimer != null) return;
+    this.shareStatusTimer = setTimeout(() => {
+      this.shareStatusTimer = null;
+      this.sendShareStatus();
+    }, shareStatusBroadcastMinIntervalMs - elapsed);
+  }
+
+  private sendShareStatus(sender?: WebSocket) {
+    if (!this.shareRecord) return;
+    this.lastShareStatusBroadcastAt = Date.now();
     let frame = encodeWireMessage(WireKind.ShareStatus, this.shareStatusPayload());
     for (let socket of this.shareSockets()) {
       if (socket == sender || socket.readyState != WebSocket.OPEN) continue;
@@ -526,6 +559,7 @@ export class CollabRoom extends DurableObject<Env> {
 
   private async cleanupShareState() {
     this.clearSaveTimers();
+    this.clearShareStatusTimer();
     this.closeShareSockets(1008, "Share retention expired");
 
     let sessionRecords = await this.ctx.storage.list({ prefix: sessionKeyPrefix });
@@ -551,18 +585,21 @@ export class CollabRoom extends DurableObject<Env> {
   }
 
   private closeShareSockets(code: number, reason: string) {
-    for (let socket of this.shareSockets()) {
+    let sockets = this.allShareTaggedSockets();
+    for (let socket of sockets) {
       socket.close(code, reason);
     }
-    for (let socket of this.shareSockets()) this.sockets.delete(socket);
+    for (let socket of sockets) this.sockets.delete(socket);
   }
 
   private shareSockets() {
     return new Set(
-      [...this.ctx.getWebSockets(shareSocketTag), ...this.sockets].filter((socket) =>
-        Boolean(this.socketRole(socket)),
-      ),
+      [...this.allShareTaggedSockets()].filter((socket) => Boolean(this.socketRole(socket))),
     );
+  }
+
+  private allShareTaggedSockets() {
+    return new Set([...this.ctx.getWebSockets(shareSocketTag), ...this.sockets]);
   }
 
   private hasHostSocket() {
@@ -606,6 +643,12 @@ export class CollabRoom extends DurableObject<Env> {
 
   private socketRole(socket: WebSocket) {
     return (socket.deserializeAttachment() as ConnectionAttachment | undefined)?.role;
+  }
+
+  private isPendingShareSocket(socket: WebSocket) {
+    return Boolean(
+      (socket.deserializeAttachment() as ConnectionAttachment | undefined)?.pendingShareAuth,
+    );
   }
 
   private enforceShareSocketAuthorization() {
@@ -704,6 +747,11 @@ export class CollabRoom extends DurableObject<Env> {
     this.maxSaveTimer = null;
   }
 
+  private clearShareStatusTimer() {
+    if (this.shareStatusTimer != null) clearTimeout(this.shareStatusTimer);
+    this.shareStatusTimer = null;
+  }
+
   private async ensureInitialized(
     request: Request,
     roomId: string,
@@ -773,7 +821,7 @@ export class CollabRoom extends DurableObject<Env> {
     }
   }
 
-  private handleControlMessage(ws: WebSocket, message: string) {
+  private async handleControlMessage(ws: WebSocket, message: string) {
     let control: ControlMessage;
     try {
       control = JSON.parse(message) as ControlMessage;
@@ -782,9 +830,89 @@ export class CollabRoom extends DurableObject<Env> {
       return;
     }
 
+    if (this.isPendingShareSocket(ws)) {
+      await this.handleShareAuthMessage(ws, control);
+      return;
+    }
+
     if (control.type == "ping") {
       ws.send(JSON.stringify({ type: "pong" }));
     }
+  }
+
+  private async handleShareAuthMessage(ws: WebSocket, control: ControlMessage) {
+    if (control.type != "auth" || typeof control.sessionToken != "string") {
+      ws.close(1008, "Share authentication required");
+      return;
+    }
+
+    await this.refreshShareRecord();
+    let session = await this.validateShareSession(control.sessionToken);
+    if (!session) {
+      ws.close(1008, "Invalid share session");
+      return;
+    }
+    if (session.role == "guest" && this.shareSocketCount("guest") >= maxShareGuestPeers) {
+      ws.close(1008, "Share is full");
+      return;
+    }
+
+    let attachment: ConnectionAttachment = {
+      clientId: normalizeClientId(typeof control.clientId == "string" ? control.clientId : null),
+      joinedAt: Date.now(),
+      role: session.role,
+      secretHash: session.secretHash,
+      updateTokens: maxUpdateFrameBurst,
+      updateTokensAt: Date.now(),
+    };
+    ws.serializeAttachment(attachment);
+    if (ws.readyState != WebSocket.OPEN) return;
+    let clientVersion = parseAuthVersionVector(control.versionVector);
+    if (!clientVersion.ok) {
+      ws.close(1008, "Invalid sync version");
+      return;
+    }
+
+    ws.send(encodeWireMessage(WireKind.ShareStatus, this.shareStatusPayload()));
+    this.sendInitialShareDocument(ws, clientVersion.version);
+    this.broadcastShareStatus(ws);
+  }
+
+  private sendInitialShareDocument(ws: WebSocket, clientVersion: VersionVector | null) {
+    if (clientVersion) {
+      try {
+        let update = this.doc.export({ from: clientVersion, mode: "update" });
+        if (update.byteLength == 0) {
+          ws.send(JSON.stringify({ type: "sync-ready" }));
+          return;
+        }
+        if (update.byteLength <= maxDocumentUpdateBytes) {
+          ws.send(encodeWireMessage(WireKind.Doc, update));
+          return;
+        }
+      } catch (error: unknown) {
+        console.warn("Falling back to snapshot for collaboration sync", error);
+      }
+    }
+
+    let snapshot = this.doc.export({ mode: "snapshot" });
+    if (snapshot.byteLength > maxSnapshotBytes) {
+      ws.close(1009, "Document snapshot is too large");
+      return;
+    }
+    ws.send(encodeWireMessage(WireKind.Snapshot, snapshot));
+  }
+
+  private enforceDocumentSnapshotLimit(sender: WebSocket) {
+    let snapshot = this.doc.export({ mode: "snapshot" });
+    if (snapshot.byteLength <= maxSnapshotBytes) return true;
+
+    console.warn("Closing shared file room after snapshot size exceeded the product limit");
+    sender.close(1009, "Document snapshot is too large");
+    this.closeShareSockets(1009, "Document snapshot is too large");
+    this.dirty = false;
+    this.clearSaveTimers();
+    return false;
   }
 
   private markDirty() {
@@ -821,6 +949,10 @@ export default {
     }
 
     if (createSharePattern.test(url.pathname) && request.method == "POST") {
+      if (!(await allowCreateShareRequest(request, env))) {
+        return jsonResponse({ error: "Share creation rate limit exceeded" }, 429, request);
+      }
+
       let json = await readJson(request, maxCreateShareBodyBytes);
       if (json === requestBodyTooLarge)
         return jsonResponse({ error: "Request too large" }, 413, request);
@@ -890,6 +1022,43 @@ function parseRelayAckRequest(payload: Uint8Array) {
   } catch {
     return null;
   }
+}
+
+function parseAuthVersionVector(
+  value: unknown,
+): { ok: true; version: VersionVector | null } | { ok: false } {
+  if (value == null) return { ok: true, version: null };
+  if (!Array.isArray(value) || value.length > maxAuthVersionVectorEntries) {
+    return { ok: false };
+  }
+
+  let version = new Map<`${number}`, number>();
+  for (let entry of value) {
+    if (!Array.isArray(entry) || entry.length != 2) return { ok: false };
+    let [peer, counter] = entry;
+    if (
+      typeof peer != "string" ||
+      !/^\d+$/.test(peer) ||
+      typeof counter != "number" ||
+      !Number.isSafeInteger(counter) ||
+      counter < 0
+    ) {
+      return { ok: false };
+    }
+    version.set(peer as `${number}`, counter);
+  }
+
+  return { ok: true, version: new VersionVector(version) };
+}
+
+async function allowCreateShareRequest(request: Request, env: Env) {
+  let key =
+    request.headers.get("cf-connecting-ip") ??
+    request.headers.get("Origin") ??
+    request.headers.get("Referer") ??
+    "unknown";
+  let { success } = await env.CREATE_SHARE_RATE_LIMITER.limit({ key: `create-share:${key}` });
+  return success;
 }
 
 async function readJson(request: Request, maxBytes: number) {

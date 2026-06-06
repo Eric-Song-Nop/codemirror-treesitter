@@ -1,5 +1,5 @@
 import { LoroDoc } from "loro-crdt";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   ShareRelayConnection,
   maxQueuedRelayMessages,
@@ -7,6 +7,15 @@ import {
   parseShareRelayAck,
   parseShareRelayStatus,
 } from "./share-relay-connection.ts";
+import { RelayWireKind, decodeRelayWireFrame, encodeRelayWireMessage } from "./relay-protocol.ts";
+
+let mockSockets: MockWebSocket[] = [];
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  mockSockets = [];
+});
 
 describe("shared file relay connection helpers", () => {
   it("parses share status frames", () => {
@@ -86,6 +95,120 @@ describe("shared file relay connection helpers", () => {
     expect(() => parseShareRelayAck(new TextEncoder().encode("not json"))).toThrow();
   });
 
+  it("sends the share session token as the first WebSocket auth frame", () => {
+    vi.stubGlobal("navigator", { onLine: true });
+    vi.stubGlobal("window", globalThis);
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc: new LoroDoc(),
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+
+    connection.connect();
+
+    expect(mockSockets).toHaveLength(1);
+    let socket = mockSockets[0]!;
+    expect(socket.url).toBe("wss://relay.example/api/shares/share-id/ws?clientId=client-id");
+    socket.open();
+
+    expect(socket.sent).toEqual([
+      JSON.stringify({
+        clientId: "client-id",
+        sessionToken: "session-token",
+        type: "auth",
+        versionVector: [],
+      }),
+    ]);
+
+    connection.close();
+  });
+
+  it("treats sync-ready control messages as initial sync completion", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("crypto", { getRandomValues: (array: Uint16Array) => array.fill(0) });
+    vi.stubGlobal("navigator", { onLine: true });
+    vi.stubGlobal("window", globalThis);
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    let states: string[] = [];
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc: new LoroDoc(),
+      onConnectionState: (state) => states.push(state),
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+
+    connection.enqueueDocumentUpdate(new Uint8Array([1, 2, 3]));
+    connection.connect();
+    let socket = mockSockets[0]!;
+    socket.open();
+    socket.receive(JSON.stringify({ type: "sync-ready" }));
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(states).toEqual(["connecting", "connected"]);
+    let binaryFrames = socket.sent.filter((item): item is Uint8Array => item instanceof Uint8Array);
+    expect(binaryFrames).toHaveLength(1);
+    expect(decodeRelayWireFrame(binaryFrames[0]!).map((message) => message.kind)).toEqual([
+      RelayWireKind.Doc,
+      RelayWireKind.RelayAckRequest,
+    ]);
+
+    connection.close();
+  });
+
+  it("merges offline document updates before replaying them to the relay", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("crypto", { getRandomValues: (array: Uint16Array) => array.fill(0) });
+    vi.stubGlobal("navigator", { onLine: true });
+    vi.stubGlobal("window", globalThis);
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    let doc = new LoroDoc();
+    let text = doc.getText("markdown");
+    doc.commit();
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc,
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+    connection.pause();
+
+    text.insert(0, "first");
+    doc.commit();
+    expect(connection.enqueueDocumentUpdate(new Uint8Array([1]))).toBe(1);
+    text.insert(5, " second");
+    doc.commit();
+    expect(connection.enqueueDocumentUpdate(new Uint8Array([2]))).toBe(2);
+
+    connection.connect();
+    let socket = mockSockets[0]!;
+    socket.open();
+    let serverDoc = new LoroDoc();
+    socket.receive(
+      encodeRelayWireMessage(RelayWireKind.Snapshot, serverDoc.export({ mode: "snapshot" })),
+    );
+    await vi.advanceTimersByTimeAsync(50);
+
+    let binaryFrames = socket.sent.filter((item): item is Uint8Array => item instanceof Uint8Array);
+    expect(binaryFrames).toHaveLength(1);
+    let messages = decodeRelayWireFrame(binaryFrames[0]!);
+    expect(messages.map((message) => message.kind)).toEqual([
+      RelayWireKind.Doc,
+      RelayWireKind.RelayAckRequest,
+    ]);
+    expect(JSON.parse(new TextDecoder().decode(messages[1]!.payload))).toEqual({ sequence: 2 });
+
+    connection.close();
+  });
+
   it("enters resync-required when one local update exceeds the relay queue limit", () => {
     let states: string[] = [];
     let errors: string[] = [];
@@ -129,3 +252,48 @@ describe("shared file relay connection helpers", () => {
     expect(states).toEqual(["resync-required"]);
   });
 });
+
+class MockWebSocket extends EventTarget {
+  static readonly CLOSED = 3;
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+
+  binaryType: BinaryType = "arraybuffer";
+  readonly sent: Array<string | Uint8Array> = [];
+  readyState = MockWebSocket.CONNECTING;
+
+  constructor(readonly url: string) {
+    super();
+    mockSockets.push(this);
+  }
+
+  open() {
+    this.readyState = MockWebSocket.OPEN;
+    this.dispatchEvent(new Event("open"));
+  }
+
+  receive(data: Uint8Array | string) {
+    let event = new Event("message") as MessageEvent<ArrayBuffer | string>;
+    Object.defineProperty(event, "data", {
+      value:
+        typeof data == "string"
+          ? data
+          : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+    });
+    this.dispatchEvent(event);
+  }
+
+  send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+    if (typeof data == "string") {
+      this.sent.push(data);
+    } else if (ArrayBuffer.isView(data)) {
+      this.sent.push(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+    } else if (data instanceof ArrayBuffer) {
+      this.sent.push(new Uint8Array(data));
+    }
+  }
+
+  close() {
+    this.readyState = MockWebSocket.CLOSED;
+  }
+}

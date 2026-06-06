@@ -115,15 +115,11 @@ describe("shared file relay client", () => {
   });
 
   it("builds share WebSocket URLs from relay sessions", () => {
-    expect(
-      shareRelayWebSocketUrl("http://127.0.0.1:8787", "share-id", "session-token", "client-id"),
-    ).toBe(
-      "ws://127.0.0.1:8787/api/shares/share-id/ws?clientId=client-id&sessionToken=session-token",
+    expect(shareRelayWebSocketUrl("http://127.0.0.1:8787", "share-id", "client-id")).toBe(
+      "ws://127.0.0.1:8787/api/shares/share-id/ws?clientId=client-id",
     );
-    expect(
-      shareRelayWebSocketUrl("https://relay.example", "share/id", "session token", "client id"),
-    ).toBe(
-      "wss://relay.example/api/shares/share%2Fid/ws?clientId=client+id&sessionToken=session+token",
+    expect(shareRelayWebSocketUrl("https://relay.example", "share/id", "client id")).toBe(
+      "wss://relay.example/api/shares/share%2Fid/ws?clientId=client+id",
     );
   });
 

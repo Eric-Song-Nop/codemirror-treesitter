@@ -21,6 +21,27 @@ describe("shared file Worker routes", () => {
     expect(response.status).toBe(403);
     expect(await response.text()).toBe("Share session required");
   });
+
+  it("rate-limits public share creation before forwarding to a Durable Object", async () => {
+    let { default: worker } = await import("./worker.ts");
+    let getByName = vi.fn();
+    let response = await worker.fetch(
+      new Request("https://relay.example/api/shares", {
+        body: "{",
+        method: "POST",
+      }),
+      {
+        COLLAB_ROOMS: { getByName },
+        CREATE_SHARE_RATE_LIMITER: {
+          limit: vi.fn(async () => ({ success: false })),
+        },
+      } as unknown as Env,
+    );
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ error: "Share creation rate limit exceeded" });
+    expect(getByName).not.toHaveBeenCalled();
+  });
 });
 
 type TestCollabRoom = {

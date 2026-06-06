@@ -147,7 +147,6 @@ export async function revokeRelayShare(
 export function shareRelayWebSocketUrl(
   relayOrigin: string | null | undefined,
   shareId: string,
-  sessionToken: string,
   clientId: string,
 ) {
   let origin = normalizeRelayOrigin(relayOrigin);
@@ -155,7 +154,7 @@ export function shareRelayWebSocketUrl(
 
   let url = new URL(`/api/shares/${encodeURIComponent(shareId)}/ws`, origin);
   url.protocol = url.protocol == "http:" || url.protocol == "ws:" ? "ws:" : "wss:";
-  url.search = new URLSearchParams({ clientId, sessionToken }).toString();
+  url.search = new URLSearchParams({ clientId }).toString();
   return url.toString();
 }
 

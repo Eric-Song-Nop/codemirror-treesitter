@@ -420,7 +420,9 @@ function isTransactionalSidecarPath(path: string) {
   return (
     normalized.startsWith(`${livemdDirectory}/`) &&
     !normalized.startsWith(`${livemdTmpDirectory}/`) &&
-    (normalized.endsWith(".snapshot.b64") || normalized.endsWith(".updates.b64")) &&
+    (normalized.endsWith(".snapshot.b64") ||
+      normalized.endsWith(".updates.b64") ||
+      normalized.endsWith(".update.b64")) &&
     !normalized.includes(".next.")
   );
 }
@@ -428,6 +430,7 @@ function isTransactionalSidecarPath(path: string) {
 function nextSidecarPath(path: string) {
   if (path.endsWith(".snapshot.b64")) return path.replace(/\.snapshot\.b64$/, ".next.snapshot.b64");
   if (path.endsWith(".updates.b64")) return path.replace(/\.updates\.b64$/, ".next.updates.b64");
+  if (path.endsWith(".update.b64")) return path.replace(/\.update\.b64$/, ".next.update.b64");
   return `${path}.next`;
 }
 
