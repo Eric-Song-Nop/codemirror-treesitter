@@ -17,6 +17,7 @@ export type LiveMdImageFilesInput = {
 
 type LiveMdEditorProps = {
   documentKey: string;
+  extensions?: Extension[];
   imageSource?: LiveMdImageSourceResolver | null;
   initialValue: string;
   placeholder: string;
@@ -27,6 +28,7 @@ type LiveMdEditorProps = {
 
 export function LiveMdEditor({
   documentKey,
+  extensions: extraExtensions = [],
   imageSource,
   initialValue,
   placeholder,
@@ -57,7 +59,7 @@ export function LiveMdEditor({
     let editor = editorRef.current;
     if (!editor) return;
 
-    let extensions: Extension[] = [gruvboxDark, liveMdImageSource(imageSource)];
+    let extensions: Extension[] = [gruvboxDark, liveMdImageSource(imageSource), ...extraExtensions];
     if (onImageFiles) extensions.push(imageInputExtension(onImageFilesRef));
     editor.extensions = extensions;
 
@@ -69,7 +71,7 @@ export function LiveMdEditor({
       onEditorReady?.(null);
       editor.extensions = [];
     };
-  }, [imageSource, onEditorReady, onImageFiles]);
+  }, [extraExtensions, imageSource, onEditorReady, onImageFiles]);
 
   return (
     <live-md-editor

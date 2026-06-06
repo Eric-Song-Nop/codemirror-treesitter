@@ -8,7 +8,9 @@ describe("workspace error messages", () => {
     );
     expect(
       workspaceErrorMessage(new Error("Dropbox authorization was closed before it completed.")),
-    ).toBe("Dropbox authorization was closed before it completed. Reconnect Dropbox to continue.");
+    ).toBe(
+      "Dropbox authorization was closed before it completed. Reconnect Dropbox mirror to continue.",
+    );
     expect(workspaceErrorMessage(new Error("access_denied"))).toBe(
       "Dropbox authorization was denied.",
     );
@@ -16,28 +18,28 @@ describe("workspace error messages", () => {
 
   it("classifies Dropbox expired-token and revoked-token failures", () => {
     expect(workspaceErrorMessage(new Error("expired_access_token"))).toBe(
-      "Dropbox access token expired. Reconnect Dropbox to continue.",
+      "Dropbox access token expired. Reconnect Dropbox mirror to continue.",
     );
     expect(workspaceErrorMessage(new Error("invalid_access_token"))).toBe(
-      "Dropbox authorization is invalid or was revoked. Reconnect Dropbox to continue.",
+      "Dropbox authorization is invalid or was revoked. Reconnect Dropbox mirror to continue.",
     );
   });
 
   it("classifies missing Dropbox file scopes", () => {
     expect(workspaceErrorMessage(new Error("missing_scope/files.content.write"))).toBe(
-      "Dropbox app is missing required file permissions: files.metadata.read, files.content.read, files.content.write. Enable those scopes and reconnect Dropbox.",
+      "Dropbox app is missing required file permissions: files.metadata.read, files.content.read, files.content.write. Enable those scopes and reconnect Dropbox mirror.",
     );
     expect(workspaceErrorMessage(new Error("not enough permissions for files.metadata.read"))).toBe(
-      "Dropbox app is missing required file permissions: files.metadata.read, files.content.read, files.content.write. Enable those scopes and reconnect Dropbox.",
+      "Dropbox app is missing required file permissions: files.metadata.read, files.content.read, files.content.write. Enable those scopes and reconnect Dropbox mirror.",
     );
   });
 
   it("classifies Dropbox token exchange failures", () => {
     expect(workspaceErrorMessage(new Error("invalid_grant"))).toBe(
-      "Dropbox token exchange failed. Check the app key and reconnect Dropbox.",
+      "Dropbox token exchange failed. Check the app key and reconnect Dropbox mirror.",
     );
     expect(workspaceErrorMessage(new Error("Dropbox token exchange failed (400)."))).toBe(
-      "Dropbox token exchange failed. Check the app key and reconnect Dropbox.",
+      "Dropbox token exchange failed. Check the app key and reconnect Dropbox mirror.",
     );
   });
 

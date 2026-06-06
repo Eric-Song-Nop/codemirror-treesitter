@@ -12,6 +12,8 @@ const clientId = getOrCreateClientId();
 const doc = new LoroDoc();
 const undoManager = new UndoManager(doc, {});
 const restoredSnapshot = loadLocalSnapshot(localSnapshotKey);
+const clientCloseCodeMalformed = 4003;
+const clientCloseCodeStale = 4001;
 
 if (restoredSnapshot) doc.import(restoredSnapshot);
 
@@ -158,7 +160,7 @@ class CollaborationConnection {
     try {
       JSON.parse(data);
     } catch {
-      this.socket?.close(1003, "Malformed control message");
+      this.socket?.close(clientCloseCodeMalformed, "Malformed control message");
     }
   }
 
@@ -194,7 +196,7 @@ class CollaborationConnection {
     this.heartbeatTimer = window.setInterval(() => {
       if (!this.isActive(generation, socket)) return;
       if (Date.now() - this.lastMessageAt > 60_000) {
-        socket.close(1001, "Stale connection");
+        socket.close(clientCloseCodeStale, "Stale connection");
         return;
       }
       if (socket.readyState == WebSocket.OPEN) socket.send(JSON.stringify({ type: "ping" }));

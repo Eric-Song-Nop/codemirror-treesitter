@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   CloudIcon,
+  CopyIcon,
   FolderOpenIcon,
   ImagePlusIcon,
   MenuIcon,
@@ -16,8 +17,12 @@ import {
   PlusIcon,
   RefreshCwIcon,
   SaveIcon,
+  Share2Icon,
   Trash2Icon,
+  TriangleAlertIcon,
+  WrenchIcon,
 } from "lucide-react";
+import type { Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type {
   LiveMdEditorElement,
@@ -62,6 +67,7 @@ import {
   type FileTreeDeleteTarget,
 } from "@/components/FileTree";
 import { LiveMdEditor, type LiveMdImageFilesInput } from "@/components/LiveMdEditor";
+import { isSharedFilePath, SharedFileEditor } from "@/components/SharedFileEditor";
 import {
   authorizeDropboxWithPkce,
   completeDropboxRedirectOAuthIfPresent,
@@ -74,6 +80,53 @@ import {
   takeDropboxRedirectDraft,
   type DropboxRedirectDraft,
 } from "@/lib/dropbox-redirect-draft";
+import {
+  getCollabDocumentValue,
+  hashMarkdownText,
+  detectCollabMaterializationConflict,
+  keepSourceAndWriteSharedConflictCopy,
+  materializeCollabDocument,
+  openMarkdownCollabDocument,
+  saveCollabDocumentSnapshot,
+  savePendingCollabDocumentUpdates,
+  type CollabMaterializationConflict,
+  type CollabDocumentState,
+} from "@/lib/collaboration/markdown-document";
+import {
+  createCollabDocumentBroadcastSync,
+  createWorkspaceManifestBroadcastSync,
+  type WorkspaceManifestBroadcastSync,
+} from "@/lib/collaboration/document-sync";
+import {
+  ensureManifestFile,
+  gcWorkspaceTombstones,
+  loadWorkspaceManifest,
+  mergeWorkspaceManifestSnapshot,
+  repairWorkspaceCollaborationMetadata,
+  renameManifestDirectoryPaths,
+  renameManifestFilePath,
+  readWorkspaceManifestSnapshotBytes,
+  tombstoneManifestDirectory,
+  tombstoneManifestFile,
+} from "@/lib/collaboration/workspace-manifest";
+import {
+  createOwnerShare,
+  findOwnerShareRecordForPath,
+  hostSecretStorageKey,
+  revokeOwnerShare,
+  rotateOwnerShare,
+  type CreatedOwnerShare,
+  type OwnerShareRecord,
+} from "@/lib/collaboration/share-storage";
+import {
+  ShareRelayConnection,
+  type ShareRelayStatus,
+} from "@/lib/collaboration/share-relay-connection";
+import {
+  configuredShareRelayOrigin,
+  createRelayShareSession,
+} from "@/lib/collaboration/share-relay-client";
+import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
 import { createDropboxWorkspaceBackend } from "@/lib/dropbox-workspace-backend";
 import {
   createLocalWorkspaceBackend,
@@ -109,11 +162,32 @@ type EditorDocument = {
   version: number;
 };
 
+const emptyEditorExtensions: Extension[] = [];
+const emptyWorkspaceManifestBroadcastSync: WorkspaceManifestBroadcastSync = {
+  broadcast: () => {},
+  dispose: () => {},
+};
+
 type WorkspaceImageAsset = WorkspaceImageNode & {
   url: string;
 };
 
+type ActiveOwnerShareRecord = OwnerShareRecord & {
+  guestCount?: number;
+  hostOnline?: boolean;
+  peerCount?: number;
+  pendingHostSave?: boolean;
+};
+
 export function App() {
+  if (isSharedFilePath(window.location.pathname)) {
+    return <SharedFileEditor />;
+  }
+
+  return <LocalWorkspaceApp />;
+}
+
+function LocalWorkspaceApp() {
   let [workspaceBackend, setWorkspaceBackend] = useState<WorkspaceBackend | null>(null);
   let [storedWorkspaceHandle, setStoredWorkspaceHandle] = useState<AccessDirectoryHandle | null>(
     null,
@@ -130,8 +204,10 @@ export function App() {
     value: "",
     version: 0,
   });
+  let [collabDocument, setCollabDocument] = useState<CollabDocumentState | null>(null);
   let [saveState, setSaveState] = useState<SaveState>("idle");
   let [errorMessage, setErrorMessage] = useState("");
+  let [retryLoadPath, setRetryLoadPath] = useState<string | null>(null);
   let [busy, setBusy] = useState(false);
   let [dropboxConnecting, setDropboxConnecting] = useState(false);
   let [restoreChecking, setRestoreChecking] = useState(false);
@@ -141,12 +217,33 @@ export function App() {
   let [fileDialogValue, setFileDialogValue] = useState("");
   let [fileDialogError, setFileDialogError] = useState("");
   let [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
+  let [shareDialogOpen, setShareDialogOpen] = useState(false);
+  let [shareExpiration, setShareExpiration] = useState<ShareExpirationOption>("7d");
+  let [shareError, setShareError] = useState("");
+  let [shareCreating, setShareCreating] = useState(false);
+  let [shareCopied, setShareCopied] = useState(false);
+  let [createdShare, setCreatedShare] = useState<CreatedOwnerShare | null>(null);
+  let [activeShareRecord, setActiveShareRecord] = useState<ActiveOwnerShareRecord | null>(null);
+  let [ownerSaveConflict, setOwnerSaveConflict] = useState<CollabMaterializationConflict | null>(
+    null,
+  );
+  let [ownerSaveConflictBusy, setOwnerSaveConflictBusy] = useState(false);
+  let [ownerSaveConflictDismissed, setOwnerSaveConflictDismissed] = useState(false);
   let [imageAssetVersion, setImageAssetVersion] = useState(0);
 
   let editorElementRef = useRef<LiveMdEditorElement | null>(null);
   let workspaceBackendRef = useRef<WorkspaceBackend | null>(null);
   let selectedFileBackendRef = useRef<WorkspaceBackend | null>(null);
   let selectedFileRef = useRef<MarkdownFileNode | null>(null);
+  let collabDocumentRef = useRef<CollabDocumentState | null>(null);
+  let collabSyncCleanupRef = useRef<() => void>(() => {});
+  let shareHostConnectionRef = useRef<ShareRelayConnection | null>(null);
+  let shareHostRecordRef = useRef<OwnerShareRecord | null>(null);
+  let shareHostUpdateCleanupRef = useRef<() => void>(() => {});
+  let ownerSaveConflictRef = useRef<CollabMaterializationConflict | null>(null);
+  let workspaceManifestSyncRef = useRef<WorkspaceManifestBroadcastSync>(
+    emptyWorkspaceManifestBroadcastSync,
+  );
   let editorValueRef = useRef("");
   let cleanValueRef = useRef("");
   let dirtyRef = useRef(false);
@@ -169,8 +266,21 @@ export function App() {
     selectedFileRef.current = selectedFile;
   }, [selectedFile]);
 
+  useEffect(() => {
+    collabDocumentRef.current = collabDocument;
+  }, [collabDocument]);
+
+  useEffect(() => {
+    ownerSaveConflictRef.current = ownerSaveConflict;
+  }, [ownerSaveConflict]);
+
   useEffect(
     () => () => {
+      collabSyncCleanupRef.current();
+      shareHostUpdateCleanupRef.current();
+      shareHostConnectionRef.current?.close();
+      workspaceManifestSyncRef.current.dispose();
+      collabDocumentRef.current?.dispose();
       revokeImageAssetUrls(imageAssetsRef.current);
       imageAssetsRef.current = new Map();
     },
@@ -216,12 +326,43 @@ export function App() {
     setImageAssetVersion((version) => version + 1);
   }, []);
 
+  let stopOwnerShareHost = useCallback(() => {
+    shareHostUpdateCleanupRef.current();
+    shareHostUpdateCleanupRef.current = () => {};
+    shareHostConnectionRef.current?.close();
+    shareHostConnectionRef.current = null;
+    shareHostRecordRef.current = null;
+  }, []);
+
+  let sendHostSaveAck = useCallback((path: string, value: string) => {
+    let record = shareHostRecordRef.current;
+    let connection = shareHostConnectionRef.current;
+    if (!record || !connection || record.path != path) return;
+
+    let materializedHash = hashMarkdownText(value);
+    connection.enqueueHostSaveAck(
+      new TextEncoder().encode(
+        JSON.stringify({
+          materializedHash,
+          savedAt: Date.now(),
+          shareId: record.shareId,
+        }),
+      ),
+    );
+    setActiveShareRecord((current) =>
+      current?.shareId == record.shareId
+        ? { ...current, lastHostSavedVersion: materializedHash }
+        : current,
+    );
+  }, []);
+
   let saveCurrentFile = useCallback(async () => {
     let backend = selectedFileBackendRef.current;
     let file = selectedFileRef.current;
     if (!backend || !file) return true;
 
-    let value = editorValueRef.current;
+    let document = collabDocumentRef.current;
+    let value = document ? getCollabDocumentValue(document) : editorValueRef.current;
     let editVersion = editVersionRef.current;
     if (!dirtyRef.current && value == cleanValueRef.current) return true;
 
@@ -240,9 +381,38 @@ export function App() {
     setSaveStateSynced("saving");
 
     try {
-      await backend.writeFile(file.path, value);
+      if (document && document.path == file.path) {
+        if (ownerSaveConflictRef.current?.path == file.path) {
+          setSaveStateSynced("error");
+          setErrorMessage(ownerSaveConflictMessage(file.path));
+          return false;
+        }
+
+        if (shareHostRecordRef.current?.path == file.path) {
+          let conflict = await detectCollabMaterializationConflict(backend, document);
+          if (conflict) {
+            setOwnerSaveConflict(conflict);
+            setOwnerSaveConflictDismissed(false);
+            setSaveStateSynced("error");
+            setErrorMessage(ownerSaveConflictMessage(file.path));
+            return false;
+          }
+        }
+
+        let result = await materializeCollabDocument(backend, document);
+        if (result.externalEdit?.kind == "conflict-copy") {
+          setErrorMessage(externalEditConflictMessage(result.externalEdit.path));
+        }
+      } else {
+        await backend.writeFile(file.path, value);
+      }
+      sendHostSaveAck(file.path, value);
       if (operation == saveOperationRef.current && selectedFileRef.current?.path == file.path) {
         cleanValueRef.current = value;
+        if (ownerSaveConflictRef.current?.path == file.path) {
+          setOwnerSaveConflict(null);
+          setOwnerSaveConflictDismissed(false);
+        }
         if (editVersion == editVersionRef.current) {
           dirtyRef.current = false;
           setSaveStateSynced("saved");
@@ -251,10 +421,65 @@ export function App() {
       return true;
     } catch (error) {
       setSaveStateSynced("error");
+      setRetryLoadPath(null);
       setErrorMessage(errorToMessage(error));
       return false;
     }
-  }, [setSaveStateSynced]);
+  }, [sendHostSaveAck, setSaveStateSynced]);
+
+  let resolveOwnerSaveConflict = useCallback(
+    async (resolution: "accept-shared" | "keep-source" | "later") => {
+      if (resolution == "later") {
+        setOwnerSaveConflictDismissed(true);
+        if (ownerSaveConflictRef.current) {
+          setErrorMessage(ownerSaveConflictMessage(ownerSaveConflictRef.current.path));
+        }
+        return;
+      }
+
+      let backend = selectedFileBackendRef.current;
+      let file = selectedFileRef.current;
+      let document = collabDocumentRef.current;
+      let conflict = ownerSaveConflictRef.current;
+      if (!backend || !file || !document || !conflict || conflict.path != file.path) return;
+
+      setOwnerSaveConflictBusy(true);
+      setErrorMessage("");
+      try {
+        let nextValue: string;
+        if (resolution == "keep-source") {
+          let result = await keepSourceAndWriteSharedConflictCopy(backend, document);
+          nextValue = result.sourceValue;
+          setErrorMessage(sharedEditConflictCopyMessage(result.externalEdit.path));
+        } else {
+          await materializeCollabDocument(backend, document, {
+            conflictStrategy: "overwrite-source",
+          });
+          nextValue = getCollabDocumentValue(document);
+        }
+
+        editorValueRef.current = nextValue;
+        cleanValueRef.current = nextValue;
+        dirtyRef.current = false;
+        editVersionRef.current += 1;
+        setEditorDocument((current) => ({
+          path: file.path,
+          value: nextValue,
+          version: current.version + 1,
+        }));
+        setOwnerSaveConflict(null);
+        setOwnerSaveConflictDismissed(false);
+        setSaveStateSynced("saved");
+        sendHostSaveAck(file.path, nextValue);
+      } catch (error) {
+        setSaveStateSynced("error");
+        setErrorMessage(errorToMessage(error));
+      } finally {
+        setOwnerSaveConflictBusy(false);
+      }
+    },
+    [sendHostSaveAck, setSaveStateSynced],
+  );
 
   let scheduleAutoSave = useCallback(() => {
     if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
@@ -266,9 +491,77 @@ export function App() {
     }, delay);
   }, [saveCurrentFile]);
 
+  let startOwnerShareHost = useCallback(
+    async (record: OwnerShareRecord, backend: WorkspaceBackend, document: CollabDocumentState) => {
+      stopOwnerShareHost();
+
+      let hostSecret = readHostSecret(record);
+      if (!hostSecret) {
+        setShareError("Link created, but this browser cannot host it without the host key.");
+        return;
+      }
+
+      try {
+        let session = await createRelayShareSession(
+          configuredShareRelayOrigin(),
+          record.shareId,
+          "host",
+          hostSecret,
+        );
+        setActiveShareRecord((current) =>
+          current?.shareId == record.shareId
+            ? {
+                ...current,
+                expiresAt: session.shareExpiresAt,
+                guestCount: session.guestCount,
+                hostOnline: session.hostOnline,
+                peerCount: session.peerCount,
+                pendingHostSave: session.pendingHostSave,
+              }
+            : current,
+        );
+        let connection = new ShareRelayConnection({
+          clientId: getOrCreateOwnerShareClientId(),
+          doc: document.doc,
+          onDocumentImported: () => {
+            editorValueRef.current = getCollabDocumentValue(document);
+            editVersionRef.current += 1;
+            dirtyRef.current = true;
+            setSaveStateSynced("pending");
+            void savePendingCollabDocumentUpdates(backend, document).catch(() => {});
+            scheduleAutoSave();
+          },
+          onError: (message) => setShareError(message),
+          onShareStatus: (status) => {
+            setActiveShareRecord((current) =>
+              current?.shareId == status.shareId ? mergeOwnerShareStatus(current, status) : current,
+            );
+          },
+          relayOrigin: configuredShareRelayOrigin(),
+          sessionToken: session.sessionToken,
+          shareId: record.shareId,
+        });
+        shareHostConnectionRef.current = connection;
+        shareHostRecordRef.current = record;
+        shareHostUpdateCleanupRef.current = document.doc.subscribeLocalUpdates((bytes) => {
+          connection.enqueueDocumentUpdate(bytes);
+        });
+        connection.connect();
+      } catch (error) {
+        setShareError(`Link created, but host sync did not start: ${errorToMessage(error)}`);
+      }
+    },
+    [scheduleAutoSave, setSaveStateSynced, stopOwnerShareHost],
+  );
+
   let handleEditorInput = useCallback(
     (value: string) => {
       editorValueRef.current = value;
+      let backend = selectedFileBackendRef.current;
+      let document = collabDocumentRef.current;
+      if (backend && document) {
+        void savePendingCollabDocumentUpdates(backend, document).catch(() => {});
+      }
       editVersionRef.current += 1;
       dirtyRef.current = true;
 
@@ -281,6 +574,17 @@ export function App() {
     [scheduleAutoSave, setSaveStateSynced],
   );
 
+  let broadcastWorkspaceManifest = useCallback(async (backend: WorkspaceBackend) => {
+    try {
+      let bytes = await readWorkspaceManifestSnapshotBytes(backend);
+      if (bytes) {
+        workspaceManifestSyncRef.current.broadcast(bytes);
+      }
+    } catch {
+      // Broadcast is opportunistic; the workspace sidecar remains durable.
+    }
+  }, []);
+
   let loadFile = useCallback(
     async (
       backend: WorkspaceBackend,
@@ -291,15 +595,64 @@ export function App() {
 
       setBusy(true);
       setErrorMessage("");
+      setOwnerSaveConflict(null);
+      setOwnerSaveConflictDismissed(false);
+      setRetryLoadPath(null);
       try {
-        let value = await backend.readFile(file.path);
+        let restoredShareRecord = await findOwnerShareRecordForPath(backend, file.path).catch(
+          () => null,
+        );
+        let document = await openMarkdownCollabDocument(backend, file.path, {
+          reconcileExternalEdits: !restoredShareRecord,
+        });
+        let value = document.value;
+        if (document.externalEdit?.kind == "conflict-copy") {
+          setErrorMessage(externalEditConflictMessage(document.externalEdit.path));
+        }
+        if (document.manifestCreated) await broadcastWorkspaceManifest(backend);
+        if (shareHostRecordRef.current?.path != file.path) stopOwnerShareHost();
+        collabSyncCleanupRef.current();
+        collabDocumentRef.current?.dispose();
+        let handleRemoteDocumentUpdate = () => {
+          void (async () => {
+            try {
+              let manifest = await loadWorkspaceManifest(backend);
+              let record = manifest.records.find((item) => item.docId == document.docId);
+              if (record?.deletedAt != null) {
+                setSaveStateSynced("error");
+                setErrorMessage(
+                  "This file was deleted in another window. Refresh the workspace before continuing.",
+                );
+                return;
+              }
+
+              editorValueRef.current = getCollabDocumentValue(document);
+              editVersionRef.current += 1;
+              dirtyRef.current = true;
+              setSaveStateSynced("pending");
+              await saveCollabDocumentSnapshot(backend, document);
+              scheduleAutoSave();
+            } catch (error) {
+              setSaveStateSynced("error");
+              setErrorMessage(errorToMessage(error));
+            }
+          })();
+        };
+        collabSyncCleanupRef.current = createCollabDocumentBroadcastSync({
+          backend,
+          doc: document.doc,
+          docId: document.docId,
+          onRemoteUpdate: handleRemoteDocumentUpdate,
+        });
         selectedFileRef.current = file;
         selectedFileBackendRef.current = backend;
+        collabDocumentRef.current = document;
         editorValueRef.current = value;
         cleanValueRef.current = value;
         dirtyRef.current = false;
         editVersionRef.current = 0;
         setSelectedFile(file);
+        setCollabDocument(document);
         setTreeSelection({ kind: "file", name: file.name, path: file.path });
         setEditorDocument((current) => ({
           path: file.path,
@@ -307,13 +660,28 @@ export function App() {
           version: current.version + 1,
         }));
         setSaveStateSynced("saved");
+        setActiveShareRecord(restoredShareRecord);
+        setCreatedShare(null);
+        if (restoredShareRecord) {
+          void startOwnerShareHost(restoredShareRecord, backend, document);
+        }
+        setRetryLoadPath(null);
       } catch (error) {
-        setErrorMessage(errorToMessage(error));
+        let message = errorToMessage(error);
+        setErrorMessage(message);
+        setRetryLoadPath(isCollaborationStateUnavailableMessage(message) ? file.path : null);
       } finally {
         setBusy(false);
       }
     },
-    [saveCurrentFile, setSaveStateSynced],
+    [
+      broadcastWorkspaceManifest,
+      saveCurrentFile,
+      scheduleAutoSave,
+      setSaveStateSynced,
+      startOwnerShareHost,
+      stopOwnerShareHost,
+    ],
   );
 
   let loadTree = useCallback(
@@ -327,6 +695,7 @@ export function App() {
         backend.readImages?.() ?? Promise.resolve([]),
       ]);
       replaceImageAssets(await createWorkspaceImageAssets(nextImageNodes));
+      void gcWorkspaceTombstones(backend).catch(() => {});
       let nextFiles = flattenMarkdownFiles(nextTree);
       setTree(nextTree);
       setFiles(nextFiles);
@@ -340,13 +709,21 @@ export function App() {
           saveCurrent: options.saveBeforeSelect ?? true,
         });
       } else {
+        stopOwnerShareHost();
+        collabSyncCleanupRef.current();
+        collabSyncCleanupRef.current = () => {};
+        collabDocumentRef.current?.dispose();
         selectedFileRef.current = null;
         selectedFileBackendRef.current = null;
+        collabDocumentRef.current = null;
         editorValueRef.current = "";
         cleanValueRef.current = "";
         dirtyRef.current = false;
         editVersionRef.current = 0;
+        setOwnerSaveConflict(null);
+        setOwnerSaveConflictDismissed(false);
         setSelectedFile(null);
+        setCollabDocument(null);
         setTreeSelection(null);
         setEditorDocument((current) => ({
           path: "",
@@ -356,8 +733,41 @@ export function App() {
         setSaveStateSynced("idle");
       }
     },
-    [loadFile, replaceImageAssets, setSaveStateSynced],
+    [loadFile, replaceImageAssets, setSaveStateSynced, stopOwnerShareHost],
   );
+
+  let handleRemoteWorkspaceManifestUpdate = useCallback(
+    async (backend: WorkspaceBackend, bytes: Uint8Array) => {
+      try {
+        await mergeWorkspaceManifestSnapshot(backend, bytes);
+        await loadTree(backend, selectedFileRef.current?.path ?? null);
+      } catch (error) {
+        setErrorMessage(errorToMessage(error));
+      }
+    },
+    [loadTree],
+  );
+
+  useEffect(() => {
+    workspaceManifestSyncRef.current.dispose();
+    workspaceManifestSyncRef.current = emptyWorkspaceManifestBroadcastSync;
+    if (!workspaceBackend) return;
+
+    let sync = createWorkspaceManifestBroadcastSync({
+      backend: workspaceBackend,
+      onRemoteUpdate: (bytes) => {
+        void handleRemoteWorkspaceManifestUpdate(workspaceBackend, bytes);
+      },
+    });
+    workspaceManifestSyncRef.current = sync;
+
+    return () => {
+      sync.dispose();
+      if (workspaceManifestSyncRef.current == sync) {
+        workspaceManifestSyncRef.current = emptyWorkspaceManifestBroadcastSync;
+      }
+    };
+  }, [handleRemoteWorkspaceManifestUpdate, workspaceBackend]);
 
   let rememberWorkspaceHandle = useCallback((handle: AccessDirectoryHandle) => {
     setStoredWorkspaceHandle(handle);
@@ -431,6 +841,7 @@ export function App() {
 
   let openWorkspace = useCallback(async () => {
     setErrorMessage("");
+    setRetryLoadPath(null);
     if (!supportsDirectoryPicker()) {
       setErrorMessage("Use a Chromium browser on localhost to open a folder.");
       return;
@@ -441,6 +852,7 @@ export function App() {
       let handle = await pickWorkspaceDirectory();
       if (!(await ensureReadWritePermission(handle))) {
         setErrorMessage("Read-write folder permission was not granted.");
+        setRetryLoadPath(null);
         return;
       }
       let backend = createLocalWorkspaceBackend(handle);
@@ -466,11 +878,13 @@ export function App() {
       } = {},
     ) => {
       setErrorMessage("");
+      setRetryLoadPath(null);
       if (!options.skipSaveCurrent && !(await saveCurrentFile())) return false;
 
       let appKey = config.appKey.trim();
       if (!appKey) {
         setErrorMessage("Dropbox app key is required.");
+        setRetryLoadPath(null);
         return false;
       }
       let root = normalizeDropboxRootInput(config.root);
@@ -495,7 +909,7 @@ export function App() {
         await getAccessToken();
         let backend = createDropboxWorkspaceBackend({
           getAccessToken,
-          name: "Dropbox",
+          name: "Dropbox mirror",
           refreshAccessToken,
           root,
         });
@@ -511,6 +925,7 @@ export function App() {
         return true;
       } catch (error) {
         setErrorMessage(errorToMessage(error));
+        setRetryLoadPath(null);
         return false;
       } finally {
         setDropboxConnecting(false);
@@ -525,9 +940,11 @@ export function App() {
 
     setBusy(true);
     setErrorMessage("");
+    setRetryLoadPath(null);
     try {
       if (!(await ensureReadWritePermission(storedWorkspaceHandle))) {
         setErrorMessage("Read-write folder permission was not granted.");
+        setRetryLoadPath(null);
         return;
       }
 
@@ -539,6 +956,7 @@ export function App() {
       await loadTree(backend, null, { saveBeforeSelect: false });
     } catch (error) {
       setErrorMessage(errorToMessage(error));
+      setRetryLoadPath(null);
     } finally {
       setBusy(false);
     }
@@ -548,7 +966,8 @@ export function App() {
     if (!storedDropboxConfig) return;
     let appKey = defaultDropboxAppKey();
     if (!appKey) {
-      setErrorMessage("Dropbox is not configured. Set VITE_DROPBOX_APP_KEY for this app.");
+      setErrorMessage("Dropbox mirror is not configured. Set VITE_DROPBOX_APP_KEY for this app.");
+      setRetryLoadPath(null);
       return;
     }
     await openDropboxWorkspace({
@@ -562,10 +981,12 @@ export function App() {
 
     setBusy(true);
     setErrorMessage("");
+    setRetryLoadPath(null);
     try {
       await loadTree(workspaceBackend, selectedFileRef.current?.path ?? null);
     } catch (error) {
       setErrorMessage(errorToMessage(error));
+      setRetryLoadPath(null);
     } finally {
       setBusy(false);
     }
@@ -609,6 +1030,7 @@ export function App() {
       } catch (error) {
         if (!canceled) {
           setErrorMessage(errorToMessage(error));
+          setRetryLoadPath(null);
         }
       } finally {
         dropboxRedirectPendingRef.current = false;
@@ -706,7 +1128,8 @@ export function App() {
   let connectDropbox = () => {
     let appKey = defaultDropboxAppKey();
     if (!appKey) {
-      setErrorMessage("Dropbox is not configured. Set VITE_DROPBOX_APP_KEY for this app.");
+      setErrorMessage("Dropbox mirror is not configured. Set VITE_DROPBOX_APP_KEY for this app.");
+      setRetryLoadPath(null);
       return;
     }
 
@@ -730,6 +1153,7 @@ export function App() {
 
     setFileDialogError("");
     setBusy(true);
+    setRetryLoadPath(null);
     try {
       let currentTarget = fileDialogTarget;
       let nextPath =
@@ -740,6 +1164,16 @@ export function App() {
             : currentTarget?.kind == "directory"
               ? await renameWorkspaceDirectory(workspaceBackend, currentTarget.path, value)
               : null;
+      if (fileDialogMode == "create" && nextPath) {
+        await ensureManifestFile(workspaceBackend, nextPath);
+        await broadcastWorkspaceManifest(workspaceBackend);
+      } else if (currentTarget?.kind == "file" && nextPath) {
+        await renameManifestFilePath(workspaceBackend, currentTarget.path, nextPath);
+        await broadcastWorkspaceManifest(workspaceBackend);
+      } else if (currentTarget?.kind == "directory" && nextPath) {
+        await renameManifestDirectoryPaths(workspaceBackend, currentTarget.path, nextPath);
+        await broadcastWorkspaceManifest(workspaceBackend);
+      }
       let nextSelectedPath =
         currentTarget?.kind == "directory" && nextPath
           ? pathAfterDirectoryRename(
@@ -778,6 +1212,7 @@ export function App() {
 
     setBusy(true);
     setErrorMessage("");
+    setRetryLoadPath(null);
     if (saveTimerRef.current != null) {
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -787,11 +1222,15 @@ export function App() {
       let nextSelectedPath = selectedFileRef.current?.path ?? null;
       if (target.kind == "directory") {
         if (!backend.deleteDirectory) throw new Error("This workspace cannot delete folders.");
+        await tombstoneManifestDirectory(backend, target.path);
+        await broadcastWorkspaceManifest(backend);
         await backend.deleteDirectory(target.path);
         if (nextSelectedPath && isPathInsideDirectory(nextSelectedPath, target.path)) {
           nextSelectedPath = null;
         }
       } else {
+        await tombstoneManifestFile(backend, target.path);
+        await broadcastWorkspaceManifest(backend);
         await backend.deleteFile(target.path);
         if (nextSelectedPath == target.path) nextSelectedPath = null;
       }
@@ -800,10 +1239,163 @@ export function App() {
       await loadTree(backend, nextSelectedPath, { saveBeforeSelect: false });
     } catch (error) {
       setErrorMessage(errorToMessage(error));
+      setRetryLoadPath(null);
     } finally {
       setBusy(false);
     }
   };
+
+  let retryUnavailableCollabFile = useCallback(async () => {
+    let backend = workspaceBackend;
+    let retryPath = retryLoadPath;
+    if (!backend || !retryPath) return;
+
+    let file = files.find((item) => item.path == retryPath);
+    if (!file) {
+      await refreshWorkspace();
+      return;
+    }
+
+    await loadFile(backend, file, { saveCurrent: false });
+  }, [files, loadFile, refreshWorkspace, retryLoadPath, workspaceBackend]);
+
+  let repairWorkspaceMetadata = useCallback(async () => {
+    let backend = workspaceBackend;
+    if (!backend || !(await saveCurrentFile())) return;
+
+    setBusy(true);
+    setErrorMessage("");
+    setRetryLoadPath(null);
+    try {
+      await repairWorkspaceCollaborationMetadata(backend);
+      await loadTree(backend, selectedFileRef.current?.path ?? null, { saveBeforeSelect: false });
+    } catch (error) {
+      setErrorMessage(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [loadTree, saveCurrentFile, workspaceBackend]);
+
+  let openShareDialog = useCallback(() => {
+    setShareDialogOpen(true);
+    setShareError("");
+    setShareCopied(false);
+    setCreatedShare(null);
+    setShareExpiration("7d");
+  }, []);
+
+  let closeShareDialog = useCallback((open: boolean) => {
+    setShareDialogOpen(open);
+    if (!open) {
+      setShareError("");
+      setShareCopied(false);
+    }
+  }, []);
+
+  let createSharedFileLink = useCallback(async () => {
+    let backend = workspaceBackendRef.current;
+    let file = selectedFileRef.current;
+    let document = collabDocumentRef.current;
+    if (!backend || !file || !document) return;
+    if (!(await saveCurrentFile())) return;
+
+    setShareCreating(true);
+    setShareError("");
+    setShareCopied(false);
+    try {
+      let share = await createOwnerShare({
+        backend,
+        baseUrl: window.location.href,
+        document,
+        expiration: shareExpiration,
+        file,
+        relayOrigin: configuredShareRelayOrigin(),
+      });
+      setCreatedShare(share);
+      setActiveShareRecord(share.record);
+      await startOwnerShareHost(share.record, backend, document);
+    } catch (error) {
+      setShareError(errorToMessage(error));
+    } finally {
+      setShareCreating(false);
+    }
+  }, [saveCurrentFile, shareExpiration, startOwnerShareHost]);
+
+  let rotateSharedFileLink = useCallback(async () => {
+    let backend = workspaceBackendRef.current;
+    let record = activeShareRecord;
+    if (!backend || !record || record.revokedAt != null) return;
+
+    let hostSecret = readHostSecret(record);
+    if (!hostSecret) {
+      setShareError("This browser cannot rotate the link without the host key.");
+      return;
+    }
+
+    setShareCreating(true);
+    setShareError("");
+    setShareCopied(false);
+    try {
+      let share = await rotateOwnerShare({
+        backend,
+        baseUrl: window.location.href,
+        expiration: shareExpiration,
+        hostSecret,
+        record,
+        relayOrigin: configuredShareRelayOrigin(),
+      });
+      setCreatedShare(share);
+      setActiveShareRecord(share.record);
+    } catch (error) {
+      setShareError(errorToMessage(error));
+    } finally {
+      setShareCreating(false);
+    }
+  }, [activeShareRecord, shareExpiration]);
+
+  let stopSharingFile = useCallback(async () => {
+    let backend = workspaceBackendRef.current;
+    let record = activeShareRecord;
+    if (!backend || !record || record.revokedAt != null) return;
+
+    let hostSecret = readHostSecret(record);
+    if (!hostSecret) {
+      setShareError("This browser cannot stop sharing without the host key.");
+      return;
+    }
+
+    setShareCreating(true);
+    setShareError("");
+    setShareCopied(false);
+    try {
+      let nextRecord = await revokeOwnerShare({
+        backend,
+        hostSecret,
+        record,
+        relayOrigin: configuredShareRelayOrigin(),
+      });
+      stopOwnerShareHost();
+      setActiveShareRecord(nextRecord);
+      setCreatedShare(null);
+    } catch (error) {
+      setShareError(errorToMessage(error));
+    } finally {
+      setShareCreating(false);
+    }
+  }, [activeShareRecord, stopOwnerShareHost]);
+
+  let copySharedFileLink = useCallback(async () => {
+    if (!createdShare) return;
+
+    try {
+      await navigator.clipboard.writeText(createdShare.link);
+      setShareCopied(true);
+      setShareError("");
+    } catch {
+      setShareCopied(false);
+      setShareError("Could not copy the link.");
+    }
+  }, [createdShare]);
 
   let resolveImageSource = useMemo<LiveMdImageSourceResolver>(() => {
     return (source) => {
@@ -871,6 +1463,13 @@ export function App() {
   );
 
   let saveLabel = useMemo(() => saveStateLabel(saveState, selectedFile), [saveState, selectedFile]);
+  let storageLabel = useMemo(() => workspaceStorageLabel(workspaceBackend), [workspaceBackend]);
+  let activeShareForSelectedFile =
+    activeShareRecord &&
+    activeShareRecord.path == selectedFile?.path &&
+    activeShareRecord.revokedAt == null
+      ? activeShareRecord
+      : null;
   let restoreAvailable = Boolean(storedWorkspaceHandle);
   let dropboxRestoreAvailable = Boolean(storedDropboxConfig);
 
@@ -900,7 +1499,7 @@ export function App() {
               <FolderOpenIcon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
-              label="Connect Dropbox"
+              label="Connect Dropbox mirror"
               size="icon-sm"
               variant="ghost"
               onClick={connectDropbox}
@@ -931,7 +1530,7 @@ export function App() {
             />
           ) : (
             <div className="flex min-h-0 flex-1 items-center justify-center p-4">
-              <div className="flex w-full max-w-48 flex-col gap-2">
+              <div className="flex w-full max-w-60 flex-col gap-2">
                 {restoreAvailable && (
                   <Button
                     onClick={() => void restoreStoredWorkspace()}
@@ -948,7 +1547,7 @@ export function App() {
                     disabled={busy || dropboxConnecting}
                   >
                     <CloudIcon data-icon="inline-start" />
-                    Reconnect Dropbox
+                    Reconnect Dropbox mirror
                   </Button>
                 )}
                 <Button
@@ -965,7 +1564,7 @@ export function App() {
                   disabled={busy || dropboxConnecting}
                 >
                   <CloudIcon data-icon="inline-start" />
-                  Connect Dropbox
+                  Connect Dropbox mirror
                 </Button>
               </div>
             </div>
@@ -1003,6 +1602,22 @@ export function App() {
               <SaveIcon data-icon="inline-start" />
               {saveLabel}
             </Badge>
+            {workspaceBackend && storageLabel && (
+              <Badge variant="secondary">
+                {workspaceBackend.kind == "opendal-dropbox" ? (
+                  <CloudIcon data-icon="inline-start" />
+                ) : (
+                  <FolderOpenIcon data-icon="inline-start" />
+                )}
+                {storageLabel}
+              </Badge>
+            )}
+            {activeShareForSelectedFile && (
+              <Badge variant="secondary">
+                <Share2Icon data-icon="inline-start" />
+                Shared file
+              </Badge>
+            )}
             <input
               ref={imageInputRef}
               className="sr-only"
@@ -1011,6 +1626,15 @@ export function App() {
               multiple
               onChange={handleImageInputChange}
             />
+            <TooltipIconButton
+              label="Share file"
+              size="icon-sm"
+              variant="ghost"
+              disabled={!selectedFile || !collabDocument || busy}
+              onClick={openShareDialog}
+            >
+              <Share2Icon data-icon="inline-start" />
+            </TooltipIconButton>
             <TooltipIconButton
               label="Insert image"
               size="icon-sm"
@@ -1030,6 +1654,15 @@ export function App() {
               <RefreshCwIcon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
+              label="Repair metadata"
+              size="icon-sm"
+              variant="ghost"
+              disabled={!workspaceBackend || busy}
+              onClick={() => void repairWorkspaceMetadata()}
+            >
+              <WrenchIcon data-icon="inline-start" />
+            </TooltipIconButton>
+            <TooltipIconButton
               label="Rename file"
               size="icon-sm"
               variant="ghost"
@@ -1041,8 +1674,30 @@ export function App() {
           </header>
 
           {errorMessage && (
-            <div className="border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {errorMessage}
+            <div className="flex items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <div className="min-w-0 flex-1">{errorMessage}</div>
+              {ownerSaveConflict && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={ownerSaveConflictBusy}
+                  onClick={() => setOwnerSaveConflictDismissed(false)}
+                >
+                  <TriangleAlertIcon data-icon="inline-start" />
+                  Resolve
+                </Button>
+              )}
+              {retryLoadPath && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => void retryUnavailableCollabFile()}
+                >
+                  <RefreshCwIcon data-icon="inline-start" />
+                  Retry
+                </Button>
+              )}
             </div>
           )}
 
@@ -1050,6 +1705,7 @@ export function App() {
             {selectedFile ? (
               <LiveMdEditor
                 documentKey={`${editorDocument.path}:${editorDocument.version}`}
+                extensions={collabDocument?.extensions ?? emptyEditorExtensions}
                 imageSource={resolveImageSource}
                 initialValue={editorDocument.value}
                 placeholder="Start writing..."
@@ -1086,6 +1742,36 @@ export function App() {
           onOpenChange={closeFileDialog}
           onSubmit={submitFileDialog}
           onValueChange={setFileDialogValue}
+        />
+
+        <ShareFileDialog
+          activeShare={activeShareForSelectedFile}
+          busy={busy || shareCreating}
+          copied={shareCopied}
+          error={shareError}
+          expiration={shareExpiration}
+          file={selectedFile}
+          link={createdShare?.link ?? ""}
+          open={shareDialogOpen}
+          shared={Boolean(activeShareForSelectedFile)}
+          onCopyLink={copySharedFileLink}
+          onCreateLink={createSharedFileLink}
+          onExpirationChange={setShareExpiration}
+          onOpenChange={closeShareDialog}
+          onRotateLink={rotateSharedFileLink}
+          onStopSharing={stopSharingFile}
+        />
+
+        <OwnerSaveConflictDialog
+          busy={ownerSaveConflictBusy}
+          conflict={ownerSaveConflict}
+          open={Boolean(ownerSaveConflict && !ownerSaveConflictDismissed)}
+          onAcceptShared={() => resolveOwnerSaveConflict("accept-shared")}
+          onKeepSource={() => resolveOwnerSaveConflict("keep-source")}
+          onOpenChange={(open) => {
+            if (!open) void resolveOwnerSaveConflict("later");
+          }}
+          onResolveLater={() => resolveOwnerSaveConflict("later")}
         />
 
         <AlertDialog open={deleteTarget != null} onOpenChange={closeDeleteDialog}>
@@ -1207,7 +1893,7 @@ function WorkspaceEmpty({
                 disabled={busy || dropboxConnecting}
               >
                 <CloudIcon data-icon="inline-start" />
-                Reconnect Dropbox
+                Reconnect Dropbox mirror
               </Button>
             )}
             <Button variant="outline" onClick={onOpenFolder} disabled={!browserSupported || busy}>
@@ -1216,14 +1902,14 @@ function WorkspaceEmpty({
             </Button>
             <Button variant="outline" onClick={onOpenDropbox} disabled={busy || dropboxConnecting}>
               <CloudIcon data-icon="inline-start" />
-              Connect Dropbox
+              Connect Dropbox mirror
             </Button>
           </div>
         ) : dropboxRestoreAvailable ? (
           <div className="flex flex-col gap-2">
             <Button onClick={onRestoreDropbox} disabled={busy || dropboxConnecting}>
               <CloudIcon data-icon="inline-start" />
-              Reconnect Dropbox
+              Reconnect Dropbox mirror
             </Button>
             <Button variant="outline" onClick={onOpenFolder} disabled={!browserSupported || busy}>
               <FolderOpenIcon data-icon="inline-start" />
@@ -1231,7 +1917,7 @@ function WorkspaceEmpty({
             </Button>
             <Button variant="outline" onClick={onOpenDropbox} disabled={busy || dropboxConnecting}>
               <CloudIcon data-icon="inline-start" />
-              Connect Dropbox
+              Connect Dropbox mirror
             </Button>
           </div>
         ) : (
@@ -1242,7 +1928,7 @@ function WorkspaceEmpty({
             </Button>
             <Button variant="outline" onClick={onOpenDropbox} disabled={busy || dropboxConnecting}>
               <CloudIcon data-icon="inline-start" />
-              Connect Dropbox
+              Connect Dropbox mirror
             </Button>
           </div>
         )}
@@ -1331,6 +2017,244 @@ function FileNameDialog({
   );
 }
 
+type OwnerSaveConflictDialogProps = {
+  busy: boolean;
+  conflict: CollabMaterializationConflict | null;
+  open: boolean;
+  onAcceptShared: () => void | Promise<void>;
+  onKeepSource: () => void | Promise<void>;
+  onOpenChange: (open: boolean) => void;
+  onResolveLater: () => void | Promise<void>;
+};
+
+function OwnerSaveConflictDialog({
+  busy,
+  conflict,
+  open,
+  onAcceptShared,
+  onKeepSource,
+  onOpenChange,
+  onResolveLater,
+}: OwnerSaveConflictDialogProps) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogMedia>
+            <TriangleAlertIcon />
+          </AlertDialogMedia>
+          <AlertDialogTitle>Shared file conflict</AlertDialogTitle>
+          <AlertDialogDescription>
+            The relay has shared edits, but the source Markdown file also changed outside LiveMD.
+            Choose what the owner should save before guests see this as saved to host.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {conflict && (
+          <div className="flex flex-col gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+            <div className="min-w-0">
+              <div className="text-xs text-muted-foreground">File</div>
+              <div className="truncate font-medium">{conflict.path}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+              <div className="truncate">Source {conflict.externalHash}</div>
+              <div className="truncate">Shared {conflict.sharedHash}</div>
+            </div>
+          </div>
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy} onClick={() => void onResolveLater()}>
+            Resolve later
+          </AlertDialogCancel>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void onKeepSource()}
+          >
+            Save shared copy
+          </Button>
+          <Button type="button" disabled={busy} onClick={() => void onAcceptShared()}>
+            Use shared edit
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+type ShareFileDialogProps = {
+  activeShare: ActiveOwnerShareRecord | null;
+  busy: boolean;
+  copied: boolean;
+  error: string;
+  expiration: ShareExpirationOption;
+  file: MarkdownFileNode | null;
+  link: string;
+  open: boolean;
+  shared: boolean;
+  onCopyLink: () => Promise<void>;
+  onCreateLink: () => Promise<void>;
+  onExpirationChange: (value: ShareExpirationOption) => void;
+  onOpenChange: (open: boolean) => void;
+  onRotateLink: () => Promise<void>;
+  onStopSharing: () => Promise<void>;
+};
+
+function ShareFileDialog({
+  activeShare,
+  busy,
+  copied,
+  error,
+  expiration,
+  file,
+  link,
+  open,
+  shared,
+  onCopyLink,
+  onCreateLink,
+  onExpirationChange,
+  onOpenChange,
+  onRotateLink,
+  onStopSharing,
+}: ShareFileDialogProps) {
+  let expirationId = "shared-file-expiration";
+  let linkId = "shared-file-link";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <div className="flex flex-col gap-4">
+          <DialogHeader>
+            <DialogTitle>Share file</DialogTitle>
+            <DialogDescription className="sr-only">
+              Create an edit link for the selected Markdown file.
+            </DialogDescription>
+          </DialogHeader>
+
+          <FieldGroup>
+            <Field>
+              <FieldLabel>File</FieldLabel>
+              <div className="truncate rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                {file?.path ?? "No file selected"}
+              </div>
+            </Field>
+            <Field>
+              <FieldLabel>Permission</FieldLabel>
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                Anyone with this link can edit
+              </div>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={expirationId}>Expiration</FieldLabel>
+              <select
+                id={expirationId}
+                className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={busy}
+                value={expiration}
+                onChange={(event) =>
+                  onExpirationChange(event.currentTarget.value as ShareExpirationOption)
+                }
+              >
+                <option value="24h">24 hours</option>
+                <option value="7d">7 days</option>
+                <option value="30d">30 days</option>
+                <option value="never">Never</option>
+              </select>
+            </Field>
+            {link && (
+              <Field>
+                <FieldLabel htmlFor={linkId}>Link</FieldLabel>
+                <div className="flex gap-2">
+                  <Input id={linkId} readOnly value={link} />
+                  <Button type="button" variant="outline" disabled={busy} onClick={onCopyLink}>
+                    <CopyIcon data-icon="inline-start" />
+                    {copied ? "Copied" : "Copy"}
+                  </Button>
+                </div>
+              </Field>
+            )}
+            {shared && !link && (
+              <Field>
+                <FieldLabel>Status</FieldLabel>
+                <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                  Link active. Rotate to copy a new link.
+                </div>
+              </Field>
+            )}
+            {shared && (
+              <>
+                <Field>
+                  <FieldLabel>Peers online</FieldLabel>
+                  <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                    {formatPeerCount(activeShare?.peerCount)}
+                  </div>
+                </Field>
+                <Field>
+                  <FieldLabel>Guests online</FieldLabel>
+                  <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                    {formatGuestCount(activeShare?.guestCount)}
+                  </div>
+                </Field>
+                <Field>
+                  <FieldLabel>Save status</FieldLabel>
+                  <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                    {formatOwnerShareSaveStatus(activeShare?.pendingHostSave)}
+                  </div>
+                </Field>
+              </>
+            )}
+            <Field data-invalid={Boolean(error)}>
+              <FieldError>{error}</FieldError>
+            </Field>
+          </FieldGroup>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => onOpenChange(false)}
+            >
+              Close
+            </Button>
+            {shared ? (
+              <>
+                <Button type="button" variant="destructive" disabled={busy} onClick={onStopSharing}>
+                  Stop sharing
+                </Button>
+                <Button type="button" disabled={busy} onClick={onRotateLink}>
+                  <Share2Icon data-icon="inline-start" />
+                  Rotate link
+                </Button>
+              </>
+            ) : (
+              <Button type="button" disabled={busy || !file} onClick={onCreateLink}>
+                <Share2Icon data-icon="inline-start" />
+                Create link
+              </Button>
+            )}
+          </DialogFooter>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function formatPeerCount(count: number | undefined) {
+  if (count == null) return "Unknown";
+  return count == 1 ? "1 peer" : `${count} peers`;
+}
+
+function formatGuestCount(count: number | undefined) {
+  if (count == null) return "Unknown";
+  return count == 1 ? "1 guest" : `${count} guests`;
+}
+
+function formatOwnerShareSaveStatus(pendingHostSave: boolean | undefined) {
+  if (pendingHostSave == null) return "Waiting for relay status";
+  return pendingHostSave ? "Waiting for host" : "Saved to host";
+}
+
 async function createWorkspaceImageAssets(nodes: WorkspaceImageNode[]) {
   let assets: WorkspaceImageAsset[] = [];
   for (let node of nodes) {
@@ -1379,6 +2303,18 @@ function imageAltText(fileName: string) {
     .replace(/\.[^.]+$/, "")
     .replace(/[-_]+/g, " ")
     .trim();
+}
+
+function externalEditConflictMessage(path: string) {
+  return `The Markdown file changed outside LiveMD. The external version was copied to ${path}.`;
+}
+
+function ownerSaveConflictMessage(path: string) {
+  return `${path} changed outside LiveMD while shared edits were waiting. Resolve the conflict before saving to host.`;
+}
+
+function sharedEditConflictCopyMessage(path: string) {
+  return `The source file was kept. Shared edits were copied to ${path}.`;
 }
 
 function blockInsertText(
@@ -1534,6 +2470,52 @@ function saveStateLabel(saveState: SaveState, selectedFile: MarkdownFileNode | n
     case "idle":
     case "saved":
       return "Saved";
+  }
+}
+
+function workspaceStorageLabel(backend: WorkspaceBackend | null) {
+  if (!backend) return "";
+  return backend.kind == "opendal-dropbox" ? "Dropbox mirror" : "Local";
+}
+
+function mergeOwnerShareStatus(
+  record: ActiveOwnerShareRecord,
+  status: ShareRelayStatus,
+): ActiveOwnerShareRecord {
+  return {
+    ...record,
+    expiresAt: status.expiresAt,
+    guestCount: status.guestCount,
+    hostOnline: status.hostOnline,
+    peerCount: status.peerCount,
+    pendingHostSave: status.pendingHostSave,
+  };
+}
+
+function isCollaborationStateUnavailableMessage(message: string) {
+  return /collaboration state .*not available yet/i.test(message);
+}
+
+function readHostSecret(record: OwnerShareRecord) {
+  try {
+    return (
+      localStorage.getItem(record.hostSecretRef) ??
+      localStorage.getItem(hostSecretStorageKey(record.shareId))
+    );
+  } catch {
+    return null;
+  }
+}
+
+function getOrCreateOwnerShareClientId() {
+  try {
+    let existing = sessionStorage.getItem("local-md-workspace:owner-share-client-id");
+    if (existing) return existing;
+    let next = crypto.randomUUID();
+    sessionStorage.setItem("local-md-workspace:owner-share-client-id", next);
+    return next;
+  } catch {
+    return crypto.randomUUID();
   }
 }
 

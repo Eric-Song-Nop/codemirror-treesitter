@@ -30,7 +30,7 @@ export function createWorkspaceProviderStatus(
     let expiry = dropboxTokenExpiryStatus(dropboxSession?.expiresAt, now);
     return {
       icon: "cloud",
-      label: `Dropbox · ${dropboxRootLabel(dropboxSession?.root)} · ${expiry.label}`,
+      label: `Dropbox mirror · ${dropboxRootLabel(dropboxSession?.root)} · ${expiry.label}`,
       state: expiry.state,
     };
   }

@@ -25,23 +25,44 @@ export type CreatedWorkspaceImageNode = WorkspaceImageNode & {
   markdownReference: string;
 };
 
+export type WorkspaceEntry = {
+  isDirectory: boolean;
+  isFile: boolean;
+  path: string;
+};
+
+export type WorkspaceEntryStat = WorkspaceEntry & {
+  exists: boolean;
+  mtime?: number;
+  size?: number;
+};
+
 export type WorkspaceBackend = {
   id: string;
   kind: WorkspaceBackendKind;
   name: string;
+  createDirectory?: (path: string) => Promise<void>;
   createFile(path: string): Promise<string | null>;
   createImageAsset?: (
     markdownFilePath: string,
     imageFile: File,
   ) => Promise<CreatedWorkspaceImageNode>;
+  deleteEntry?: (path: string, options?: { recursive?: boolean }) => Promise<void>;
   deleteDirectory?: (path: string) => Promise<void>;
   deleteFile(path: string): Promise<void>;
+  listEntries?: (path: string) => Promise<WorkspaceEntry[]>;
+  readBytes?: (path: string) => Promise<Uint8Array>;
   readFile(path: string): Promise<string>;
   readImages?: () => Promise<WorkspaceImageNode[]>;
+  readTextFile?: (path: string) => Promise<string>;
   readTree(): Promise<MarkdownDirectoryNode>;
+  renameEntry?: (from: string, to: string) => Promise<void>;
   renameDirectory?: (path: string, rawName: string) => Promise<string>;
   renameFile(path: string, rawName: string): Promise<string>;
+  stat?: (path: string) => Promise<WorkspaceEntryStat>;
+  writeBytes?: (path: string, bytes: Uint8Array) => Promise<void>;
   writeFile(path: string, value: string): Promise<void>;
+  writeTextFile?: (path: string, value: string) => Promise<void>;
 };
 
 export type WorkspaceCreateTarget =
@@ -139,14 +160,7 @@ export function buildMarkdownTreeFromPaths(name: string, paths: string[]) {
   );
 }
 
-export function buildMarkdownTreeFromEntries(
-  name: string,
-  entries: Array<{
-    isDirectory: boolean;
-    isFile: boolean;
-    path: string;
-  }>,
-) {
+export function buildMarkdownTreeFromEntries(name: string, entries: WorkspaceEntry[]) {
   let root: MarkdownDirectoryNode = {
     children: [],
     kind: "directory",
@@ -182,6 +196,7 @@ export function buildMarkdownTreeFromEntries(
   for (let entry of entries) {
     let path = normalizeBackendPath(entry.path);
     if (!path) continue;
+    if (isHiddenLiveMdPath(path)) continue;
 
     if (entry.isDirectory) {
       ensureDirectory(path);
@@ -214,6 +229,10 @@ function collectMarkdownFiles(nodes: MarkdownTreeNode[], files: MarkdownFileNode
       collectMarkdownFiles(node.children, files);
     }
   }
+}
+
+export function isHiddenLiveMdPath(path: string) {
+  return path == ".livemd" || path.startsWith(".livemd/");
 }
 
 function sortTree(directory: MarkdownDirectoryNode) {
