@@ -38,6 +38,7 @@ and a CSS export.
 import {
   createLiveMdEditor,
   defineLiveMdEditor,
+  liveMdCodeFenceHighlighting,
   liveMdImageSource,
   liveMarkdown,
 } from "@codemirror-treesitter/live-md";
@@ -54,7 +55,8 @@ and benchmark content.
 ## Programmatic API
 
 ```ts
-import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
+import { createLiveMdEditor, liveMdCodeFenceHighlighting } from "@codemirror-treesitter/live-md";
+import { gruvboxDarkHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
 
 const imageAssetUrlMap = new Map<string, string>();
 const editor = createLiveMdEditor({
@@ -66,6 +68,7 @@ const editor = createLiveMdEditor({
   linkBaseUrl: "https://docs.example/notes/current.md",
   placeholder: "Start writing...",
   persistKey: "draft",
+  extensions: [liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle)],
   onChange({ value }) {
     console.log(value);
   },
@@ -81,9 +84,11 @@ editor.destroy();
 `imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`. `imageSource` maps
 normalized Markdown image destinations to preview URLs, which lets host apps
 serve local files through blob URLs. `linkBaseUrl` is used to resolve relative
-Markdown links for Shift-click link jumps. The controller exposes `view`,
-`value`, `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`,
-`setPlaceholder()`, `setReadOnly()`, and `destroy()`.
+Markdown links for Shift-click link jumps. `liveMdCodeFenceHighlighting(...)`
+lets hosts override the default code-fence token highlighter so fenced code can
+match the surrounding editor theme. The controller exposes `view`, `value`,
+`ready`, `setValue()`, `setExtensions()`, `setPersistKey()`, `setPlaceholder()`,
+`setReadOnly()`, and `destroy()`.
 
 ## Web Component
 
@@ -99,8 +104,10 @@ The element reflects the runtime API through `value`, `defaultValue`,
 `selectionEnd`, `view`, `extensions`, `ready`, `markClean()`,
 `setSelectionRange(...)`, and `select()`.
 
-JavaScript hosts can add `liveMdImageSource(...)` to the `extensions` property
-when a web component needs custom image preview URL resolution.
+JavaScript hosts can add `liveMdImageSource(...)` and
+`liveMdCodeFenceHighlighting(...)` to the `extensions` property when a web
+component needs custom image preview URL resolution or themed code-fence token
+highlighting.
 
 The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 `select`. Styling is installed into Shadow DOM and can be themed with

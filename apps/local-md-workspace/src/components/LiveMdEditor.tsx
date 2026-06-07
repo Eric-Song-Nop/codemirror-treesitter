@@ -2,12 +2,13 @@ import { useEffect, useRef, type RefObject } from "react";
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
+  liveMdCodeFenceHighlighting,
   liveMdImageSource,
   type LiveMdEditorElement,
   type LiveMdImageSourceResolver,
 } from "@codemirror-treesitter/live-md";
 import "@codemirror-treesitter/live-md/register";
-import { gruvboxDark } from "@codemirror-treesitter/theme-gruvbox";
+import { gruvboxDark, gruvboxDarkHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
 
 export type LiveMdImageFilesInput = {
   files: File[];
@@ -59,7 +60,12 @@ export function LiveMdEditor({
     let editor = editorRef.current;
     if (!editor) return;
 
-    let extensions: Extension[] = [gruvboxDark, liveMdImageSource(imageSource), ...extraExtensions];
+    let extensions: Extension[] = [
+      gruvboxDark,
+      liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle),
+      liveMdImageSource(imageSource),
+      ...extraExtensions,
+    ];
     if (onImageFiles) extensions.push(imageInputExtension(onImageFilesRef));
     editor.extensions = extensions;
 

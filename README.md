@@ -76,7 +76,8 @@ await editor.ready;
   brackets, basic setup, merge views, LSP integration, and Gruvbox themes.
 - LiveMD, a Markdown editor runtime built from the local Tree-sitter packages,
   exposed through `createLiveMdEditor()`, `liveMarkdown()`,
-  `defineLiveMdEditor()`, and `<live-md-editor>`.
+  `liveMdCodeFenceHighlighting()`, `defineLiveMdEditor()`, and
+  `<live-md-editor>`.
 - Optional LiveMD collaboration bindings for Loro documents, presence, custom
   text containers, and collaborative undo/redo.
 - Validation tooling and apps that check public export parity, package
@@ -263,7 +264,8 @@ custom properties on the host element.
 ## Programmatic API
 
 ```ts
-import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
+import { createLiveMdEditor, liveMdCodeFenceHighlighting } from "@codemirror-treesitter/live-md";
+import { gruvboxDarkHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
 
 const imageAssetUrlMap = new Map<string, string>();
 const controller = createLiveMdEditor({
@@ -275,6 +277,7 @@ const controller = createLiveMdEditor({
   linkBaseUrl: "https://docs.example/notes/current.md",
   placeholder: "Start writing...",
   persistKey: "draft",
+  extensions: [liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle)],
   onChange({ value }) {
     console.log(value);
   },
@@ -294,6 +297,8 @@ for local blob URLs or uploaded assets. `linkBaseUrl` is used to resolve
 relative Markdown links for Shift-click link jumps. The controller exposes
 `view`, `value`, `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`,
 `setPlaceholder()`, `setReadOnly()`, and `destroy()`.
+`liveMdCodeFenceHighlighting(...)` can be passed through `extensions` to align
+fenced code token colors with a host theme.
 
 ## Optional Loro Collaboration
 
