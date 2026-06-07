@@ -1,11 +1,17 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { FileTree as TreesFileTree } from "@pierre/trees";
-import type { ContextMenuOpenContext } from "@pierre/trees";
+import type {
+  ContextMenuOpenContext,
+  FileTreeBatchOperation,
+  FileTreeDirectoryHandle,
+} from "@pierre/trees";
+import { basename, dirname, normalize } from "pathe";
 import type {
   MarkdownDirectoryNode,
   MarkdownFileNode,
   MarkdownTreeNode,
 } from "@/lib/workspace-backend";
+import { flattenMarkdownFiles } from "@/lib/workspace-backend";
 
 type FileTreeProps = {
   onCreateEntry: (target: FileTreeDeleteTarget, kind: FileTreeCreateKind) => void;
@@ -35,9 +41,13 @@ export const FileTree = memo(function FileTree({
   onSelectFile,
 }: FileTreeProps) {
   let paths = useMemo(() => (root ? collectTreePaths(root.children) : []), [root]);
-  let filesByPath = useMemo(() => (root ? collectFilesByPath(root.children) : new Map()), [root]);
+  let filesByPath = useMemo(
+    () => new Map(root ? flattenMarkdownFiles(root).map((file) => [file.path, file]) : []),
+    [root],
+  );
   let containerRef = useRef<HTMLDivElement | null>(null);
-  let initialExpandedDirectoryPathRef = useRef(parentDirectoryPath(selectedPath));
+  let initialExpandedDirectoryPathRef = useRef(treeDirectoryPathForFile(selectedPath));
+  let pathsRef = useRef(paths);
   let latestSelectionRef = useRef({
     filesByPath,
     onCreateEntry,
@@ -142,7 +152,8 @@ export const FileTree = memo(function FileTree({
     let model = modelRef.current;
     if (!model) return;
 
-    model.resetPaths(paths);
+    syncTreePaths(model, pathsRef.current, paths);
+    pathsRef.current = paths;
   }, [paths]);
 
   useEffect(() => {
@@ -156,7 +167,9 @@ export const FileTree = memo(function FileTree({
       }
 
       if (selectedPath) {
-        expandDirectory(model, parentDirectoryPath(selectedPath));
+        let directoryPath = treeDirectoryPathForFile(selectedPath);
+        let directory = directoryPath ? model.getItem(directoryPath) : null;
+        if (directory?.isDirectory()) (directory as FileTreeDirectoryHandle).expand();
         let item = model.getItem(selectedPath);
         item?.select();
         item?.focus();
@@ -227,7 +240,7 @@ function renderContextMenuSeparator() {
 function normalizeDeleteTarget(target: FileTreeDeleteTarget): FileTreeDeleteTarget {
   return {
     ...target,
-    path: target.kind == "directory" ? target.path.replace(/\/+$/g, "") : target.path,
+    path: target.kind == "directory" ? workspaceDirectoryPath(target.path) : target.path,
   };
 }
 
@@ -244,12 +257,12 @@ function resolveSelectionTarget(
     };
   }
 
-  let directoryPath = path.replace(/\/+$/g, "");
+  let directoryPath = workspaceDirectoryPath(path);
   if (!directoryPath) return null;
 
   return {
     kind: "directory",
-    name: directoryPath.split("/").at(-1) ?? directoryPath,
+    name: basename(directoryPath),
     path: directoryPath,
   };
 }
@@ -267,30 +280,40 @@ function collectTreePaths(nodes: MarkdownTreeNode[]) {
   return paths;
 }
 
-function expandDirectory(model: TreesFileTree, path: null | string) {
-  if (!path) return;
+function syncTreePaths(model: TreesFileTree, previousPaths: string[], nextPaths: string[]) {
+  let previousPathSet = new Set(previousPaths);
+  let nextPathSet = new Set(nextPaths);
+  let removedDirectoryPaths = previousPaths.filter(
+    (path) => path.endsWith("/") && !nextPathSet.has(path),
+  );
+  let operations: FileTreeBatchOperation[] = [];
 
-  let item = model.getItem(path);
-  if (item && "expand" in item) item.expand();
+  for (let path of previousPaths) {
+    if (nextPathSet.has(path) || hasRemovedAncestorDirectory(path, removedDirectoryPaths)) continue;
+    operations.push({ path, recursive: path.endsWith("/"), type: "remove" });
+  }
+
+  for (let path of nextPaths) {
+    if (!previousPathSet.has(path)) operations.push({ path, type: "add" });
+  }
+
+  if (operations.length) model.batch(operations);
 }
 
-function parentDirectoryPath(path: null | string) {
+function hasRemovedAncestorDirectory(path: string, removedDirectoryPaths: string[]) {
+  return removedDirectoryPaths.some(
+    (directoryPath) => path != directoryPath && path.startsWith(directoryPath),
+  );
+}
+
+function treeDirectoryPathForFile(path: null | string) {
   if (!path) return null;
 
-  let slashIndex = path.lastIndexOf("/");
-  return slashIndex == -1 ? null : `${path.slice(0, slashIndex)}/`;
+  let directoryPath = normalize(dirname(path));
+  return directoryPath == "." ? null : normalize(`${directoryPath}/`);
 }
 
-function collectFilesByPath(nodes: MarkdownTreeNode[]) {
-  let files = new Map<string, MarkdownFileNode>();
-  for (let node of nodes) {
-    if (node.kind == "directory") {
-      for (let [path, file] of collectFilesByPath(node.children)) {
-        files.set(path, file);
-      }
-    } else {
-      files.set(node.path, node);
-    }
-  }
-  return files;
+function workspaceDirectoryPath(path: string) {
+  let directoryPath = normalize(path);
+  return directoryPath.endsWith("/") ? directoryPath.slice(0, -1) : directoryPath;
 }
