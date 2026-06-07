@@ -187,7 +187,10 @@ export async function gcWorkspaceTombstones(
     if (record.deletedAt == null || now - record.deletedAt < retentionMs) continue;
 
     await deleteIfPresent(backend, documentSnapshotPath(record.docId));
-    await deleteIfPresent(backend, documentUpdateLogPath(record.docId));
+    await deleteIfPresent(backend, legacyDocumentUpdateLogPath(record.docId));
+    await deleteIfPresent(backend, documentUpdateLogDirectoryPath(record.docId), {
+      recursive: true,
+    });
     getManifestFilesMap(manifest.doc).delete(record.docId);
     removed += 1;
   }
@@ -306,11 +309,15 @@ function getManifestFilesMap(doc: LoroDoc) {
   return doc.getMap(filesMapKey) as LoroMap<Record<string, WorkspaceManifestRecord>>;
 }
 
-async function deleteIfPresent(backend: WorkspaceBackend, path: string) {
+async function deleteIfPresent(
+  backend: WorkspaceBackend,
+  path: string,
+  options: { recursive?: boolean } = {},
+) {
   if (!backend.deleteEntry) return;
 
   try {
-    await backend.deleteEntry(path);
+    await backend.deleteEntry(path, options);
   } catch (error) {
     if (!isMissingEntryError(error)) throw error;
   }
@@ -320,8 +327,12 @@ function documentSnapshotPath(docId: string) {
   return `${livemdDirectory}/docs/${docId}.snapshot.b64`;
 }
 
-function documentUpdateLogPath(docId: string) {
+function legacyDocumentUpdateLogPath(docId: string) {
   return `${livemdDirectory}/docs/${docId}.updates.b64`;
+}
+
+function documentUpdateLogDirectoryPath(docId: string) {
+  return `${livemdDirectory}/docs/${docId}.updates`;
 }
 
 async function readManifestSnapshot(backend: ManifestBackend) {

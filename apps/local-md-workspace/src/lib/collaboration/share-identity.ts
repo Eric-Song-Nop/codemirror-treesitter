@@ -1,7 +1,7 @@
 import type { LoroDoc, UndoManager } from "loro-crdt";
 import type { WorkspaceBackendKind } from "@/lib/workspace-backend";
 
-export type ShareExpirationOption = "24h" | "7d" | "30d" | "never";
+export type ShareExpirationOption = "24h" | "7d" | "30d";
 
 export type ShareCredentials = {
   guestSecret: string;
@@ -46,7 +46,7 @@ export const shareSecretBytes = 32;
 const base64UrlAlphabet = /^[A-Za-z0-9_-]+$/;
 const shareIdLength = 22;
 const shareSecretLength = 43;
-const millisecondsByExpiration: Record<Exclude<ShareExpirationOption, "never">, number> = {
+const millisecondsByExpiration: Record<ShareExpirationOption, number> = {
   "24h": 24 * 60 * 60 * 1000,
   "7d": 7 * 24 * 60 * 60 * 1000,
   "30d": 30 * 24 * 60 * 60 * 1000,
@@ -69,7 +69,7 @@ export function isValidShareSecret(value: string) {
 }
 
 export function shareExpiresAt(option: ShareExpirationOption, now = Date.now()) {
-  return option == "never" ? null : now + millisecondsByExpiration[option];
+  return now + millisecondsByExpiration[option];
 }
 
 export function buildShareLink(baseUrl: string | URL, { guestSecret, shareId }: ShareLinkParts) {

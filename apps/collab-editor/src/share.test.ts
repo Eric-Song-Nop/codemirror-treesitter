@@ -3,14 +3,15 @@ import {
   hashShareSecret,
   isShareActive,
   isShareCleanupDue,
-  parseCreateSessionRequest,
   parseCreateShareRequest,
+  parseCreateSessionRequest,
   parseRevokeShareRequest,
   parseRotateShareRequest,
   shareCleanupDueAt,
   timingSafeEqualString,
   type ShareRecord,
 } from "./share.ts";
+import { maxShareTtlMs, maxSnapshotBytes } from "./share-limits.ts";
 
 const validShareId = "AAAAAAAAAAAAAAAAAAAAAA";
 const validSecret = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
@@ -51,6 +52,44 @@ describe("shared file relay inputs", () => {
     expect(parseCreateShareRequest({ shareId: "path-derived" })).toBeNull();
   });
 
+  it("rejects shares without a bounded lifetime or with oversized snapshots", () => {
+    expect(
+      parseCreateShareRequest({
+        ...validCreateShareRequest(),
+        expiresAt: null,
+      }),
+    ).toBeNull();
+    expect(
+      parseCreateShareRequest({
+        ...validCreateShareRequest(),
+        expiresAt: Date.now() + maxShareTtlMs + 1,
+      }),
+    ).toBeNull();
+    expect(
+      parseCreateShareRequest({
+        ...validCreateShareRequest(),
+        snapshot: "A".repeat(Math.ceil(((maxSnapshotBytes + 1) * 4) / 3)),
+      }),
+    ).toBeNull();
+  });
+
+  it("requires rotated links to keep a bounded lifetime", () => {
+    expect(
+      parseRotateShareRequest({
+        expiresAt: null,
+        hostSecret: validSecret,
+        nextGuestSecretHash: validHash,
+      }),
+    ).toBeNull();
+    expect(
+      parseRotateShareRequest({
+        expiresAt: Date.now() + maxShareTtlMs + 1,
+        hostSecret: validSecret,
+        nextGuestSecretHash: validHash,
+      }),
+    ).toBeNull();
+  });
+
   it("parses session, rotate, and revoke requests", () => {
     expect(parseCreateSessionRequest({ role: "guest", secret: validSecret })).toEqual({
       role: "guest",
@@ -59,12 +98,12 @@ describe("shared file relay inputs", () => {
     expect(parseCreateSessionRequest({ role: "owner", secret: validSecret })).toBeNull();
     expect(
       parseRotateShareRequest({
-        expiresAt: null,
+        expiresAt: Date.now() + 10_000,
         hostSecret: validSecret,
         nextGuestSecretHash: validHash,
       }),
     ).toEqual({
-      expiresAt: null,
+      expiresAt: expect.any(Number),
       hostSecret: validSecret,
       nextGuestSecretHash: validHash,
     });
@@ -130,5 +169,16 @@ function shareRecord(overrides: Partial<ShareRecord> = {}): ShareRecord {
     schemaVersion: 1,
     shareId: validShareId,
     ...overrides,
+  };
+}
+
+function validCreateShareRequest() {
+  return {
+    displayName: "note.md",
+    expiresAt: Date.now() + 10_000,
+    guestSecretHash: validHash,
+    hostSecretHash: validHash,
+    shareId: validShareId,
+    snapshot: "AA==",
   };
 }

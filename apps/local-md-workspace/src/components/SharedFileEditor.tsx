@@ -8,7 +8,7 @@ import {
   WifiIcon,
   WifiOffIcon,
 } from "lucide-react";
-import { LoroDoc, UndoManager } from "loro-crdt";
+import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
@@ -47,14 +47,11 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
   let [displayName, setDisplayName] = useState("Shared file");
   let [connectionState, setConnectionState] = useState<ShareRelayConnectionState>("connecting");
   let [shareStatus, setShareStatus] = useState<ShareRelayStatus | null>(null);
-  let [latestLocalSequence, setLatestLocalSequence] = useState(0);
-  let [latestRelaySequence, setLatestRelaySequence] = useState(0);
-  let [hostSavedSequence, setHostSavedSequence] = useState(0);
+  let [latestLocalVersion, setLatestLocalVersion] = useState<VersionVector | null>(null);
+  let [hostSavedVersion, setHostSavedVersion] = useState<VersionVector | null>(null);
   let [lastHostSavedAt, setLastHostSavedAt] = useState<number | null>(null);
   let [errorMessage, setErrorMessage] = useState("");
   let connectionRef = useRef<ShareRelayConnection | null>(null);
-  let latestRelaySequenceRef = useRef(0);
-  let hostSavedSequenceRef = useRef(0);
   let extensions = useMemo(
     () => [liveMdLoroCollaboration({ doc, undoManager })],
     [doc, undoManager],
@@ -63,9 +60,8 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
   useEffect(
     () =>
       doc.subscribeLocalUpdates((bytes) => {
-        let sequence = connectionRef.current?.enqueueDocumentUpdate(bytes);
-        if (sequence == null) return;
-        setLatestLocalSequence(sequence);
+        connectionRef.current?.enqueueDocumentUpdate(bytes);
+        setLatestLocalVersion(doc.oplogVersion());
       }),
     [doc],
   );
@@ -87,16 +83,12 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
 
     let canceled = false;
     let connection: ShareRelayConnection | null = null;
-    let revalidateTimer: number | null = null;
     setConnectionState("connecting");
     setErrorMessage("");
     setSessionReady(false);
-    setLatestLocalSequence(0);
-    setLatestRelaySequence(0);
-    setHostSavedSequence(0);
+    setLatestLocalVersion(null);
+    setHostSavedVersion(null);
     setLastHostSavedAt(null);
-    latestRelaySequenceRef.current = 0;
-    hostSavedSequenceRef.current = 0;
 
     void createRelayShareSession(relayOrigin, route.parts.shareId, "guest", route.parts.guestSecret)
       .then((session) => {
@@ -123,19 +115,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
             let ack = parseHostSaveAck(payload);
             if (!ack || ack.shareId != route.parts.shareId) return;
             setLastHostSavedAt(ack.savedAt);
-            let sequence = latestRelaySequenceRef.current;
-            hostSavedSequenceRef.current = sequence;
-            setHostSavedSequence(sequence);
-          },
-          onRelayAck: (ack) => {
-            if (ack.shareId != route.parts.shareId) return;
-            let sequence = Math.max(latestRelaySequenceRef.current, ack.sequence);
-            latestRelaySequenceRef.current = sequence;
-            setLatestRelaySequence(sequence);
-            if (hostSavedSequenceRef.current > sequence) {
-              hostSavedSequenceRef.current = sequence;
-              setHostSavedSequence(sequence);
-            }
+            setHostSavedVersion(ack.versionVector);
           },
           onShareStatus: (status) => {
             setShareStatus(status);
@@ -148,19 +128,6 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
         connectionRef.current = connection;
         connection.connect();
         setSessionReady(true);
-        revalidateTimer = window.setInterval(() => {
-          void createRelayShareSession(
-            relayOrigin,
-            route.parts.shareId,
-            "guest",
-            route.parts.guestSecret,
-          ).catch(() => {
-            if (canceled) return;
-            setConnectionState("offline");
-            setErrorMessage("This shared file link is no longer valid.");
-            connectionRef.current?.close();
-          });
-        }, 10_000);
       })
       .catch((error: unknown) => {
         if (canceled) return;
@@ -170,7 +137,6 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
 
     return () => {
       canceled = true;
-      if (revalidateTimer != null) window.clearInterval(revalidateTimer);
       connectionRef.current?.close();
       connectionRef.current = null;
       connection?.close();
@@ -191,9 +157,8 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
   let statusLabel = connectionStatusLabel(connectionState);
   let expiresAt = shareStatus?.expiresAt ?? null;
   let saveStatus = guestSaveStatus({
-    hostSavedSequence,
-    latestLocalSequence,
-    latestRelaySequence,
+    hostSavedVersion,
+    latestLocalVersion,
   });
   let saveStatusTitle =
     saveStatus == "Saved to host" && lastHostSavedAt
@@ -224,11 +189,6 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
           </Badge>
         ) : (
           <Badge variant="outline">Host offline</Badge>
-        )}
-        {latestLocalSequence > 0 && (
-          <Badge variant="secondary">
-            {latestRelaySequence >= latestLocalSequence ? "Saved to relay" : "Saving to relay"}
-          </Badge>
         )}
         {shareStatus && shareStatus.peerCount > 0 && (
           <Badge variant="outline">{shareStatus.peerCount} peers</Badge>
@@ -298,21 +258,21 @@ function sharedFileRouteFromHref(href: string): SharedFileRoute {
 function connectionStatusLabel(state: ShareRelayConnectionState) {
   if (state == "connected") return "Connected";
   if (state == "connecting") return "Connecting";
+  if (state == "resync-required") return "Reconnect required";
   return "Offline";
 }
 
 function guestSaveStatus({
-  hostSavedSequence,
-  latestLocalSequence,
-  latestRelaySequence,
+  hostSavedVersion,
+  latestLocalVersion,
 }: {
-  hostSavedSequence: number;
-  latestLocalSequence: number;
-  latestRelaySequence: number;
+  hostSavedVersion: VersionVector | null;
+  latestLocalVersion: VersionVector | null;
 }) {
-  if (latestLocalSequence == 0) return "";
-  if (latestRelaySequence < latestLocalSequence) return "";
-  if (hostSavedSequence >= latestLocalSequence) return "Saved to host";
+  if (!latestLocalVersion) return "";
+  if (hostSavedVersion && versionCovers(hostSavedVersion, latestLocalVersion)) {
+    return "Saved to host";
+  }
   return "Waiting for host";
 }
 
@@ -328,20 +288,48 @@ function formatTimestamp(value: number) {
 }
 
 function parseHostSaveAck(payload: Uint8Array) {
-  if (!payload.byteLength) return { savedAt: Date.now(), shareId: "" };
   try {
     let value = JSON.parse(new TextDecoder().decode(payload)) as {
       savedAt?: unknown;
       shareId?: unknown;
+      versionVector?: unknown;
     };
     if (typeof value.savedAt != "number" || typeof value.shareId != "string") return null;
+    let versionVector = parseVersionVector(value.versionVector);
+    if (!versionVector) return null;
     return {
       savedAt: value.savedAt,
       shareId: value.shareId,
+      versionVector,
     };
   } catch {
     return null;
   }
+}
+
+function parseVersionVector(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  let version = new Map<`${number}`, number>();
+  for (let entry of value) {
+    if (!Array.isArray(entry) || entry.length != 2) return null;
+    let [peer, counter] = entry;
+    if (
+      typeof peer != "string" ||
+      !/^\d+$/.test(peer) ||
+      typeof counter != "number" ||
+      !Number.isSafeInteger(counter) ||
+      counter < 0
+    ) {
+      return null;
+    }
+    version.set(peer as `${number}`, counter);
+  }
+  return new VersionVector(version);
+}
+
+function versionCovers(saved: VersionVector, local: VersionVector) {
+  let comparison = saved.compare(local);
+  return comparison == 0 || comparison == 1;
 }
 
 function getOrCreateSharedFileClientId() {

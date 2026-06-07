@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import type { Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import type { VersionVector } from "loro-crdt";
 import type {
   LiveMdEditorElement,
   LiveMdImageSourceResolver,
@@ -342,7 +343,7 @@ function LocalWorkspaceApp() {
     shareHostRecordRef.current = null;
   }, []);
 
-  let sendHostSaveAck = useCallback((path: string, value: string) => {
+  let sendHostSaveAck = useCallback((path: string, value: string, savedVersion: VersionVector) => {
     let record = shareHostRecordRef.current;
     let connection = shareHostConnectionRef.current;
     if (!record || !connection || record.path != path) return;
@@ -354,6 +355,7 @@ function LocalWorkspaceApp() {
           materializedHash,
           savedAt: Date.now(),
           shareId: record.shareId,
+          versionVector: serializeVersionVector(savedVersion),
         }),
       ),
     );
@@ -414,7 +416,9 @@ function LocalWorkspaceApp() {
       } else {
         await backend.writeFile(file.path, value);
       }
-      sendHostSaveAck(file.path, value);
+      if (document && document.path == file.path) {
+        sendHostSaveAck(file.path, value, document.doc.oplogVersion());
+      }
       if (operation == saveOperationRef.current && selectedFileRef.current?.path == file.path) {
         cleanValueRef.current = value;
         if (ownerSaveConflictRef.current?.path == file.path) {
@@ -478,7 +482,7 @@ function LocalWorkspaceApp() {
         setOwnerSaveConflict(null);
         setOwnerSaveConflictDismissed(false);
         setSaveStateSynced("saved");
-        sendHostSaveAck(file.path, nextValue);
+        sendHostSaveAck(file.path, nextValue, document.doc.oplogVersion());
       } catch (error) {
         setSaveStateSynced("error");
         setErrorMessage(errorToMessage(error));
@@ -2260,7 +2264,6 @@ function ShareFileDialog({
                     <option value="24h">24h</option>
                     <option value="7d">7 days</option>
                     <option value="30d">30 days</option>
-                    <option value="never">Never</option>
                   </select>
                 </div>
               </Field>
@@ -2347,8 +2350,6 @@ function formatExpirationHint(expiration: ShareExpirationOption) {
       return "Default";
     case "30d":
       return "Long-running";
-    case "never":
-      return "Manual revoke";
   }
 }
 
@@ -2602,6 +2603,10 @@ function readHostSecret(record: OwnerShareRecord) {
   } catch {
     return null;
   }
+}
+
+function serializeVersionVector(version: VersionVector) {
+  return [...version.toJSON()].map(([peer, counter]) => [String(peer), counter]);
 }
 
 function getOrCreateOwnerShareClientId() {

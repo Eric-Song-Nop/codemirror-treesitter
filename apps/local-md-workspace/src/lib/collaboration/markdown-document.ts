@@ -13,6 +13,7 @@ const livemdDirectory = ".livemd";
 const docsDirectory = `${livemdDirectory}/docs`;
 const textKey = "markdown";
 const maxDocumentUpdateLogBytes = 64 * 1024;
+const updateSegmentFilePattern = /^(\d{6})\.update\.b64$/;
 
 export type CollabDocumentState = {
   cleanValue: string;
@@ -80,7 +81,8 @@ export async function openMarkdownCollabDocument(
 
   let doc = new LoroDoc();
   let snapshot = await readDocumentSnapshot(backend, record.docId);
-  let updates = await readDocumentUpdateLog(backend, record.docId);
+  let updateLog = await readDocumentUpdateLog(backend, record.docId);
+  let updates = updateLog.updates;
   let externalEdit: CollabExternalEditResolution | undefined;
 
   if (snapshot) {
@@ -88,6 +90,9 @@ export async function openMarkdownCollabDocument(
     if (updates.length) doc.importBatch(updates);
     if (options.reconcileExternalEdits ?? true) {
       externalEdit = await reconcileExternalMarkdownEdit(backend, record, doc);
+    }
+    if (updateLog.hasLegacyLog) {
+      await compactDocumentSnapshot(backend, record.docId, doc);
     }
   } else {
     if (updates.length) doc.importBatch(updates);
@@ -250,11 +255,19 @@ function ensureCollabBackend(
   Required<
     Pick<
       WorkspaceBackend,
-      "createDirectory" | "readBytes" | "readTextFile" | "writeBytes" | "writeTextFile"
+      | "createDirectory"
+      | "deleteEntry"
+      | "listEntries"
+      | "readBytes"
+      | "readTextFile"
+      | "writeBytes"
+      | "writeTextFile"
     >
   > {
   if (
     !backend.createDirectory ||
+    !backend.deleteEntry ||
+    !backend.listEntries ||
     !backend.readBytes ||
     !backend.readTextFile ||
     !backend.writeBytes ||
@@ -346,14 +359,32 @@ async function readDocumentSnapshot(backend: WorkspaceBackend, docId: string) {
 }
 
 async function readDocumentUpdateLog(backend: WorkspaceBackend, docId: string) {
-  let path = documentUpdateLogPath(docId);
+  let updates = await readDocumentUpdateSegments(backend, docId);
+  let legacyUpdates = await readLegacyDocumentUpdateLog(backend, docId);
+  return {
+    hasLegacyLog: legacyUpdates != null,
+    updates: [...(legacyUpdates ?? []), ...updates],
+  };
+}
+
+async function readLegacyDocumentUpdateLog(backend: WorkspaceBackend, docId: string) {
+  let path = legacyDocumentUpdateLogPath(docId);
   try {
     let bytes = (await backend.readBytes?.(path)) ?? null;
     return bytes ? decodeUpdateLog(bytes) : [];
   } catch (error) {
-    if (isMissingEntryError(error)) return [];
+    if (isMissingEntryError(error)) return null;
     throw error;
   }
+}
+
+async function readDocumentUpdateSegments(backend: WorkspaceBackend, docId: string) {
+  let updates: Uint8Array[] = [];
+  for (let segment of await listDocumentUpdateSegments(backend, docId)) {
+    let bytes = await backend.readBytes?.(segment.path);
+    if (bytes) updates.push(...decodeUpdateLog(bytes));
+  }
+  return updates;
 }
 
 async function writeDocumentSnapshot(backend: WorkspaceBackend, docId: string, doc: LoroDoc) {
@@ -371,33 +402,95 @@ async function appendDocumentUpdates(
   docId: string,
   updates: Uint8Array[],
 ) {
-  let existingUpdates = await readDocumentUpdateLog(backend, docId);
-  let encoded = encodeUpdateLog([...existingUpdates, ...updates]);
+  let encoded = encodeUpdateLog(updates);
   await backend.createDirectory?.(docsDirectory);
-  await backend.writeBytes?.(documentUpdateLogPath(docId), encoded);
-  return encoded.byteLength;
+  await backend.createDirectory?.(documentUpdateLogDirectoryPath(docId));
+  let nextSequence = (await lastDocumentUpdateSegmentSequence(backend, docId)) + 1;
+  await backend.writeBytes?.(documentUpdateSegmentPath(docId, nextSequence), encoded);
+  return documentUpdateLogByteLength(backend, docId);
 }
 
 async function deleteDocumentUpdateLog(backend: WorkspaceBackend, docId: string) {
-  let path = documentUpdateLogPath(docId);
-  if (backend.deleteEntry) {
-    try {
-      await backend.deleteEntry(path);
-    } catch (error) {
-      if (!isMissingEntryError(error)) throw error;
-    }
-    return;
-  }
-
-  await backend.writeBytes?.(path, new Uint8Array());
+  await deleteIfPresent(backend, legacyDocumentUpdateLogPath(docId));
+  await deleteIfPresent(backend, documentUpdateLogDirectoryPath(docId), { recursive: true });
 }
 
 function documentSnapshotPath(docId: string) {
   return `${docsDirectory}/${docId}.snapshot.b64`;
 }
 
-function documentUpdateLogPath(docId: string) {
+function legacyDocumentUpdateLogPath(docId: string) {
   return `${docsDirectory}/${docId}.updates.b64`;
+}
+
+function documentUpdateLogDirectoryPath(docId: string) {
+  return `${docsDirectory}/${docId}.updates`;
+}
+
+function documentUpdateSegmentPath(docId: string, sequence: number) {
+  return `${documentUpdateLogDirectoryPath(docId)}/${formatUpdateSegmentSequence(sequence)}.update.b64`;
+}
+
+function formatUpdateSegmentSequence(sequence: number) {
+  return String(sequence).padStart(6, "0");
+}
+
+async function listDocumentUpdateSegments(backend: WorkspaceBackend, docId: string) {
+  let directory = documentUpdateLogDirectoryPath(docId);
+  try {
+    let entries = await backend.listEntries?.(directory);
+    return (entries ?? [])
+      .filter(
+        (entry) =>
+          entry.isFile && updateSegmentFilePattern.test(entry.path.split("/").at(-1) ?? ""),
+      )
+      .sort((a, b) => segmentSequence(a.path) - segmentSequence(b.path));
+  } catch (error) {
+    if (isMissingEntryError(error)) return [];
+    throw error;
+  }
+}
+
+async function lastDocumentUpdateSegmentSequence(backend: WorkspaceBackend, docId: string) {
+  let segments = await listDocumentUpdateSegments(backend, docId);
+  return segments.reduce((max, segment) => Math.max(max, segmentSequence(segment.path)), 0);
+}
+
+async function documentUpdateLogByteLength(backend: WorkspaceBackend, docId: string) {
+  let total = await byteLengthIfPresent(backend, legacyDocumentUpdateLogPath(docId));
+  for (let segment of await listDocumentUpdateSegments(backend, docId)) {
+    total += await byteLengthIfPresent(backend, segment.path);
+  }
+  return total;
+}
+
+async function byteLengthIfPresent(backend: WorkspaceBackend, path: string) {
+  try {
+    let stat = await backend.stat?.(path);
+    if (stat?.exists && typeof stat.size == "number") return stat.size;
+    return (await backend.readBytes?.(path))?.byteLength ?? 0;
+  } catch (error) {
+    if (isMissingEntryError(error)) return 0;
+    throw error;
+  }
+}
+
+async function deleteIfPresent(
+  backend: WorkspaceBackend,
+  path: string,
+  options: { recursive?: boolean } = {},
+) {
+  try {
+    await backend.deleteEntry?.(path, options);
+  } catch (error) {
+    if (!isMissingEntryError(error)) throw error;
+  }
+}
+
+function segmentSequence(path: string) {
+  let fileName = path.split("/").at(-1) ?? "";
+  let match = updateSegmentFilePattern.exec(fileName);
+  return match ? Number(match[1]) : 0;
 }
 
 function encodeUpdateLog(updates: Uint8Array[]) {

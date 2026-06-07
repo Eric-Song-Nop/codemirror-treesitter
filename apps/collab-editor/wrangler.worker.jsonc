@@ -12,6 +12,16 @@
       },
     ],
   },
+  "ratelimits": [
+    {
+      "name": "CREATE_SHARE_RATE_LIMITER",
+      "namespace_id": "43541",
+      "simple": {
+        "limit": 30,
+        "period": 60,
+      },
+    },
+  ],
   "migrations": [
     {
       "tag": "v1",

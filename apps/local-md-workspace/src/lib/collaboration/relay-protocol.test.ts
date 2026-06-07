@@ -22,8 +22,6 @@ describe("collaboration relay protocol", () => {
       { kind: RelayWireKind.Presence, payload: new Uint8Array([3]) },
       { kind: RelayWireKind.HostSaveAck, payload: new Uint8Array([4]) },
       { kind: RelayWireKind.ShareStatus, payload: new Uint8Array([5]) },
-      { kind: RelayWireKind.RelayAckRequest, payload: new Uint8Array([6]) },
-      { kind: RelayWireKind.RelayAck, payload: new Uint8Array([7]) },
     ]);
 
     expect(decodeRelayWireFrame(batch)).toEqual([
@@ -31,8 +29,6 @@ describe("collaboration relay protocol", () => {
       { kind: RelayWireKind.Presence, payload: new Uint8Array([3]) },
       { kind: RelayWireKind.HostSaveAck, payload: new Uint8Array([4]) },
       { kind: RelayWireKind.ShareStatus, payload: new Uint8Array([5]) },
-      { kind: RelayWireKind.RelayAckRequest, payload: new Uint8Array([6]) },
-      { kind: RelayWireKind.RelayAck, payload: new Uint8Array([7]) },
     ]);
   });
 });

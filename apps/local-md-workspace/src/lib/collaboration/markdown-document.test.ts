@@ -104,7 +104,7 @@ describe("Markdown collaboration documents", () => {
     document.doc.commit();
     await savePendingCollabDocumentUpdates(backend, document);
 
-    expect(backend.files.has(`.livemd/docs/${document.docId}.updates.b64`)).toBe(true);
+    expect(backend.files.has(updateSegmentPath(document.docId, 1))).toBe(true);
 
     let reopened = await openMarkdownCollabDocument(backend, "note.md");
 
@@ -133,7 +133,7 @@ describe("Markdown collaboration documents", () => {
     let updateWrites = 0;
 
     backend.writeBytes = async (path, bytes) => {
-      if (path.endsWith(".updates.b64")) {
+      if (path.endsWith(".update.b64")) {
         updateWrites += 1;
         if (updateWrites == 1) {
           firstUpdateWriteStarted.resolve();
@@ -167,11 +167,11 @@ describe("Markdown collaboration documents", () => {
     text.insert(text.toString().length, "\nPending edit.\n");
     document.doc.commit();
     await savePendingCollabDocumentUpdates(backend, document);
-    expect(backend.files.has(`.livemd/docs/${document.docId}.updates.b64`)).toBe(true);
+    expect(backend.files.has(updateSegmentPath(document.docId, 1))).toBe(true);
 
     await materializeCollabDocument(backend, document);
 
-    expect(backend.files.has(`.livemd/docs/${document.docId}.updates.b64`)).toBe(false);
+    expect(hasUpdateSegments(backend, document.docId)).toBe(false);
     expect(backend.files.get("note.md")).toBe("# First\n\nPending edit.\n");
   });
 
@@ -185,9 +185,28 @@ describe("Markdown collaboration documents", () => {
     document.doc.commit();
     await savePendingCollabDocumentUpdates(backend, document);
 
-    expect(backend.files.has(`.livemd/docs/${document.docId}.updates.b64`)).toBe(false);
+    expect(hasUpdateSegments(backend, document.docId)).toBe(false);
     let reopened = await openMarkdownCollabDocument(backend, "note.md");
     expect(reopened.value).toBe(`# First\n${largeEdit}`);
+  });
+
+  it("migrates legacy monolithic update logs into a compacted snapshot", async () => {
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let text = document.doc.getText("markdown");
+
+    text.insert(text.toString().length, "\nLegacy edit.\n");
+    document.doc.commit();
+    backend.files.set(
+      legacyUpdateLogPath(document.docId),
+      encodeBase64(encodeUpdateLogForTest(document.pendingUpdates.splice(0))),
+    );
+
+    let reopened = await openMarkdownCollabDocument(backend, "note.md");
+
+    expect(reopened.value).toBe("# First\n\nLegacy edit.\n");
+    expect(backend.files.has(legacyUpdateLogPath(document.docId))).toBe(false);
+    expect(hasUpdateSegments(backend, document.docId)).toBe(false);
   });
 
   it("keeps pending updates when writing the update log fails", async () => {
@@ -389,7 +408,7 @@ describe("Markdown collaboration documents", () => {
     expect(result).toEqual({ removed: 1 });
     expect(manifest.records).toEqual([]);
     expect(backend.files.has(`.livemd/docs/${document.docId}.snapshot.b64`)).toBe(false);
-    expect(backend.files.has(`.livemd/docs/${document.docId}.updates.b64`)).toBe(false);
+    expect(hasUpdateSegments(backend, document.docId)).toBe(false);
   });
 
   it("migrates legacy JSON manifests into the Loro workspace manifest", async () => {
@@ -432,8 +451,15 @@ function createMemoryBackend(entries: Array<[string, string]>): MemoryBackend {
     async deleteFile(path) {
       files.delete(path);
     },
-    async deleteEntry(path) {
+    async deleteEntry(path, options) {
       files.delete(path);
+      if (options?.recursive) {
+        let prefix = `${path}/`;
+        let pathsToDelete: string[] = [];
+        for (let filePath of files.keys())
+          if (filePath.startsWith(prefix)) pathsToDelete.push(filePath);
+        for (let filePath of pathsToDelete) files.delete(filePath);
+      }
     },
     async listEntries(path) {
       let prefix = path ? `${path}/` : "";
@@ -494,6 +520,39 @@ function encodeBase64(bytes: Uint8Array) {
     chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
   }
   return btoa(chunks.join(""));
+}
+
+function encodeUpdateLogForTest(updates: Uint8Array[]) {
+  let byteLength = updates.reduce((total, update) => total + 4 + update.byteLength, 0);
+  let bytes = new Uint8Array(byteLength);
+  let view = new DataView(bytes.buffer);
+  let offset = 0;
+
+  for (let update of updates) {
+    view.setUint32(offset, update.byteLength);
+    offset += 4;
+    bytes.set(update, offset);
+    offset += update.byteLength;
+  }
+
+  return bytes;
+}
+
+function hasUpdateSegments(backend: MemoryBackend, docId: string) {
+  let prefix = `${updateLogDirectoryPath(docId)}/`;
+  return [...backend.files.keys()].some((path) => path.startsWith(prefix));
+}
+
+function legacyUpdateLogPath(docId: string) {
+  return `.livemd/docs/${docId}.updates.b64`;
+}
+
+function updateLogDirectoryPath(docId: string) {
+  return `.livemd/docs/${docId}.updates`;
+}
+
+function updateSegmentPath(docId: string, sequence: number) {
+  return `${updateLogDirectoryPath(docId)}/${String(sequence).padStart(6, "0")}.update.b64`;
 }
 
 function deferred<T>() {
