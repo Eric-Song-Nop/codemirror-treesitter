@@ -8,7 +8,6 @@ import {
   type ComponentProps,
 } from "react";
 import {
-  CheckCircle2Icon,
   CloudIcon,
   Clock3Icon,
   CopyIcon,
@@ -26,9 +25,7 @@ import {
   Trash2Icon,
   TriangleAlertIcon,
   UserRoundIcon,
-  UsersRoundIcon,
   WrenchIcon,
-  type LucideIcon,
 } from "lucide-react";
 import type { Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
@@ -2132,7 +2129,6 @@ function ShareFileDialog({
   let expirationId = "shared-file-expiration";
   let linkId = "shared-file-link";
   let filePath = file?.path ?? "No file selected";
-  let pendingHostSave = activeShare?.pendingHostSave;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -2144,12 +2140,7 @@ function ShareFileDialog({
                 <Share2Icon className="size-5" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <DialogTitle className="text-lg">Share file</DialogTitle>
-                  <Badge variant={shared ? "default" : "secondary"}>
-                    {shared ? "Active" : "Not shared"}
-                  </Badge>
-                </div>
+                <DialogTitle className="text-lg">Share file</DialogTitle>
                 <DialogDescription className="mt-1 flex min-w-0 items-center gap-1.5">
                   <FileTextIcon className="size-3.5 shrink-0" />
                   <span className="truncate">{filePath}</span>
@@ -2171,13 +2162,13 @@ function ShareFileDialog({
 
             {link ? (
               <div className="rounded-lg border bg-card/60 p-3">
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <LinkIcon className="size-4 shrink-0 text-primary" />
-                    <div className="text-sm font-medium">Edit link</div>
-                  </div>
-                  <Badge variant="outline">Anyone can edit</Badge>
+                <div className="mb-2 flex min-w-0 items-center gap-2">
+                  <LinkIcon className="size-4 shrink-0 text-primary" />
+                  <div className="text-sm font-medium">Edit link</div>
                 </div>
+                <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
+                  Anyone with this link can edit this file.
+                </p>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Input
                     id={linkId}
@@ -2192,14 +2183,12 @@ function ShareFileDialog({
                 </div>
               </div>
             ) : shared ? (
-              <div className="flex items-start gap-3 rounded-lg border bg-card/60 p-3">
-                <CheckCircle2Icon className="mt-0.5 size-4 shrink-0 text-primary" />
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">Link is active</div>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    Rotate the link to copy a fresh guest URL.
-                  </p>
-                </div>
+              <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
+                <LinkIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  Anyone with this link can edit this file. Rotate the link to copy a fresh guest
+                  URL.
+                </p>
               </div>
             ) : (
               <div className="flex items-start gap-3 rounded-lg border border-primary/20 bg-primary/10 p-3">
@@ -2207,67 +2196,50 @@ function ShareFileDialog({
                 <div className="min-w-0">
                   <div className="text-sm font-medium">Create an edit link</div>
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    Guests only see this file. They do not get your workspace or Dropbox mirror.
+                    Anyone with this link can edit this file. Guests only see this file.
                   </p>
                 </div>
               </div>
             )}
 
             {shared && (
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                <ShareStatusMetric
-                  icon={UsersRoundIcon}
-                  label="Peers"
-                  value={formatPeerCount(activeShare?.peerCount)}
-                />
-                <ShareStatusMetric
-                  icon={UserRoundIcon}
-                  label="Guests"
-                  value={formatGuestCount(activeShare?.guestCount)}
-                />
-                <ShareStatusMetric
-                  icon={pendingHostSave ? Clock3Icon : CheckCircle2Icon}
-                  label="Host save"
-                  tone={pendingHostSave ? "attention" : "good"}
-                  value={formatOwnerShareSaveStatus(pendingHostSave)}
-                />
+              <div className="flex flex-col gap-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:gap-4">
+                <div className="flex items-center gap-2">
+                  <UserRoundIcon className="size-4 shrink-0" />
+                  <span>{formatGuestCount(activeShare?.guestCount)}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Clock3Icon className="size-4 shrink-0" />
+                  <span>{formatCurrentShareExpiration(activeShare?.expiresAt)}</span>
+                </div>
               </div>
             )}
 
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-              <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
-                <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+            <Field className="rounded-lg border bg-muted/20 p-3">
+              <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-sm font-medium">Permission</div>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    Anyone with this link can edit this file.
+                  <FieldLabel htmlFor={expirationId}>
+                    {shared ? "Rotate expires" : "Expires"}
+                  </FieldLabel>
+                  <p className="text-xs text-muted-foreground">
+                    {shared ? "New guest links" : formatExpirationHint(expiration)}
                   </p>
                 </div>
+                <select
+                  id={expirationId}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={busy}
+                  value={expiration}
+                  onChange={(event) =>
+                    onExpirationChange(event.currentTarget.value as ShareExpirationOption)
+                  }
+                >
+                  <option value="24h">24h</option>
+                  <option value="7d">7 days</option>
+                  <option value="30d">30 days</option>
+                </select>
               </div>
-              <Field className="rounded-lg border bg-muted/20 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <FieldLabel htmlFor={expirationId}>Expires</FieldLabel>
-                    <p className="text-xs text-muted-foreground">
-                      {formatExpirationHint(expiration)}
-                    </p>
-                  </div>
-                  <select
-                    id={expirationId}
-                    className="h-8 rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={busy}
-                    value={expiration}
-                    onChange={(event) =>
-                      onExpirationChange(event.currentTarget.value as ShareExpirationOption)
-                    }
-                  >
-                    <option value="24h">24h</option>
-                    <option value="7d">7 days</option>
-                    <option value="30d">30 days</option>
-                  </select>
-                </div>
-              </Field>
-            </div>
+            </Field>
           </div>
 
           <DialogFooter className="mx-0 mb-0 rounded-none bg-muted/30 px-5 py-3 sm:items-center sm:justify-between">
@@ -2302,44 +2274,15 @@ function ShareFileDialog({
   );
 }
 
-type ShareStatusMetricProps = {
-  icon: LucideIcon;
-  label: string;
-  tone?: "attention" | "good" | "neutral";
-  value: string;
-};
-
-function ShareStatusMetric({ icon: Icon, label, tone = "neutral", value }: ShareStatusMetricProps) {
-  return (
-    <div className="rounded-lg border bg-muted/20 p-3">
-      <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-        <Icon
-          className={cn(
-            "size-3.5",
-            tone == "good" && "text-primary",
-            tone == "attention" && "text-foreground",
-          )}
-        />
-        {label}
-      </div>
-      <div className="truncate text-sm font-medium">{value}</div>
-    </div>
-  );
-}
-
-function formatPeerCount(count: number | undefined) {
-  if (count == null) return "Unknown";
-  return count == 1 ? "1 peer" : `${count} peers`;
-}
-
 function formatGuestCount(count: number | undefined) {
   if (count == null) return "Unknown";
   return count == 1 ? "1 guest" : `${count} guests`;
 }
 
-function formatOwnerShareSaveStatus(pendingHostSave: boolean | undefined) {
-  if (pendingHostSave == null) return "Waiting for relay status";
-  return pendingHostSave ? "Waiting for host" : "Saved to host";
+function formatCurrentShareExpiration(expiresAt: number | null | undefined) {
+  if (expiresAt == null) return "Current link expiration unknown";
+  let prefix = expiresAt <= Date.now() ? "Current link expired" : "Current link expires";
+  return `${prefix} ${formatTimestamp(expiresAt)}`;
 }
 
 function formatExpirationHint(expiration: ShareExpirationOption) {
@@ -2351,6 +2294,13 @@ function formatExpirationHint(expiration: ShareExpirationOption) {
     case "30d":
       return "Long-running";
   }
+}
+
+function formatTimestamp(value: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 async function createWorkspaceImageAssets(nodes: WorkspaceImageNode[]) {
