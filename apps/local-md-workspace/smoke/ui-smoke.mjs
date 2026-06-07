@@ -146,7 +146,7 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
   );
 
   await client.waitForPredicate(
-    `document.body.innerText.includes("Smoke Workspace") && document.body.innerText.includes("1 markdown file")`,
+    `document.body.innerText.includes("Smoke Workspace") && Array.from(document.querySelectorAll("button")).some((button) => button.textContent.trim() == "New file" && !button.disabled)`,
     sessionId,
   );
 
@@ -971,7 +971,7 @@ async function connectDropboxWorkspace(client, sessionId) {
 
   try {
     await client.waitForPredicate(
-      `document.body.innerText.includes("Dropbox mirror connected") || document.body.innerText.includes("Dropbox mirror ·") || document.body.innerText.includes("Dropbox mirror\\n0 markdown files")`,
+      `document.body.innerText.includes("Dropbox mirror connected") || document.body.innerText.includes("Dropbox mirror ·") || (document.body.innerText.includes("Dropbox mirror") && document.body.innerText.includes("No markdown files") && Array.from(document.querySelectorAll("button")).some((button) => button.textContent.trim() == "New file" && !button.disabled))`,
       sessionId,
       20_000,
     );

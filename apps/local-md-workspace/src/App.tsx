@@ -16,7 +16,6 @@ import {
   ImagePlusIcon,
   LinkIcon,
   MenuIcon,
-  PencilIcon,
   PlusIcon,
   RefreshCwIcon,
   SaveIcon,
@@ -1492,12 +1491,7 @@ function LocalWorkspaceApp() {
           )}
         >
           <div className="flex h-12 shrink-0 items-center gap-2 px-3">
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{rootName}</div>
-              <div className="truncate text-xs text-sidebar-foreground/55">
-                {files.length == 1 ? "1 markdown file" : `${files.length} markdown files`}
-              </div>
-            </div>
+            <div className="min-w-0 flex-1 truncate text-sm font-medium">{rootName}</div>
             <TooltipIconButton
               label="Open folder"
               size="icon-sm"
@@ -1670,15 +1664,6 @@ function LocalWorkspaceApp() {
               onClick={() => void repairWorkspaceMetadata()}
             >
               <WrenchIcon data-icon="inline-start" />
-            </TooltipIconButton>
-            <TooltipIconButton
-              label="Rename file"
-              size="icon-sm"
-              variant="ghost"
-              disabled={!selectedFile || busy}
-              onClick={() => openRenameDialog()}
-            >
-              <PencilIcon data-icon="inline-start" />
             </TooltipIconButton>
           </header>
 
