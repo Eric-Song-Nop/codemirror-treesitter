@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { FileTree as TreesFileTree } from "@pierre/trees";
-import type { ContextMenuOpenContext, FileTreeDirectoryHandle } from "@pierre/trees";
+import type { ContextMenuOpenContext } from "@pierre/trees";
 import type {
   MarkdownDirectoryNode,
   MarkdownFileNode,
@@ -37,7 +37,7 @@ export const FileTree = memo(function FileTree({
   let paths = useMemo(() => (root ? collectTreePaths(root.children) : []), [root]);
   let filesByPath = useMemo(() => (root ? collectFilesByPath(root.children) : new Map()), [root]);
   let containerRef = useRef<HTMLDivElement | null>(null);
-  let initialExpandedPathsRef = useRef<null | string[]>(null);
+  let initialExpandedDirectoryPathRef = useRef(parentDirectoryPath(selectedPath));
   let latestSelectionRef = useRef({
     filesByPath,
     onCreateEntry,
@@ -49,10 +49,6 @@ export const FileTree = memo(function FileTree({
   });
   let modelRef = useRef<TreesFileTree | null>(null);
   let syncingSelectionRef = useRef(false);
-
-  let initialExpandedPaths =
-    initialExpandedPathsRef.current ?? collectAncestorDirectoryPaths(selectedPath);
-  initialExpandedPathsRef.current = initialExpandedPaths;
 
   useEffect(() => {
     latestSelectionRef.current = {
@@ -105,7 +101,9 @@ export const FileTree = memo(function FileTree({
         colored: true,
         set: "complete",
       },
-      initialExpandedPaths,
+      initialExpandedPaths: initialExpandedDirectoryPathRef.current
+        ? [initialExpandedDirectoryPathRef.current]
+        : [],
       initialSelectedPaths: selectedPath ? [selectedPath] : [],
       paths,
       search: false,
@@ -158,7 +156,7 @@ export const FileTree = memo(function FileTree({
       }
 
       if (selectedPath) {
-        expandAncestorDirectories(model, selectedPath);
+        expandDirectory(model, parentDirectoryPath(selectedPath));
         let item = model.getItem(selectedPath);
         item?.select();
         item?.focus();
@@ -269,27 +267,18 @@ function collectTreePaths(nodes: MarkdownTreeNode[]) {
   return paths;
 }
 
-function expandAncestorDirectories(model: TreesFileTree, path: string) {
-  for (let directoryPath of collectAncestorDirectoryPaths(path)) {
-    let item = model.getItem(directoryPath);
-    if (isDirectoryItem(item)) item.expand();
-  }
+function expandDirectory(model: TreesFileTree, path: null | string) {
+  if (!path) return;
+
+  let item = model.getItem(path);
+  if (item && "expand" in item) item.expand();
 }
 
-function isDirectoryItem(
-  item: null | ReturnType<TreesFileTree["getItem"]>,
-): item is FileTreeDirectoryHandle {
-  return Boolean(item?.isDirectory());
-}
+function parentDirectoryPath(path: null | string) {
+  if (!path) return null;
 
-function collectAncestorDirectoryPaths(path: null | string) {
-  if (!path) return [];
-
-  let paths: string[] = [];
-  for (let index = path.indexOf("/"); index != -1; index = path.indexOf("/", index + 1)) {
-    paths.push(`${path.slice(0, index)}/`);
-  }
-  return paths;
+  let slashIndex = path.lastIndexOf("/");
+  return slashIndex == -1 ? null : `${path.slice(0, slashIndex)}/`;
 }
 
 function collectFilesByPath(nodes: MarkdownTreeNode[]) {
