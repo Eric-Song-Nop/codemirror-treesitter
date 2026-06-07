@@ -35,7 +35,7 @@ export const FileTree = memo(function FileTree({
   onSelectFile,
 }: FileTreeProps) {
   let paths = useMemo(() => (root ? collectTreePaths(root.children) : []), [root]);
-  let expandedPaths = useMemo(() => paths.filter((path) => path.endsWith("/")), [paths]);
+  let expandedPaths = useMemo(() => collectAncestorDirectoryPaths(selectedPath), [selectedPath]);
   let filesByPath = useMemo(() => (root ? collectFilesByPath(root.children) : new Map()), [root]);
   let containerRef = useRef<HTMLDivElement | null>(null);
   let latestSelectionRef = useRef({
@@ -260,6 +260,16 @@ function collectTreePaths(nodes: MarkdownTreeNode[]) {
     } else {
       paths.push(node.path);
     }
+  }
+  return paths;
+}
+
+function collectAncestorDirectoryPaths(path: null | string) {
+  if (!path) return [];
+
+  let paths: string[] = [];
+  for (let index = path.indexOf("/"); index != -1; index = path.indexOf("/", index + 1)) {
+    paths.push(`${path.slice(0, index)}/`);
   }
   return paths;
 }
