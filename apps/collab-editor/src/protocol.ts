@@ -4,8 +4,6 @@ export const WireKind = {
   Snapshot: 3,
   HostSaveAck: 4,
   ShareStatus: 5,
-  RelayAckRequest: 6,
-  RelayAck: 7,
   Batch: 9,
 } as const;
 
@@ -100,8 +98,6 @@ function isWireKind(kind: number | undefined): kind is WireKind {
     kind == WireKind.Snapshot ||
     kind == WireKind.HostSaveAck ||
     kind == WireKind.ShareStatus ||
-    kind == WireKind.RelayAckRequest ||
-    kind == WireKind.RelayAck ||
     kind == WireKind.Batch
   );
 }

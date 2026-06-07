@@ -84,9 +84,10 @@ Implemented on this branch:
 - Added guest-side capability revalidation. If a link is rotated or revoked,
   the old guest page detects that the fragment key no longer works and stops
   treating the session as valid.
-- Added relay acknowledgement messages for shared-file edits. The guest UI
-  distinguishes local edits still being sent, `Saved to relay`,
-  `Waiting for host`, and `Saved to host`.
+- Added version-vector based shared-file catch-up. Guests and hosts exchange
+  Loro version vectors on connect/reconnect, and guest save UI distinguishes
+  `Waiting for host` from `Saved to host` using the version vector included in
+  `HostSaveAck`.
 - Added relay share-status metadata for active peers, guest count, and pending
   host saves. The owner `Share file` modal now shows peers online, guests
   online, and whether relay edits are still waiting for the owner host to write
@@ -108,7 +109,7 @@ Implemented on this branch:
   fail after rotation, new guest secrets work after rotation, and revoked shares
   reject new sessions.
 - Verified guest save-state UI with local relay and browser smoke: after a guest
-  edit, the page showed `Saved to relay` and `Waiting for host`.
+  edit while the host is offline, the page showed `Waiting for host`.
 - Verified active-peer and pending-host-save share status with a local relay
   WebSocket smoke: guest join updated peer counts, guest edit set
   `pendingHostSave`, and host acknowledgement cleared it.
@@ -122,9 +123,9 @@ Implemented on this branch:
   sees `Saved to host`.
 - Added and verified a local-folder owner reconnect product UI smoke. It
   creates a share, closes the owner tab, lets an isolated guest edit while the
-  host is offline, verifies the guest only reaches `Saved to relay` /
-  `Waiting for host`, opens a new owner tab, selects the shared file, and waits
-  for the owner host to save the relay edit back to the local folder.
+  host is offline, verifies the guest reaches `Waiting for host`, opens a new
+  owner tab, selects the shared file, and waits for the owner host to save the
+  relay edit back to the local folder.
 - Added and verified a shared-file lifecycle product UI smoke. It rotates the
   active link, verifies the old guest link can no longer join, verifies the new
   guest link can join the same file, stops sharing from the owner UI, and
@@ -201,11 +202,11 @@ Relay:
 Use distinct status language:
 
 - `Connected`: the guest is connected to the relay.
-- `Saved to relay`: the Loro room has accepted the edit.
 - `Saved to host`: the owner client has materialized the Loro text to the
-  owner's local folder or Dropbox mirror and sent an acknowledgement.
-- `Waiting for host`: the relay has edits that the owner has not yet saved to
-  the source file.
+  owner's local folder or Dropbox mirror and sent a `HostSaveAck` whose Loro
+  version vector covers the guest's latest local edit.
+- `Waiting for host`: the guest has local edits not yet covered by a host save
+  acknowledgement.
 - `Host offline`: guests may continue editing only if the share policy allows
   relay-buffered edits.
 
@@ -309,7 +310,6 @@ Do not show:
 Guest status examples:
 
 - `Connected`
-- `Saved to relay`
 - `Waiting for host`
 - `Host online`
 - `Host offline`
@@ -486,8 +486,6 @@ const WireKind = {
   Snapshot: 3,
   HostSaveAck: 4,
   ShareStatus: 5,
-  RelayAckRequest: 6,
-  RelayAck: 7,
   Batch: 9,
 };
 ```
@@ -501,8 +499,9 @@ The owner client sends `HostSaveAck` only after:
 3. It has written the materialized Markdown to the owner's local folder or
    Dropbox mirror.
 4. It has updated the local materialized hash.
+5. It includes the Loro version vector that was saved.
 
-Guests use this message to distinguish `Saved to relay` from `Saved to host`.
+Guests use this message to distinguish `Waiting for host` from `Saved to host`.
 
 ## Delete Existing Incorrect Behavior
 
@@ -640,7 +639,7 @@ Goal: let invited users edit without opening a workspace.
 Acceptance:
 
 - Guest can edit the shared file without a local folder or Dropbox auth.
-- Guest sees `Saved to relay`, `Waiting for host`, and connection state.
+- Guest sees `Waiting for host`, `Saved to host`, and connection state.
 - Guest cannot browse or infer the owner workspace.
 
 ### Phase 5: Owner Host Agent

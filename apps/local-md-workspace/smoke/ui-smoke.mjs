@@ -286,7 +286,7 @@ async function assertOwnerReconnectSharedFileFlow(client) {
       guest.sessionId,
     );
     await client.waitForPredicate(
-      `document.body.innerText.includes("Saved to relay") && document.body.innerText.includes("Waiting for host")`,
+      `document.body.innerText.includes("Waiting for host")`,
       guest.sessionId,
       15_000,
     );
@@ -410,7 +410,7 @@ async function assertOwnerExternalConflictFlow(client) {
       guest.sessionId,
     );
     await client.waitForPredicate(
-      `document.body.innerText.includes("Saved to relay") && document.body.innerText.includes("Waiting for host")`,
+      `document.body.innerText.includes("Waiting for host")`,
       guest.sessionId,
       15_000,
     );

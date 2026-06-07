@@ -4,7 +4,6 @@ import {
   ShareRelayConnection,
   maxQueuedRelayMessages,
   maxSingleQueuedDocumentUpdateBytes,
-  parseShareRelayAck,
   parseShareRelayStatus,
 } from "./share-relay-connection.ts";
 import { RelayWireKind, decodeRelayWireFrame, encodeRelayWireMessage } from "./relay-protocol.ts";
@@ -74,27 +73,6 @@ describe("shared file relay connection helpers", () => {
     expect(() => parseShareRelayStatus(new TextEncoder().encode("not json"))).toThrow();
   });
 
-  it("parses relay acknowledgement frames", () => {
-    let payload = new TextEncoder().encode(
-      JSON.stringify({
-        acceptedAt: Date.UTC(2026, 5, 6),
-        sequence: 7,
-        shareId: "share-id",
-      }),
-    );
-
-    expect(parseShareRelayAck(payload)).toEqual({
-      acceptedAt: Date.UTC(2026, 5, 6),
-      sequence: 7,
-      shareId: "share-id",
-    });
-  });
-
-  it("rejects malformed relay acknowledgement frames", () => {
-    expect(() => parseShareRelayAck(new TextEncoder().encode("{}"))).toThrow("Invalid relay ack.");
-    expect(() => parseShareRelayAck(new TextEncoder().encode("not json"))).toThrow();
-  });
-
   it("sends the share session token as the first WebSocket auth frame", () => {
     vi.stubGlobal("navigator", { onLine: true });
     vi.stubGlobal("window", globalThis);
@@ -135,20 +113,23 @@ describe("shared file relay connection helpers", () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
 
     let states: string[] = [];
+    let doc = new LoroDoc();
+    doc.getText("markdown").insert(0, "local");
+    doc.commit();
     let connection = new ShareRelayConnection({
       clientId: "client-id",
-      doc: new LoroDoc(),
+      doc,
       onConnectionState: (state) => states.push(state),
       relayOrigin: "https://relay.example",
       sessionToken: "session-token",
       shareId: "share-id",
     });
 
-    connection.enqueueDocumentUpdate(new Uint8Array([1, 2, 3]));
+    connection.enqueueDocumentUpdate(doc.export({ mode: "update" }));
     connection.connect();
     let socket = mockSockets[0]!;
     socket.open();
-    socket.receive(JSON.stringify({ type: "sync-ready" }));
+    socket.receive(JSON.stringify({ type: "sync-ready", versionVector: [] }));
     await vi.advanceTimersByTimeAsync(50);
 
     expect(states).toEqual(["connecting", "connected"]);
@@ -156,7 +137,6 @@ describe("shared file relay connection helpers", () => {
     expect(binaryFrames).toHaveLength(1);
     expect(decodeRelayWireFrame(binaryFrames[0]!).map((message) => message.kind)).toEqual([
       RelayWireKind.Doc,
-      RelayWireKind.RelayAckRequest,
     ]);
 
     connection.close();
@@ -183,10 +163,10 @@ describe("shared file relay connection helpers", () => {
 
     text.insert(0, "first");
     doc.commit();
-    expect(connection.enqueueDocumentUpdate(new Uint8Array([1]))).toBe(1);
+    expect(connection.enqueueDocumentUpdate(new Uint8Array([1]))).toBe(true);
     text.insert(5, " second");
     doc.commit();
-    expect(connection.enqueueDocumentUpdate(new Uint8Array([2]))).toBe(2);
+    expect(connection.enqueueDocumentUpdate(new Uint8Array([2]))).toBe(true);
 
     connection.connect();
     let socket = mockSockets[0]!;
@@ -195,16 +175,15 @@ describe("shared file relay connection helpers", () => {
     socket.receive(
       encodeRelayWireMessage(RelayWireKind.Snapshot, serverDoc.export({ mode: "snapshot" })),
     );
+    socket.receive(JSON.stringify({ type: "sync-ready", versionVector: [] }));
     await vi.advanceTimersByTimeAsync(50);
 
     let binaryFrames = socket.sent.filter((item): item is Uint8Array => item instanceof Uint8Array);
     expect(binaryFrames).toHaveLength(1);
     let messages = decodeRelayWireFrame(binaryFrames[0]!);
-    expect(messages.map((message) => message.kind)).toEqual([
-      RelayWireKind.Doc,
-      RelayWireKind.RelayAckRequest,
-    ]);
-    expect(JSON.parse(new TextDecoder().decode(messages[1]!.payload))).toEqual({ sequence: 2 });
+    expect(messages.map((message) => message.kind)).toEqual([RelayWireKind.Doc]);
+    serverDoc.import(messages[0]!.payload);
+    expect(serverDoc.getText("markdown").toString()).toBe("first second");
 
     connection.close();
   });
@@ -245,7 +224,7 @@ describe("shared file relay connection helpers", () => {
     });
 
     for (let index = 0; index < maxQueuedRelayMessages; index++) {
-      expect(connection.enqueueDocumentUpdate(new Uint8Array([index & 0xff]))).toBe(index + 1);
+      expect(connection.enqueueDocumentUpdate(new Uint8Array([index & 0xff]))).toBe(true);
     }
 
     expect(connection.enqueueDocumentUpdate(new Uint8Array([1]))).toBeNull();

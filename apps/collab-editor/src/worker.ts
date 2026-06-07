@@ -403,7 +403,6 @@ export class CollabRoom extends DurableObject<Env> {
     let acceptedSnapshot: Uint8Array | null = null;
     let documentChanged = false;
     let hostSaveAcked = false;
-    let relayAckSequence: number | null = null;
     let messages: WireMessage[];
 
     let frame = toUint8Array(message);
@@ -426,6 +425,7 @@ export class CollabRoom extends DurableObject<Env> {
           ws.close(1008, "Document update rate limit exceeded");
           return;
         }
+        let beforeVersion = this.doc.oplogVersion();
         try {
           this.doc.import(item.payload);
         } catch (error: unknown) {
@@ -433,16 +433,25 @@ export class CollabRoom extends DurableObject<Env> {
           ws.close(1003, "Malformed collaboration payload");
           return;
         }
+        let afterVersion = this.doc.oplogVersion();
+        let changed = versionAdvanced(afterVersion, beforeVersion);
         if (this.shareRecord && !this.enforceDocumentSnapshotLimit(ws)) return;
-        this.initialized = true;
-        documentChanged = this.shareRecord != null;
-        if (this.shareRecord) {
-          if (item.kind == WireKind.Snapshot) acceptedSnapshot = item.payload;
-          else acceptedDocumentUpdates.push(item.payload);
-        } else {
-          this.markDirty();
+        if (changed) {
+          let relayItem = item;
+          this.initialized = true;
+          documentChanged = this.shareRecord != null;
+          if (this.shareRecord) {
+            if (item.kind == WireKind.Snapshot) acceptedSnapshot = item.payload;
+            else {
+              let acceptedUpdate = this.doc.export({ from: beforeVersion, mode: "update" });
+              acceptedDocumentUpdates.push(acceptedUpdate);
+              relayItem = { kind: WireKind.Doc, payload: acceptedUpdate };
+            }
+          } else {
+            this.markDirty();
+          }
+          relay.push(relayItem);
         }
-        relay.push(item);
       } else if (item.kind == WireKind.Presence) {
         relay.push(item);
       } else if (item.kind == WireKind.HostSaveAck) {
@@ -452,13 +461,6 @@ export class CollabRoom extends DurableObject<Env> {
         }
         hostSaveAcked = true;
         relay.push(item);
-      } else if (item.kind == WireKind.RelayAckRequest) {
-        let sequence = parseRelayAckRequest(item.payload);
-        if (sequence == null) {
-          ws.close(1003, "Malformed relay ack request");
-          return;
-        }
-        relayAckSequence = Math.max(relayAckSequence ?? 0, sequence);
       }
     }
 
@@ -485,7 +487,6 @@ export class CollabRoom extends DurableObject<Env> {
     } else if (relay.length) {
       this.broadcast(ws, encodeWireBatch(relay));
     }
-    if (relayAckSequence != null) this.sendRelayAck(ws, relayAckSequence);
   }
 
   async webSocketClose(
@@ -547,22 +548,6 @@ export class CollabRoom extends DurableObject<Env> {
       if (!this.ensureSocketShareAuthorization(socket)) continue;
       socket.send(frame);
     }
-  }
-
-  private sendRelayAck(socket: WebSocket, sequence: number) {
-    if (socket.readyState != WebSocket.OPEN) return;
-    socket.send(
-      encodeWireMessage(
-        WireKind.RelayAck,
-        new TextEncoder().encode(
-          JSON.stringify({
-            acceptedAt: Date.now(),
-            sequence,
-            shareId: this.shareRecord?.shareId ?? "",
-          }),
-        ),
-      ),
-    );
   }
 
   private activeShareRecord() {
@@ -969,21 +954,27 @@ export class CollabRoom extends DurableObject<Env> {
       return;
     }
 
+    let serverVersion = this.doc.oplogVersion();
     ws.send(encodeWireMessage(WireKind.ShareStatus, this.shareStatusPayload()));
-    this.sendInitialShareDocument(ws, clientVersion.version);
+    this.sendInitialShareDocument(ws, clientVersion.version, serverVersion);
     this.broadcastShareStatus(ws);
   }
 
-  private sendInitialShareDocument(ws: WebSocket, clientVersion: VersionVector | null) {
+  private sendInitialShareDocument(
+    ws: WebSocket,
+    clientVersion: VersionVector | null,
+    serverVersion: VersionVector,
+  ) {
     if (clientVersion) {
       try {
         let update = this.doc.export({ from: clientVersion, mode: "update" });
         if (update.byteLength == 0) {
-          ws.send(JSON.stringify({ type: "sync-ready" }));
+          this.sendSyncReady(ws, serverVersion);
           return;
         }
         if (update.byteLength <= maxDocumentUpdateBytes) {
           ws.send(encodeWireMessage(WireKind.Doc, update));
+          this.sendSyncReady(ws, serverVersion);
           return;
         }
       } catch (error: unknown) {
@@ -997,6 +988,17 @@ export class CollabRoom extends DurableObject<Env> {
       return;
     }
     ws.send(encodeWireMessage(WireKind.Snapshot, snapshot));
+    this.sendSyncReady(ws, serverVersion);
+  }
+
+  private sendSyncReady(ws: WebSocket, serverVersion: VersionVector) {
+    if (ws.readyState != WebSocket.OPEN) return;
+    ws.send(
+      JSON.stringify({
+        type: "sync-ready",
+        versionVector: serializeVersionVector(serverVersion),
+      }),
+    );
   }
 
   private enforceDocumentSnapshotLimit(sender: WebSocket) {
@@ -1108,22 +1110,6 @@ function updateLogEntryKey(sequence: number) {
   return `${updateLogEntryPrefix}${String(sequence).padStart(12, "0")}`;
 }
 
-function parseRelayAckRequest(payload: Uint8Array) {
-  try {
-    let value = JSON.parse(new TextDecoder().decode(payload)) as { sequence?: unknown };
-    if (
-      typeof value.sequence != "number" ||
-      !Number.isFinite(value.sequence) ||
-      value.sequence < 1
-    ) {
-      return null;
-    }
-    return Math.trunc(value.sequence);
-  } catch {
-    return null;
-  }
-}
-
 function parseAuthVersionVector(
   value: unknown,
 ): { ok: true; version: VersionVector | null } | { ok: false } {
@@ -1149,6 +1135,14 @@ function parseAuthVersionVector(
   }
 
   return { ok: true, version: new VersionVector(version) };
+}
+
+function serializeVersionVector(version: VersionVector) {
+  return [...version.toJSON()].map(([peer, counter]) => [String(peer), counter]);
+}
+
+function versionAdvanced(next: VersionVector, previous: VersionVector) {
+  return next.compare(previous) == 1;
 }
 
 async function allowCreateShareRequest(request: Request, env: Env) {
