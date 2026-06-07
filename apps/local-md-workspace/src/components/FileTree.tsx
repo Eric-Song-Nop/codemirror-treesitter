@@ -249,48 +249,38 @@ function resolveSelectionTarget(
   filesByPath: Map<string, MarkdownFileNode>,
 ): FileTreeDeleteTarget | null {
   let file = filesByPath.get(path);
-  if (file) {
-    return {
-      kind: "file",
-      name: file.name,
-      path: file.path,
-    };
-  }
+  if (file) return { kind: "file", name: file.name, path: file.path };
 
   let directoryPath = workspaceDirectoryPath(path);
   if (!directoryPath) return null;
 
-  return {
-    kind: "directory",
-    name: basename(directoryPath),
-    path: directoryPath,
-  };
+  return { kind: "directory", name: basename(directoryPath), path: directoryPath };
 }
 
-function collectTreePaths(nodes: MarkdownTreeNode[]) {
-  let paths: string[] = [];
-  for (let node of nodes) {
-    if (node.kind == "directory") {
-      paths.push(treeDirectoryPath(node.path));
-      paths.push(...collectTreePaths(node.children));
-    } else {
-      paths.push(node.path);
-    }
-  }
-  return paths;
+function collectTreePaths(nodes: MarkdownTreeNode[]): string[] {
+  return nodes.flatMap((node) =>
+    node.kind == "directory"
+      ? [join(normalize(node.path), "/"), ...collectTreePaths(node.children)]
+      : [node.path],
+  );
 }
 
 function syncTreePaths(model: TreesFileTree, previousPaths: string[], nextPaths: string[]) {
   let previousPathSet = new Set(previousPaths);
   let nextPathSet = new Set(nextPaths);
-  let removedDirectoryPaths = previousPaths.filter(
-    (path) => isTreeDirectoryPath(path) && !nextPathSet.has(path),
+  let removedDirectories = previousPaths.filter(
+    (path) => path.endsWith("/") && !nextPathSet.has(path),
   );
   let operations: FileTreeBatchOperation[] = [];
 
   for (let path of previousPaths) {
-    if (nextPathSet.has(path) || hasRemovedAncestorDirectory(path, removedDirectoryPaths)) continue;
-    operations.push({ path, recursive: isTreeDirectoryPath(path), type: "remove" });
+    if (
+      nextPathSet.has(path) ||
+      removedDirectories.some((directory) => isInside(path, directory))
+    ) {
+      continue;
+    }
+    operations.push({ path, recursive: path.endsWith("/"), type: "remove" });
   }
 
   for (let path of nextPaths) {
@@ -300,34 +290,20 @@ function syncTreePaths(model: TreesFileTree, previousPaths: string[], nextPaths:
   if (operations.length) model.batch(operations);
 }
 
-function hasRemovedAncestorDirectory(path: string, removedDirectoryPaths: string[]) {
-  return removedDirectoryPaths.some((directoryPath) => isPathInsideDirectory(path, directoryPath));
-}
-
 function treeDirectoryPathForFile(path: null | string) {
   if (!path) return null;
 
   let directoryPath = dirname(path);
-  return directoryPath == "." ? null : treeDirectoryPath(directoryPath);
-}
-
-function treeDirectoryPath(path: string) {
-  return join(normalize(path), "/");
+  return directoryPath == "." ? null : join(normalize(directoryPath), "/");
 }
 
 function workspaceDirectoryPath(path: string) {
   let directoryPath = normalize(path);
   if (directoryPath == "." || directoryPath == "/") return "";
-  return isTreeDirectoryPath(directoryPath)
-    ? join(dirname(directoryPath), basename(directoryPath))
-    : directoryPath;
+  return join(dirname(directoryPath), basename(directoryPath));
 }
 
-function isPathInsideDirectory(path: string, directoryPath: string) {
+function isInside(path: string, directoryPath: string) {
   let relativePath = relative(normalize(directoryPath), normalize(path));
   return relativePath != "" && relativePath != ".." && !relativePath.startsWith("../");
-}
-
-function isTreeDirectoryPath(path: string) {
-  return path.endsWith("/");
 }
