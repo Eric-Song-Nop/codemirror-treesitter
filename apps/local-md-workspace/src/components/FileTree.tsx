@@ -5,7 +5,7 @@ import type {
   FileTreeBatchOperation,
   FileTreeDirectoryHandle,
 } from "@pierre/trees";
-import { basename, dirname, normalize } from "pathe";
+import { basename, dirname, join, normalize, relative } from "pathe";
 import type {
   MarkdownDirectoryNode,
   MarkdownFileNode,
@@ -271,7 +271,7 @@ function collectTreePaths(nodes: MarkdownTreeNode[]) {
   let paths: string[] = [];
   for (let node of nodes) {
     if (node.kind == "directory") {
-      paths.push(`${node.path}/`);
+      paths.push(treeDirectoryPath(node.path));
       paths.push(...collectTreePaths(node.children));
     } else {
       paths.push(node.path);
@@ -284,13 +284,13 @@ function syncTreePaths(model: TreesFileTree, previousPaths: string[], nextPaths:
   let previousPathSet = new Set(previousPaths);
   let nextPathSet = new Set(nextPaths);
   let removedDirectoryPaths = previousPaths.filter(
-    (path) => path.endsWith("/") && !nextPathSet.has(path),
+    (path) => isTreeDirectoryPath(path) && !nextPathSet.has(path),
   );
   let operations: FileTreeBatchOperation[] = [];
 
   for (let path of previousPaths) {
     if (nextPathSet.has(path) || hasRemovedAncestorDirectory(path, removedDirectoryPaths)) continue;
-    operations.push({ path, recursive: path.endsWith("/"), type: "remove" });
+    operations.push({ path, recursive: isTreeDirectoryPath(path), type: "remove" });
   }
 
   for (let path of nextPaths) {
@@ -301,19 +301,33 @@ function syncTreePaths(model: TreesFileTree, previousPaths: string[], nextPaths:
 }
 
 function hasRemovedAncestorDirectory(path: string, removedDirectoryPaths: string[]) {
-  return removedDirectoryPaths.some(
-    (directoryPath) => path != directoryPath && path.startsWith(directoryPath),
-  );
+  return removedDirectoryPaths.some((directoryPath) => isPathInsideDirectory(path, directoryPath));
 }
 
 function treeDirectoryPathForFile(path: null | string) {
   if (!path) return null;
 
-  let directoryPath = normalize(dirname(path));
-  return directoryPath == "." ? null : normalize(`${directoryPath}/`);
+  let directoryPath = dirname(path);
+  return directoryPath == "." ? null : treeDirectoryPath(directoryPath);
+}
+
+function treeDirectoryPath(path: string) {
+  return join(normalize(path), "/");
 }
 
 function workspaceDirectoryPath(path: string) {
   let directoryPath = normalize(path);
-  return directoryPath.endsWith("/") ? directoryPath.slice(0, -1) : directoryPath;
+  if (directoryPath == "." || directoryPath == "/") return "";
+  return isTreeDirectoryPath(directoryPath)
+    ? join(dirname(directoryPath), basename(directoryPath))
+    : directoryPath;
+}
+
+function isPathInsideDirectory(path: string, directoryPath: string) {
+  let relativePath = relative(normalize(directoryPath), normalize(path));
+  return relativePath != "" && relativePath != ".." && !relativePath.startsWith("../");
+}
+
+function isTreeDirectoryPath(path: string) {
+  return path.endsWith("/");
 }
