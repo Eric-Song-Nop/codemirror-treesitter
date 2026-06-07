@@ -4,7 +4,7 @@ import { EditorView, keymap, placeholder as placeholderExtension } from "@codemi
 import { liveMdKeymap } from "./commands.js";
 import { liveMdAnalysis } from "./decorations.js";
 import { liveMdImageSource, type LiveMdImageSourceResolver } from "./images.js";
-import { codeFenceLanguagesField } from "./languages.js";
+import { codeFenceLanguagesField, liveMdDefaultCodeFenceHighlighting } from "./languages.js";
 import { liveMdLinkBase, liveMdLinkInteractions, type LiveMdLinkBaseUrl } from "./links.js";
 import { liveMdSearch } from "./search.js";
 
@@ -25,6 +25,7 @@ export function liveMarkdown(options: LiveMarkdownOptions = {}): Extension {
     EditorView.lineWrapping,
     EditorState.allowMultipleSelections.of(true),
     codeFenceLanguagesField,
+    liveMdDefaultCodeFenceHighlighting,
     EditorView.contentAttributes.of({
       "aria-label": options.ariaLabel ?? "LiveMD Markdown editor",
       spellcheck: String(options.spellcheck ?? true),

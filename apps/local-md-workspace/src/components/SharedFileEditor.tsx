@@ -166,8 +166,8 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
       : undefined;
 
   return (
-    <main className="flex min-h-svh flex-col bg-background text-foreground">
-      <header className="flex min-h-14 items-center gap-3 border-b px-3">
+    <main className="flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Share2Icon className="size-4 shrink-0" />
           <div className="min-w-0 truncate text-sm font-medium">{displayName}</div>
@@ -201,7 +201,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
       </header>
 
       {errorMessage && (
-        <div className="flex items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <div className="flex shrink-0 items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
           <AlertCircleIcon className="size-4 shrink-0" />
           <div className="min-w-0 flex-1">{errorMessage}</div>
           {route.kind == "share" && (
@@ -214,7 +214,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
       )}
 
       {sessionReady ? (
-        <section className="min-h-0 flex-1">
+        <section className="min-h-0 flex-1 overflow-hidden">
           <LiveMdEditor
             documentKey={route.kind == "share" ? route.parts.shareId : "shared-file"}
             extensions={extensions}

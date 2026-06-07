@@ -14,13 +14,13 @@ import {
   highlightTree,
   queryTreeMatches,
   syntaxTree,
+  type Highlighter,
   type SyntaxNode,
   type Tree,
   type TreeSitterParser,
   type TreeSitterQueryCapture,
   type TreeSitterQueryMatch,
 } from "@codemirror-treesitter/language";
-import { gruvboxLightHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
 import {
   Decoration,
   EditorView,
@@ -30,6 +30,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import {
+  codeFenceHighlighterFacet,
   codeFenceLanguagesField,
   emptyCodeFenceLanguages,
   type CodeFenceLanguageMap,
@@ -59,6 +60,7 @@ type LiveMdBuild = {
   activeLines: Set<number>;
   atomicRanges: Array<{ from: number; to: number }>;
   codeFenceHighlightTrees: CodeFenceHighlightTree[];
+  codeFenceHighlighter: Highlighter;
   codeFenceLanguages: CodeFenceLanguageMap;
   decorations: Array<Range<Decoration>>;
   imageSourceResolver: LiveMdImageSourceResolver | null;
@@ -126,6 +128,8 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
       tree == value.tree &&
       !transaction.docChanged &&
       !transaction.selection &&
+      transaction.startState.facet(codeFenceHighlighterFacet) ==
+        transaction.state.facet(codeFenceHighlighterFacet) &&
       !codeFenceLanguagesChanged(transaction.startState, transaction.state) &&
       transaction.startState.facet(liveMdImageSourceResolver) ==
         transaction.state.facet(liveMdImageSourceResolver) &&
@@ -202,6 +206,7 @@ function createLiveMdBuild(
     activeLines,
     atomicRanges: [],
     codeFenceHighlightTrees: [],
+    codeFenceHighlighter: state.facet(codeFenceHighlighterFacet),
     codeFenceLanguages,
     decorations: [],
     imageSourceResolver: state.facet(liveMdImageSourceResolver),
@@ -1094,7 +1099,7 @@ function addCodeFenceHighlights(
 
   highlightTree(
     tree,
-    gruvboxLightHighlightStyle,
+    build.codeFenceHighlighter,
     (from, to, className) => {
       let decoration = Decoration.mark({ class: className });
       splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {

@@ -4,7 +4,6 @@ import { EditorView, placeholder as placeholderExtension, type ViewUpdate } from
 import { liveMarkdown } from "./extension.js";
 import type { LiveMdImageSourceResolver } from "./images.js";
 import {
-  codeFenceHighlightModule,
   loadCodeFenceLanguages,
   loadMarkdownExtension,
   setCodeFenceLanguages,
@@ -67,7 +66,6 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       doc: initialValue,
       extensions: [
         liveMarkdown({ imageSource: options.imageSource, linkBaseUrl: options.linkBaseUrl }),
-        codeFenceHighlightModule,
         markdownCompartment.of([]),
         placeholderCompartment.of(placeholderValue(options.placeholder)),
         readOnlyCompartment.of(readOnlyExtensions(options.readOnly ?? false)),

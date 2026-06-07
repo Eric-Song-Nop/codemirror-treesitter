@@ -1,5 +1,10 @@
-import { StateEffect, StateField, type Extension } from "@codemirror/state";
-import { TreeSitterLanguage, type TreeSitterParser } from "@codemirror-treesitter/language";
+import { Facet, StateEffect, StateField, type Extension } from "@codemirror/state";
+import {
+  HighlightStyle,
+  TreeSitterLanguage,
+  type Highlighter,
+  type TreeSitterParser,
+} from "@codemirror-treesitter/language";
 import { languages } from "@codemirror-treesitter/language-data";
 import { gruvboxLightHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
 import { EditorView } from "@codemirror/view";
@@ -8,6 +13,12 @@ export type CodeFenceLanguageMap = ReadonlyMap<string, TreeSitterParser>;
 
 export const emptyCodeFenceLanguages: CodeFenceLanguageMap = new Map();
 export const setCodeFenceLanguages = StateEffect.define<CodeFenceLanguageMap>();
+
+export const codeFenceHighlighterFacet = Facet.define<Highlighter, Highlighter>({
+  combine(values) {
+    return values.at(-1) ?? gruvboxLightHighlightStyle;
+  },
+});
 
 export const codeFenceLanguagesField = StateField.define<CodeFenceLanguageMap>({
   create() {
@@ -21,9 +32,17 @@ export const codeFenceLanguagesField = StateField.define<CodeFenceLanguageMap>({
   },
 });
 
-export const codeFenceHighlightModule = gruvboxLightHighlightStyle.module
-  ? EditorView.styleModule.of(gruvboxLightHighlightStyle.module)
-  : [];
+export function liveMdCodeFenceHighlighting(highlighter: Highlighter): Extension {
+  let extensions: Extension[] = [codeFenceHighlighterFacet.of(highlighter)];
+  if (highlighter instanceof HighlightStyle && highlighter.module) {
+    extensions.push(EditorView.styleModule.of(highlighter.module));
+  }
+  return extensions;
+}
+
+export const liveMdDefaultCodeFenceHighlighting = liveMdCodeFenceHighlighting(
+  gruvboxLightHighlightStyle,
+);
 
 let markdownExtensionPromise: Promise<Extension> | null = null;
 let codeFenceLanguagesPromise: Promise<CodeFenceLanguageMap> | null = null;

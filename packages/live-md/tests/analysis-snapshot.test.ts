@@ -2,7 +2,11 @@
 
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { ensureSyntaxTree, Tree } from "@codemirror-treesitter/language";
+import { ensureSyntaxTree, tags as t, Tree } from "@codemirror-treesitter/language";
+import {
+  gruvboxDarkHighlightStyle,
+  gruvboxLightHighlightStyle,
+} from "@codemirror-treesitter/theme-gruvbox";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   __testBuildLiveMdAnalysis,
@@ -14,6 +18,7 @@ import {
 import { liveMdImageSource, normalizeMarkdownImageSource } from "../src/core/images.js";
 import {
   codeFenceLanguagesField,
+  liveMdCodeFenceHighlighting,
   loadCodeFenceLanguages,
   loadMarkdownExtension,
   setCodeFenceLanguages,
@@ -128,6 +133,30 @@ describe("LiveMD analysis snapshot", () => {
 
     expect(__testLiveMdAnalysis(view).codeFenceHighlightTrees).toHaveLength(1);
     expect(parseCalls).toBe(1);
+    view.destroy();
+  });
+
+  it("rebuilds code fence highlights when the highlighter changes", async () => {
+    let highlighterCompartment = new Compartment();
+    let view = await markdownAnalysisView("```ts\nlet answer = 1;\n```\n", "", [
+      highlighterCompartment.of(liveMdCodeFenceHighlighting(gruvboxLightHighlightStyle)),
+    ]);
+    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+    let lightKeywordClass = gruvboxLightHighlightStyle.style([t.keyword]);
+    let darkKeywordClass = gruvboxDarkHighlightStyle.style([t.keyword]);
+
+    expect(lightKeywordClass).toBeTruthy();
+    expect(darkKeywordClass).toBeTruthy();
+    expect(codeFenceClasses(view.state).has(lightKeywordClass!)).toBe(true);
+
+    view.dispatch({
+      effects: highlighterCompartment.reconfigure(
+        liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle),
+      ),
+    });
+
+    expect(codeFenceClasses(view.state).has(darkKeywordClass!)).toBe(true);
+    expect(codeFenceClasses(view.state).has(lightKeywordClass!)).toBe(false);
     view.destroy();
   });
 
@@ -324,6 +353,19 @@ function imagePreviewSources(state: EditorState) {
     }
   });
   return sources;
+}
+
+function codeFenceClasses(state: EditorState) {
+  let classes = new Set<string>();
+  __testLiveMdAnalysis({ state } as EditorView).decorations.between(
+    0,
+    state.doc.length,
+    (_from, _to, value) => {
+      let className = (value.spec as { class?: string }).class;
+      if (className) classes.add(className);
+    },
+  );
+  return classes;
 }
 
 async function waitForLiveMdRanges(view: EditorView) {
