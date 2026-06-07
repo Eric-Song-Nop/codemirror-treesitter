@@ -1,11 +1,12 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { FileTree as TreesFileTree } from "@pierre/trees";
-import type { ContextMenuOpenContext } from "@pierre/trees";
+import { basename, dirname, join, relative } from "pathe";
 import type {
   MarkdownDirectoryNode,
   MarkdownFileNode,
   MarkdownTreeNode,
 } from "@/lib/workspace-backend";
+import { flattenMarkdownFiles } from "@/lib/workspace-backend";
 
 type FileTreeProps = {
   onCreateEntry: (target: FileTreeDeleteTarget, kind: FileTreeCreateKind) => void;
@@ -35,10 +36,11 @@ export const FileTree = memo(function FileTree({
   onSelectFile,
 }: FileTreeProps) {
   let paths = useMemo(() => (root ? collectTreePaths(root.children) : []), [root]);
-  let expandedPaths = useMemo(() => paths.filter((path) => path.endsWith("/")), [paths]);
-  let filesByPath = useMemo(() => (root ? collectFilesByPath(root.children) : new Map()), [root]);
-  let containerRef = useRef<HTMLDivElement | null>(null);
-  let latestSelectionRef = useRef({
+  let filesByPath = useMemo(
+    () => new Map(root ? flattenMarkdownFiles(root).map((file) => [file.path, file]) : []),
+    [root],
+  );
+  let latestSelection = {
     filesByPath,
     onCreateEntry,
     onDeleteEntry,
@@ -46,29 +48,14 @@ export const FileTree = memo(function FileTree({
     onSelectEntry,
     onSelectFile,
     selectedPath,
-  });
+  };
+  let containerRef = useRef<HTMLDivElement | null>(null);
+  let initialExpandedDirectoryPathRef = useRef(treeDirectoryPathForFile(selectedPath));
+  let pathsRef = useRef(paths);
+  let latestSelectionRef = useRef(latestSelection);
   let modelRef = useRef<TreesFileTree | null>(null);
   let syncingSelectionRef = useRef(false);
-
-  useEffect(() => {
-    latestSelectionRef.current = {
-      filesByPath,
-      onCreateEntry,
-      onDeleteEntry,
-      onRenameEntry,
-      onSelectEntry,
-      onSelectFile,
-      selectedPath,
-    };
-  }, [
-    filesByPath,
-    onCreateEntry,
-    onDeleteEntry,
-    onRenameEntry,
-    onSelectEntry,
-    onSelectFile,
-    selectedPath,
-  ]);
+  latestSelectionRef.current = latestSelection;
 
   useEffect(() => {
     let container = containerRef.current;
@@ -101,7 +88,9 @@ export const FileTree = memo(function FileTree({
         colored: true,
         set: "complete",
       },
-      initialExpandedPaths: expandedPaths,
+      initialExpandedPaths: initialExpandedDirectoryPathRef.current
+        ? [initialExpandedDirectoryPathRef.current]
+        : [],
       initialSelectedPaths: selectedPath ? [selectedPath] : [],
       paths,
       search: false,
@@ -112,18 +101,13 @@ export const FileTree = memo(function FileTree({
         let nextPath = selectedPaths.at(-1);
         if (!nextPath) return;
 
-        let {
-          filesByPath: latestFilesByPath,
-          onSelectFile: latestOnSelectFile,
-          onSelectEntry: latestOnSelectEntry,
-          selectedPath,
-        } = latestSelectionRef.current;
-        let target = resolveSelectionTarget(nextPath, latestFilesByPath);
-        if (target) latestOnSelectEntry(target);
-        if (nextPath == selectedPath) return;
+        let latest = latestSelectionRef.current;
+        let target = resolveSelectionTarget(nextPath, latest.filesByPath);
+        if (target) latest.onSelectEntry(target);
+        if (nextPath == latest.selectedPath) return;
 
-        let file = latestFilesByPath.get(nextPath);
-        if (file) latestOnSelectFile(file);
+        let file = latest.filesByPath.get(nextPath);
+        if (file) latest.onSelectFile(file);
       },
     });
 
@@ -140,8 +124,9 @@ export const FileTree = memo(function FileTree({
     let model = modelRef.current;
     if (!model) return;
 
-    model.resetPaths(paths, { initialExpandedPaths: expandedPaths });
-  }, [expandedPaths, paths]);
+    syncTreePaths(model, pathsRef.current, paths);
+    pathsRef.current = paths;
+  }, [paths]);
 
   useEffect(() => {
     let model = modelRef.current;
@@ -154,6 +139,9 @@ export const FileTree = memo(function FileTree({
       }
 
       if (selectedPath) {
+        let directoryPath = treeDirectoryPathForFile(selectedPath);
+        let directory = directoryPath ? model.getItem(directoryPath) : null;
+        if (directory && "expand" in directory) directory.expand();
         let item = model.getItem(selectedPath);
         item?.select();
         item?.focus();
@@ -171,7 +159,7 @@ export const FileTree = memo(function FileTree({
 
 function renderFileTreeContextMenu(
   target: FileTreeDeleteTarget,
-  context: ContextMenuOpenContext,
+  context: { close(): void },
   actions: {
     create: (target: FileTreeDeleteTarget, kind: FileTreeCreateKind) => void;
     delete: (target: FileTreeDeleteTarget) => void;
@@ -182,49 +170,39 @@ function renderFileTreeContextMenu(
   menu.className = "local-md-file-tree-context-menu";
   menu.setAttribute("role", "menu");
   menu.tabIndex = -1;
-
-  menu.append(
-    renderContextMenuItem("New file", context, () => actions.create(target, "file")),
-    renderContextMenuItem("New folder", context, () => actions.create(target, "directory")),
-    renderContextMenuItem("Rename", context, () => actions.rename(target)),
-    renderContextMenuSeparator(),
-    renderContextMenuItem("Delete", context, () => actions.delete(target), { destructive: true }),
-  );
-  return menu;
-}
-
-function renderContextMenuItem(
-  label: string,
-  context: ContextMenuOpenContext,
-  onSelect: () => void,
-  options: { destructive?: boolean } = {},
-) {
-  let button = document.createElement("button");
-  button.className = "local-md-file-tree-context-menu-item";
-  if (options.destructive) button.dataset.destructive = "true";
-  button.setAttribute("role", "menuitem");
-  button.type = "button";
-  button.textContent = label;
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    context.close();
-    onSelect();
-  });
-  return button;
-}
-
-function renderContextMenuSeparator() {
+  let item = (label: string, onSelect: () => void, destructive = false) => {
+    let button = document.createElement("button");
+    button.className = "local-md-file-tree-context-menu-item";
+    if (destructive) button.dataset.destructive = "true";
+    button.setAttribute("role", "menuitem");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      context.close();
+      onSelect();
+    });
+    return button;
+  };
   let separator = document.createElement("div");
   separator.className = "local-md-file-tree-context-menu-separator";
   separator.setAttribute("role", "separator");
-  return separator;
+
+  menu.append(
+    item("New file", () => actions.create(target, "file")),
+    item("New folder", () => actions.create(target, "directory")),
+    item("Rename", () => actions.rename(target)),
+    separator,
+    item("Delete", () => actions.delete(target), true),
+  );
+  return menu;
 }
 
 function normalizeDeleteTarget(target: FileTreeDeleteTarget): FileTreeDeleteTarget {
   return {
     ...target,
-    path: target.kind == "directory" ? target.path.replace(/\/+$/g, "") : target.path,
+    path: target.kind == "directory" ? workspaceDirectoryPath(target.path) : target.path,
   };
 }
 
@@ -233,47 +211,58 @@ function resolveSelectionTarget(
   filesByPath: Map<string, MarkdownFileNode>,
 ): FileTreeDeleteTarget | null {
   let file = filesByPath.get(path);
-  if (file) {
-    return {
-      kind: "file",
-      name: file.name,
-      path: file.path,
-    };
-  }
+  if (file) return { kind: "file", name: file.name, path: file.path };
 
-  let directoryPath = path.replace(/\/+$/g, "");
+  let directoryPath = workspaceDirectoryPath(path);
   if (!directoryPath) return null;
 
-  return {
-    kind: "directory",
-    name: directoryPath.split("/").at(-1) ?? directoryPath,
-    path: directoryPath,
-  };
+  return { kind: "directory", name: basename(directoryPath), path: directoryPath };
 }
 
-function collectTreePaths(nodes: MarkdownTreeNode[]) {
-  let paths: string[] = [];
-  for (let node of nodes) {
-    if (node.kind == "directory") {
-      paths.push(`${node.path}/`);
-      paths.push(...collectTreePaths(node.children));
-    } else {
-      paths.push(node.path);
-    }
-  }
-  return paths;
+function collectTreePaths(nodes: MarkdownTreeNode[]): string[] {
+  return nodes.flatMap((node) =>
+    node.kind == "directory"
+      ? [join(node.path, "/"), ...collectTreePaths(node.children)]
+      : [node.path],
+  );
 }
 
-function collectFilesByPath(nodes: MarkdownTreeNode[]) {
-  let files = new Map<string, MarkdownFileNode>();
-  for (let node of nodes) {
-    if (node.kind == "directory") {
-      for (let [path, file] of collectFilesByPath(node.children)) {
-        files.set(path, file);
-      }
-    } else {
-      files.set(node.path, node);
-    }
-  }
-  return files;
+function syncTreePaths(model: TreesFileTree, previousPaths: string[], nextPaths: string[]) {
+  let previousPathSet = new Set(previousPaths);
+  let nextPathSet = new Set(nextPaths);
+  let removedDirectories = previousPaths.filter(
+    (path) => path.endsWith("/") && !nextPathSet.has(path),
+  );
+  let operations = [
+    ...previousPaths
+      .filter(
+        (path) =>
+          !nextPathSet.has(path) &&
+          !removedDirectories.some((directory) => isInside(path, directory)),
+      )
+      .map((path) => ({ path, recursive: path.endsWith("/"), type: "remove" as const })),
+    ...nextPaths
+      .filter((path) => !previousPathSet.has(path))
+      .map((path) => ({ path, type: "add" as const })),
+  ];
+
+  if (operations.length) model.batch(operations);
+}
+
+function treeDirectoryPathForFile(path: null | string) {
+  if (!path) return null;
+
+  let directoryPath = dirname(path);
+  return directoryPath == "." ? null : join(directoryPath, "/");
+}
+
+function workspaceDirectoryPath(path: string) {
+  let directoryPath = join(dirname(path), basename(path));
+  if (directoryPath == "." || directoryPath == "/") return "";
+  return directoryPath;
+}
+
+function isInside(path: string, directoryPath: string) {
+  let relativePath = relative(directoryPath, path);
+  return relativePath != "" && relativePath != ".." && !relativePath.startsWith("../");
 }
