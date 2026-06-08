@@ -61,8 +61,9 @@ Implemented on this branch:
 
 - Removed the incorrect automatic workspace relay behavior from
   `local-md-workspace`.
-- Kept private workspace editing local-first, with per-file Loro sidecars under
-  the owner's `.livemd/` directory.
+- Kept private workspace editing as plain Markdown reads/writes. Opening,
+  saving, creating, renaming, and deleting ordinary files no longer creates
+  Loro sidecars in the owner's local folder or Dropbox mirror.
 - Added owner-side `Share file` link creation for one selected Markdown file.
 - Created relay shares with random `shareId`, hashed guest/host secrets, and an
   initial Loro snapshot.
@@ -76,8 +77,8 @@ Implemented on this branch:
   write succeeds.
 - Added owner share lifecycle controls for `Rotate link` and `Stop sharing`.
   Rotation keeps the same `shareId`, replaces the guest capability, and writes
-  the new guest hash to both relay and owner sidecar metadata. Stop sharing
-  revokes the relay share and marks the owner sidecar revoked.
+  the new guest hash to both relay and browser owner metadata. Stop sharing
+  revokes the relay share and marks the browser owner metadata revoked.
 - Added reload-time owner share discovery for the selected file. If the host key
   still exists in browser storage, the owner app reconnects the host agent
   without exposing or restoring the old guest secret.
@@ -160,7 +161,7 @@ Not verified in this environment:
 - Do not require guests to have the same local folder or Dropbox mirror root.
 - Do not use Dropbox as the real-time collaboration transport.
 - Do not let the relay access the owner's local file system or Dropbox token.
-- Do not expose `.livemd/`, Loro, CRDTs, room IDs, or sidecar files in normal
+- Do not expose Loro, CRDTs, room IDs, or runtime storage internals in normal
   user-facing copy.
 - Do not imply that guest edits are saved to the owner's file until the owner
   client has acknowledged materialization.
@@ -185,7 +186,7 @@ Guest:
 - Edits only the shared file.
 - Sends and receives Loro updates through the relay.
 - Has no access to the owner's file tree, local folder handle, Dropbox token, or
-  hidden `.livemd/` files.
+  browser-local owner metadata.
 - Sees save status relative to the host, not relative to Dropbox or local disk.
 
 Relay:
@@ -216,18 +217,24 @@ sync, merge, and save them on reconnect.
 
 ### Storage Semantics
 
-The source `.md` remains readable and writable by normal tools. The owner's app
-keeps local collaboration sidecar state for recovery and fast startup:
+The source `.md` remains readable and writable by normal tools. Local folders
+and Dropbox mirrors store Markdown content only; they are not CRDT stores and
+must not receive high-frequency collaboration logs.
 
 ```text
-.livemd/
-  files/
-    <localFileId>.snapshot.b64
-    <localFileId>.updates.b64
-  shares/
-    <shareId>.json
-  tmp/
-    <txid>/
+owner browser IndexedDB:
+  documents[docId] -> Loro snapshot + materialization metadata
+  updates[docId, sequence] -> pending local Loro updates
+
+owner browser localStorage:
+  share-record:<shareId> -> non-secret owner share metadata
+  share-host-secret:<shareId> -> host capability for this browser only
+
+relay Durable Object storage:
+  share record
+  latest Loro snapshot
+  bounded update log
+  short-lived authenticated sessions
 ```
 
 `localFileId` is an owner-local stable identity for the selected file. It is not
@@ -434,7 +441,8 @@ type GuestSharedFileState = {
 
 ### Relay Worker
 
-The existing `apps/collab-editor` Durable Object design is the right reference:
+The dedicated `apps/grove-relay` Durable Object design is derived from the
+existing `apps/collab-editor` transport, but Grove owns a separate Worker app:
 
 - One room ID in the URL.
 - One `LoroDoc` in a Durable Object.
@@ -477,7 +485,8 @@ The room stores:
 - Active socket attachments with role and client ID.
 - Last host save acknowledgement.
 
-Wire messages can reuse the `apps/collab-editor` frame format:
+Wire messages use the Grove relay frame format derived from the original
+`apps/collab-editor` frame format:
 
 ```ts
 const WireKind = {
@@ -495,7 +504,7 @@ const WireKind = {
 The owner client sends `HostSaveAck` only after:
 
 1. It has imported the relay state.
-2. It has persisted sidecar state.
+2. It has persisted browser-local collaboration state.
 3. It has written the materialized Markdown to the owner's local folder or
    Dropbox mirror.
 4. It has updated the local materialized hash.
@@ -537,19 +546,17 @@ Keep, after review:
 
 - LiveMD + Loro editor binding.
 - Per-file Loro document runtime.
-- Owner-side `.livemd/files/<localFileId>` snapshots/update logs.
+- Owner-side browser IndexedDB snapshots/update logs.
 - Owner-side materialization back to `.md`.
 - External edit detection with conflict copy.
-- File System Access sidecar primitives.
-- Dropbox sidecar primitives and transaction-style writes.
-- Tests for sidecar read/write, Dropbox partial-write recovery, materialization,
-  and external edit conflicts.
+- Tests for browser CRDT persistence, materialization, and external edit
+  conflicts.
 
 Reconsider:
 
-- Workspace manifest. It is not needed for guest collaboration. It may still be
-  useful as an owner-local file identity index, but it should not be relayed or
-  treated as a shared workspace document.
+- Workspace manifest. Removed for the current architecture; deterministic
+  browser-local document identity is sufficient for owner runtime state, and
+  relay share identity is independent of paths.
 
 ## Build The Correct Implementation
 
@@ -562,7 +569,7 @@ Goal: remove misleading behavior before building the new model.
 - Remove peer count/status from private workspace mode unless an explicit file
   share is active.
 - Update tests that assumed `backend.id`-derived remote rooms.
-- Keep local sidecar and per-file Loro behavior behind private editing.
+- Keep per-file Loro behavior behind explicit file sharing.
 - Ensure `vp check --fix` and `vp test` pass.
 
 Acceptance:
@@ -577,7 +584,7 @@ Goal: make one selected file a Loro-backed owner document with reliable local
 recovery.
 
 - Define an owner-local `localFileId` mapping for selected files.
-- Persist per-file snapshots/update logs under `.livemd/files/`.
+- Persist per-file snapshots/update logs in browser IndexedDB.
 - Materialize Loro text back to the selected `.md`.
 - Keep the current debounced save behavior, but make CRDT persistence happen
   before materialization.
@@ -585,9 +592,10 @@ recovery.
 
 Acceptance:
 
-- Reloading the owner workspace restores from Loro sidecar.
+- Reloading the owner browser restores active shared-file runtime state from
+  browser storage.
 - Editing through another tool creates safe import or conflict copy.
-- Dropbox writes use transaction-style sidecar persistence.
+- Dropbox writes only materialized Markdown files.
 
 ### Phase 2: Share Link Creation
 
@@ -648,7 +656,7 @@ Goal: owner client becomes the persistence agent for the shared file.
 
 - When the owner has a shared file open, connect as host.
 - Import remote Loro updates.
-- Persist sidecar state.
+- Persist browser-local collaboration state.
 - Materialize to the owner's local folder or Dropbox mirror.
 - Send `HostSaveAck` after successful materialization.
 - If the owner is not viewing the file, decide whether to connect a background
@@ -711,7 +719,7 @@ Automated tests:
 - Guest cannot perform host actions.
 - WebSocket import/export converges between owner and guest.
 - HostSaveAck is sent only after materialization.
-- Dropbox sidecar transaction recovery still works.
+- Dropbox writes only the materialized Markdown file.
 - External edit conflict flow preserves both versions.
 
 Manual smoke:
@@ -720,7 +728,7 @@ Manual smoke:
 VITE_DROPBOX_APP_KEY=smoke-dropbox-app vp run local-md-workspace#dev
 ```
 
-`local-md-workspace#dev` starts the local shared-file relay at
+`local-md-workspace#dev` starts the local `apps/grove-relay` shared-file relay at
 `http://127.0.0.1:8787` and injects that origin into the frontend. Use
 `vp run local-md-workspace#dev -- --relay-origin <deployed relay origin>` when
 intentionally testing against a deployed relay instead of the local Worker.
@@ -759,6 +767,5 @@ Scenarios:
   after an explicit owner setting.
 - Whether host agents should run for active shares even when the owner is
   viewing a different file.
-- Whether `hostSecret` belongs in browser storage only or also in encrypted
-  `.livemd/shares/` metadata.
+- Whether host agents should support a more explicit multi-device handoff model.
 - Whether to later add read-only links and named collaborators.

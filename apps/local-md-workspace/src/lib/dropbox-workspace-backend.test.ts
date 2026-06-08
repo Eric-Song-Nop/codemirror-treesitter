@@ -114,7 +114,7 @@ describe("Dropbox workspace backend", () => {
     });
   });
 
-  it("stores sidecar bytes as base64 text files", async () => {
+  it("stores bytes as base64 text files", async () => {
     let files = new Map<string, string>();
     let backend = createDropboxWorkspaceBackend({
       createOperator: async () => fakeMapOperator(files),
@@ -122,70 +122,35 @@ describe("Dropbox workspace backend", () => {
       refreshAccessToken: async () => token("token"),
     });
 
-    await backend.writeBytes!(".livemd/docs/doc.snapshot.b64", new Uint8Array([1, 2, 3, 255]));
+    await backend.writeBytes!("state/doc.snapshot.b64", new Uint8Array([1, 2, 3, 255]));
 
-    expect(files.get(".livemd/docs/doc.snapshot.b64")).toBe("AQID/w==");
-    await expect(backend.readBytes!(".livemd/docs/doc.snapshot.b64")).resolves.toEqual(
+    expect(files.get("state/doc.snapshot.b64")).toBe("AQID/w==");
+    await expect(backend.readBytes!("state/doc.snapshot.b64")).resolves.toEqual(
       new Uint8Array([1, 2, 3, 255]),
     );
-    await expect(backend.stat!(".livemd/missing.snapshot.b64")).resolves.toMatchObject({
+    await expect(backend.stat!("state/missing.snapshot.b64")).resolves.toMatchObject({
       exists: false,
-      path: ".livemd/missing.snapshot.b64",
+      path: "state/missing.snapshot.b64",
     });
     expect([...files.keys()].filter((path) => path.includes(".next."))).toEqual([]);
-    expect([...files.keys()].filter((path) => path.startsWith(".livemd/tmp/"))).toEqual([]);
   });
 
-  it("commits sidecar writes through a tmp file and prepared next file", async () => {
-    let files = new Map<string, string>();
-    let operations: string[] = [];
+  it("treats Dropbox 409 path-not-found responses as missing entries", async () => {
     let backend = createDropboxWorkspaceBackend({
-      createOperator: async () => fakeMapOperator(files, operations),
+      createOperator: async () =>
+        fakeOperator({
+          async stat() {
+            throw new Error("Dropbox API error 409 Conflict: path/not_found");
+          },
+        }),
       getAccessToken: async () => token("token"),
       refreshAccessToken: async () => token("token"),
     });
 
-    await backend.writeBytes!(".livemd/workspace.snapshot.b64", new Uint8Array([9, 8, 7]));
-
-    expect(files.get(".livemd/workspace.snapshot.b64")).toBe("CQgH");
-    expect(operations.some((operation) => /^write \.livemd\/tmp\/[^/]+\//.test(operation))).toBe(
-      true,
-    );
-    expect(operations).toContain(
-      "rename .livemd/workspace.next.snapshot.b64 .livemd/workspace.snapshot.b64",
-    );
-  });
-
-  it("recovers a prepared sidecar next file before reading", async () => {
-    let files = new Map<string, string>([[".livemd/docs/doc.next.snapshot.b64", "AQID"]]);
-    let backend = createDropboxWorkspaceBackend({
-      createOperator: async () => fakeMapOperator(files),
-      getAccessToken: async () => token("token"),
-      refreshAccessToken: async () => token("token"),
+    await expect(backend.stat!("missing.md")).resolves.toMatchObject({
+      exists: false,
+      path: "missing.md",
     });
-
-    await expect(backend.readBytes!(".livemd/docs/doc.snapshot.b64")).resolves.toEqual(
-      new Uint8Array([1, 2, 3]),
-    );
-    expect(files.get(".livemd/docs/doc.snapshot.b64")).toBe("AQID");
-    expect(files.has(".livemd/docs/doc.next.snapshot.b64")).toBe(false);
-  });
-
-  it("deletes both final and prepared sidecar files", async () => {
-    let files = new Map<string, string>([
-      [".livemd/docs/doc.snapshot.b64", "AQID"],
-      [".livemd/docs/doc.next.snapshot.b64", "BAUG"],
-    ]);
-    let backend = createDropboxWorkspaceBackend({
-      createOperator: async () => fakeMapOperator(files),
-      getAccessToken: async () => token("token"),
-      refreshAccessToken: async () => token("token"),
-    });
-
-    await backend.deleteEntry!(".livemd/docs/doc.snapshot.b64");
-
-    expect(files.has(".livemd/docs/doc.snapshot.b64")).toBe(false);
-    expect(files.has(".livemd/docs/doc.next.snapshot.b64")).toBe(false);
   });
 
   it("creates missing parent directories before nested writes", async () => {

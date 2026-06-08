@@ -43,6 +43,21 @@ describe("workspace error messages", () => {
     );
   });
 
+  it("classifies unavailable Dropbox app folders and mirror paths", () => {
+    expect(
+      workspaceErrorMessage(new Error("OpenDAL Dropbox API error 409 Conflict: path/not_found")),
+    ).toBe(
+      "Dropbox app folder or mirror path is no longer available. Check the Dropbox app folder setting, then reconnect Dropbox mirror.",
+    );
+    expect(
+      workspaceErrorMessage(
+        new Error("POST https://api.dropboxapi.com/2/files/list_folder 409 Conflict"),
+      ),
+    ).toBe(
+      "Dropbox app folder or mirror path is no longer available. Check the Dropbox app folder setting, then reconnect Dropbox mirror.",
+    );
+  });
+
   it("classifies unsupported backend operations and preserves unknown errors", () => {
     expect(
       workspaceErrorMessage(

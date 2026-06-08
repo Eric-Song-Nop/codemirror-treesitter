@@ -15,8 +15,6 @@ import {
 } from "./workspace-backend.ts";
 
 const TOKEN_EXPIRY_SKEW_MS = 5 * 60 * 1000;
-const livemdDirectory = ".livemd";
-const livemdTmpDirectory = `${livemdDirectory}/tmp`;
 const generatedModuleUrl = new URL(
   "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser.js",
   import.meta.url,
@@ -96,58 +94,7 @@ export function createDropboxWorkspaceBackend(
   }
 
   async function writeQueuedText(path: string, value: string) {
-    if (isTransactionalSidecarPath(path)) {
-      await writeTransactionalSidecarText(path, value);
-      return;
-    }
-
     await writeText(path, value);
-  }
-
-  async function writeTransactionalSidecarText(path: string, value: string) {
-    await recoverTransactionalSidecarText(path);
-
-    let nextPath = nextSidecarPath(path);
-    let transactionDirectory = `${livemdTmpDirectory}/${createDropboxTransactionId()}`;
-    let tempPath = `${transactionDirectory}/${sidecarFileName(path)}`;
-
-    await createDirectory(transactionDirectory);
-    try {
-      await writeText(tempPath, value);
-      await deleteIfPresent(nextPath);
-      await renamePath(tempPath, nextPath);
-      await deleteIfPresent(path);
-      await renamePath(nextPath, path);
-    } catch (error) {
-      await deleteIfPresent(tempPath).catch(() => {});
-      throw error;
-    } finally {
-      await deleteIfPresent(transactionDirectory).catch(() => {});
-      forgetCreatedDirectory(transactionDirectory, createdDirectories);
-    }
-  }
-
-  async function recoverTransactionalSidecarText(path: string) {
-    let nextPath = nextSidecarPath(path);
-    if (!(await pathExists(nextPath))) return;
-
-    await deleteIfPresent(path);
-    try {
-      await renamePath(nextPath, path);
-    } catch (error) {
-      if (isDropboxNotFoundError(error) && (await pathExists(path))) return;
-      throw error;
-    }
-  }
-
-  async function readTransactionalSidecarText(path: string) {
-    await recoverTransactionalSidecarText(path);
-    return withDropboxRetry((operator) => operator.readText(path));
-  }
-
-  async function deleteTransactionalSidecarText(path: string) {
-    await deleteIfPresent(path);
-    await deleteIfPresent(nextSidecarPath(path));
   }
 
   async function renamePath(from: string, to: string) {
@@ -157,24 +104,6 @@ export function createDropboxWorkspaceBackend(
 
   async function deletePath(path: string) {
     await withDropboxRetry((operator) => operator.delete(normalizeDropboxDirectoryPath(path)));
-  }
-
-  async function deleteIfPresent(path: string) {
-    try {
-      await deletePath(path);
-    } catch (error) {
-      if (!isDropboxNotFoundError(error)) throw error;
-    }
-  }
-
-  async function pathExists(path: string) {
-    try {
-      await withDropboxRetry((operator) => operator.stat(path));
-      return true;
-    } catch (error) {
-      if (isDropboxNotFoundError(error)) return false;
-      throw error;
-    }
   }
 
   async function ensureParentDirectory(path: string) {
@@ -268,11 +197,6 @@ export function createDropboxWorkspaceBackend(
       return nextPath;
     },
     async deleteEntry(path, options) {
-      if (isTransactionalSidecarPath(path)) {
-        await deleteTransactionalSidecarText(path);
-        return;
-      }
-
       await deletePath(path);
       if (options?.recursive)
         forgetCreatedDirectory(normalizeDropboxDirectoryPath(path), createdDirectories);
@@ -292,16 +216,13 @@ export function createDropboxWorkspaceBackend(
       return withDropboxRetry((operator) => operator.list(prefix));
     },
     async readBytes(path) {
-      let value = isTransactionalSidecarPath(path)
-        ? await readTransactionalSidecarText(path)
-        : await withDropboxRetry((operator) => operator.readText(path));
+      let value = await withDropboxRetry((operator) => operator.readText(path));
       return decodeBase64(value);
     },
     async readFile(path) {
       return withDropboxRetry((operator) => operator.readText(path));
     },
     async readTextFile(path) {
-      if (isTransactionalSidecarPath(path)) return readTransactionalSidecarText(path);
       return withDropboxRetry((operator) => operator.readText(path));
     },
     async readTree() {
@@ -336,7 +257,6 @@ export function createDropboxWorkspaceBackend(
     },
     async stat(path) {
       try {
-        if (isTransactionalSidecarPath(path)) await recoverTransactionalSidecarText(path);
         let entry = await withDropboxRetry((operator) => operator.stat(path));
         return { ...entry, exists: true };
       } catch (error) {
@@ -415,35 +335,6 @@ function parentDirectory(path: string) {
   return index == -1 ? "" : path.slice(0, index);
 }
 
-function isTransactionalSidecarPath(path: string) {
-  let normalized = normalizeDropboxDirectoryPath(path);
-  return (
-    normalized.startsWith(`${livemdDirectory}/`) &&
-    !normalized.startsWith(`${livemdTmpDirectory}/`) &&
-    (normalized.endsWith(".snapshot.b64") ||
-      normalized.endsWith(".updates.b64") ||
-      normalized.endsWith(".update.b64")) &&
-    !normalized.includes(".next.")
-  );
-}
-
-function nextSidecarPath(path: string) {
-  if (path.endsWith(".snapshot.b64")) return path.replace(/\.snapshot\.b64$/, ".next.snapshot.b64");
-  if (path.endsWith(".updates.b64")) return path.replace(/\.updates\.b64$/, ".next.updates.b64");
-  if (path.endsWith(".update.b64")) return path.replace(/\.update\.b64$/, ".next.update.b64");
-  return `${path}.next`;
-}
-
-function sidecarFileName(path: string) {
-  let normalized = normalizeDropboxDirectoryPath(path);
-  let index = normalized.lastIndexOf("/");
-  return index == -1 ? normalized : normalized.slice(index + 1);
-}
-
-function createDropboxTransactionId() {
-  return crypto.randomUUID();
-}
-
 function normalizeDropboxDirectoryPath(path: string) {
   let normalized = path
     .trim()
@@ -459,7 +350,11 @@ function isDropboxExpiredTokenError(error: unknown) {
 
 function isDropboxNotFoundError(error: unknown) {
   let message = error instanceof Error ? error.message : String(error);
-  return /not.?found|not_found|404/i.test(message);
+  return (
+    /not.?found|not_found|404/i.test(message) ||
+    /path[/_. -]?not[/_. -]?found/i.test(message) ||
+    /lookup[/_. -]?not[/_. -]?found/i.test(message)
+  );
 }
 
 function decodeBase64(value: string) {

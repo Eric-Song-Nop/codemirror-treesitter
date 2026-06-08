@@ -21,9 +21,8 @@ import {
   type ShareExpirationOption,
 } from "./share-identity.ts";
 
-const livemdDirectory = ".livemd";
-const sharesDirectory = `${livemdDirectory}/shares`;
-const schemaVersion = 1;
+const shareRecordStoragePrefix = "local-md-workspace:share-record:";
+const schemaVersion = 2;
 
 export type OwnerShareRecord = {
   backendKind: "local" | "opendal-dropbox";
@@ -38,8 +37,9 @@ export type OwnerShareRecord = {
   materializedHash: string;
   path: string;
   revokedAt?: number;
-  schemaVersion: 1;
+  schemaVersion: 2;
   shareId: string;
+  workspaceId: string;
 };
 
 export type CreateOwnerShareOptions = {
@@ -86,9 +86,11 @@ export type RevokeOwnerShareOptions = {
   ) => Promise<RelayShareRevokeResult>;
 };
 
-type ShareStorageBackend = WorkspaceBackend &
-  Required<Pick<WorkspaceBackend, "createDirectory" | "readTextFile" | "writeTextFile">>;
-type ShareDiscoveryBackend = ShareStorageBackend & Required<Pick<WorkspaceBackend, "listEntries">>;
+type ShareRecordStore = Pick<Storage, "getItem" | "key" | "removeItem" | "setItem"> & {
+  readonly length: number;
+};
+
+let memoryShareRecords = new Map<string, string>();
 
 export async function createOwnerShare({
   backend,
@@ -101,7 +103,6 @@ export async function createOwnerShare({
   now = Date.now(),
   relayOrigin,
 }: CreateOwnerShareOptions): Promise<CreatedOwnerShare> {
-  ensureShareStorageBackend(backend);
   if (backend.kind != "local" && backend.kind != "opendal-dropbox") {
     throw new Error("This workspace cannot host shared files.");
   }
@@ -121,6 +122,7 @@ export async function createOwnerShare({
     path: file.path,
     schemaVersion,
     shareId: credentials.shareId,
+    workspaceId: workspaceShareNamespace(backend),
   };
 
   await createRelayShare(relayOrigin, {
@@ -149,7 +151,6 @@ export async function rotateOwnerShare({
   relayOrigin,
   rotateRelayShare = defaultRotateRelayShare,
 }: RotateOwnerShareOptions): Promise<CreatedOwnerShare> {
-  ensureShareStorageBackend(backend);
   if (record.revokedAt != null) throw new Error("This file is no longer shared.");
 
   let credentials = createShareCredentials();
@@ -184,7 +185,6 @@ export async function revokeOwnerShare({
   relayOrigin,
   revokeRelayShare = defaultRevokeRelayShare,
 }: RevokeOwnerShareOptions) {
-  ensureShareStorageBackend(backend);
   let result = await revokeRelayShare(relayOrigin, record.shareId, hostSecret);
   if (result.shareId != record.shareId) throw new Error("Relay returned the wrong share.");
 
@@ -196,32 +196,28 @@ export async function revokeOwnerShare({
   return nextRecord;
 }
 
-export async function readOwnerShareRecord(backend: WorkspaceBackend, shareId: string) {
-  ensureShareStorageBackend(backend);
-  let raw = await backend.readTextFile(ownerShareRecordPath(shareId));
+export async function readOwnerShareRecord(_backend: WorkspaceBackend, shareId: string) {
+  let raw = shareRecordStore().getItem(ownerShareRecordPath(shareId));
+  if (!raw) throw new Error("Shared file metadata is not available in this browser.");
   return parseOwnerShareRecord(JSON.parse(raw));
 }
 
 export async function findOwnerShareRecordForPath(backend: WorkspaceBackend, path: string) {
-  ensureShareDiscoveryBackend(backend);
-
-  let entries: Awaited<ReturnType<ShareDiscoveryBackend["listEntries"]>>;
-  try {
-    entries = await backend.listEntries(sharesDirectory);
-  } catch (error) {
-    if (isNotFoundError(error)) return null;
-    throw error;
-  }
-
+  let store = shareRecordStore();
+  let workspaceId = workspaceShareNamespace(backend);
   let records: OwnerShareRecord[] = [];
-  for (let entry of entries) {
-    if (!entry.isFile || !entry.path.endsWith(".json")) continue;
+  for (let index = 0; index < store.length; index++) {
+    let key = store.key(index);
+    if (!key?.startsWith(shareRecordStoragePrefix)) continue;
     try {
-      let raw = await backend.readTextFile(entry.path);
+      let raw = store.getItem(key);
+      if (!raw) continue;
       let record = parseOwnerShareRecord(JSON.parse(raw));
-      if (record.path == path && record.revokedAt == null) records.push(record);
+      if (record.workspaceId == workspaceId && record.path == path && record.revokedAt == null) {
+        records.push(record);
+      }
     } catch {
-      // Ignore corrupt share records so one bad sidecar does not block the file.
+      // Ignore corrupt browser records so one bad entry does not block the file.
     }
   }
 
@@ -229,17 +225,12 @@ export async function findOwnerShareRecordForPath(backend: WorkspaceBackend, pat
   return records[0] ?? null;
 }
 
-export async function writeOwnerShareRecord(backend: WorkspaceBackend, record: OwnerShareRecord) {
-  ensureShareStorageBackend(backend);
-  await backend.createDirectory(sharesDirectory);
-  await backend.writeTextFile(
-    ownerShareRecordPath(record.shareId),
-    JSON.stringify(record, null, 2),
-  );
+export async function writeOwnerShareRecord(_backend: WorkspaceBackend, record: OwnerShareRecord) {
+  shareRecordStore().setItem(ownerShareRecordPath(record.shareId), JSON.stringify(record));
 }
 
 export function ownerShareRecordPath(shareId: string) {
-  return `${sharesDirectory}/${shareId}.json`;
+  return `${shareRecordStoragePrefix}${shareId}`;
 }
 
 export function hostSecretStorageKey(shareId: string) {
@@ -269,6 +260,7 @@ function parseOwnerShareRecord(value: unknown): OwnerShareRecord {
     typeof record.shareId != "string" ||
     typeof record.localFileId != "string" ||
     typeof record.path != "string" ||
+    typeof record.workspaceId != "string" ||
     typeof record.displayName != "string" ||
     (record.backendKind != "local" && record.backendKind != "opendal-dropbox") ||
     typeof record.createdAt != "number" ||
@@ -299,26 +291,40 @@ function parseOwnerShareRecord(value: unknown): OwnerShareRecord {
     ...(typeof record.revokedAt == "number" ? { revokedAt: record.revokedAt } : {}),
     schemaVersion,
     shareId: record.shareId,
+    workspaceId: record.workspaceId,
   };
 }
 
-function ensureShareStorageBackend(
-  backend: WorkspaceBackend,
-): asserts backend is ShareStorageBackend {
-  if (!backend.createDirectory || !backend.readTextFile || !backend.writeTextFile) {
-    throw new Error("This workspace backend does not support shared file metadata.");
-  }
+export function resetOwnerShareRecordStoreForTests() {
+  memoryShareRecords = new Map();
 }
 
-function ensureShareDiscoveryBackend(
-  backend: WorkspaceBackend,
-): asserts backend is ShareDiscoveryBackend {
-  ensureShareStorageBackend(backend);
-  if (!backend.listEntries) {
-    throw new Error("This workspace backend does not support shared file discovery.");
-  }
+function workspaceShareNamespace(backend: WorkspaceBackend) {
+  return `${backend.kind}:${backend.id}`;
 }
 
-function isNotFoundError(error: unknown) {
-  return error instanceof DOMException && error.name == "NotFoundError";
+function shareRecordStore(): ShareRecordStore {
+  try {
+    if (globalThis.localStorage) return globalThis.localStorage;
+  } catch {}
+
+  return memoryShareRecordStore;
 }
+
+const memoryShareRecordStore: ShareRecordStore = {
+  get length() {
+    return memoryShareRecords.size;
+  },
+  getItem(key) {
+    return memoryShareRecords.get(key) ?? null;
+  },
+  key(index) {
+    return [...memoryShareRecords.keys()][index] ?? null;
+  },
+  removeItem(key) {
+    memoryShareRecords.delete(key);
+  },
+  setItem(key, value) {
+    memoryShareRecords.set(key, value);
+  },
+};

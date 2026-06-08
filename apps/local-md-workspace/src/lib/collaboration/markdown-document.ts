@@ -3,17 +3,15 @@ import type { Extension } from "@codemirror/state";
 import { LoroDoc, UndoManager } from "loro-crdt";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
 import {
-  ensureManifestFile,
-  loadWorkspaceManifest,
-  updateManifestMaterialization,
-  type WorkspaceManifestRecord,
-} from "./workspace-manifest.ts";
+  appendBrowserCollabUpdates,
+  clearBrowserCollabUpdates,
+  loadBrowserCollabDocument,
+  writeBrowserCollabSnapshot,
+  type BrowserCollabDocumentMetadata,
+} from "./collab-browser-store.ts";
 
-const livemdDirectory = ".livemd";
-const docsDirectory = `${livemdDirectory}/docs`;
 const textKey = "markdown";
 const maxDocumentUpdateLogBytes = 64 * 1024;
-const updateSegmentFilePattern = /^(\d{6})\.update\.b64$/;
 
 export type CollabDocumentState = {
   cleanValue: string;
@@ -22,7 +20,7 @@ export type CollabDocumentState = {
   dispose: () => void;
   externalEdit?: CollabExternalEditResolution;
   extensions: Extension[];
-  manifestCreated: boolean;
+  metadata: BrowserCollabDocumentMetadata;
   path: string;
   pendingUpdates: Uint8Array[];
   persistence: Promise<void>;
@@ -75,42 +73,35 @@ export async function openMarkdownCollabDocument(
   path: string,
   options: OpenMarkdownCollabDocumentOptions = {},
 ): Promise<CollabDocumentState> {
-  ensureCollabBackend(backend);
-
-  let { created, record } = await ensureManifestFile(backend, path);
-
+  let docId = await createDocumentId(backend, path);
+  let workspaceId = workspaceDocumentNamespace(backend);
+  let stored = await loadBrowserCollabDocument(docId);
   let doc = new LoroDoc();
-  let snapshot = await readDocumentSnapshot(backend, record.docId);
-  let updateLog = await readDocumentUpdateLog(backend, record.docId);
-  let updates = updateLog.updates;
   let externalEdit: CollabExternalEditResolution | undefined;
+  let metadata: BrowserCollabDocumentMetadata =
+    stored.metadata && stored.metadata.path == path && stored.metadata.workspaceId == workspaceId
+      ? stored.metadata
+      : { docId, path, workspaceId };
 
-  if (snapshot) {
-    doc.import(snapshot);
-    if (updates.length) doc.importBatch(updates);
+  if (stored.snapshot) {
+    doc.import(stored.snapshot);
+    if (stored.updates.length) doc.importBatch(stored.updates);
     if (options.reconcileExternalEdits ?? true) {
-      externalEdit = await reconcileExternalMarkdownEdit(backend, record, doc);
-    }
-    if (updateLog.hasLegacyLog) {
-      await compactDocumentSnapshot(backend, record.docId, doc);
+      let result = await reconcileExternalMarkdownEdit(backend, metadata, doc);
+      externalEdit = result.externalEdit;
+      metadata = result.metadata;
     }
   } else {
-    if (updates.length) doc.importBatch(updates);
-    if (!created && !updates.length && record.materializedHash) {
-      throw new Error(
-        `Collaboration state for ${path} is not available yet. If this is a Dropbox mirror, wait for sync to finish and retry.`,
-      );
-    }
-
     let initialValue = await backend.readFile(path);
     let text = doc.getText(textKey);
-    if (!text.toString() && initialValue) text.insert(0, initialValue);
-    if (initialValue || updates.length) doc.commit();
-    await compactDocumentSnapshot(backend, record.docId, doc);
-    await updateManifestMaterialization(backend, record.docId, {
+    if (initialValue) text.insert(0, initialValue);
+    if (initialValue) doc.commit();
+    metadata = {
+      ...metadata,
       materializedAt: Date.now(),
       materializedHash: hashMarkdownText(initialValue),
-    });
+    };
+    await compactDocumentSnapshot(metadata, doc);
   }
 
   let undoManager = new UndoManager(doc, {});
@@ -123,11 +114,11 @@ export async function openMarkdownCollabDocument(
   return {
     cleanValue: value,
     doc,
-    docId: record.docId,
+    docId,
     dispose: unsubscribeLocalUpdates,
     externalEdit,
     extensions: [liveMdLoroCollaboration({ doc, undoManager, text: textKey })],
-    manifestCreated: created,
+    metadata,
     path,
     pendingUpdates,
     persistence: Promise.resolve(),
@@ -141,27 +132,25 @@ export function getCollabDocumentValue(state: CollabDocumentState) {
 }
 
 export async function saveCollabDocumentSnapshot(
-  backend: WorkspaceBackend,
+  _backend: WorkspaceBackend,
   state: CollabDocumentState,
 ) {
-  ensureCollabBackend(backend);
   await enqueueDocumentPersistence(state, async () => {
     let updates = state.pendingUpdates.splice(0);
     try {
-      await writeDocumentSnapshot(backend, state.docId, state.doc);
+      await writeBrowserCollabSnapshot(state.metadata, state.doc.export({ mode: "snapshot" }));
     } catch (error) {
       state.pendingUpdates.unshift(...updates);
       throw error;
     }
-    await deleteDocumentUpdateLog(backend, state.docId);
+    await clearBrowserCollabUpdates(state.docId);
   });
 }
 
 export async function savePendingCollabDocumentUpdates(
-  backend: WorkspaceBackend,
+  _backend: WorkspaceBackend,
   state: CollabDocumentState,
 ) {
-  ensureCollabBackend(backend);
   if (!state.pendingUpdates.length) return;
 
   await enqueueDocumentPersistence(state, async () => {
@@ -170,14 +159,14 @@ export async function savePendingCollabDocumentUpdates(
     let updates = state.pendingUpdates.splice(0);
     let updateLogBytes: number;
     try {
-      updateLogBytes = await appendDocumentUpdates(backend, state.docId, updates);
+      updateLogBytes = await appendBrowserCollabUpdates(state.docId, updates);
     } catch (error) {
       state.pendingUpdates.unshift(...updates);
       throw error;
     }
 
     if (updateLogBytes >= maxDocumentUpdateLogBytes) {
-      await compactDocumentSnapshot(backend, state.docId, state.doc);
+      await compactDocumentSnapshot(state.metadata, state.doc);
     }
   });
 }
@@ -201,10 +190,12 @@ export async function materializeCollabDocument(
 
   await saveCollabDocumentSnapshot(backend, state);
   await backend.writeFile(state.path, value);
-  await updateManifestMaterialization(backend, state.docId, {
+  state.metadata = {
+    ...state.metadata,
     materializedAt: Date.now(),
     materializedHash: hashMarkdownText(value),
-  });
+  };
+  await writeBrowserCollabSnapshot(state.metadata, state.doc.export({ mode: "snapshot" }));
   state.cleanValue = value;
   state.externalEdit = externalEdit;
   return { externalEdit };
@@ -239,85 +230,67 @@ export async function keepSourceAndWriteSharedConflictCopy(
 
   replaceMarkdownText(state.doc, sourceValue);
   await saveCollabDocumentSnapshot(backend, state);
-  await updateManifestMaterialization(backend, state.docId, {
+  state.metadata = {
+    ...state.metadata,
     materializedAt: Date.now(),
     materializedHash: hashMarkdownText(sourceValue),
-  });
+  };
+  await writeBrowserCollabSnapshot(state.metadata, state.doc.export({ mode: "snapshot" }));
   state.cleanValue = sourceValue;
   state.externalEdit = externalEdit;
   state.value = sourceValue;
   return { externalEdit, sourceValue };
 }
 
-function ensureCollabBackend(
-  backend: WorkspaceBackend,
-): asserts backend is WorkspaceBackend &
-  Required<
-    Pick<
-      WorkspaceBackend,
-      | "createDirectory"
-      | "deleteEntry"
-      | "listEntries"
-      | "readBytes"
-      | "readTextFile"
-      | "writeBytes"
-      | "writeTextFile"
-    >
-  > {
-  if (
-    !backend.createDirectory ||
-    !backend.deleteEntry ||
-    !backend.listEntries ||
-    !backend.readBytes ||
-    !backend.readTextFile ||
-    !backend.writeBytes ||
-    !backend.writeTextFile
-  ) {
-    throw new Error("This workspace backend does not support local-first collaboration storage.");
-  }
-}
-
 async function reconcileExternalMarkdownEdit(
   backend: WorkspaceBackend,
-  record: WorkspaceManifestRecord,
+  metadata: BrowserCollabDocumentMetadata,
   doc: LoroDoc,
-): Promise<CollabExternalEditResolution | undefined> {
-  if (!record.materializedHash) {
-    let visibleValue = await backend.readFile(record.path);
+): Promise<{
+  externalEdit?: CollabExternalEditResolution;
+  metadata: BrowserCollabDocumentMetadata;
+}> {
+  if (!metadata.materializedHash) {
+    let visibleValue = await backend.readFile(metadata.path);
     if (hashMarkdownText(visibleValue) == hashMarkdownText(doc.getText(textKey).toString())) {
-      await updateManifestMaterialization(backend, record.docId, {
+      let nextMetadata = {
+        ...metadata,
         materializedAt: Date.now(),
         materializedHash: hashMarkdownText(visibleValue),
-      });
+      };
+      await writeBrowserCollabSnapshot(nextMetadata, doc.export({ mode: "snapshot" }));
+      return { metadata: nextMetadata };
     }
-    return undefined;
+    return { metadata };
   }
 
-  let visibleValue = await backend.readFile(record.path);
+  let visibleValue = await backend.readFile(metadata.path);
   let visibleHash = hashMarkdownText(visibleValue);
-  if (visibleHash == record.materializedHash) return undefined;
+  if (visibleHash == metadata.materializedHash) return { metadata };
 
   let docValue = doc.getText(textKey).toString();
-  if (hashMarkdownText(docValue) == record.materializedHash) {
+  if (hashMarkdownText(docValue) == metadata.materializedHash) {
     replaceMarkdownText(doc, visibleValue);
-    await compactDocumentSnapshot(backend, record.docId, doc);
-    await updateManifestMaterialization(backend, record.docId, {
+    let nextMetadata = {
+      ...metadata,
       materializedAt: Date.now(),
       materializedHash: visibleHash,
-    });
-    return { kind: "imported", path: record.path };
+    };
+    await compactDocumentSnapshot(nextMetadata, doc);
+    return {
+      externalEdit: { kind: "imported", path: metadata.path },
+      metadata: nextMetadata,
+    };
   }
 
   return {
-    kind: "conflict-copy",
-    path: await writeExternalConflictCopy(backend, record.path, visibleValue),
-    sourcePath: record.path,
+    externalEdit: {
+      kind: "conflict-copy",
+      path: await writeExternalConflictCopy(backend, metadata.path, visibleValue),
+      sourcePath: metadata.path,
+    },
+    metadata,
   };
-}
-
-async function loadManifestRecordByDocId(backend: WorkspaceBackend, docId: string) {
-  let manifest = await loadWorkspaceManifest(backend);
-  return manifest.records.find((record) => record.docId == docId && record.deletedAt == null);
 }
 
 async function findMaterializationConflict(
@@ -325,12 +298,12 @@ async function findMaterializationConflict(
   state: CollabDocumentState,
   value = getCollabDocumentValue(state),
 ): Promise<MaterializationConflictDetails | null> {
-  let record = await loadManifestRecordByDocId(backend, state.docId);
-  if (!record?.materializedHash) return null;
+  let materializedHash = state.metadata.materializedHash;
+  if (!materializedHash) return null;
 
   let visibleValue = await backend.readFile(state.path);
   let externalHash = hashMarkdownText(visibleValue);
-  if (externalHash == record.materializedHash || visibleValue == value) return null;
+  if (externalHash == materializedHash || visibleValue == value) return null;
 
   return {
     externalHash,
@@ -348,185 +321,9 @@ function enqueueDocumentPersistence(state: CollabDocumentState, operation: () =>
   return task;
 }
 
-async function readDocumentSnapshot(backend: WorkspaceBackend, docId: string) {
-  let path = documentSnapshotPath(docId);
-  try {
-    return (await backend.readBytes?.(path)) ?? null;
-  } catch (error) {
-    if (isMissingEntryError(error)) return null;
-    throw error;
-  }
-}
-
-async function readDocumentUpdateLog(backend: WorkspaceBackend, docId: string) {
-  let updates = await readDocumentUpdateSegments(backend, docId);
-  let legacyUpdates = await readLegacyDocumentUpdateLog(backend, docId);
-  return {
-    hasLegacyLog: legacyUpdates != null,
-    updates: [...(legacyUpdates ?? []), ...updates],
-  };
-}
-
-async function readLegacyDocumentUpdateLog(backend: WorkspaceBackend, docId: string) {
-  let path = legacyDocumentUpdateLogPath(docId);
-  try {
-    let bytes = (await backend.readBytes?.(path)) ?? null;
-    return bytes ? decodeUpdateLog(bytes) : [];
-  } catch (error) {
-    if (isMissingEntryError(error)) return null;
-    throw error;
-  }
-}
-
-async function readDocumentUpdateSegments(backend: WorkspaceBackend, docId: string) {
-  let updates: Uint8Array[] = [];
-  for (let segment of await listDocumentUpdateSegments(backend, docId)) {
-    let bytes = await backend.readBytes?.(segment.path);
-    if (bytes) updates.push(...decodeUpdateLog(bytes));
-  }
-  return updates;
-}
-
-async function writeDocumentSnapshot(backend: WorkspaceBackend, docId: string, doc: LoroDoc) {
-  await backend.createDirectory?.(docsDirectory);
-  await backend.writeBytes?.(documentSnapshotPath(docId), doc.export({ mode: "snapshot" }));
-}
-
-async function compactDocumentSnapshot(backend: WorkspaceBackend, docId: string, doc: LoroDoc) {
-  await writeDocumentSnapshot(backend, docId, doc);
-  await deleteDocumentUpdateLog(backend, docId);
-}
-
-async function appendDocumentUpdates(
-  backend: WorkspaceBackend,
-  docId: string,
-  updates: Uint8Array[],
-) {
-  let encoded = encodeUpdateLog(updates);
-  await backend.createDirectory?.(docsDirectory);
-  await backend.createDirectory?.(documentUpdateLogDirectoryPath(docId));
-  let nextSequence = (await lastDocumentUpdateSegmentSequence(backend, docId)) + 1;
-  await backend.writeBytes?.(documentUpdateSegmentPath(docId, nextSequence), encoded);
-  return documentUpdateLogByteLength(backend, docId);
-}
-
-async function deleteDocumentUpdateLog(backend: WorkspaceBackend, docId: string) {
-  await deleteIfPresent(backend, legacyDocumentUpdateLogPath(docId));
-  await deleteIfPresent(backend, documentUpdateLogDirectoryPath(docId), { recursive: true });
-}
-
-function documentSnapshotPath(docId: string) {
-  return `${docsDirectory}/${docId}.snapshot.b64`;
-}
-
-function legacyDocumentUpdateLogPath(docId: string) {
-  return `${docsDirectory}/${docId}.updates.b64`;
-}
-
-function documentUpdateLogDirectoryPath(docId: string) {
-  return `${docsDirectory}/${docId}.updates`;
-}
-
-function documentUpdateSegmentPath(docId: string, sequence: number) {
-  return `${documentUpdateLogDirectoryPath(docId)}/${formatUpdateSegmentSequence(sequence)}.update.b64`;
-}
-
-function formatUpdateSegmentSequence(sequence: number) {
-  return String(sequence).padStart(6, "0");
-}
-
-async function listDocumentUpdateSegments(backend: WorkspaceBackend, docId: string) {
-  let directory = documentUpdateLogDirectoryPath(docId);
-  try {
-    let entries = await backend.listEntries?.(directory);
-    return (entries ?? [])
-      .filter(
-        (entry) =>
-          entry.isFile && updateSegmentFilePattern.test(entry.path.split("/").at(-1) ?? ""),
-      )
-      .sort((a, b) => segmentSequence(a.path) - segmentSequence(b.path));
-  } catch (error) {
-    if (isMissingEntryError(error)) return [];
-    throw error;
-  }
-}
-
-async function lastDocumentUpdateSegmentSequence(backend: WorkspaceBackend, docId: string) {
-  let segments = await listDocumentUpdateSegments(backend, docId);
-  return segments.reduce((max, segment) => Math.max(max, segmentSequence(segment.path)), 0);
-}
-
-async function documentUpdateLogByteLength(backend: WorkspaceBackend, docId: string) {
-  let total = await byteLengthIfPresent(backend, legacyDocumentUpdateLogPath(docId));
-  for (let segment of await listDocumentUpdateSegments(backend, docId)) {
-    total += await byteLengthIfPresent(backend, segment.path);
-  }
-  return total;
-}
-
-async function byteLengthIfPresent(backend: WorkspaceBackend, path: string) {
-  try {
-    let stat = await backend.stat?.(path);
-    if (stat?.exists && typeof stat.size == "number") return stat.size;
-    return (await backend.readBytes?.(path))?.byteLength ?? 0;
-  } catch (error) {
-    if (isMissingEntryError(error)) return 0;
-    throw error;
-  }
-}
-
-async function deleteIfPresent(
-  backend: WorkspaceBackend,
-  path: string,
-  options: { recursive?: boolean } = {},
-) {
-  try {
-    await backend.deleteEntry?.(path, options);
-  } catch (error) {
-    if (!isMissingEntryError(error)) throw error;
-  }
-}
-
-function segmentSequence(path: string) {
-  let fileName = path.split("/").at(-1) ?? "";
-  let match = updateSegmentFilePattern.exec(fileName);
-  return match ? Number(match[1]) : 0;
-}
-
-function encodeUpdateLog(updates: Uint8Array[]) {
-  let byteLength = updates.reduce((total, update) => total + 4 + update.byteLength, 0);
-  let bytes = new Uint8Array(byteLength);
-  let view = new DataView(bytes.buffer);
-  let offset = 0;
-
-  for (let update of updates) {
-    view.setUint32(offset, update.byteLength);
-    offset += 4;
-    bytes.set(update, offset);
-    offset += update.byteLength;
-  }
-
-  return bytes;
-}
-
-function decodeUpdateLog(bytes: Uint8Array) {
-  let view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let updates: Uint8Array[] = [];
-  let offset = 0;
-
-  while (offset < bytes.byteLength) {
-    if (offset + 4 > bytes.byteLength)
-      throw new Error("Truncated collaboration update log header.");
-    let length = view.getUint32(offset);
-    offset += 4;
-    if (offset + length > bytes.byteLength) {
-      throw new Error("Truncated collaboration update log payload.");
-    }
-    updates.push(bytes.slice(offset, offset + length));
-    offset += length;
-  }
-
-  return updates;
+async function compactDocumentSnapshot(metadata: BrowserCollabDocumentMetadata, doc: LoroDoc) {
+  await writeBrowserCollabSnapshot(metadata, doc.export({ mode: "snapshot" }));
+  await clearBrowserCollabUpdates(metadata.docId);
 }
 
 function replaceMarkdownText(doc: LoroDoc, value: string) {
@@ -553,8 +350,6 @@ async function writeConflictCopy(
   value: string,
   label: "external-conflict" | "shared-conflict",
 ) {
-  ensureCollabBackend(backend);
-
   for (let attempt = 0; attempt < 1000; attempt++) {
     let conflictPath = conflictCopyPath(path, label, Date.now(), attempt);
     if (backend.stat) {
@@ -562,7 +357,7 @@ async function writeConflictCopy(
       if (stat.exists) continue;
     }
 
-    await backend.writeTextFile(conflictPath, value);
+    await backend.writeFile(conflictPath, value);
     return conflictPath;
   }
 
@@ -588,12 +383,6 @@ function timestampForPath(now: number) {
   return new Date(now).toISOString().replace(/\D/g, "").slice(0, 14);
 }
 
-function isMissingEntryError(error: unknown) {
-  if (error instanceof DOMException) return error.name == "NotFoundError";
-  let message = error instanceof Error ? error.message : String(error);
-  return /not.?found|not_found|404/i.test(message);
-}
-
 export function hashMarkdownText(value: string) {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index++) {
@@ -601,4 +390,25 @@ export function hashMarkdownText(value: string) {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+async function createDocumentId(backend: WorkspaceBackend, path: string) {
+  let value = `${workspaceDocumentNamespace(backend)}:${path}`;
+  try {
+    let bytes = new TextEncoder().encode(value);
+    let digest = await crypto.subtle.digest("SHA-256", bytes);
+    return `doc-${encodeBase64Url(new Uint8Array(digest))}`;
+  } catch {
+    return `doc-${hashMarkdownText(value)}`;
+  }
+}
+
+function workspaceDocumentNamespace(backend: WorkspaceBackend) {
+  return `${backend.kind}:${backend.id}`;
+}
+
+function encodeBase64Url(bytes: Uint8Array) {
+  let binary = "";
+  for (let byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }

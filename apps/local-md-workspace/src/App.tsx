@@ -24,7 +24,6 @@ import {
   Trash2Icon,
   TriangleAlertIcon,
   UserRoundIcon,
-  WrenchIcon,
 } from "lucide-react";
 import type { Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
@@ -91,23 +90,7 @@ import {
   type CollabMaterializationConflict,
   type CollabDocumentState,
 } from "@/lib/collaboration/markdown-document";
-import {
-  createCollabDocumentBroadcastSync,
-  createWorkspaceManifestBroadcastSync,
-  type WorkspaceManifestBroadcastSync,
-} from "@/lib/collaboration/document-sync";
-import {
-  ensureManifestFile,
-  gcWorkspaceTombstones,
-  loadWorkspaceManifest,
-  mergeWorkspaceManifestSnapshot,
-  repairWorkspaceCollaborationMetadata,
-  renameManifestDirectoryPaths,
-  renameManifestFilePath,
-  readWorkspaceManifestSnapshotBytes,
-  tombstoneManifestDirectory,
-  tombstoneManifestFile,
-} from "@/lib/collaboration/workspace-manifest";
+import { createCollabDocumentBroadcastSync } from "@/lib/collaboration/document-sync";
 import {
   createOwnerShare,
   findOwnerShareRecordForPath,
@@ -146,10 +129,13 @@ import { workspaceErrorMessage } from "@/lib/workspace-errors";
 import { cn } from "@/lib/utils";
 import {
   loadStoredDropboxWorkspaceConfig,
+  loadStoredWorkspaceKind,
   loadStoredWorkspaceHandle,
   saveStoredDropboxWorkspaceConfig,
+  saveStoredWorkspaceKind,
   saveStoredWorkspaceHandle,
   type StoredDropboxWorkspaceConfig,
+  type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
 
 type SaveState = "idle" | "pending" | "saving" | "saved" | "error";
@@ -162,10 +148,6 @@ type EditorDocument = {
 };
 
 const emptyEditorExtensions: Extension[] = [];
-const emptyWorkspaceManifestBroadcastSync: WorkspaceManifestBroadcastSync = {
-  broadcast: () => {},
-  dispose: () => {},
-};
 
 type WorkspaceImageAsset = WorkspaceImageNode & {
   url: string;
@@ -192,7 +174,10 @@ function LocalWorkspaceApp() {
     null,
   );
   let [storedDropboxConfig, setStoredDropboxConfig] = useState<StoredDropboxWorkspaceConfig | null>(
-    null,
+    () => loadStoredDropboxWorkspaceConfig(),
+  );
+  let [storedWorkspaceKind, setStoredWorkspaceKind] = useState<StoredWorkspaceKind | null>(() =>
+    loadStoredWorkspaceKind(),
   );
   let [tree, setTree] = useState<MarkdownDirectoryNode | null>(null);
   let [files, setFiles] = useState<MarkdownFileNode[]>([]);
@@ -240,9 +225,6 @@ function LocalWorkspaceApp() {
   let shareHostRecordRef = useRef<OwnerShareRecord | null>(null);
   let shareHostUpdateCleanupRef = useRef<() => void>(() => {});
   let ownerSaveConflictRef = useRef<CollabMaterializationConflict | null>(null);
-  let workspaceManifestSyncRef = useRef<WorkspaceManifestBroadcastSync>(
-    emptyWorkspaceManifestBroadcastSync,
-  );
   let editorValueRef = useRef("");
   let cleanValueRef = useRef("");
   let dirtyRef = useRef(false);
@@ -253,9 +235,11 @@ function LocalWorkspaceApp() {
   let dropboxTokenRef = useRef<DropboxAccessToken | null>(null);
   let dropboxTokenAppKeyRef = useRef("");
   let dropboxAuthPromiseRef = useRef<Promise<DropboxAccessToken> | null>(null);
+  let dropboxAutoRestoreAttemptedRef = useRef(false);
   let dropboxRedirectPendingRef = useRef(isDropboxRedirectCallbackWindow());
   let imageAssetsRef = useRef(new Map<string, WorkspaceImageAsset>());
   let imageInputRef = useRef<HTMLInputElement | null>(null);
+  let [localRestoreChecked, setLocalRestoreChecked] = useState(false);
 
   useEffect(() => {
     workspaceBackendRef.current = workspaceBackend;
@@ -278,7 +262,6 @@ function LocalWorkspaceApp() {
       collabSyncCleanupRef.current();
       shareHostUpdateCleanupRef.current();
       shareHostConnectionRef.current?.close();
-      workspaceManifestSyncRef.current.dispose();
       collabDocumentRef.current?.dispose();
       revokeImageAssetUrls(imageAssetsRef.current);
       imageAssetsRef.current = new Map();
@@ -491,12 +474,18 @@ function LocalWorkspaceApp() {
   }, [saveCurrentFile]);
 
   let startOwnerShareHost = useCallback(
-    async (record: OwnerShareRecord, backend: WorkspaceBackend, document: CollabDocumentState) => {
+    async (
+      record: OwnerShareRecord,
+      backend: WorkspaceBackend,
+      document: CollabDocumentState,
+      options: { actionLabel?: string } = {},
+    ) => {
       stopOwnerShareHost();
 
+      let actionLabel = options.actionLabel ?? "Link created";
       let hostSecret = readHostSecret(record);
       if (!hostSecret) {
-        setShareError("Link created, but this browser cannot host it without the host key.");
+        setShareError(`${actionLabel}, but this browser cannot host it without the host key.`);
         return;
       }
 
@@ -547,7 +536,7 @@ function LocalWorkspaceApp() {
         });
         connection.connect();
       } catch (error) {
-        setShareError(`Link created, but host sync did not start: ${errorToMessage(error)}`);
+        setShareError(`${actionLabel}, but host sync did not start: ${errorToMessage(error)}`);
       }
     },
     [scheduleAutoSave, setSaveStateSynced, stopOwnerShareHost],
@@ -573,17 +562,6 @@ function LocalWorkspaceApp() {
     [scheduleAutoSave, setSaveStateSynced],
   );
 
-  let broadcastWorkspaceManifest = useCallback(async (backend: WorkspaceBackend) => {
-    try {
-      let bytes = await readWorkspaceManifestSnapshotBytes(backend);
-      if (bytes) {
-        workspaceManifestSyncRef.current.broadcast(bytes);
-      }
-    } catch {
-      // Broadcast is opportunistic; the workspace sidecar remains durable.
-    }
-  }, []);
-
   let loadFile = useCallback(
     async (
       backend: WorkspaceBackend,
@@ -601,51 +579,43 @@ function LocalWorkspaceApp() {
         let restoredShareRecord = await findOwnerShareRecordForPath(backend, file.path).catch(
           () => null,
         );
-        let document = await openMarkdownCollabDocument(backend, file.path, {
-          reconcileExternalEdits: !restoredShareRecord,
-        });
-        let value = document.value;
-        if (document.externalEdit?.kind == "conflict-copy") {
-          setErrorMessage(externalEditConflictMessage(document.externalEdit.path));
-        }
-        if (document.manifestCreated) await broadcastWorkspaceManifest(backend);
+        let document = restoredShareRecord
+          ? await openMarkdownCollabDocument(backend, file.path, {
+              reconcileExternalEdits: false,
+            })
+          : null;
+        let value = document ? document.value : await backend.readFile(file.path);
         if (shareHostRecordRef.current?.path != file.path) stopOwnerShareHost();
         collabSyncCleanupRef.current();
         collabDocumentRef.current?.dispose();
-        let handleRemoteDocumentUpdate = () => {
-          void (async () => {
-            try {
-              let manifest = await loadWorkspaceManifest(backend);
-              let record = manifest.records.find((item) => item.docId == document.docId);
-              if (record?.deletedAt != null) {
-                setSaveStateSynced("error");
-                setErrorMessage(
-                  "This file was deleted in another window. Refresh the workspace before continuing.",
-                );
-                return;
-              }
-
-              editorValueRef.current = getCollabDocumentValue(document);
-              editVersionRef.current += 1;
-              dirtyRef.current = true;
-              setSaveStateSynced("pending");
-              await saveCollabDocumentSnapshot(backend, document);
-              scheduleAutoSave();
-            } catch (error) {
-              setSaveStateSynced("error");
-              setErrorMessage(errorToMessage(error));
-            }
-          })();
-        };
-        collabSyncCleanupRef.current = createCollabDocumentBroadcastSync({
-          backend,
-          doc: document.doc,
-          docId: document.docId,
-          onRemoteUpdate: handleRemoteDocumentUpdate,
-        });
+        collabSyncCleanupRef.current = () => {};
         selectedFileRef.current = file;
         selectedFileBackendRef.current = backend;
         collabDocumentRef.current = document;
+        if (document) {
+          let handleRemoteDocumentUpdate = () => {
+            if (selectedFileRef.current?.path != document.path) return;
+            void (async () => {
+              try {
+                editorValueRef.current = getCollabDocumentValue(document);
+                editVersionRef.current += 1;
+                dirtyRef.current = true;
+                setSaveStateSynced("pending");
+                await saveCollabDocumentSnapshot(backend, document);
+                scheduleAutoSave();
+              } catch (error) {
+                setSaveStateSynced("error");
+                setErrorMessage(errorToMessage(error));
+              }
+            })();
+          };
+          collabSyncCleanupRef.current = createCollabDocumentBroadcastSync({
+            backend,
+            doc: document.doc,
+            docId: document.docId,
+            onRemoteUpdate: handleRemoteDocumentUpdate,
+          });
+        }
         editorValueRef.current = value;
         cleanValueRef.current = value;
         dirtyRef.current = false;
@@ -661,20 +631,18 @@ function LocalWorkspaceApp() {
         setSaveStateSynced("saved");
         setActiveShareRecord(restoredShareRecord);
         setCreatedShare(null);
-        if (restoredShareRecord) {
+        if (restoredShareRecord && document) {
           void startOwnerShareHost(restoredShareRecord, backend, document);
         }
         setRetryLoadPath(null);
       } catch (error) {
-        let message = errorToMessage(error);
-        setErrorMessage(message);
-        setRetryLoadPath(isCollaborationStateUnavailableMessage(message) ? file.path : null);
+        setErrorMessage(errorToMessage(error));
+        setRetryLoadPath(file.path);
       } finally {
         setBusy(false);
       }
     },
     [
-      broadcastWorkspaceManifest,
       saveCurrentFile,
       scheduleAutoSave,
       setSaveStateSynced,
@@ -694,7 +662,6 @@ function LocalWorkspaceApp() {
         backend.readImages?.() ?? Promise.resolve([]),
       ]);
       replaceImageAssets(await createWorkspaceImageAssets(nextImageNodes));
-      void gcWorkspaceTombstones(backend).catch(() => {});
       let nextFiles = flattenMarkdownFiles(nextTree);
       setTree(nextTree);
       setFiles(nextFiles);
@@ -721,6 +688,8 @@ function LocalWorkspaceApp() {
         editVersionRef.current = 0;
         setOwnerSaveConflict(null);
         setOwnerSaveConflictDismissed(false);
+        setActiveShareRecord(null);
+        setCreatedShare(null);
         setSelectedFile(null);
         setCollabDocument(null);
         setTreeSelection(null);
@@ -735,42 +704,11 @@ function LocalWorkspaceApp() {
     [loadFile, replaceImageAssets, setSaveStateSynced, stopOwnerShareHost],
   );
 
-  let handleRemoteWorkspaceManifestUpdate = useCallback(
-    async (backend: WorkspaceBackend, bytes: Uint8Array) => {
-      try {
-        await mergeWorkspaceManifestSnapshot(backend, bytes);
-        await loadTree(backend, selectedFileRef.current?.path ?? null);
-      } catch (error) {
-        setErrorMessage(errorToMessage(error));
-      }
-    },
-    [loadTree],
-  );
-
-  useEffect(() => {
-    workspaceManifestSyncRef.current.dispose();
-    workspaceManifestSyncRef.current = emptyWorkspaceManifestBroadcastSync;
-    if (!workspaceBackend) return;
-
-    let sync = createWorkspaceManifestBroadcastSync({
-      backend: workspaceBackend,
-      onRemoteUpdate: (bytes) => {
-        void handleRemoteWorkspaceManifestUpdate(workspaceBackend, bytes);
-      },
-    });
-    workspaceManifestSyncRef.current = sync;
-
-    return () => {
-      sync.dispose();
-      if (workspaceManifestSyncRef.current == sync) {
-        workspaceManifestSyncRef.current = emptyWorkspaceManifestBroadcastSync;
-      }
-    };
-  }, [handleRemoteWorkspaceManifestUpdate, workspaceBackend]);
-
   let rememberWorkspaceHandle = useCallback((handle: AccessDirectoryHandle) => {
     setStoredWorkspaceHandle(handle);
+    setStoredWorkspaceKind("local");
     void saveStoredWorkspaceHandle(handle).catch(() => {});
+    saveStoredWorkspaceKind("local");
   }, []);
 
   let authorizeDropboxAccess = useCallback(async (appKey: string, root?: string) => {
@@ -915,7 +853,9 @@ function LocalWorkspaceApp() {
         setWorkspaceBackend(backend);
         let storedConfig = root ? { appKey, root } : { appKey };
         setStoredDropboxConfig(storedConfig);
+        setStoredWorkspaceKind("dropbox");
         saveStoredDropboxWorkspaceConfig(storedConfig);
+        saveStoredWorkspaceKind("dropbox");
         setSidebarOpen(true);
         await loadTree(backend, options.restoreDraft?.selectedPath ?? null, {
           saveBeforeSelect: false,
@@ -992,10 +932,6 @@ function LocalWorkspaceApp() {
   }, [loadTree, saveCurrentFile, workspaceBackend]);
 
   useEffect(() => {
-    setStoredDropboxConfig(loadStoredDropboxWorkspaceConfig());
-  }, []);
-
-  useEffect(() => {
     if (!dropboxRedirectPendingRef.current) return;
 
     let canceled = false;
@@ -1046,7 +982,22 @@ function LocalWorkspaceApp() {
   }, [openDropboxWorkspace]);
 
   useEffect(() => {
-    if (!browserSupported || dropboxRedirectPendingRef.current) return;
+    if (dropboxRedirectPendingRef.current) {
+      setLocalRestoreChecked(true);
+      return;
+    }
+    if (!browserSupported) {
+      setLocalRestoreChecked(true);
+      return;
+    }
+    if (workspaceBackend) {
+      setLocalRestoreChecked(true);
+      return;
+    }
+    if (storedWorkspaceKind == "dropbox" && storedDropboxConfig) {
+      setLocalRestoreChecked(true);
+      return;
+    }
 
     let canceled = false;
     setRestoreChecking(true);
@@ -1072,14 +1023,41 @@ function LocalWorkspaceApp() {
       } catch (error) {
         if (!canceled) setErrorMessage(errorToMessage(error));
       } finally {
-        if (!canceled) setRestoreChecking(false);
+        if (!canceled) {
+          setRestoreChecking(false);
+          setLocalRestoreChecked(true);
+        }
       }
     })();
 
     return () => {
       canceled = true;
     };
-  }, [browserSupported, loadTree]);
+  }, [browserSupported, loadTree, storedDropboxConfig, storedWorkspaceKind, workspaceBackend]);
+
+  useEffect(() => {
+    if (
+      !localRestoreChecked ||
+      dropboxRedirectPendingRef.current ||
+      workspaceBackend ||
+      !storedDropboxConfig ||
+      dropboxAutoRestoreAttemptedRef.current
+    ) {
+      return;
+    }
+    if (storedWorkspaceKind && storedWorkspaceKind != "dropbox") return;
+    if (!storedWorkspaceKind && storedWorkspaceHandle) return;
+
+    dropboxAutoRestoreAttemptedRef.current = true;
+    void openDropboxWorkspace(storedDropboxConfig, { skipSaveCurrent: true });
+  }, [
+    localRestoreChecked,
+    openDropboxWorkspace,
+    storedDropboxConfig,
+    storedWorkspaceHandle,
+    storedWorkspaceKind,
+    workspaceBackend,
+  ]);
 
   useEffect(
     () => () => {
@@ -1163,16 +1141,6 @@ function LocalWorkspaceApp() {
             : currentTarget?.kind == "directory"
               ? await renameWorkspaceDirectory(workspaceBackend, currentTarget.path, value)
               : null;
-      if (fileDialogMode == "create" && nextPath) {
-        await ensureManifestFile(workspaceBackend, nextPath);
-        await broadcastWorkspaceManifest(workspaceBackend);
-      } else if (currentTarget?.kind == "file" && nextPath) {
-        await renameManifestFilePath(workspaceBackend, currentTarget.path, nextPath);
-        await broadcastWorkspaceManifest(workspaceBackend);
-      } else if (currentTarget?.kind == "directory" && nextPath) {
-        await renameManifestDirectoryPaths(workspaceBackend, currentTarget.path, nextPath);
-        await broadcastWorkspaceManifest(workspaceBackend);
-      }
       let nextSelectedPath =
         currentTarget?.kind == "directory" && nextPath
           ? pathAfterDirectoryRename(
@@ -1221,15 +1189,11 @@ function LocalWorkspaceApp() {
       let nextSelectedPath = selectedFileRef.current?.path ?? null;
       if (target.kind == "directory") {
         if (!backend.deleteDirectory) throw new Error("This workspace cannot delete folders.");
-        await tombstoneManifestDirectory(backend, target.path);
-        await broadcastWorkspaceManifest(backend);
         await backend.deleteDirectory(target.path);
         if (nextSelectedPath && isPathInsideDirectory(nextSelectedPath, target.path)) {
           nextSelectedPath = null;
         }
       } else {
-        await tombstoneManifestFile(backend, target.path);
-        await broadcastWorkspaceManifest(backend);
         await backend.deleteFile(target.path);
         if (nextSelectedPath == target.path) nextSelectedPath = null;
       }
@@ -1258,22 +1222,57 @@ function LocalWorkspaceApp() {
     await loadFile(backend, file, { saveCurrent: false });
   }, [files, loadFile, refreshWorkspace, retryLoadPath, workspaceBackend]);
 
-  let repairWorkspaceMetadata = useCallback(async () => {
-    let backend = workspaceBackend;
-    if (!backend || !(await saveCurrentFile())) return;
+  let ensureSelectedCollabDocument = useCallback(
+    async (backend: WorkspaceBackend, file: MarkdownFileNode) => {
+      let current = collabDocumentRef.current;
+      if (current?.path == file.path) return current;
 
-    setBusy(true);
-    setErrorMessage("");
-    setRetryLoadPath(null);
-    try {
-      await repairWorkspaceCollaborationMetadata(backend);
-      await loadTree(backend, selectedFileRef.current?.path ?? null, { saveBeforeSelect: false });
-    } catch (error) {
-      setErrorMessage(errorToMessage(error));
-    } finally {
-      setBusy(false);
-    }
-  }, [loadTree, saveCurrentFile, workspaceBackend]);
+      let document = await openMarkdownCollabDocument(backend, file.path);
+      if (document.externalEdit?.kind == "conflict-copy") {
+        setErrorMessage(externalEditConflictMessage(document.externalEdit.path));
+      }
+
+      collabSyncCleanupRef.current();
+      collabDocumentRef.current?.dispose();
+      collabDocumentRef.current = document;
+      collabSyncCleanupRef.current = createCollabDocumentBroadcastSync({
+        backend,
+        doc: document.doc,
+        docId: document.docId,
+        onRemoteUpdate: () => {
+          if (selectedFileRef.current?.path != document.path) return;
+          void (async () => {
+            try {
+              editorValueRef.current = getCollabDocumentValue(document);
+              editVersionRef.current += 1;
+              dirtyRef.current = true;
+              setSaveStateSynced("pending");
+              await saveCollabDocumentSnapshot(backend, document);
+              scheduleAutoSave();
+            } catch (error) {
+              setSaveStateSynced("error");
+              setErrorMessage(errorToMessage(error));
+            }
+          })();
+        },
+      });
+
+      let value = document.value;
+      editorValueRef.current = value;
+      cleanValueRef.current = value;
+      dirtyRef.current = false;
+      editVersionRef.current += 1;
+      setCollabDocument(document);
+      setEditorDocument((currentDocument) => ({
+        path: file.path,
+        value,
+        version: currentDocument.version + 1,
+      }));
+      setSaveStateSynced("saved");
+      return document;
+    },
+    [scheduleAutoSave, setSaveStateSynced],
+  );
 
   let openShareDialog = useCallback(() => {
     setShareDialogOpen(true);
@@ -1294,14 +1293,14 @@ function LocalWorkspaceApp() {
   let createSharedFileLink = useCallback(async () => {
     let backend = workspaceBackendRef.current;
     let file = selectedFileRef.current;
-    let document = collabDocumentRef.current;
-    if (!backend || !file || !document) return;
+    if (!backend || !file) return;
     if (!(await saveCurrentFile())) return;
 
     setShareCreating(true);
     setShareError("");
     setShareCopied(false);
     try {
+      let document = await ensureSelectedCollabDocument(backend, file);
       let share = await createOwnerShare({
         backend,
         baseUrl: window.location.href,
@@ -1318,13 +1317,15 @@ function LocalWorkspaceApp() {
     } finally {
       setShareCreating(false);
     }
-  }, [saveCurrentFile, shareExpiration, startOwnerShareHost]);
+  }, [ensureSelectedCollabDocument, saveCurrentFile, shareExpiration, startOwnerShareHost]);
 
   let rotateSharedFileLink = useCallback(async () => {
     let backend = workspaceBackendRef.current;
     let record = activeShareRecord;
     if (!backend || !record || record.revokedAt != null) return;
 
+    let document = collabDocumentRef.current;
+    let shouldRestartHost = document?.path == record.path;
     let hostSecret = readHostSecret(record);
     if (!hostSecret) {
       setShareError("This browser cannot rotate the link without the host key.");
@@ -1334,6 +1335,7 @@ function LocalWorkspaceApp() {
     setShareCreating(true);
     setShareError("");
     setShareCopied(false);
+    if (shouldRestartHost) stopOwnerShareHost();
     try {
       let share = await rotateOwnerShare({
         backend,
@@ -1345,12 +1347,22 @@ function LocalWorkspaceApp() {
       });
       setCreatedShare(share);
       setActiveShareRecord(share.record);
+      if (shouldRestartHost && document) {
+        await startOwnerShareHost(share.record, backend, document, {
+          actionLabel: "Link rotated",
+        });
+      }
     } catch (error) {
       setShareError(errorToMessage(error));
+      if (shouldRestartHost && document) {
+        void startOwnerShareHost(record, backend, document, {
+          actionLabel: "Link rotation failed",
+        });
+      }
     } finally {
       setShareCreating(false);
     }
-  }, [activeShareRecord, shareExpiration]);
+  }, [activeShareRecord, shareExpiration, startOwnerShareHost, stopOwnerShareHost]);
 
   let stopSharingFile = useCallback(async () => {
     let backend = workspaceBackendRef.current;
@@ -1539,7 +1551,7 @@ function LocalWorkspaceApp() {
                     disabled={!browserSupported || busy || restoreChecking}
                   >
                     <FolderOpenIcon data-icon="inline-start" />
-                    Restore folder
+                    Continue previous folder
                   </Button>
                 )}
                 {dropboxRestoreAvailable && (
@@ -1549,7 +1561,7 @@ function LocalWorkspaceApp() {
                     disabled={busy || dropboxConnecting}
                   >
                     <CloudIcon data-icon="inline-start" />
-                    Reconnect Dropbox mirror
+                    Continue Dropbox mirror
                   </Button>
                 )}
                 <Button
@@ -1632,7 +1644,7 @@ function LocalWorkspaceApp() {
               label="Share file"
               size="icon-sm"
               variant="ghost"
-              disabled={!selectedFile || !collabDocument || busy}
+              disabled={!selectedFile || busy}
               onClick={openShareDialog}
             >
               <Share2Icon data-icon="inline-start" />
@@ -1654,15 +1666,6 @@ function LocalWorkspaceApp() {
               onClick={() => void refreshWorkspace()}
             >
               <RefreshCwIcon data-icon="inline-start" />
-            </TooltipIconButton>
-            <TooltipIconButton
-              label="Repair metadata"
-              size="icon-sm"
-              variant="ghost"
-              disabled={!workspaceBackend || busy}
-              onClick={() => void repairWorkspaceMetadata()}
-            >
-              <WrenchIcon data-icon="inline-start" />
             </TooltipIconButton>
           </header>
 
@@ -1870,7 +1873,7 @@ function WorkspaceEmpty({
               disabled={!browserSupported || busy || restoreChecking}
             >
               <FolderOpenIcon data-icon="inline-start" />
-              Restore folder
+              Continue previous folder
             </Button>
             {dropboxRestoreAvailable && (
               <Button
@@ -1879,7 +1882,7 @@ function WorkspaceEmpty({
                 disabled={busy || dropboxConnecting}
               >
                 <CloudIcon data-icon="inline-start" />
-                Reconnect Dropbox mirror
+                Continue Dropbox mirror
               </Button>
             )}
             <Button variant="outline" onClick={onOpenFolder} disabled={!browserSupported || busy}>
@@ -1895,7 +1898,7 @@ function WorkspaceEmpty({
           <div className="flex flex-col gap-2">
             <Button onClick={onRestoreDropbox} disabled={busy || dropboxConnecting}>
               <CloudIcon data-icon="inline-start" />
-              Reconnect Dropbox mirror
+              Continue Dropbox mirror
             </Button>
             <Button variant="outline" onClick={onOpenFolder} disabled={!browserSupported || busy}>
               <FolderOpenIcon data-icon="inline-start" />
@@ -2510,10 +2513,6 @@ function mergeOwnerShareStatus(
     peerCount: status.peerCount,
     pendingHostSave: status.pendingHostSave,
   };
-}
-
-function isCollaborationStateUnavailableMessage(message: string) {
-  return /collaboration state .*not available yet/i.test(message);
 }
 
 function readHostSecret(record: OwnerShareRecord) {

@@ -7,7 +7,7 @@ const RELAY_READY_POLL_MS = 250;
 
 let appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 let repoRoot = resolve(appRoot, "../..");
-let relayRoot = resolve(repoRoot, "apps/collab-editor");
+let relayRoot = resolve(repoRoot, "apps/grove-relay");
 let options = parseArgs(process.argv.slice(2));
 let frontendArgs = options.frontendArgs;
 
@@ -245,6 +245,6 @@ Frontend host and port use normal Vite dev flags:
 Examples:
   vp run dev
   vp run dev -- --relay-origin http://127.0.0.1:8788
-  vp run dev -- --relay-origin https://collab-editor.example.workers.dev
+  vp run dev -- --relay-origin https://grove-relay.example.workers.dev
 `);
 }

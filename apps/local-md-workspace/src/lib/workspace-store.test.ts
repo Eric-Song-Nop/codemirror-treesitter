@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   loadStoredDropboxWorkspaceConfig,
+  loadStoredWorkspaceKind,
   saveStoredDropboxWorkspaceConfig,
+  saveStoredWorkspaceKind,
 } from "./workspace-store.ts";
 
 const DROPBOX_CONFIG_KEY = "local-md-workspace:dropbox-config";
+const WORKSPACE_KIND_KEY = "local-md-workspace:workspace-kind";
 
 describe("Dropbox workspace config storage", () => {
   let values: Map<string, string>;
@@ -53,5 +56,21 @@ describe("Dropbox workspace config storage", () => {
     saveStoredDropboxWorkspaceConfig({ appKey: " " });
 
     expect(values.has(DROPBOX_CONFIG_KEY)).toBe(false);
+  });
+
+  it("saves and restores the last workspace kind", () => {
+    saveStoredWorkspaceKind("dropbox");
+    expect(values.get(WORKSPACE_KIND_KEY)).toBe("dropbox");
+    expect(loadStoredWorkspaceKind()).toBe("dropbox");
+
+    saveStoredWorkspaceKind("local");
+    expect(values.get(WORKSPACE_KIND_KEY)).toBe("local");
+    expect(loadStoredWorkspaceKind()).toBe("local");
+  });
+
+  it("ignores unknown stored workspace kinds", () => {
+    values.set(WORKSPACE_KIND_KEY, "other");
+
+    expect(loadStoredWorkspaceKind()).toBeNull();
   });
 });

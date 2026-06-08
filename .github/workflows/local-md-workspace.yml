@@ -6,7 +6,19 @@ on:
       - main
     paths:
       - ".github/workflows/local-md-workspace.yml"
-      - "apps/local-md-workspace/**"
+      - "apps/grove-relay/package.json"
+      - "apps/grove-relay/src/**"
+      - "apps/grove-relay/tsconfig.json"
+      - "apps/grove-relay/vite.config.ts"
+      - "apps/grove-relay/worker-configuration.d.ts"
+      - "apps/grove-relay/wrangler.jsonc"
+      - "apps/grove-relay/wrangler.worker.jsonc"
+      - "apps/local-md-workspace/index.html"
+      - "apps/local-md-workspace/package.json"
+      - "apps/local-md-workspace/public/**"
+      - "apps/local-md-workspace/src/**"
+      - "apps/local-md-workspace/tsconfig.json"
+      - "apps/local-md-workspace/vite.config.ts"
       - "bun.lock"
       - "package.json"
       - "packages/autocomplete/**"
@@ -92,6 +104,15 @@ jobs:
               apps/local-md-workspace/package.json | \
               apps/local-md-workspace/tsconfig.json | \
               apps/local-md-workspace/vite.config.ts)
+                return 0
+                ;;
+              apps/grove-relay/src/* | \
+              apps/grove-relay/package.json | \
+              apps/grove-relay/tsconfig.json | \
+              apps/grove-relay/vite.config.ts | \
+              apps/grove-relay/worker-configuration.d.ts | \
+              apps/grove-relay/wrangler.jsonc | \
+              apps/grove-relay/wrangler.worker.jsonc)
                 return 0
                 ;;
             esac
@@ -198,8 +219,7 @@ jobs:
             git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA" > "$changed_paths_file"
             if collect_relevant_paths; then
               should_run=true
-              deploy_target=preview
-              deploy_branch="pr-$PR_NUMBER"
+              deploy_target=validation
               skip_reason=
             fi
           elif [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
@@ -238,6 +258,7 @@ jobs:
 
             if collect_relevant_paths; then
               should_run=true
+              deploy_target=validation
               skip_reason=
             fi
           fi
@@ -282,7 +303,6 @@ jobs:
       VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY }}
       VITE_DROPBOX_REDIRECT_URI: ${{ vars.VITE_DROPBOX_REDIRECT_URI }}
       VITE_DROPBOX_ROOT: ${{ vars.VITE_DROPBOX_ROOT }}
-      VITE_LOCAL_MD_SHARE_RELAY_ORIGIN: ${{ vars.VITE_LOCAL_MD_SHARE_RELAY_ORIGIN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -292,7 +312,7 @@ jobs:
       - uses: voidzero-dev/setup-vp@v1
         with:
           cache: true
-          node-version: "22.12.0"
+          node-version: "22"
 
       - name: Install dependencies
         run: vp install
@@ -301,15 +321,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          missing=false
-          for name in VITE_DROPBOX_APP_KEY VITE_LOCAL_MD_SHARE_RELAY_ORIGIN; do
-            if [ -z "${!name:-}" ]; then
-              echo "::error::$name is required as a GitHub repository variable for Grove builds."
-              missing=true
-            fi
-          done
-
-          if [ "$missing" = true ]; then
+          if [ -z "${VITE_DROPBOX_APP_KEY:-}" ]; then
+            echo "::error::VITE_DROPBOX_APP_KEY is required as a GitHub repository variable for Grove builds."
             exit 1
           fi
 
@@ -319,26 +332,77 @@ jobs:
       - name: Test
         run: vp test
 
-      - name: Build Grove
-        run: vp run local-md-workspace#build
+      - name: Build Grove relay
+        run: vp run grove-relay#build
 
-      - name: Skip fork preview deploy
-        if: ${{ github.event_name == 'pull_request' && needs.scope.outputs.deploy_target == 'preview' && github.event.pull_request.head.repo.full_name != github.repository }}
+      - id: relay
+        name: Resolve Grove relay origin
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CONFIGURED_RELAY_ORIGIN: ${{ vars.VITE_LOCAL_MD_SHARE_RELAY_ORIGIN }}
+          DEPLOY_TARGET: ${{ needs.scope.outputs.deploy_target }}
         run: |
-          echo "::notice::Skipping Grove preview deploy for fork PR because Cloudflare secrets are unavailable."
+          set -euo pipefail
+
+          normalize_origin() {
+            node -e 'console.log(new URL(process.argv[1]).origin)' "$1"
+          }
+
+          relay_origin=""
+          if [ -n "${CONFIGURED_RELAY_ORIGIN:-}" ]; then
+            if ! relay_origin="$(normalize_origin "$CONFIGURED_RELAY_ORIGIN")"; then
+              echo "::error::VITE_LOCAL_MD_SHARE_RELAY_ORIGIN is not a valid URL origin."
+              exit 1
+            fi
+          fi
+
+          if [ "$DEPLOY_TARGET" = "production" ]; then
+            output_file="$RUNNER_TEMP/wrangler-worker-deploy.log"
+            ./node_modules/.bin/wrangler deploy \
+              --config apps/grove-relay/wrangler.worker.jsonc 2>&1 | tee "$output_file"
+
+            parsed_origin="$(grep -Eo 'https://[^[:space:]]+\.workers\.dev[^[:space:]]*' "$output_file" | tail -n 1 || true)"
+            if [ -n "$parsed_origin" ]; then
+              relay_origin="$(normalize_origin "$parsed_origin")"
+            fi
+          fi
+
+          if [ -z "$relay_origin" ]; then
+            if [ "$DEPLOY_TARGET" = "production" ]; then
+              echo "::error::Could not determine Grove relay origin from wrangler output. Set VITE_LOCAL_MD_SHARE_RELAY_ORIGIN as a fallback repository variable."
+              exit 1
+            fi
+            relay_origin="https://grove-relay.example.invalid"
+            echo "::notice::VITE_LOCAL_MD_SHARE_RELAY_ORIGIN is not set; using $relay_origin for validation only."
+          fi
+
+          echo "relay_origin=$relay_origin" >> "$GITHUB_OUTPUT"
+
           {
-            echo "### Grove preview skipped"
+            echo "### Grove relay"
             echo
-            echo "Preview deploy skipped for fork PR because Cloudflare secrets are unavailable."
+            if [ "$DEPLOY_TARGET" = "production" ]; then
+              echo "- Worker: \`grove-relay\`"
+            else
+              echo "- Worker deploy: skipped"
+            fi
+            echo "- Origin: $relay_origin"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Build Grove
+        env:
+          VITE_LOCAL_MD_SHARE_RELAY_ORIGIN: ${{ steps.relay.outputs.relay_origin }}
+        run: vp run local-md-workspace#build
+
       - name: Deploy Grove to Cloudflare Pages
-        if: ${{ needs.scope.outputs.deploy_target != 'none' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ needs.scope.outputs.deploy_target == 'production' }}
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           DEPLOY_BRANCH: ${{ needs.scope.outputs.deploy_branch }}
           DEPLOY_TARGET: ${{ needs.scope.outputs.deploy_target }}
+          RELAY_ORIGIN: ${{ steps.relay.outputs.relay_origin }}
         run: |
           set -euo pipefail
 
@@ -361,6 +425,7 @@ jobs:
             echo "- Cloudflare Pages project: \`grove\`"
             echo "- Branch: \`$DEPLOY_BRANCH\`"
             echo "- Commit: \`$commit_hash\`"
+            echo "- Relay origin: $RELAY_ORIGIN"
             if [ -n "$deployment_url" ]; then
               echo "- URL: $deployment_url"
             fi

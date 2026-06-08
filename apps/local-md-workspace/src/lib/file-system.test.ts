@@ -49,7 +49,7 @@ describe("local workspace backend", () => {
     });
   });
 
-  it("supports hidden collaboration sidecar files without exposing them in the tree", async () => {
+  it("keeps legacy .livemd files hidden from the Markdown tree", async () => {
     let root = new MemoryDirectoryHandle("Workspace");
     let backend = createLocalWorkspaceBackend(root);
 
