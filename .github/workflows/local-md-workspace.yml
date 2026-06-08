@@ -12,6 +12,7 @@ on:
       - "apps/grove-relay/vite.config.ts"
       - "apps/grove-relay/worker-configuration.d.ts"
       - "apps/grove-relay/wrangler.jsonc"
+      - "apps/grove-relay/wrangler.worker.ci.jsonc"
       - "apps/grove-relay/wrangler.worker.jsonc"
       - "apps/local-md-workspace/index.html"
       - "apps/local-md-workspace/package.json"
@@ -112,6 +113,7 @@ jobs:
               apps/grove-relay/vite.config.ts | \
               apps/grove-relay/worker-configuration.d.ts | \
               apps/grove-relay/wrangler.jsonc | \
+              apps/grove-relay/wrangler.worker.ci.jsonc | \
               apps/grove-relay/wrangler.worker.jsonc)
                 return 0
                 ;;
@@ -302,8 +304,10 @@ jobs:
     env:
       GROVE_APP_ORIGIN: https://app.grovemd.net
       GROVE_DROPBOX_REDIRECT_URI: https://app.grovemd.net/
+      GROVE_PAGES_DOMAINS: grovemd.net,app.grovemd.net
       GROVE_PAGES_PROJECT: grove
       GROVE_RELAY_ORIGIN: https://relay.grovemd.net
+      GROVE_ROOT_ORIGIN: https://grovemd.net
       GROVE_ZONE_NAME: grovemd.net
       VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY }}
       VITE_DROPBOX_REDIRECT_URI: ${{ vars.VITE_DROPBOX_REDIRECT_URI }}
@@ -422,7 +426,7 @@ jobs:
 
             output_file="$RUNNER_TEMP/wrangler-worker-deploy.log"
             ./node_modules/.bin/wrangler deploy \
-              --config apps/grove-relay/wrangler.worker.jsonc 2>&1 | tee "$output_file"
+              --config apps/grove-relay/wrangler.worker.ci.jsonc 2>&1 | tee "$output_file"
 
             parsed_origin="$(grep -Eo 'https://[^[:space:]]+\.workers\.dev[^[:space:]]*' "$output_file" | tail -n 1 || true)"
             if [ -n "$parsed_origin" ]; then
@@ -501,6 +505,7 @@ jobs:
             echo
             echo "- Cloudflare Pages project: \`$GROVE_PAGES_PROJECT\`"
             echo "- App origin: $GROVE_APP_ORIGIN"
+            echo "- Root origin: $GROVE_ROOT_ORIGIN"
             echo "- Branch: \`$DEPLOY_BRANCH\`"
             echo "- Commit: \`$commit_hash\`"
             echo "- Relay origin: $RELAY_ORIGIN"
@@ -522,7 +527,7 @@ jobs:
             CLOUDFLARE_ACCOUNT_ID,
             CLOUDFLARE_API_TOKEN,
             GITHUB_STEP_SUMMARY,
-            GROVE_APP_ORIGIN,
+            GROVE_PAGES_DOMAINS,
             GROVE_PAGES_PROJECT,
           } = process.env;
 
@@ -530,7 +535,14 @@ jobs:
             throw new Error("Cloudflare account ID and API token are required.");
           }
 
-          const domain = new URL(GROVE_APP_ORIGIN).hostname;
+          const targetDomains = (GROVE_PAGES_DOMAINS ?? "")
+            .split(",")
+            .map((domain) => domain.trim())
+            .filter(Boolean);
+          if (!targetDomains.length) {
+            throw new Error("GROVE_PAGES_DOMAINS must include at least one domain.");
+          }
+
           const project = encodeURIComponent(GROVE_PAGES_PROJECT);
           const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${project}/domains`;
 
@@ -559,24 +571,30 @@ jobs:
 
           const existing = await cloudflare(baseUrl);
           const domains = domainList(existing.result);
-          if (!domains.some((entry) => entry?.name === domain)) {
-            await cloudflare(baseUrl, {
-              method: "POST",
-              body: JSON.stringify({ name: domain }),
-            });
-          }
+          const statuses = [];
+          for (const domain of targetDomains) {
+            if (!domains.some((entry) => entry?.name === domain)) {
+              await cloudflare(baseUrl, {
+                method: "POST",
+                body: JSON.stringify({ name: domain }),
+              });
+            }
 
-          const current = await cloudflare(`${baseUrl}/${encodeURIComponent(domain)}`);
-          const status =
-            current.result?.status ??
-            current.result?.verification_data?.status ??
-            current.result?.verification_status ??
-            "unknown";
+            const current = await cloudflare(`${baseUrl}/${encodeURIComponent(domain)}`);
+            const status =
+              current.result?.status ??
+              current.result?.verification_data?.status ??
+              current.result?.verification_status ??
+              "unknown";
+            statuses.push({ domain, status });
+          }
 
           await import("node:fs").then((fs) => {
             fs.appendFileSync(
               GITHUB_STEP_SUMMARY,
-              `\n### Grove custom domain\n\n- Pages domain: ${domain}\n- Status: ${status}\n`,
+              `\n### Grove custom domains\n\n${statuses
+                .map(({ domain, status }) => `- Pages domain: ${domain} (${status})`)
+                .join("\n")}\n`,
             );
           });
           NODE
