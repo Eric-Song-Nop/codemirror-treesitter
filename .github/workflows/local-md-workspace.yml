@@ -300,6 +300,10 @@ jobs:
       - scope
     if: ${{ needs.scope.outputs.should_run == 'true' }}
     env:
+      GROVE_APP_ORIGIN: https://app.grovemd.net
+      GROVE_DROPBOX_REDIRECT_URI: https://app.grovemd.net/
+      GROVE_PAGES_PROJECT: grove
+      GROVE_RELAY_ORIGIN: https://relay.grovemd.net
       VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY }}
       VITE_DROPBOX_REDIRECT_URI: ${{ vars.VITE_DROPBOX_REDIRECT_URI }}
       VITE_DROPBOX_ROOT: ${{ vars.VITE_DROPBOX_ROOT }}
@@ -325,6 +329,19 @@ jobs:
             echo "::error::VITE_DROPBOX_APP_KEY is required as a GitHub repository variable for Grove builds."
             exit 1
           fi
+
+          dropbox_redirect_uri="${VITE_DROPBOX_REDIRECT_URI:-$GROVE_DROPBOX_REDIRECT_URI}"
+          if ! normalized_dropbox_redirect_uri="$(node -e 'console.log(new URL(process.argv[1]).href)' "$dropbox_redirect_uri")"; then
+            echo "::error::VITE_DROPBOX_REDIRECT_URI is not a valid URL."
+            exit 1
+          fi
+
+          if [ "$normalized_dropbox_redirect_uri" != "$GROVE_DROPBOX_REDIRECT_URI" ]; then
+            echo "::error::VITE_DROPBOX_REDIRECT_URI must be $GROVE_DROPBOX_REDIRECT_URI for Grove production builds."
+            exit 1
+          fi
+
+          echo "VITE_DROPBOX_REDIRECT_URI=$GROVE_DROPBOX_REDIRECT_URI" >> "$GITHUB_ENV"
 
       - name: Build OpenDAL browser WASM
         run: |
@@ -356,11 +373,14 @@ jobs:
             node -e 'console.log(new URL(process.argv[1]).origin)' "$1"
           }
 
-          relay_origin=""
+          relay_origin="$(normalize_origin "$GROVE_RELAY_ORIGIN")"
           if [ -n "${CONFIGURED_RELAY_ORIGIN:-}" ]; then
-            if ! relay_origin="$(normalize_origin "$CONFIGURED_RELAY_ORIGIN")"; then
+            if ! configured_relay_origin="$(normalize_origin "$CONFIGURED_RELAY_ORIGIN")"; then
               echo "::error::VITE_LOCAL_MD_SHARE_RELAY_ORIGIN is not a valid URL origin."
               exit 1
+            fi
+            if [ "$configured_relay_origin" != "$relay_origin" ]; then
+              echo "::warning::Ignoring VITE_LOCAL_MD_SHARE_RELAY_ORIGIN=$configured_relay_origin; Grove relay deploys to $relay_origin."
             fi
           fi
 
@@ -371,17 +391,8 @@ jobs:
 
             parsed_origin="$(grep -Eo 'https://[^[:space:]]+\.workers\.dev[^[:space:]]*' "$output_file" | tail -n 1 || true)"
             if [ -n "$parsed_origin" ]; then
-              relay_origin="$(normalize_origin "$parsed_origin")"
+              echo "::notice::Wrangler workers.dev deployment URL: $(normalize_origin "$parsed_origin")"
             fi
-          fi
-
-          if [ -z "$relay_origin" ]; then
-            if [ "$DEPLOY_TARGET" = "production" ]; then
-              echo "::error::Could not determine Grove relay origin from wrangler output. Set VITE_LOCAL_MD_SHARE_RELAY_ORIGIN as a fallback repository variable."
-              exit 1
-            fi
-            relay_origin="https://grove-relay.example.invalid"
-            echo "::notice::VITE_LOCAL_MD_SHARE_RELAY_ORIGIN is not set; using $relay_origin for validation only."
           fi
 
           echo "relay_origin=$relay_origin" >> "$GITHUB_OUTPUT"
@@ -442,7 +453,7 @@ jobs:
           commit_message="$(git log -1 --pretty=%s)"
 
           ./node_modules/.bin/wrangler pages deploy apps/local-md-workspace/dist \
-            --project-name grove \
+            --project-name "$GROVE_PAGES_PROJECT" \
             --branch "$DEPLOY_BRANCH" \
             --commit-hash "$commit_hash" \
             --commit-message "$commit_message" \
@@ -453,7 +464,8 @@ jobs:
           {
             echo "### Grove $DEPLOY_TARGET deployment"
             echo
-            echo "- Cloudflare Pages project: \`grove\`"
+            echo "- Cloudflare Pages project: \`$GROVE_PAGES_PROJECT\`"
+            echo "- App origin: $GROVE_APP_ORIGIN"
             echo "- Branch: \`$DEPLOY_BRANCH\`"
             echo "- Commit: \`$commit_hash\`"
             echo "- Relay origin: $RELAY_ORIGIN"
@@ -461,3 +473,75 @@ jobs:
               echo "- URL: $deployment_url"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure Grove Pages custom domain
+        if: ${{ needs.scope.outputs.deploy_target == 'production' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const {
+            CLOUDFLARE_ACCOUNT_ID,
+            CLOUDFLARE_API_TOKEN,
+            GITHUB_STEP_SUMMARY,
+            GROVE_APP_ORIGIN,
+            GROVE_PAGES_PROJECT,
+          } = process.env;
+
+          if (!CLOUDFLARE_ACCOUNT_ID || !CLOUDFLARE_API_TOKEN) {
+            throw new Error("Cloudflare account ID and API token are required.");
+          }
+
+          const domain = new URL(GROVE_APP_ORIGIN).hostname;
+          const project = encodeURIComponent(GROVE_PAGES_PROJECT);
+          const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${project}/domains`;
+
+          async function cloudflare(path, init = {}) {
+            const response = await fetch(path, {
+              ...init,
+              headers: {
+                Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}`,
+                "Content-Type": "application/json",
+                ...(init.headers ?? {}),
+              },
+            });
+            const body = await response.json().catch(() => null);
+            if (!response.ok || body?.success === false) {
+              let detail = body?.errors?.map((error) => error.message).join("; ") || response.statusText;
+              throw new Error(`Cloudflare Pages domain API failed: ${detail}`);
+            }
+            return body;
+          }
+
+          function domainList(result) {
+            if (Array.isArray(result)) return result;
+            if (Array.isArray(result?.domains)) return result.domains;
+            return [];
+          }
+
+          const existing = await cloudflare(baseUrl);
+          const domains = domainList(existing.result);
+          if (!domains.some((entry) => entry?.name === domain)) {
+            await cloudflare(baseUrl, {
+              method: "POST",
+              body: JSON.stringify({ name: domain }),
+            });
+          }
+
+          const current = await cloudflare(`${baseUrl}/${encodeURIComponent(domain)}`);
+          const status =
+            current.result?.status ??
+            current.result?.verification_data?.status ??
+            current.result?.verification_status ??
+            "unknown";
+
+          await import("node:fs").then((fs) => {
+            fs.appendFileSync(
+              GITHUB_STEP_SUMMARY,
+              `\n### Grove custom domain\n\n- Pages domain: ${domain}\n- Status: ${status}\n`,
+            );
+          });
+          NODE

@@ -4,6 +4,12 @@
   "main": "./dist/grove_relay/index.js",
   "compatibility_date": "2026-05-28",
   "compatibility_flags": ["nodejs_compat"],
+  "routes": [
+    {
+      "pattern": "relay.grovemd.net",
+      "custom_domain": true,
+    },
+  ],
   "durable_objects": {
     "bindings": [
       {
