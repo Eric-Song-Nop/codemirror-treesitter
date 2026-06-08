@@ -474,12 +474,18 @@ function LocalWorkspaceApp() {
   }, [saveCurrentFile]);
 
   let startOwnerShareHost = useCallback(
-    async (record: OwnerShareRecord, backend: WorkspaceBackend, document: CollabDocumentState) => {
+    async (
+      record: OwnerShareRecord,
+      backend: WorkspaceBackend,
+      document: CollabDocumentState,
+      options: { actionLabel?: string } = {},
+    ) => {
       stopOwnerShareHost();
 
+      let actionLabel = options.actionLabel ?? "Link created";
       let hostSecret = readHostSecret(record);
       if (!hostSecret) {
-        setShareError("Link created, but this browser cannot host it without the host key.");
+        setShareError(`${actionLabel}, but this browser cannot host it without the host key.`);
         return;
       }
 
@@ -530,7 +536,7 @@ function LocalWorkspaceApp() {
         });
         connection.connect();
       } catch (error) {
-        setShareError(`Link created, but host sync did not start: ${errorToMessage(error)}`);
+        setShareError(`${actionLabel}, but host sync did not start: ${errorToMessage(error)}`);
       }
     },
     [scheduleAutoSave, setSaveStateSynced, stopOwnerShareHost],
@@ -1318,6 +1324,8 @@ function LocalWorkspaceApp() {
     let record = activeShareRecord;
     if (!backend || !record || record.revokedAt != null) return;
 
+    let document = collabDocumentRef.current;
+    let shouldRestartHost = document?.path == record.path;
     let hostSecret = readHostSecret(record);
     if (!hostSecret) {
       setShareError("This browser cannot rotate the link without the host key.");
@@ -1327,6 +1335,7 @@ function LocalWorkspaceApp() {
     setShareCreating(true);
     setShareError("");
     setShareCopied(false);
+    if (shouldRestartHost) stopOwnerShareHost();
     try {
       let share = await rotateOwnerShare({
         backend,
@@ -1338,12 +1347,22 @@ function LocalWorkspaceApp() {
       });
       setCreatedShare(share);
       setActiveShareRecord(share.record);
+      if (shouldRestartHost && document) {
+        await startOwnerShareHost(share.record, backend, document, {
+          actionLabel: "Link rotated",
+        });
+      }
     } catch (error) {
       setShareError(errorToMessage(error));
+      if (shouldRestartHost && document) {
+        void startOwnerShareHost(record, backend, document, {
+          actionLabel: "Link rotation failed",
+        });
+      }
     } finally {
       setShareCreating(false);
     }
-  }, [activeShareRecord, shareExpiration]);
+  }, [activeShareRecord, shareExpiration, startOwnerShareHost, stopOwnerShareHost]);
 
   let stopSharingFile = useCallback(async () => {
     let backend = workspaceBackendRef.current;
