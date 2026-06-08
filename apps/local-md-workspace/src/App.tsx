@@ -846,7 +846,7 @@ function LocalWorkspaceApp() {
         await getAccessToken();
         let backend = createDropboxWorkspaceBackend({
           getAccessToken,
-          name: "Dropbox mirror",
+          name: "Dropbox workspace",
           refreshAccessToken,
           root,
         });
@@ -905,7 +905,9 @@ function LocalWorkspaceApp() {
     if (!storedDropboxConfig) return;
     let appKey = defaultDropboxAppKey();
     if (!appKey) {
-      setErrorMessage("Dropbox mirror is not configured. Set VITE_DROPBOX_APP_KEY for this app.");
+      setErrorMessage(
+        "Dropbox workspace is not configured. Set VITE_DROPBOX_APP_KEY for this app.",
+      );
       setRetryLoadPath(null);
       return;
     }
@@ -1105,7 +1107,9 @@ function LocalWorkspaceApp() {
   let connectDropbox = () => {
     let appKey = defaultDropboxAppKey();
     if (!appKey) {
-      setErrorMessage("Dropbox mirror is not configured. Set VITE_DROPBOX_APP_KEY for this app.");
+      setErrorMessage(
+        "Dropbox workspace is not configured. Set VITE_DROPBOX_APP_KEY for this app.",
+      );
       setRetryLoadPath(null);
       return;
     }
@@ -1513,7 +1517,7 @@ function LocalWorkspaceApp() {
               <FolderOpenIcon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
-              label="Connect Dropbox mirror"
+              label="Connect Dropbox"
               size="icon-sm"
               variant="ghost"
               onClick={connectDropbox}
@@ -1561,7 +1565,7 @@ function LocalWorkspaceApp() {
                     disabled={busy || dropboxConnecting}
                   >
                     <CloudIcon data-icon="inline-start" />
-                    Continue Dropbox mirror
+                    Continue Dropbox
                   </Button>
                 )}
                 <Button
@@ -1578,7 +1582,7 @@ function LocalWorkspaceApp() {
                   disabled={busy || dropboxConnecting}
                 >
                   <CloudIcon data-icon="inline-start" />
-                  Connect Dropbox mirror
+                  Connect Dropbox
                 </Button>
               </div>
             </div>
@@ -1882,7 +1886,7 @@ function WorkspaceEmpty({
                 disabled={busy || dropboxConnecting}
               >
                 <CloudIcon data-icon="inline-start" />
-                Continue Dropbox mirror
+                Continue Dropbox
               </Button>
             )}
             <Button variant="outline" onClick={onOpenFolder} disabled={!browserSupported || busy}>
@@ -1891,14 +1895,14 @@ function WorkspaceEmpty({
             </Button>
             <Button variant="outline" onClick={onOpenDropbox} disabled={busy || dropboxConnecting}>
               <CloudIcon data-icon="inline-start" />
-              Connect Dropbox mirror
+              Connect Dropbox
             </Button>
           </div>
         ) : dropboxRestoreAvailable ? (
           <div className="flex flex-col gap-2">
             <Button onClick={onRestoreDropbox} disabled={busy || dropboxConnecting}>
               <CloudIcon data-icon="inline-start" />
-              Continue Dropbox mirror
+              Continue Dropbox
             </Button>
             <Button variant="outline" onClick={onOpenFolder} disabled={!browserSupported || busy}>
               <FolderOpenIcon data-icon="inline-start" />
@@ -1906,7 +1910,7 @@ function WorkspaceEmpty({
             </Button>
             <Button variant="outline" onClick={onOpenDropbox} disabled={busy || dropboxConnecting}>
               <CloudIcon data-icon="inline-start" />
-              Connect Dropbox mirror
+              Connect Dropbox
             </Button>
           </div>
         ) : (
@@ -1917,7 +1921,7 @@ function WorkspaceEmpty({
             </Button>
             <Button variant="outline" onClick={onOpenDropbox} disabled={busy || dropboxConnecting}>
               <CloudIcon data-icon="inline-start" />
-              Connect Dropbox mirror
+              Connect Dropbox
             </Button>
           </div>
         )}
@@ -2498,7 +2502,7 @@ function saveStateLabel(saveState: SaveState, selectedFile: MarkdownFileNode | n
 
 function workspaceStorageLabel(backend: WorkspaceBackend | null) {
   if (!backend) return "";
-  return backend.kind == "opendal-dropbox" ? "Dropbox mirror" : "Local";
+  return backend.kind == "opendal-dropbox" ? "Dropbox" : "Local";
 }
 
 function mergeOwnerShareStatus(

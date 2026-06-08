@@ -273,7 +273,9 @@ function waitForDropboxPopupCode(popup: Window, authUrl: URL, expectedState: str
       () => {
         cleanup();
         closeDropboxPopup(popup);
-        reject(new Error("Dropbox authorization timed out. Reconnect Dropbox mirror to continue."));
+        reject(
+          new Error("Dropbox authorization timed out. Reconnect Dropbox workspace to continue."),
+        );
       },
       5 * 60 * 1000,
     );

@@ -304,6 +304,7 @@ jobs:
     env:
       GROVE_APP_ORIGIN: https://app.grovemd.net
       GROVE_DROPBOX_REDIRECT_URI: https://app.grovemd.net/
+      GROVE_PAGES_CNAME: grove-6te.pages.dev
       GROVE_PAGES_DOMAINS: grovemd.net,app.grovemd.net
       GROVE_PAGES_PROJECT: grove
       GROVE_RELAY_ORIGIN: https://relay.grovemd.net
@@ -595,6 +596,150 @@ jobs:
               `\n### Grove custom domains\n\n${statuses
                 .map(({ domain, status }) => `- Pages domain: ${domain} (${status})`)
                 .join("\n")}\n`,
+            );
+          });
+          NODE
+
+      - name: Ensure Grove Pages DNS records
+        if: ${{ needs.scope.outputs.deploy_target == 'production' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const {
+            CLOUDFLARE_ACCOUNT_ID,
+            CLOUDFLARE_API_TOKEN,
+            GITHUB_STEP_SUMMARY,
+            GROVE_PAGES_CNAME,
+            GROVE_PAGES_DOMAINS,
+            GROVE_ZONE_NAME,
+          } = process.env;
+
+          if (!CLOUDFLARE_ACCOUNT_ID || !CLOUDFLARE_API_TOKEN) {
+            throw new Error("Cloudflare account ID and API token are required.");
+          }
+
+          const target = normalizeDnsName(GROVE_PAGES_CNAME);
+          if (!target) throw new Error("GROVE_PAGES_CNAME must be set.");
+
+          const domains = (GROVE_PAGES_DOMAINS ?? "")
+            .split(",")
+            .map((domain) => normalizeDnsName(domain))
+            .filter(Boolean);
+          if (!domains.length) {
+            throw new Error("GROVE_PAGES_DOMAINS must include at least one domain.");
+          }
+
+          async function cloudflare(path, init = {}, context = path) {
+            const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+              ...init,
+              headers: {
+                Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}`,
+                "Content-Type": "application/json",
+                ...(init.headers ?? {}),
+              },
+            });
+            const body = await response.json().catch(() => null);
+            if (!response.ok || body?.success === false) {
+              const detail =
+                body?.errors?.map((error) => `${error.code}: ${error.message}`).join("; ") ??
+                response.statusText;
+              throw new Error(
+                `Cloudflare DNS API failed while ${context}: ${detail}. ` +
+                  `The Cloudflare API token must include Zone:DNS:Edit for ${GROVE_ZONE_NAME}.`,
+              );
+            }
+            return body;
+          }
+
+          function normalizeDnsName(name) {
+            return (name ?? "").trim().replace(/\.$/, "").toLowerCase();
+          }
+
+          function recordPayload(name) {
+            return {
+              content: target,
+              name,
+              proxied: true,
+              ttl: 1,
+              type: "CNAME",
+            };
+          }
+
+          const zones = await cloudflare(
+            `/zones?name=${encodeURIComponent(GROVE_ZONE_NAME)}`,
+            {},
+            `looking up zone ${GROVE_ZONE_NAME}`,
+          );
+          const zone = zones.result?.find(
+            (candidate) =>
+              candidate?.name === GROVE_ZONE_NAME && candidate?.account?.id === CLOUDFLARE_ACCOUNT_ID,
+          );
+          if (!zone) {
+            throw new Error(`Cloudflare zone ${GROVE_ZONE_NAME} is not visible in the configured account.`);
+          }
+
+          const changes = [];
+          for (const domain of domains) {
+            const records = await cloudflare(
+              `/zones/${zone.id}/dns_records?name=${encodeURIComponent(domain)}`,
+              {},
+              `listing DNS records for ${domain}`,
+            );
+            const conflicting = records.result?.filter((record) =>
+              ["A", "AAAA", "CNAME"].includes(record?.type),
+            ) ?? [];
+            const [primaryCname, ...extraCnames] = conflicting.filter(
+              (record) => record.type === "CNAME",
+            );
+
+            for (const record of conflicting.filter((record) => record.type !== "CNAME")) {
+              await cloudflare(
+                `/zones/${zone.id}/dns_records/${record.id}`,
+                { method: "DELETE" },
+                `removing ${record.type} record for ${domain}`,
+              );
+              changes.push(`${domain}: removed ${record.type}`);
+            }
+
+            for (const record of extraCnames) {
+              await cloudflare(
+                `/zones/${zone.id}/dns_records/${record.id}`,
+                { method: "DELETE" },
+                `removing duplicate CNAME record for ${domain}`,
+              );
+              changes.push(`${domain}: removed duplicate CNAME`);
+            }
+
+            if (primaryCname) {
+              const currentTarget = normalizeDnsName(primaryCname.content);
+              if (currentTarget !== target || primaryCname.proxied !== true) {
+                await cloudflare(
+                  `/zones/${zone.id}/dns_records/${primaryCname.id}`,
+                  { method: "PUT", body: JSON.stringify(recordPayload(domain)) },
+                  `updating CNAME record for ${domain}`,
+                );
+                changes.push(`${domain}: updated CNAME -> ${target}`);
+              } else {
+                changes.push(`${domain}: CNAME already points to ${target}`);
+              }
+            } else {
+              await cloudflare(
+                `/zones/${zone.id}/dns_records`,
+                { method: "POST", body: JSON.stringify(recordPayload(domain)) },
+                `creating CNAME record for ${domain}`,
+              );
+              changes.push(`${domain}: created CNAME -> ${target}`);
+            }
+          }
+
+          await import("node:fs").then((fs) => {
+            fs.appendFileSync(
+              GITHUB_STEP_SUMMARY,
+              `\n### Grove DNS records\n\n${changes.map((change) => `- ${change}`).join("\n")}\n`,
             );
           });
           NODE

@@ -124,7 +124,7 @@ async function assertInitialDropboxUi(client, sessionId) {
     sessionId,
   );
 
-  if (!state.hasRoot || !state.body.includes("Connect Dropbox mirror")) {
+  if (!state.hasRoot || !state.body.includes("Connect Dropbox")) {
     throw new Error(
       `Initial workspace UI did not render Dropbox controls: ${JSON.stringify(state)}`,
     );
@@ -494,7 +494,7 @@ async function assertOwnerExternalConflictFlow(client) {
 
 async function assertSavedDropboxConfigUi(client, sessionId) {
   let body = await client.evaluate("document.body.innerText", sessionId);
-  if (!body.includes("Continue Dropbox mirror")) {
+  if (!body.includes("Continue Dropbox")) {
     throw new Error("Stored Dropbox config did not expose a reconnect action.");
   }
 }
@@ -518,7 +518,7 @@ async function assertNoDropboxConfigFields(client, sessionId) {
 async function assertRealDropboxWorkspaceFlow(client, sessionId) {
   if (!dropboxAccessToken) {
     console.log(
-      "Skipping real Dropbox mirror UI smoke: LOCAL_MD_WORKSPACE_DROPBOX_ACCESS_TOKEN and OPENDAL_DROPBOX_ACCESS_TOKEN are not set.",
+      "Skipping real Dropbox workspace UI smoke: LOCAL_MD_WORKSPACE_DROPBOX_ACCESS_TOKEN and OPENDAL_DROPBOX_ACCESS_TOKEN are not set.",
     );
     return;
   }
@@ -570,7 +570,7 @@ async function assertMockDropboxWorkspaceFlow(client, sessionId) {
     nextValue: sharedValue,
     waitForOwnerSave: () => waitForMockDropboxFileValue(client, sessionId, fileName, sharedValue),
   });
-  console.log("Mock Dropbox mirror shared-file UI smoke passed.");
+  console.log("Mock Dropbox workspace shared-file UI smoke passed.");
 }
 
 async function assertSharedFileGuestEdit(
@@ -960,9 +960,9 @@ async function connectDropboxWorkspace(client, sessionId) {
     `
       (() => {
         let button = Array.from(document.querySelectorAll("button")).find((item) =>
-          item.textContent.includes("Connect Dropbox mirror") && !item.disabled
+          item.textContent.includes("Connect Dropbox") && !item.disabled
         );
-        if (!button) throw new Error("Connect Dropbox mirror button was not found.");
+        if (!button) throw new Error("Connect Dropbox button was not found.");
         button.click();
       })()
     `,
@@ -971,7 +971,7 @@ async function connectDropboxWorkspace(client, sessionId) {
 
   try {
     await client.waitForPredicate(
-      `document.body.innerText.includes("Dropbox mirror connected") || document.body.innerText.includes("Dropbox mirror ·") || (document.body.innerText.includes("Dropbox mirror") && document.body.innerText.includes("No markdown files") && Array.from(document.querySelectorAll("button")).some((button) => button.textContent.trim() == "New file" && !button.disabled))`,
+      `document.body.innerText.includes("Dropbox workspace connected") || document.body.innerText.includes("Dropbox workspace ·") || (document.body.innerText.includes("Dropbox workspace") && document.body.innerText.includes("No markdown files") && Array.from(document.querySelectorAll("button")).some((button) => button.textContent.trim() == "New file" && !button.disabled))`,
       sessionId,
       20_000,
     );

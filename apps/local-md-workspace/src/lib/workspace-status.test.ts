@@ -15,7 +15,7 @@ describe("workspace provider status", () => {
     });
   });
 
-  it("describes Dropbox mirror root and token expiry", () => {
+  it("describes Dropbox workspace root and token expiry", () => {
     expect(
       createWorkspaceProviderStatus(
         backend("opendal-dropbox"),
@@ -27,7 +27,7 @@ describe("workspace provider status", () => {
       ),
     ).toEqual({
       icon: "cloud",
-      label: "Dropbox mirror · notes · token 2h 5m",
+      label: "Dropbox workspace · notes · token 2h 5m",
       state: "connected",
     });
   });

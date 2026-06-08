@@ -454,12 +454,12 @@ a token with zone route permissions.
 server to be running at `http://127.0.0.1:5173/` by default. Start that dev
 server with a Dropbox app key, for example
 `VITE_DROPBOX_APP_KEY=smoke-dropbox-app`, so the credential-free mock Dropbox
-mirror smoke can enter through the normal OAuth UI. It runs without cloud
-credentials for the local workspace and mock Dropbox mirror checks. To include
+workspace smoke can enter through the normal OAuth UI. It runs without cloud
+credentials for the local workspace and mock Dropbox workspace checks. To include
 the credential-gated real Dropbox app flow, set
 `LOCAL_MD_WORKSPACE_DROPBOX_ACCESS_TOKEN` or `OPENDAL_DROPBOX_ACCESS_TOKEN`;
 `LOCAL_MD_WORKSPACE_DROPBOX_ROOT` can limit the temporary smoke file to a
-specific Dropbox mirror root. These access-token variables are only for local
+specific Dropbox workspace root. These access-token variables are only for local
 smoke tests that need to exercise real Dropbox file IO. They are not product
 configuration, are not required for collaboration, and do not replace the
 app's Dropbox OAuth flow. Set `CHROME_PATH` if Chromium is not available in a
@@ -476,7 +476,7 @@ standard app path or the Playwright browser cache.
   build commands, and validation notes.
 - `packages/opendal-wasm-browser/PLAN.md`: cloud workspace integration plan.
 - `apps/local-md-workspace/COLLABORATION_PLAN.md`: owner-backed single-file
-  collaboration plan, Dropbox mirror semantics, and cleanup/implementation
+  collaboration plan, Dropbox workspace semantics, and cleanup/implementation
   phases.
 - This README: repository-level architecture, workspace structure, apps, and
   LiveMD web component/API reference.
