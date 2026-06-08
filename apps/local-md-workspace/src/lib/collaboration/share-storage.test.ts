@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { resetBrowserCollabMemoryStoreForTests } from "./collab-browser-store.ts";
 import { openMarkdownCollabDocument } from "./markdown-document.ts";
 import {
   createOwnerShare,
@@ -8,6 +9,7 @@ import {
   hostSecretStorageKey,
   ownerShareRecordPath,
   readOwnerShareRecord,
+  resetOwnerShareRecordStoreForTests,
   revokeOwnerShare,
   rotateOwnerShare,
 } from "./share-storage.ts";
@@ -18,8 +20,32 @@ import type {
   WorkspaceEntry,
 } from "@/lib/workspace-backend";
 
+let indexedDbDescriptor: PropertyDescriptor | undefined;
+
+beforeEach(() => {
+  indexedDbDescriptor = Object.getOwnPropertyDescriptor(window, "indexedDB");
+  Object.defineProperty(window, "indexedDB", {
+    configurable: true,
+    value: undefined,
+  });
+  localStorage.clear();
+  resetBrowserCollabMemoryStoreForTests();
+  resetOwnerShareRecordStoreForTests();
+});
+
+afterEach(() => {
+  localStorage.clear();
+  resetBrowserCollabMemoryStoreForTests();
+  resetOwnerShareRecordStoreForTests();
+  if (indexedDbDescriptor) {
+    Object.defineProperty(window, "indexedDB", indexedDbDescriptor);
+  } else {
+    Reflect.deleteProperty(window, "indexedDB");
+  }
+});
+
 describe("owner shared file metadata", () => {
-  it("creates a link and stores only hashed capabilities in workspace sidecar", async () => {
+  it("creates a link and stores only hashed capabilities in browser metadata", async () => {
     let backend = createMemoryBackend([["note.md", "# First\n"]]);
     let document = await openMarkdownCollabDocument(backend, "note.md");
     let hostSecrets = new Map<string, string>();
@@ -55,7 +81,8 @@ describe("owner shared file metadata", () => {
       localFileId: document.docId,
       materializedHash: "420eb45a",
       path: "note.md",
-      schemaVersion: 1,
+      schemaVersion: 2,
+      workspaceId: "local:memory:test",
     });
     expect(relayRequests).toEqual([
       {
@@ -68,7 +95,7 @@ describe("owner shared file metadata", () => {
       },
     ]);
 
-    let stored = backend.files.get(ownerShareRecordPath(share.record.shareId));
+    let stored = localStorage.getItem(ownerShareRecordPath(share.record.shareId));
     let hostSecret = hostSecrets.get(hostSecretStorageKey(share.record.shareId));
     expect(stored).toBeTruthy();
     expect(stored).not.toContain(linkParts!.guestSecret);
@@ -79,7 +106,7 @@ describe("owner shared file metadata", () => {
     );
   });
 
-  it("does not write owner sidecar metadata when relay creation fails", async () => {
+  it("does not write owner browser metadata when relay creation fails", async () => {
     let backend = createMemoryBackend([["note.md", "# First\n"]]);
     let document = await openMarkdownCollabDocument(backend, "note.md");
     let hostSecrets = new Map<string, string>();
@@ -104,9 +131,8 @@ describe("owner shared file metadata", () => {
       }),
     ).rejects.toThrow("relay unavailable");
 
-    expect([...backend.files.keys()].some((path) => path.startsWith(".livemd/shares/"))).toBe(
-      false,
-    );
+    expect(hasLiveMdFiles(backend)).toBe(false);
+    expect(localStorage.getItem(ownerShareRecordPath("missing-share-id"))).toBeNull();
     expect(hostSecrets.size).toBe(0);
   });
 
@@ -164,7 +190,7 @@ describe("owner shared file metadata", () => {
       },
     ]);
 
-    let stored = backend.files.get(ownerShareRecordPath(share.record.shareId));
+    let stored = localStorage.getItem(ownerShareRecordPath(share.record.shareId));
     expect(stored).toBeTruthy();
     expect(stored).not.toContain(rotatedLink.guestSecret);
     await expect(readOwnerShareRecord(backend, share.record.shareId)).resolves.toEqual(
@@ -240,7 +266,7 @@ describe("owner shared file metadata", () => {
         shareId,
       }),
     });
-    backend.files.set(".livemd/shares/corrupt.json", "{");
+    localStorage.setItem("local-md-workspace:share-record:corrupt", "{");
 
     await expect(findOwnerShareRecordForPath(backend, "note.md")).resolves.toEqual(second.record);
   });
@@ -313,6 +339,10 @@ function createMemoryBackend(entries: Array<[string, string]>): MemoryBackend {
       files.set(path, value);
     },
   };
+}
+
+function hasLiveMdFiles(backend: MemoryBackend) {
+  return [...backend.files.keys()].some((path) => path == ".livemd" || path.startsWith(".livemd/"));
 }
 
 function decodeBase64(value: string) {

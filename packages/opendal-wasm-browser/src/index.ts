@@ -93,7 +93,7 @@ async function initializeGeneratedModule(
   wasmModuleUrl: CreateOpendalBrowserOperatorOptions["wasmModuleUrl"],
 ) {
   if (typeof generated.default == "function") {
-    await generated.default(wasmModuleUrl);
+    await generated.default(wasmModuleUrl == null ? undefined : { module_or_path: wasmModuleUrl });
   }
 }
 

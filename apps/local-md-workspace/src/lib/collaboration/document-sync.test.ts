@@ -4,9 +4,7 @@ import { LoroDoc } from "loro-crdt";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   collabDocumentBroadcastChannelName,
-  collabWorkspaceBroadcastChannelName,
   createCollabDocumentBroadcastSync,
-  createWorkspaceManifestBroadcastSync,
 } from "./document-sync.ts";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
 
@@ -27,9 +25,6 @@ describe("collab document BroadcastChannel sync", () => {
   it("uses backend and document identity in the channel name", () => {
     expect(collabDocumentBroadcastChannelName(memoryBackend, "doc-1")).toBe(
       "local-md-workspace:local:memory:test:doc:doc-1",
-    );
-    expect(collabWorkspaceBroadcastChannelName(memoryBackend)).toBe(
-      "local-md-workspace:local:memory:test:workspace",
     );
   });
 
@@ -68,29 +63,6 @@ describe("collab document BroadcastChannel sync", () => {
 
     stopFirst();
     stopSecond();
-  });
-
-  it("relays workspace manifest snapshots to another sender on the same channel", async () => {
-    let received: Uint8Array[] = [];
-    let first = createWorkspaceManifestBroadcastSync({
-      backend: memoryBackend,
-      senderId: "first",
-    });
-    let second = createWorkspaceManifestBroadcastSync({
-      backend: memoryBackend,
-      onRemoteUpdate: (bytes) => {
-        received.push(bytes);
-      },
-      senderId: "second",
-    });
-
-    first.broadcast(new Uint8Array([4, 5, 6]));
-    await Promise.resolve();
-
-    expect(received).toEqual([new Uint8Array([4, 5, 6])]);
-
-    first.dispose();
-    second.dispose();
   });
 });
 

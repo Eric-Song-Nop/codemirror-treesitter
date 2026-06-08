@@ -2,6 +2,10 @@
 
 Review scope: branch `lody/87ec2365-f4d`, compared with `origin/main`.
 
+Current note: Grove's dedicated relay now lives in `apps/grove-relay`. References
+below to `apps/collab-editor` describe the historical implementation reviewed
+before the relay was split out.
+
 This document records the collaboration review findings and the recommended
 fixes. The review focused on owner-backed single-file sharing, the
 `apps/collab-editor` Durable Object relay, and the `apps/local-md-workspace`
@@ -32,8 +36,9 @@ Recommended release posture:
   returns a session token.
 - `/api/shares/:shareId/ws?sessionToken=...` joins the authenticated share
   WebSocket.
-- The owner stores only hashed capabilities in workspace sidecar metadata under
-  `.livemd/shares/`.
+- The owner stores non-secret share metadata in browser storage. Host
+  capabilities remain in browser localStorage and are not written to the
+  local folder or Dropbox mirror.
 - The owner host agent imports relay edits, materializes the merged document to
   the owner's backend, then sends `HostSaveAck`.
 - Guests only receive a `/share/:shareId#key=...` link. The guest secret is in
@@ -318,9 +323,9 @@ Recommended fix:
 - Save each batch of pending updates as a new segment.
 - Compact segments into a snapshot after a byte or count threshold.
 
-Best maintainable design:
+Superseded design:
 
-Use this layout:
+The previous workspace sidecar layout is no longer used:
 
 ```text
 .livemd/docs/<docId>.snapshot.b64
@@ -330,32 +335,31 @@ Use this layout:
   000003.update.b64
 ```
 
-Open flow:
+Current open flow:
 
-1. Read snapshot if present.
-2. List update segments.
-3. Sort by sequence number.
-4. Import segments with `doc.importBatch(...)`.
-5. If segments exceed thresholds, compact in the background.
+1. Ordinary Markdown open reads the selected `.md` only.
+2. Explicit file sharing opens a browser-local Loro document.
+3. Owner CRDT snapshots and pending updates live in browser IndexedDB.
+4. Relay room snapshots/update logs live in Durable Object storage.
+5. Dropbox/local folders receive only materialized Markdown writes.
 
 Save flow:
 
-1. Encode only the current pending batch.
-2. Write one new segment file.
-3. Do not read or rewrite older segments.
-4. Compact to snapshot after threshold.
+1. Encode pending owner CRDT updates to browser IndexedDB.
+2. Send live collaboration updates to the relay WebSocket.
+3. Materialize the merged Markdown text back to the selected `.md`.
+4. Send `HostSaveAck` after the owner storage write succeeds.
 
 Migration:
 
-- Keep support for the existing `.updates.b64` file.
-- On first successful open, import it and compact to the new segmented layout.
-- Delete or ignore the legacy file only after the new snapshot is safely written.
+- No backwards-compatible `.livemd` migration is required for the current
+  product.
 
 ### 9. Test Coverage Gap: Missing Worker/DO Security and Limit Tests
 
-Current tests cover pure parsing, client relay helpers, and owner sidecar
-metadata. They do not cover the full Worker route behavior or security-critical
-WebSocket joins.
+Current tests cover pure parsing, client relay helpers, owner browser metadata,
+and Worker route behavior. Continue extending security-critical WebSocket join
+coverage as relay behavior grows.
 
 Recommended tests:
 

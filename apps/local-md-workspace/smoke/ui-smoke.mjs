@@ -494,7 +494,7 @@ async function assertOwnerExternalConflictFlow(client) {
 
 async function assertSavedDropboxConfigUi(client, sessionId) {
   let body = await client.evaluate("document.body.innerText", sessionId);
-  if (!body.includes("Reconnect Dropbox mirror")) {
+  if (!body.includes("Continue Dropbox mirror")) {
     throw new Error("Stored Dropbox config did not expose a reconnect action.");
   }
 }

@@ -52,6 +52,10 @@ export function workspaceErrorMessage(error: unknown) {
     return "Dropbox token exchange failed. Check the app key and reconnect Dropbox mirror.";
   }
 
+  if (isDropboxPathUnavailable(normalized)) {
+    return "Dropbox app folder or mirror path is no longer available. Check the Dropbox app folder setting, then reconnect Dropbox mirror.";
+  }
+
   if (
     matchesAny(normalized, [
       "does not support native rename or copy fallback",
@@ -63,6 +67,29 @@ export function workspaceErrorMessage(error: unknown) {
   }
 
   return message;
+}
+
+function isDropboxPathUnavailable(normalized: string) {
+  return (
+    matchesAny(normalized, [
+      "dropbox",
+      "api.dropboxapi.com",
+      "content.dropboxapi.com",
+      "opendal",
+    ]) &&
+    matchesAny(normalized, [
+      "409",
+      "conflict",
+      "path not found",
+      "path_not_found",
+      "path/not_found",
+      "lookup not found",
+      "lookup_not_found",
+      "lookup/not_found",
+      "not found",
+      "not_found",
+    ])
+  );
 }
 
 function isMissingScope(message: string) {
@@ -81,5 +108,5 @@ function normalizeErrorText(value: string) {
   return value
     .toLowerCase()
     .replace(/[\s_-]+/g, " ")
-    .replace(/\//g, "_");
+    .replace(/[\\/]+/g, " ");
 }

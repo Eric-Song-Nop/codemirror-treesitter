@@ -113,7 +113,7 @@ export async function authorizeDropboxWithPkce(options: DropboxPkceOptions) {
       redirectUri,
     });
   } catch (error) {
-    popup.close();
+    closeDropboxPopup(popup);
     throw error;
   }
 }
@@ -250,7 +250,7 @@ function waitForDropboxPopupCode(popup: Window, authUrl: URL, expectedState: str
   return new Promise<string>((resolve, reject) => {
     let cleanup = () => {
       window.removeEventListener("message", handleMessage);
-      window.clearInterval(closedTimer);
+      window.clearTimeout(timeout);
     };
 
     let handleMessage = (event: MessageEvent<unknown>) => {
@@ -258,7 +258,7 @@ function waitForDropboxPopupCode(popup: Window, authUrl: URL, expectedState: str
       if (event.data.state != expectedState) return;
 
       cleanup();
-      popup.close();
+      closeDropboxPopup(popup);
 
       if (event.data.error) {
         reject(new Error(dropboxOAuthCallbackError(event.data.error, event.data.errorDescription)));
@@ -269,15 +269,24 @@ function waitForDropboxPopupCode(popup: Window, authUrl: URL, expectedState: str
       }
     };
 
-    let closedTimer = window.setInterval(() => {
-      if (!popup.closed) return;
-      cleanup();
-      reject(new Error("Dropbox authorization was closed before it completed."));
-    }, 500);
+    let timeout = window.setTimeout(
+      () => {
+        cleanup();
+        closeDropboxPopup(popup);
+        reject(new Error("Dropbox authorization timed out. Reconnect Dropbox mirror to continue."));
+      },
+      5 * 60 * 1000,
+    );
 
     window.addEventListener("message", handleMessage);
     popup.location.href = authUrl.href;
   });
+}
+
+function closeDropboxPopup(popup: Window) {
+  try {
+    popup.close();
+  } catch {}
 }
 
 async function exchangeDropboxCodeForToken(options: {

@@ -1,0 +1,22 @@
+{
+  "name": "grove-relay",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "deploy": "wrangler deploy --config wrangler.worker.jsonc",
+    "deploy:worker": "wrangler deploy --config wrangler.worker.jsonc",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "loro-crdt": "^1.12.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.39.0",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "wrangler": "^4.95.0"
+  }
+}

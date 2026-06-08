@@ -32,8 +32,9 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   assets, highlight queries, and local CodeMirror-compatible wrappers.
 - Product/runtime integrations: LiveMD uses KaTeX, Mermaid, and
   `beautiful-mermaid`; optional collaboration uses `loro-crdt` and
-  `loro-codemirror`; `apps/collab-editor` uses Cloudflare Workers, Durable
-  Objects, WebSockets, Wrangler, and `@cloudflare/vite-plugin`.
+  `loro-codemirror`; `apps/grove-relay` and `apps/collab-editor` use
+  Cloudflare Workers, Durable Objects, WebSockets, Wrangler, and
+  `@cloudflare/vite-plugin`.
 
 ## Repository Layout
 
@@ -63,6 +64,9 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `apps/basic-editor`: Minimal `<live-md-editor>` smoke app.
 - `apps/local-md-workspace`: React shadcn/ui local-first Markdown workspace
   using LiveMD and the browser File System Access API for `.md` files.
+- `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
+  persistence, WebSocket Loro sync, share lifecycle APIs, and Wrangler deploy
+  config.
 - `apps/examples`: Side-by-side local-vs-official CodeMirror comparison app.
 - `apps/live-md-benchmark`: LiveMD benchmark harness.
 - `apps/live-md-loro-demo`: Local two-peer Loro collaboration demo.
@@ -83,8 +87,9 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   package.
 - Keep Loro collaboration optional. Do not import `loro-crdt` or
   `loro-codemirror` from `packages/live-md`.
-- Cloudflare-specific APIs belong in `apps/collab-editor`; package code should
-  remain browser/library oriented.
+- Grove shared-file relay APIs belong in `apps/grove-relay`; the
+  `apps/collab-editor` Cloudflare app remains a separate collaboration demo.
+  Package code should remain browser/library oriented.
 
 ## Common Commands
 
@@ -106,6 +111,8 @@ Useful task selectors:
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
 vp run local-md-workspace#dev
+vp run grove-relay#dev
+vp run grove-relay#types
 vp run examples#dev
 vp run live-md-benchmark#benchmark
 vp run live-md-loro-demo#dev
