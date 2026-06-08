@@ -386,39 +386,39 @@ jobs:
           fi
 
           if [ "$DEPLOY_TARGET" = "production" ]; then
-            node <<'NODE'
-            const { CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, GROVE_ZONE_NAME } = process.env;
+          node <<'NODE'
+          const { CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, GROVE_ZONE_NAME } = process.env;
 
-            if (!CLOUDFLARE_ACCOUNT_ID || !CLOUDFLARE_API_TOKEN) {
-              throw new Error("Cloudflare account ID and API token are required.");
-            }
+          if (!CLOUDFLARE_ACCOUNT_ID || !CLOUDFLARE_API_TOKEN) {
+            throw new Error("Cloudflare account ID and API token are required.");
+          }
 
-            const response = await fetch(
-              `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(GROVE_ZONE_NAME)}`,
-              { headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` } },
+          const response = await fetch(
+            `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(GROVE_ZONE_NAME)}`,
+            { headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` } },
+          );
+          const body = await response.json().catch(() => null);
+          if (!response.ok || body?.success === false) {
+            const detail = body?.errors?.map((error) => error.message).join("; ") || response.statusText;
+            throw new Error(`Could not verify Cloudflare zone ${GROVE_ZONE_NAME}: ${detail}`);
+          }
+
+          const zone = body.result?.find(
+            (candidate) => candidate?.name === GROVE_ZONE_NAME && candidate?.account?.id === CLOUDFLARE_ACCOUNT_ID,
+          );
+          if (!zone) {
+            console.error(
+              `::error::Cloudflare zone ${GROVE_ZONE_NAME} is not visible in the configured Cloudflare account. Add the zone to the same account as the Grove Pages project, or update CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN.`,
             );
-            const body = await response.json().catch(() => null);
-            if (!response.ok || body?.success === false) {
-              const detail = body?.errors?.map((error) => error.message).join("; ") || response.statusText;
-              throw new Error(`Could not verify Cloudflare zone ${GROVE_ZONE_NAME}: ${detail}`);
-            }
-
-            const zone = body.result?.find(
-              (candidate) => candidate?.name === GROVE_ZONE_NAME && candidate?.account?.id === CLOUDFLARE_ACCOUNT_ID,
+            process.exit(1);
+          }
+          if (zone.status !== "active") {
+            console.error(
+              `::error::Cloudflare zone ${GROVE_ZONE_NAME} is ${zone.status}; Worker custom domains require an active zone.`,
             );
-            if (!zone) {
-              console.error(
-                `::error::Cloudflare zone ${GROVE_ZONE_NAME} is not visible in the configured Cloudflare account. Add the zone to the same account as the Grove Pages project, or update CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN.`,
-              );
-              process.exit(1);
-            }
-            if (zone.status !== "active") {
-              console.error(
-                `::error::Cloudflare zone ${GROVE_ZONE_NAME} is ${zone.status}; Worker custom domains require an active zone.`,
-              );
-              process.exit(1);
-            }
-            NODE
+            process.exit(1);
+          }
+          NODE
 
             output_file="$RUNNER_TEMP/wrangler-worker-deploy.log"
             ./node_modules/.bin/wrangler deploy \
