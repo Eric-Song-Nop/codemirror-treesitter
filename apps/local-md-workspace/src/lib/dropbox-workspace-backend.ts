@@ -4,6 +4,8 @@ import type {
   OpendalBrowserOperator,
   OpendalBrowserOperatorConfig,
 } from "@codemirror-treesitter/opendal-wasm-browser";
+import generatedModuleUrl from "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser.js?url";
+import wasmModuleUrl from "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser_bg.wasm?url";
 import type { DropboxAccessToken } from "./dropbox-oauth.ts";
 import {
   buildMarkdownTreeFromEntries,
@@ -15,14 +17,6 @@ import {
 } from "./workspace-backend.ts";
 
 const TOKEN_EXPIRY_SKEW_MS = 5 * 60 * 1000;
-const generatedModuleUrl = new URL(
-  "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser.js",
-  import.meta.url,
-).href;
-const wasmModuleUrl = new URL(
-  "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser_bg.wasm",
-  import.meta.url,
-).href;
 
 export type DropboxWorkspaceBackendOptions = {
   createOperator?: DropboxOperatorFactory;

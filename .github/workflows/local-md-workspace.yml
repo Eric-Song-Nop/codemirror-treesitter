@@ -393,7 +393,31 @@ jobs:
       - name: Build Grove
         env:
           VITE_LOCAL_MD_SHARE_RELAY_ORIGIN: ${{ steps.relay.outputs.relay_origin }}
-        run: vp run local-md-workspace#build
+        run: |
+          set -euo pipefail
+
+          build_log="$RUNNER_TEMP/grove-build.log"
+          vp run local-md-workspace#build 2>&1 | tee "$build_log"
+
+          if grep -Fq "doesn't exist at build time" "$build_log"; then
+            echo "::error::Grove build has unresolved asset URLs. Check build warnings before deploying."
+            exit 1
+          fi
+
+          if grep -R "packages/opendal-wasm-browser/pkg" apps/local-md-workspace/dist/assets/*.js >/dev/null; then
+            echo "::error::Grove build still references the OpenDAL source package path at runtime."
+            exit 1
+          fi
+
+          if ! find apps/local-md-workspace/dist/assets -name "opendal_wasm_browser-*.js" -print -quit | grep -q .; then
+            echo "::error::Grove build did not emit the OpenDAL generated JS asset."
+            exit 1
+          fi
+
+          if ! find apps/local-md-workspace/dist/assets -name "opendal_wasm_browser_bg-*.wasm" -print -quit | grep -q .; then
+            echo "::error::Grove build did not emit the OpenDAL WASM asset."
+            exit 1
+          fi
 
       - name: Deploy Grove to Cloudflare Pages
         if: ${{ needs.scope.outputs.deploy_target == 'production' }}
