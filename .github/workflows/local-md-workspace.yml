@@ -395,6 +395,43 @@ jobs:
           VITE_LOCAL_MD_SHARE_RELAY_ORIGIN: ${{ steps.relay.outputs.relay_origin }}
         run: vp run local-md-workspace#build
 
+      - id: cloudflare
+        name: Resolve Cloudflare deploy credentials
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DEPLOY_TARGET: ${{ needs.scope.outputs.deploy_target }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            missing+=("CLOUDFLARE_ACCOUNT_ID")
+          fi
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            missing+=("CLOUDFLARE_API_TOKEN")
+          fi
+
+          can_deploy=true
+          if [ "${#missing[@]}" -gt 0 ]; then
+            can_deploy=false
+            missing_list="$(IFS=", "; echo "${missing[*]}")"
+
+            if [ "$DEPLOY_TARGET" = "production" ]; then
+              echo "::error::Missing Cloudflare deploy secret(s): $missing_list."
+              exit 1
+            fi
+
+            echo "::notice::Skipping Grove preview deploy because Cloudflare deploy secret(s) are missing: $missing_list."
+            {
+              echo "### Grove preview skipped"
+              echo
+              echo "Cloudflare deploy secret(s) are missing: \`$missing_list\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "can_deploy=$can_deploy" >> "$GITHUB_OUTPUT"
+
       - name: Skip fork preview deploy
         if: ${{ github.event_name == 'pull_request' && needs.scope.outputs.deploy_target == 'preview' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
@@ -406,7 +443,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Deploy Grove to Cloudflare Pages
-        if: ${{ needs.scope.outputs.deploy_target != 'none' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ needs.scope.outputs.deploy_target != 'none' && steps.cloudflare.outputs.can_deploy == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
