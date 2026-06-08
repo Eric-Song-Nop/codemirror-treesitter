@@ -312,7 +312,7 @@ jobs:
       - uses: voidzero-dev/setup-vp@v1
         with:
           cache: true
-          node-version: "22.12.0"
+          node-version: "22"
 
       - name: Install dependencies
         run: vp install
