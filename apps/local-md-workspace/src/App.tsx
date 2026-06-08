@@ -54,14 +54,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -303,9 +296,7 @@ function LocalWorkspaceApp() {
     ? selectedFile.path == selectedFile.name
       ? ""
       : selectedFile.path
-    : workspaceBackend
-      ? "No file selected"
-      : "No folder selected";
+    : "";
   let browserSupported = supportsDirectoryPicker();
 
   let setSaveStateSynced = useCallback((nextState: SaveState) => {
@@ -1494,9 +1485,11 @@ function LocalWorkspaceApp() {
             <GroveMark className="size-8" decorative />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{rootName}</div>
-              <div className="truncate text-xs text-sidebar-foreground/55">
-                {files.length == 1 ? "1 markdown file" : `${files.length} markdown files`}
-              </div>
+              {workspaceBackend && (
+                <div className="truncate text-xs text-sidebar-foreground/55">
+                  {files.length == 1 ? "1 markdown file" : `${files.length} markdown files`}
+                </div>
+              )}
             </div>
             <TooltipIconButton
               label="Open folder"
@@ -1599,9 +1592,10 @@ function LocalWorkspaceApp() {
             >
               <MenuIcon data-icon="inline-start" />
             </TooltipIconButton>
-            {!selectedFile && <GroveMark className="size-6" decorative />}
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{selectedFile?.name ?? "Grove"}</div>
+              {selectedFile && (
+                <div className="truncate text-sm font-medium">{selectedFile.name}</div>
+              )}
               {selectedPathLabel && (
                 <div className="truncate text-xs text-muted-foreground">{selectedPathLabel}</div>
               )}
@@ -1716,7 +1710,6 @@ function LocalWorkspaceApp() {
               <WorkspaceEmpty
                 browserSupported={browserSupported}
                 busy={busy}
-                fileCount={files.length}
                 hasWorkspace={Boolean(workspaceBackend)}
                 dropboxConnecting={dropboxConnecting}
                 dropboxRestoreAvailable={dropboxRestoreAvailable}
@@ -1833,7 +1826,6 @@ type WorkspaceEmptyProps = {
   busy: boolean;
   dropboxConnecting: boolean;
   dropboxRestoreAvailable: boolean;
-  fileCount: number;
   hasWorkspace: boolean;
   restoreAvailable: boolean;
   restoreChecking: boolean;
@@ -1849,7 +1841,6 @@ function WorkspaceEmpty({
   busy,
   dropboxConnecting,
   dropboxRestoreAvailable,
-  fileCount,
   hasWorkspace,
   restoreAvailable,
   restoreChecking,
@@ -1861,15 +1852,11 @@ function WorkspaceEmpty({
 }: WorkspaceEmptyProps) {
   return (
     <Empty className="h-full rounded-none border-0">
-      <EmptyHeader>
-        <EmptyMedia variant="icon">
-          <GroveMark className="size-14" />
-        </EmptyMedia>
-        <EmptyTitle>{emptyTitle(hasWorkspace, fileCount)}</EmptyTitle>
-        {!browserSupported && (
+      {!browserSupported && (
+        <EmptyHeader>
           <EmptyDescription>File System Access API is unavailable.</EmptyDescription>
-        )}
-      </EmptyHeader>
+        </EmptyHeader>
+      )}
       <EmptyContent>
         {hasWorkspace ? (
           <Button onClick={onCreateFile} disabled={busy}>
@@ -1934,11 +1921,6 @@ function WorkspaceEmpty({
       </EmptyContent>
     </Empty>
   );
-}
-
-function emptyTitle(hasWorkspace: boolean, fileCount: number) {
-  if (!hasWorkspace) return "No folder open";
-  return fileCount ? "No file selected" : "No markdown files";
 }
 
 type FileNameDialogProps = {
