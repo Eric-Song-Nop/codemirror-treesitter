@@ -326,6 +326,13 @@ jobs:
             exit 1
           fi
 
+      - name: Build OpenDAL browser WASM
+        run: |
+          set -euo pipefail
+
+          rustup target add wasm32-unknown-unknown
+          vp run @codemirror-treesitter/opendal-wasm-browser#build:wasm
+
       - name: Check
         run: vp check
 
