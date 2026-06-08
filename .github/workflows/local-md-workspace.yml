@@ -1,0 +1,367 @@
+name: Grove CI/CD
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/local-md-workspace.yml"
+      - "apps/local-md-workspace/**"
+      - "bun.lock"
+      - "package.json"
+      - "packages/autocomplete/**"
+      - "packages/codemirror/**"
+      - "packages/commands/**"
+      - "packages/language/**"
+      - "packages/language-data/**"
+      - "packages/live-md/**"
+      - "packages/live-md-loro/**"
+      - "packages/opendal-wasm-browser/**"
+      - "packages/theme-gruvbox/**"
+      - "tsconfig*.json"
+      - "vite.config.ts"
+      - "vite.shared.ts"
+  push:
+    branches:
+      - main
+    tags:
+      - "grove-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing grove-v* tag to redeploy to production"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grove-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scope:
+    name: Resolve Grove scope
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_branch: ${{ steps.scope.outputs.deploy_branch }}
+      deploy_target: ${{ steps.scope.outputs.deploy_target }}
+      should_run: ${{ steps.scope.outputs.should_run }}
+      skip_reason: ${{ steps.scope.outputs.skip_reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: scope
+        name: Check release and changed paths
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_SHA_VALUE: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          PUSH_BEFORE: ${{ github.event.before || '' }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag || '' }}
+        run: |
+          set -euo pipefail
+
+          changed_paths_file="$RUNNER_TEMP/grove-changed-paths.txt"
+          relevant_paths_file="$RUNNER_TEMP/grove-relevant-paths.txt"
+          : > "$changed_paths_file"
+          : > "$relevant_paths_file"
+
+          is_relevant_path() {
+            local path="$1"
+
+            case "$path" in
+              ".github/workflows/local-md-workspace.yml" | \
+              "bun.lock" | \
+              "package.json" | \
+              "vite.config.ts" | \
+              "vite.shared.ts" | \
+              tsconfig*.json)
+                return 0
+                ;;
+              apps/local-md-workspace/src/* | \
+              apps/local-md-workspace/public/* | \
+              apps/local-md-workspace/index.html | \
+              apps/local-md-workspace/package.json | \
+              apps/local-md-workspace/tsconfig.json | \
+              apps/local-md-workspace/vite.config.ts)
+                return 0
+                ;;
+            esac
+
+            case "$path" in
+              packages/autocomplete/src/* | \
+              packages/codemirror/src/* | \
+              packages/commands/src/* | \
+              packages/language/src/* | \
+              packages/language-data/src/* | \
+              packages/live-md/src/* | \
+              packages/live-md/vite-plugin.ts | \
+              packages/live-md-loro/src/* | \
+              packages/opendal-wasm-browser/src/* | \
+              packages/opendal-wasm-browser/pkg/* | \
+              packages/theme-gruvbox/src/*)
+                return 0
+                ;;
+              packages/autocomplete/package.json | \
+              packages/autocomplete/tsconfig.json | \
+              packages/autocomplete/vite.config.ts | \
+              packages/codemirror/package.json | \
+              packages/codemirror/tsconfig.json | \
+              packages/codemirror/vite.config.ts | \
+              packages/commands/package.json | \
+              packages/commands/tsconfig.json | \
+              packages/commands/vite.config.ts | \
+              packages/language/package.json | \
+              packages/language/tsconfig.json | \
+              packages/language/vite.config.ts | \
+              packages/language-data/package.json | \
+              packages/language-data/tsconfig.json | \
+              packages/language-data/vite.config.ts | \
+              packages/live-md/package.json | \
+              packages/live-md/tsconfig.json | \
+              packages/live-md/vite.config.ts | \
+              packages/live-md-loro/package.json | \
+              packages/live-md-loro/tsconfig.json | \
+              packages/live-md-loro/vite.config.ts | \
+              packages/opendal-wasm-browser/Cargo.lock | \
+              packages/opendal-wasm-browser/Cargo.toml | \
+              packages/opendal-wasm-browser/package.json | \
+              packages/opendal-wasm-browser/tsconfig.json | \
+              packages/opendal-wasm-browser/vite.config.ts | \
+              packages/theme-gruvbox/package.json | \
+              packages/theme-gruvbox/tsconfig.json | \
+              packages/theme-gruvbox/vite.config.ts)
+                return 0
+                ;;
+            esac
+
+            return 1
+          }
+
+          collect_relevant_paths() {
+            local found=false
+            while IFS= read -r path; do
+              [ -n "$path" ] || continue
+              if is_relevant_path "$path"; then
+                echo "$path" >> "$relevant_paths_file"
+                found=true
+              fi
+            done < "$changed_paths_file"
+
+            if [ "$found" = true ]; then
+              return 0
+            fi
+            return 1
+          }
+
+          ensure_tag_on_main() {
+            local tag="$1"
+            local tag_sha
+
+            git fetch origin main --tags --force
+            tag_sha="$(git rev-list -n 1 "$tag")"
+
+            if ! git merge-base --is-ancestor "$tag_sha" origin/main; then
+              echo "::error::Release tag $tag does not point to a commit contained in origin/main."
+              exit 1
+            fi
+          }
+
+          should_run=false
+          deploy_target=none
+          deploy_branch=
+          skip_reason="No Grove runtime-impacting paths changed."
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            release_tag="$RELEASE_TAG_INPUT"
+            if [[ ! "$release_tag" == grove-v* ]]; then
+              echo "::error::Manual production deploys require a grove-v* release tag."
+              exit 1
+            fi
+            if ! git rev-parse -q --verify "refs/tags/$release_tag^{commit}" >/dev/null; then
+              git fetch origin "refs/tags/$release_tag:refs/tags/$release_tag" --force
+            fi
+            ensure_tag_on_main "$release_tag"
+            should_run=true
+            deploy_target=production
+            deploy_branch=main
+            skip_reason=
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA" > "$changed_paths_file"
+            if collect_relevant_paths; then
+              should_run=true
+              deploy_target=preview
+              deploy_branch="pr-$PR_NUMBER"
+              skip_reason=
+            fi
+          elif [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
+            release_tag="$REF_NAME"
+            if [[ ! "$release_tag" == grove-v* ]]; then
+              echo "::error::Production deploy tags must match grove-v*."
+              exit 1
+            fi
+
+            ensure_tag_on_main "$release_tag"
+            previous_tag="$(git tag --list 'grove-v*' --sort=-v:refname | awk -v current="$release_tag" '$0 != current { print; exit }')"
+
+            if [ -z "$previous_tag" ]; then
+              should_run=true
+              deploy_target=production
+              deploy_branch=main
+              skip_reason=
+            else
+              git diff --name-only "$previous_tag" "$release_tag" > "$changed_paths_file"
+              if collect_relevant_paths; then
+                should_run=true
+                deploy_target=production
+                deploy_branch=main
+                skip_reason=
+              else
+                skip_reason="No Grove runtime-impacting paths changed since $previous_tag."
+              fi
+            fi
+          elif [ "$EVENT_NAME" = "push" ] && [ "$REF_NAME" = "main" ]; then
+            zero_sha="0000000000000000000000000000000000000000"
+            if [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$zero_sha" ] && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+              git diff --name-only "$PUSH_BEFORE" "$GITHUB_SHA_VALUE" > "$changed_paths_file"
+            else
+              git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA_VALUE" > "$changed_paths_file"
+            fi
+
+            if collect_relevant_paths; then
+              should_run=true
+              skip_reason=
+            fi
+          fi
+
+          {
+            echo "should_run=$should_run"
+            echo "deploy_target=$deploy_target"
+            echo "deploy_branch=$deploy_branch"
+            echo "skip_reason=$skip_reason"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$should_run" = true ]; then
+            {
+              echo "### Grove scope"
+              echo
+              echo "- Target: \`$deploy_target\`"
+              if [ -n "$deploy_branch" ]; then
+                echo "- Deploy branch: \`$deploy_branch\`"
+              fi
+              if [ -s "$relevant_paths_file" ]; then
+                echo
+                echo "Relevant changes:"
+                sed 's/^/- `/' "$relevant_paths_file" | sed 's/$/`/'
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::notice::$skip_reason"
+            {
+              echo "### Grove skipped"
+              echo
+              echo "$skip_reason"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  validate:
+    name: Validate Grove
+    runs-on: ubuntu-latest
+    needs:
+      - scope
+    if: ${{ needs.scope.outputs.should_run == 'true' }}
+    env:
+      VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY }}
+      VITE_DROPBOX_REDIRECT_URI: ${{ vars.VITE_DROPBOX_REDIRECT_URI }}
+      VITE_DROPBOX_ROOT: ${{ vars.VITE_DROPBOX_ROOT }}
+      VITE_LOCAL_MD_SHARE_RELAY_ORIGIN: ${{ vars.VITE_LOCAL_MD_SHARE_RELAY_ORIGIN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          cache: true
+          node-version: "22.12.0"
+
+      - name: Install dependencies
+        run: vp install
+
+      - name: Validate Grove frontend config
+        run: |
+          set -euo pipefail
+
+          missing=false
+          for name in VITE_DROPBOX_APP_KEY VITE_LOCAL_MD_SHARE_RELAY_ORIGIN; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is required as a GitHub repository variable for Grove builds."
+              missing=true
+            fi
+          done
+
+          if [ "$missing" = true ]; then
+            exit 1
+          fi
+
+      - name: Check
+        run: vp check
+
+      - name: Test
+        run: vp test
+
+      - name: Build Grove
+        run: vp run local-md-workspace#build
+
+      - name: Skip fork preview deploy
+        if: ${{ github.event_name == 'pull_request' && needs.scope.outputs.deploy_target == 'preview' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          echo "::notice::Skipping Grove preview deploy for fork PR because Cloudflare secrets are unavailable."
+          {
+            echo "### Grove preview skipped"
+            echo
+            echo "Preview deploy skipped for fork PR because Cloudflare secrets are unavailable."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy Grove to Cloudflare Pages
+        if: ${{ needs.scope.outputs.deploy_target != 'none' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DEPLOY_BRANCH: ${{ needs.scope.outputs.deploy_branch }}
+          DEPLOY_TARGET: ${{ needs.scope.outputs.deploy_target }}
+        run: |
+          set -euo pipefail
+
+          output_file="$RUNNER_TEMP/wrangler-pages-deploy.log"
+          commit_hash="$(git rev-parse HEAD)"
+          commit_message="$(git log -1 --pretty=%s)"
+
+          ./node_modules/.bin/wrangler pages deploy apps/local-md-workspace/dist \
+            --project-name grove \
+            --branch "$DEPLOY_BRANCH" \
+            --commit-hash "$commit_hash" \
+            --commit-message "$commit_message" \
+            --commit-dirty=false 2>&1 | tee "$output_file"
+
+          deployment_url="$(grep -Eo 'https://[^[:space:]]+\.pages\.dev[^[:space:]]*' "$output_file" | tail -n 1 || true)"
+
+          {
+            echo "### Grove $DEPLOY_TARGET deployment"
+            echo
+            echo "- Cloudflare Pages project: \`grove\`"
+            echo "- Branch: \`$DEPLOY_BRANCH\`"
+            echo "- Commit: \`$commit_hash\`"
+            if [ -n "$deployment_url" ]; then
+              echo "- URL: $deployment_url"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
