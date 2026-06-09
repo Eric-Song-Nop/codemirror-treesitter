@@ -2,10 +2,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   appServiceWorkerPath,
   appServiceWorkerScope,
-  preloadAppInstallAssets,
   registerAppServiceWorker,
   shouldRegisterAppServiceWorker,
-  type AppInstallAssetPreloadWindow,
   type AppServiceWorkerEnvironment,
 } from "./pwa.ts";
 
@@ -96,131 +94,6 @@ describe("PWA service worker registration", () => {
   });
 });
 
-describe("PWA install asset preloading", () => {
-  it("only installs preload listeners in production service worker environments", () => {
-    let preload = vi.fn();
-    let { targetWindow } = installTargetWindow();
-
-    expect(
-      preloadAppInstallAssets(preload, {
-        isProduction: false,
-        location: { hostname: "app.grovemd.net", protocol: "https:" },
-        navigator: { serviceWorker: { register: vi.fn() } },
-        targetWindow,
-      }),
-    ).toBe(false);
-
-    expect(targetWindow.addEventListener).not.toHaveBeenCalled();
-    expect(preload).not.toHaveBeenCalled();
-  });
-
-  it("preloads install assets after the service worker controls the page", async () => {
-    let preload = vi.fn();
-    let { listeners, targetWindow } = installTargetWindow();
-    let controllerChange: (() => void) | undefined;
-    let serviceWorker = {
-      addEventListener: vi.fn((_type: "controllerchange", listener: () => void) => {
-        controllerChange = listener;
-      }),
-      controller: null,
-      ready: Promise.resolve({} as ServiceWorkerRegistration),
-      register: vi.fn(),
-    };
-
-    expect(
-      preloadAppInstallAssets(preload, {
-        controlTimeoutMs: 50,
-        isProduction: true,
-        location: { hostname: "app.grovemd.net", protocol: "https:" },
-        navigator: { serviceWorker },
-        targetWindow,
-      }),
-    ).toBe(true);
-
-    expect(targetWindow.addEventListener).toHaveBeenCalledWith(
-      "beforeinstallprompt",
-      expect.any(Function),
-      { once: true },
-    );
-    expect(targetWindow.addEventListener).toHaveBeenCalledWith(
-      "appinstalled",
-      expect.any(Function),
-      { once: true },
-    );
-
-    listeners.get("beforeinstallprompt")!();
-    await flushAsync();
-
-    expect(preload).not.toHaveBeenCalled();
-    expect(serviceWorker.addEventListener).toHaveBeenCalledWith(
-      "controllerchange",
-      expect.any(Function),
-      { once: true },
-    );
-
-    controllerChange!();
-    await flushAsync();
-
-    expect(preload).toHaveBeenCalledTimes(1);
-
-    listeners.get("appinstalled")!();
-    await flushAsync();
-
-    expect(preload).toHaveBeenCalledTimes(1);
-  });
-
-  it("preloads install assets when launched in standalone display mode", async () => {
-    let preload = vi.fn();
-    let { targetWindow } = installTargetWindow({ standalone: true });
-
-    preloadAppInstallAssets(preload, {
-      isProduction: true,
-      location: { hostname: "app.grovemd.net", protocol: "https:" },
-      navigator: {
-        serviceWorker: {
-          controller: {} as ServiceWorker,
-          ready: Promise.resolve({} as ServiceWorkerRegistration),
-          register: vi.fn(),
-        },
-      },
-      targetWindow,
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await flushAsync();
-
-    expect(preload).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports preload failures without breaking app startup", async () => {
-    let error = new Error("preload failed");
-    let onError = vi.fn();
-    let preload = vi.fn(async () => {
-      throw error;
-    });
-    let { listeners, targetWindow } = installTargetWindow();
-
-    preloadAppInstallAssets(preload, {
-      isProduction: true,
-      location: { hostname: "app.grovemd.net", protocol: "https:" },
-      navigator: {
-        serviceWorker: {
-          controller: {} as ServiceWorker,
-          ready: Promise.resolve({} as ServiceWorkerRegistration),
-          register: vi.fn(),
-        },
-      },
-      onError,
-      targetWindow,
-    });
-
-    listeners.get("appinstalled")!();
-    await flushAsync();
-
-    expect(onError).toHaveBeenCalledWith(error);
-  });
-});
-
 function environment({
   hostname = "app.grovemd.net",
   isProduction = true,
@@ -237,24 +110,4 @@ function environment({
     location: { hostname, protocol },
     navigator: { serviceWorker },
   };
-}
-
-function installTargetWindow({ standalone = false } = {}) {
-  let listeners = new Map<"appinstalled" | "beforeinstallprompt", () => void>();
-  let targetWindow = {
-    addEventListener: vi.fn(
-      (type: "appinstalled" | "beforeinstallprompt", listener: () => void) => {
-        listeners.set(type, listener);
-      },
-    ),
-    matchMedia: vi.fn((query: string) => ({
-      matches: query == "(display-mode: standalone)" && standalone,
-    })),
-  } satisfies AppInstallAssetPreloadWindow;
-
-  return { listeners, targetWindow };
-}
-
-async function flushAsync() {
-  for (let index = 0; index < 6; index++) await Promise.resolve();
 }

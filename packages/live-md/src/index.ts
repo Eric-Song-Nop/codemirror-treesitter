@@ -12,5 +12,4 @@ export {
   type LiveMdImageSourceResolver,
 } from "./core/images.js";
 export { liveMdCodeFenceHighlighting } from "./core/languages.js";
-export { preloadLiveMdPreviewAssets } from "./core/widgets.js";
 export { defineLiveMdEditor, LiveMdEditorElement } from "./element/live-md-editor.js";
