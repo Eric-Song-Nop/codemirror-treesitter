@@ -2,6 +2,7 @@ import { liveMdLoroCollaboration } from "@codemirror-treesitter/live-md-loro";
 import type { Extension } from "@codemirror/state";
 import { LoroDoc, UndoManager } from "loro-crdt";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
+import { hashMarkdownText } from "../markdown-hash.ts";
 import {
   appendBrowserCollabUpdates,
   clearBrowserCollabUpdates,
@@ -9,6 +10,8 @@ import {
   writeBrowserCollabSnapshot,
   type BrowserCollabDocumentMetadata,
 } from "./collab-browser-store.ts";
+
+export { hashMarkdownText } from "../markdown-hash.ts";
 
 const textKey = "markdown";
 const maxDocumentUpdateLogBytes = 64 * 1024;
@@ -381,15 +384,6 @@ function conflictCopyPath(
 
 function timestampForPath(now: number) {
   return new Date(now).toISOString().replace(/\D/g, "").slice(0, 14);
-}
-
-export function hashMarkdownText(value: string) {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index++) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 async function createDocumentId(backend: WorkspaceBackend, path: string) {
