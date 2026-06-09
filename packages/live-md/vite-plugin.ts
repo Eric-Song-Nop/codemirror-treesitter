@@ -7,30 +7,38 @@ const runtimeCssPath = fileURLToPath(new URL("src/style.css", import.meta.url));
 
 export function liveMdRawCssPlugin() {
   let rawQueries = ["?raw", "?live-md-raw"];
+  let rawExtensions = [".css", ".scm"];
   return {
     enforce: "pre" as const,
     name: "live-md-raw-css",
     resolveId(source: string, importer?: string) {
-      let rawQuery = rawQueries.find((query) => source.endsWith(`.css${query}`));
-      if (!rawQuery) return null;
-      let cssSource = source.slice(0, -rawQuery.length);
-      if (cssSource.startsWith("/")) return `${cssSource}${rawQuery}`;
+      let rawImport = parseRawImport(source, rawQueries, rawExtensions);
+      if (!rawImport) return null;
+      if (rawImport.fileName.startsWith("/")) return `${rawImport.fileName}${rawImport.query}`;
       if (!importer) return null;
-      if (!cssSource.startsWith(".")) {
-        return `${createRequire(importer).resolve(cssSource)}${rawQuery}`;
+      if (!rawImport.fileName.startsWith(".")) {
+        return `${createRequire(importer).resolve(rawImport.fileName)}${rawImport.query}`;
       }
-      return `${resolve(dirname(importer), cssSource)}${rawQuery}`;
+      return `${resolve(dirname(importer), rawImport.fileName)}${rawImport.query}`;
     },
     load(id: string) {
-      let rawQuery = rawQueries.find((query) => id.endsWith(`.css${query}`));
-      if (!rawQuery) return null;
-      let fileName = id.slice(0, -rawQuery.length);
-      let css = readFileSync(fileName, "utf8");
-      if (isRuntimeCss(fileName)) css = stripKatexImport(css);
-      if (isKatexCss(fileName)) css = inlineKatexFontData(css, fileName);
-      return `export default ${JSON.stringify(css)};`;
+      let rawImport = parseRawImport(id, rawQueries, rawExtensions);
+      if (!rawImport) return null;
+      let { fileName } = rawImport;
+      let sourceText = readFileSync(fileName, "utf8");
+      if (isRuntimeCss(fileName)) sourceText = stripKatexImport(sourceText);
+      if (isKatexCss(fileName)) sourceText = inlineKatexFontData(sourceText, fileName);
+      return `export default ${JSON.stringify(sourceText)};`;
     },
   };
+}
+
+function parseRawImport(source: string, queries: readonly string[], extensions: readonly string[]) {
+  let query = queries.find((candidate) => source.endsWith(candidate));
+  if (!query) return null;
+  let fileName = source.slice(0, -query.length);
+  if (!extensions.some((extension) => fileName.endsWith(extension))) return null;
+  return { fileName, query };
 }
 
 function inlineKatexFontData(css: string, katexCssPath: string) {
