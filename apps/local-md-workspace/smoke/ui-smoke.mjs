@@ -425,7 +425,7 @@ async function assertOwnerExternalConflictFlow(client) {
       expectedEditorText: "Owner conflict smoke",
     });
     await client.waitForPredicate(
-      `document.body.innerText.includes("Shared file conflict") && document.body.innerText.includes("Save shared copy")`,
+      `document.body.innerText.includes("File changed outside LiveMD") && document.body.innerText.includes("Use shared edit")`,
       secondOwner.sessionId,
       15_000,
     );
@@ -441,13 +441,18 @@ async function assertOwnerExternalConflictFlow(client) {
       throw new Error("Guest saw Saved to host before the owner resolved the source conflict.");
     }
 
-    await clickShareDialogButton(client, secondOwner.sessionId, "Save shared copy");
+    await clickShareDialogButton(client, secondOwner.sessionId, "Reload file");
     try {
       await client.waitForPredicate(
         `
-          (() => Array.from(window.__localMdSmokeFiles?.entries?.() ?? []).some(([name, value]) =>
-            name.includes(".shared-conflict-") && value == ${JSON.stringify(sharedValue)}
-          ))()
+          (() => {
+            let files = Array.from(window.__localMdSmokeFiles?.entries?.() ?? []);
+            return window.__localMdSmokeFiles?.get(${JSON.stringify(fileName)}) == ${JSON.stringify(
+              externalValue,
+            )} &&
+              document.querySelector("live-md-editor")?.value == ${JSON.stringify(externalValue)} &&
+              !files.some(([name]) => name.includes(".shared-conflict-"));
+          })()
         `,
         secondOwner.sessionId,
         10_000,
