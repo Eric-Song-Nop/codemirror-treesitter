@@ -7,6 +7,7 @@ import { join } from "node:path";
 const SMOKE_URL = process.env.LOCAL_MD_WORKSPACE_SMOKE_URL || "http://127.0.0.1:5173/";
 const DROPBOX_CONFIG_KEY = "local-md-workspace:dropbox-config";
 const DROPBOX_OAUTH_MESSAGE = "local-md-workspace:dropbox-oauth";
+const GITHUB_REPOSITORY_URL = "https://github.com/Eric-Song-Nop/codemirror-treesitter";
 const dropboxAccessToken =
   process.env.LOCAL_MD_WORKSPACE_DROPBOX_ACCESS_TOKEN || process.env.OPENDAL_DROPBOX_ACCESS_TOKEN;
 const dropboxRoot =
@@ -44,6 +45,7 @@ try {
   await installMockFileSystemAccess(client, sessionId);
 
   await navigate(client, sessionId, SMOKE_URL);
+  await assertGitHubRepositoryLink(client, sessionId);
   await assertLocalWorkspaceFlow(client, sessionId);
   await assertOwnerReconnectSharedFileFlow(client);
   await assertOwnerExternalConflictFlow(client);
@@ -110,6 +112,38 @@ async function attachLocalWorkspaceTarget(client) {
   await installMockFileSystemAccess(client, target.sessionId);
   await navigate(client, target.sessionId, SMOKE_URL);
   return target;
+}
+
+async function assertGitHubRepositoryLink(client, sessionId) {
+  let state = await client.evaluate(
+    `
+      (() => {
+        let link = document.querySelector(${JSON.stringify(`a[href="${GITHUB_REPOSITORY_URL}"]`)});
+        return {
+          ariaLabel: link?.getAttribute("aria-label") ?? null,
+          found: Boolean(link),
+          hasIcon: Boolean(link?.querySelector("svg")),
+          rel: link?.getAttribute("rel") ?? null,
+          target: link?.getAttribute("target") ?? null,
+          text: link?.textContent?.trim() ?? null,
+          visible: Boolean(link?.getClientRects().length)
+        };
+      })()
+    `,
+    sessionId,
+  );
+
+  if (
+    !state.found ||
+    !state.visible ||
+    !state.hasIcon ||
+    state.ariaLabel != "Open GitHub repository" ||
+    state.rel != "noreferrer" ||
+    state.target != "_blank" ||
+    state.text != "GitHub repository"
+  ) {
+    throw new Error(`GitHub repository link did not render correctly: ${JSON.stringify(state)}`);
+  }
 }
 
 async function assertInitialDropboxUi(client, sessionId) {
@@ -976,7 +1010,7 @@ async function connectDropboxWorkspace(client, sessionId) {
 
   try {
     await client.waitForPredicate(
-      `document.body.innerText.includes("Dropbox workspace connected") || document.body.innerText.includes("Dropbox workspace ·") || (document.body.innerText.includes("Dropbox workspace") && document.body.innerText.includes("No markdown files") && Array.from(document.querySelectorAll("button")).some((button) => button.textContent.trim() == "New file" && !button.disabled))`,
+      `document.body.innerText.includes("Dropbox workspace connected") || document.body.innerText.includes("Dropbox workspace ·") || (document.body.innerText.includes("Dropbox workspace") && (document.body.innerText.includes("No markdown files") || document.body.innerText.includes("0 markdown files")) && Array.from(document.querySelectorAll("button")).some((button) => button.textContent.trim() == "New file" && !button.disabled))`,
       sessionId,
       20_000,
     );
