@@ -477,6 +477,11 @@ jobs:
             exit 1
           fi
 
+          if ! grep -Fq "https://app.grovemd.net" apps/local-md-workspace/dist/_worker.js; then
+            echo "::error::Grove Pages worker is missing the root-domain redirect target."
+            exit 1
+          fi
+
       - name: Deploy Grove to Cloudflare Pages
         if: ${{ needs.scope.outputs.deploy_target == 'production' }}
         env:

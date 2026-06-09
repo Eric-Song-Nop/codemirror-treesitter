@@ -442,13 +442,14 @@ deployed relay in local dev, pass
 `vp run local-md-workspace#dev -- --relay-origin <deployed relay origin>`.
 
 Production Grove deploys use the Cloudflare Pages project `grove` at
-`https://grovemd.net` and `https://app.grovemd.net`, and the `grove-relay`
-Worker custom domain at `https://relay.grovemd.net`. The Grove CI/CD workflow
-enforces `VITE_DROPBOX_REDIRECT_URI=https://app.grovemd.net/` for Dropbox OAuth
-and builds the frontend against the relay custom domain. CI deploys the relay
-Worker with `apps/grove-relay/wrangler.worker.ci.jsonc`; the custom-domain route
-is kept in `apps/grove-relay/wrangler.worker.jsonc` for one-time provisioning by
-a token with zone route permissions.
+`https://app.grovemd.net`, with `https://grovemd.net` redirecting to that app
+origin, and the `grove-relay` Worker custom domain at
+`https://relay.grovemd.net`. The Grove CI/CD workflow enforces
+`VITE_DROPBOX_REDIRECT_URI=https://app.grovemd.net/` for Dropbox OAuth and
+builds the frontend against the relay custom domain. CI deploys the relay Worker
+with `apps/grove-relay/wrangler.worker.ci.jsonc`; the custom-domain route is kept
+in `apps/grove-relay/wrangler.worker.jsonc` for one-time provisioning by a token
+with zone route permissions.
 
 `vp run local-md-workspace#smoke:ui` expects the local Markdown workspace dev
 server to be running at `http://127.0.0.1:5173/` by default. Start that dev
