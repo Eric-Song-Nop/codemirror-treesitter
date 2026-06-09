@@ -53,7 +53,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -100,6 +106,7 @@ import {
   type CreatedOwnerShare,
   type OwnerShareRecord,
 } from "@/lib/collaboration/share-storage";
+import { localFolderAccessUnavailableMessage } from "@/lib/browser-support";
 import {
   ShareRelayConnection,
   type ShareRelayStatus,
@@ -281,6 +288,9 @@ function LocalWorkspaceApp() {
       : selectedFile.path
     : "";
   let browserSupported = supportsDirectoryPicker();
+  let folderAccessUnavailableMessage = browserSupported
+    ? ""
+    : localFolderAccessUnavailableMessage();
 
   let setSaveStateSynced = useCallback((nextState: SaveState) => {
     if (saveStateRef.current == nextState) return;
@@ -780,7 +790,7 @@ function LocalWorkspaceApp() {
     setErrorMessage("");
     setRetryLoadPath(null);
     if (!supportsDirectoryPicker()) {
-      setErrorMessage("Use a Chromium browser on localhost to open a folder.");
+      setErrorMessage(localFolderAccessUnavailableMessage());
       return;
     }
 
@@ -1717,6 +1727,7 @@ function LocalWorkspaceApp() {
               <WorkspaceEmpty
                 browserSupported={browserSupported}
                 busy={busy}
+                folderAccessUnavailableMessage={folderAccessUnavailableMessage}
                 hasWorkspace={Boolean(workspaceBackend)}
                 dropboxConnecting={dropboxConnecting}
                 dropboxRestoreAvailable={dropboxRestoreAvailable}
@@ -1833,6 +1844,7 @@ type WorkspaceEmptyProps = {
   busy: boolean;
   dropboxConnecting: boolean;
   dropboxRestoreAvailable: boolean;
+  folderAccessUnavailableMessage: string;
   hasWorkspace: boolean;
   restoreAvailable: boolean;
   restoreChecking: boolean;
@@ -1848,6 +1860,7 @@ function WorkspaceEmpty({
   busy,
   dropboxConnecting,
   dropboxRestoreAvailable,
+  folderAccessUnavailableMessage,
   hasWorkspace,
   restoreAvailable,
   restoreChecking,
@@ -1861,7 +1874,8 @@ function WorkspaceEmpty({
     <Empty className="h-full rounded-none border-0">
       {!browserSupported && (
         <EmptyHeader>
-          <EmptyDescription>File System Access API is unavailable.</EmptyDescription>
+          <EmptyTitle>Local folder access unavailable</EmptyTitle>
+          <EmptyDescription>{folderAccessUnavailableMessage}</EmptyDescription>
         </EmptyHeader>
       )}
       <EmptyContent>
