@@ -50,7 +50,7 @@
   --live-md-content-padding-block-start: clamp(34px, 6vw, 72px);
   --live-md-content-padding-inline: clamp(22px, 7vw, 78px);
   --live-md-content-padding-block-end: 120px;
-  --live-md-font-body: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --live-md-font-body: "Iowan Old Style", "Palatino Linotype", Georgia, "Noto Serif", serif;
   --live-md-font-ui: "Avenir Next", "Gill Sans", ui-sans-serif, system-ui, sans-serif;
   --live-md-font-code: "SFMono-Regular", "Cascadia Code", ui-monospace, monospace;
   --live-md-mermaid-bg: var(--live-md-bg);
@@ -87,7 +87,7 @@
   min-height: 0;
   background: var(--live-md-bg);
   font-size: 18px;
-  font-synthesis: none;
+  font-synthesis: weight style;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -97,14 +97,14 @@
   outline: none;
 }
 
-.live-md-codemirror .cm-scroller {
+.live-md-codemirror.live-md-codemirror .cm-scroller {
   font-family: var(--live-md-font-body);
   justify-content: center;
   line-height: 1.72;
   overflow: auto;
 }
 
-.live-md-codemirror .cm-content {
+.live-md-codemirror.live-md-codemirror .cm-content {
   box-sizing: border-box;
   width: 100%;
   max-width: var(--live-md-content-width);
@@ -122,7 +122,7 @@
   border-left-width: 2px !important;
 }
 
-.live-md-codemirror .cm-line {
+.live-md-codemirror.live-md-codemirror .cm-line {
   padding: 0 2px;
 }
 

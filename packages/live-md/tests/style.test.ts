@@ -45,6 +45,11 @@ describe("public LiveMD stylesheet", () => {
       expect(css).toContain('font-family: "KaTeX_Main"');
       expect(css).toContain(".live-md-codemirror .cm-md-latex-inline .katex");
       expect(css).toContain(".live-md-codemirror .cm-md-mermaid");
+      expect(css).toContain("Noto Serif");
+      expect(css).toContain("font-synthesis: weight style");
+      expect(css).toContain(".live-md-codemirror.live-md-codemirror .cm-scroller");
+      expect(css).toContain(".live-md-codemirror.live-md-codemirror .cm-content");
+      expect(css).toContain(".live-md-codemirror.live-md-codemirror .cm-line");
       expect(css).toContain("--live-md-mermaid-accent");
       expect(css).toContain("--live-md-mermaid-font");
       expect(css).not.toContain('@import "katex/dist/katex.css"');
@@ -94,6 +99,11 @@ describe("web component shadow stylesheet", () => {
       expect(javascript).toContain("data:font/woff2;base64");
       expect(javascript).toContain(".live-md-codemirror .cm-md-latex-inline .katex");
       expect(javascript).toContain(".live-md-codemirror .cm-md-mermaid");
+      expect(javascript).toContain("Noto Serif");
+      expect(javascript).toContain("font-synthesis: weight style");
+      expect(javascript).toContain(".live-md-codemirror.live-md-codemirror .cm-scroller");
+      expect(javascript).toContain(".live-md-codemirror.live-md-codemirror .cm-content");
+      expect(javascript).toContain(".live-md-codemirror.live-md-codemirror .cm-line");
       expect(javascript).toContain("--live-md-mermaid-accent");
       expect(javascript).toContain("--live-md-mermaid-font");
       expect(javascript).not.toContain("url(fonts/KaTeX_");
