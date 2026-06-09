@@ -1,8 +1,29 @@
-# CodeMirror Tree-sitter
+# GroveMd
 
-CodeMirror Tree-sitter is a Lezer-free CodeMirror 6 workspace backed by
-Tree-sitter through `web-tree-sitter`. It reimplements the editor-facing
-CodeMirror packages that normally depend on Lezer and publishes them under the
+GroveMd is a local-first Markdown workspace for writing directly from the files
+you already own. Open a local folder in the browser, write in a Typora-style
+live Markdown editor, and keep the source as plain `.md` files instead of
+pushing notes through an app-specific storage model.
+
+![GroveMd local-first Markdown workspace](docs/grovemd-workspace.png)
+
+GroveMd is built for a small set of workflows that should stay simple:
+
+- **Local first**: grant access to a folder, edit Markdown in place, autosave
+  locally, and keep images beside the document in normal workspace assets.
+- **Easy sync**: keep working from the local folder or connect Dropbox when a
+  cloud-backed workspace is useful.
+- **No app install**: run the editor as a web app while still using browser
+  file access for real local files.
+- **Collaboration**: share a single file link through the Grove relay so guests
+  can co-edit without access to the owner's local folder or Dropbox workspace.
+- **Instant live Markdown**: headings, tables, task lists, code fences, KaTeX,
+  Mermaid, and images render inline while the document remains editable.
+
+Under the GroveMd app, this repository contains CodeMirror Tree-sitter, a
+Lezer-free CodeMirror 6 workspace backed by Tree-sitter through
+`web-tree-sitter`. It reimplements the editor-facing CodeMirror packages that
+normally depend on Lezer and publishes them under the
 `@codemirror-treesitter/*` scope so they can be installed beside the official
 `@codemirror/*` packages.
 
