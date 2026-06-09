@@ -78,12 +78,6 @@ to test installability and offline app-shell loading.
 The service worker caches same-origin GET navigations and static assets. Dropbox
 requests, relay API mutations, and relay WebSockets remain network-only.
 
-When the browser reports that the app is installable, after `appinstalled`, or
-when the app starts in standalone display mode, the production app preloads the
-LiveMD preview runtime for KaTeX and Mermaid after the service worker controls
-the page. Those lazy chunks are then available from the runtime cache for
-offline PWA sessions that use LaTeX or Mermaid previews.
-
 ## Commands
 
 Run from the workspace root:

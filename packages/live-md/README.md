@@ -41,7 +41,6 @@ import {
   liveMdCodeFenceHighlighting,
   liveMdImageSource,
   liveMarkdown,
-  preloadLiveMdPreviewAssets,
 } from "@codemirror-treesitter/live-md";
 ```
 
@@ -90,8 +89,6 @@ lets hosts override the default code-fence token highlighter so fenced code can
 match the surrounding editor theme. The controller exposes `view`, `value`,
 `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`, `setPlaceholder()`,
 `setReadOnly()`, and `destroy()`.
-`preloadLiveMdPreviewAssets()` eagerly loads the KaTeX and Mermaid preview
-runtime so host apps can warm service-worker caches before offline use.
 
 ## Web Component
 
