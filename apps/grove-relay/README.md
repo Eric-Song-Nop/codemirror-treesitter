@@ -16,6 +16,7 @@ in `apps/local-md-workspace`.
   Durable Object.
 - Enforce payload size, frame burst, per-minute update, session, and guest-peer
   limits.
+- Emit Grove business metrics to Workers Analytics Engine.
 
 ## API Shape
 
@@ -56,3 +57,24 @@ vp run grove-relay#deploy:worker
 
 `local-md-workspace#dev` starts this relay automatically when
 `VITE_LOCAL_MD_SHARE_RELAY_ORIGIN` or `--relay-origin` points at a local host.
+
+## Observability
+
+The Wrangler configs enable Workers Logs at full sampling and Workers Traces at
+5% head sampling. After deployment, runtime health is available in the
+Cloudflare dashboard under the `grove-relay` Worker metrics, logs, and traces
+views.
+
+For live logs:
+
+```bash
+cd apps/grove-relay
+wrangler tail grove-relay --config wrangler.worker.jsonc --format pretty
+wrangler tail grove-relay --config wrangler.worker.jsonc --status error
+```
+
+Custom Grove events are written to the `GROVE_METRICS` Analytics Engine binding
+with the `grove_relay_metrics` dataset. Events include share lifecycle,
+host/guest session creation, WebSocket accept/join/close/error, Loro update and
+snapshot sizes, pending host-save transitions, malformed frame/control payloads,
+rate limits, persistence failures, and oversized snapshots.

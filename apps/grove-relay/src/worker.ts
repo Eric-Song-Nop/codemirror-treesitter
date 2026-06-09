@@ -56,6 +56,39 @@ type ControlMessage = {
   versionVector?: unknown;
 };
 
+type GroveMetricEvent =
+  | "frame_limit"
+  | "loro_update"
+  | "malformed_control"
+  | "malformed_frame"
+  | "malformed_loro_payload"
+  | "pending_host_save"
+  | "persist_failure"
+  | "rate_limit"
+  | "session_create"
+  | "share_cleanup"
+  | "share_create"
+  | "share_revoke"
+  | "share_rotate"
+  | "snapshot_too_large"
+  | "snapshot_update"
+  | "ws_accept"
+  | "ws_auth_failed"
+  | "ws_close"
+  | "ws_error"
+  | "ws_join";
+
+type GroveMetricValues = {
+  bytes?: number;
+  closeCode?: number;
+  count?: number;
+  guestCount?: number;
+  peerCount?: number;
+  reason?: string;
+  role?: ShareRole;
+  shareId?: string;
+};
+
 const createSharePattern = /^\/api\/shares\/?$/;
 const sharePattern = /^\/api\/shares\/([^/]+)(?:\/(session|rotate|revoke|ws))?\/?$/;
 const validClientIdPattern = /^[A-Za-z0-9_-]{8,96}$/;
@@ -215,6 +248,7 @@ export class GroveShareRoom extends DurableObject<Env> {
       this.ctx.storage.put(schemaVersionKey, schemaVersion),
     ]);
     await this.scheduleShareMaintenance();
+    this.writeMetric("share_create", { bytes: snapshot.byteLength, shareId });
 
     return jsonResponse(
       {
@@ -260,6 +294,11 @@ export class GroveShareRoom extends DurableObject<Env> {
       secretHash,
     };
     await this.ctx.storage.put(sessionKey(await hashShareSecret(sessionToken)), session);
+    this.writeMetric("session_create", {
+      guestCount: this.shareSocketCount("guest"),
+      peerCount: this.shareSocketCount(),
+      role: body.role,
+    });
 
     return jsonResponse(
       {
@@ -303,6 +342,7 @@ export class GroveShareRoom extends DurableObject<Env> {
     await this.scheduleShareMaintenance();
     this.broadcastShareStatus(undefined, { immediate: true });
     this.closeShareSockets(1008, "Share link rotated");
+    this.writeMetric("share_rotate", { shareId: next.shareId });
 
     return jsonResponse({ expiresAt: next.expiresAt, shareId: next.shareId }, 200, request);
   }
@@ -327,6 +367,7 @@ export class GroveShareRoom extends DurableObject<Env> {
     await this.scheduleShareMaintenance();
     this.broadcastShareStatus(undefined, { immediate: true });
     this.closeShareSockets(1008, "Sharing stopped");
+    this.writeMetric("share_revoke", { shareId: next.shareId });
 
     return jsonResponse({ revokedAt: next.revokedAt, shareId: next.shareId }, 200, request);
   }
@@ -350,6 +391,7 @@ export class GroveShareRoom extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server, [shareSocketTag]);
     this.sockets.add(server);
     server.serializeAttachment(attachment);
+    this.writeMetric("ws_accept", { peerCount: this.shareSocketCount() });
     setTimeout(() => {
       if (server.readyState != WebSocket.OPEN) return;
       let next = server.deserializeAttachment() as ConnectionAttachment | undefined;
@@ -362,6 +404,7 @@ export class GroveShareRoom extends DurableObject<Env> {
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
     if (typeof message == "string") {
       if (new TextEncoder().encode(message).byteLength > maxShareControlBodyBytes) {
+        this.writeMetric("frame_limit", { reason: "control_message_too_large" });
         ws.close(1009, "Control message too large");
         return;
       }
@@ -386,12 +429,23 @@ export class GroveShareRoom extends DurableObject<Env> {
     try {
       messages = decodeWireFrame(frame);
     } catch (error: unknown) {
+      this.writeMetric("malformed_frame", { bytes: frame.byteLength, reason: "decode" });
       console.warn("Dropping malformed collaboration frame", error);
       ws.close(1003, "Malformed collaboration frame");
       return;
     }
     let limits = validateWireFrameLimits(frame.byteLength, messages);
     if (!limits.ok) {
+      this.writeMetric(
+        limits.reason == "Document snapshot is too large" ? "snapshot_too_large" : "frame_limit",
+        {
+          bytes: frame.byteLength,
+          closeCode: limits.closeCode,
+          count: messages.length,
+          reason: limits.reason,
+          role: this.socketRole(ws),
+        },
+      );
       ws.close(limits.closeCode, limits.reason);
       return;
     }
@@ -399,6 +453,7 @@ export class GroveShareRoom extends DurableObject<Env> {
     for (let item of messages) {
       if (item.kind == WireKind.Doc || item.kind == WireKind.Snapshot) {
         if (item.kind == WireKind.Doc && !this.consumeUpdateToken(ws)) {
+          this.writeMetric("rate_limit", { reason: "document_update", role: this.socketRole(ws) });
           ws.close(1008, "Document update rate limit exceeded");
           return;
         }
@@ -406,6 +461,10 @@ export class GroveShareRoom extends DurableObject<Env> {
         try {
           this.doc.import(item.payload);
         } catch (error: unknown) {
+          this.writeMetric("malformed_loro_payload", {
+            bytes: item.payload.byteLength,
+            role: this.socketRole(ws),
+          });
           console.warn("Dropping malformed Loro payload", error);
           ws.close(1003, "Malformed collaboration payload");
           return;
@@ -453,9 +512,22 @@ export class GroveShareRoom extends DurableObject<Env> {
             }
           }
         } catch (error: unknown) {
+          this.writeMetric("persist_failure", { reason: "update_log" });
           console.error("Failed to persist shared file update log", error);
           ws.close(1011, "Failed to persist shared file update");
           return;
+        }
+        if (acceptedSnapshot) {
+          this.writeMetric("snapshot_update", {
+            bytes: acceptedSnapshot.byteLength,
+            role: this.socketRole(ws),
+          });
+        } else if (acceptedDocumentUpdates.length) {
+          this.writeMetric("loro_update", {
+            bytes: sumByteLength(acceptedDocumentUpdates),
+            count: acceptedDocumentUpdates.length,
+            role: this.socketRole(ws),
+          });
         }
       }
       if (relay.length) this.broadcast(ws, encodeWireBatch(relay));
@@ -468,17 +540,23 @@ export class GroveShareRoom extends DurableObject<Env> {
 
   async webSocketClose(
     ws: WebSocket,
-    _code: number,
-    _reason: string,
+    code: number,
+    reason: string,
     _wasClean: boolean,
   ): Promise<void> {
     this.sockets.delete(ws);
+    this.writeMetric("ws_close", {
+      closeCode: code,
+      reason,
+      role: this.socketRole(ws),
+    });
     if (this.shareRecord) return;
     await this.flushSnapshot();
   }
 
   async webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
     this.sockets.delete(ws);
+    this.writeMetric("ws_error", { role: this.socketRole(ws) });
     if (this.shareRecord) {
       ws.close(1011, "WebSocket error");
       return;
@@ -560,6 +638,7 @@ export class GroveShareRoom extends DurableObject<Env> {
   }
 
   private async cleanupShareState() {
+    let shareId = this.shareRecord?.shareId;
     this.clearSaveTimers();
     this.clearShareStatusTimer();
     this.closeShareSockets(1008, "Share retention expired");
@@ -588,6 +667,7 @@ export class GroveShareRoom extends DurableObject<Env> {
     this.retryDelayMs = 1000;
     this.saving = false;
     this.shareRecord = null;
+    this.writeMetric("share_cleanup", { shareId });
   }
 
   private closeShareSockets(code: number, reason: string) {
@@ -645,6 +725,7 @@ export class GroveShareRoom extends DurableObject<Env> {
     if (this.pendingHostSave == value) return;
     await this.ctx.storage.put(pendingHostSaveKey, value);
     this.pendingHostSave = value;
+    if (value) this.writeMetric("pending_host_save");
   }
 
   private socketRole(socket: WebSocket) {
@@ -778,6 +859,7 @@ export class GroveShareRoom extends DurableObject<Env> {
       this.firstDirtyAt = 0;
       this.retryDelayMs = 1000;
     } catch (error: unknown) {
+      this.writeMetric("persist_failure", { reason: "snapshot" });
       console.error("Failed to persist collaboration snapshot", error);
       this.dirty = true;
       this.scheduleRetrySave();
@@ -845,6 +927,7 @@ export class GroveShareRoom extends DurableObject<Env> {
     try {
       control = JSON.parse(message) as ControlMessage;
     } catch {
+      this.writeMetric("malformed_control", { reason: "json" });
       ws.close(1003, "Malformed control message");
       return;
     }
@@ -861,6 +944,7 @@ export class GroveShareRoom extends DurableObject<Env> {
 
   private async handleShareAuthMessage(ws: WebSocket, control: ControlMessage) {
     if (control.type != "auth" || typeof control.sessionToken != "string") {
+      this.writeMetric("ws_auth_failed", { reason: "missing_session_token" });
       ws.close(1008, "Share authentication required");
       return;
     }
@@ -868,10 +952,12 @@ export class GroveShareRoom extends DurableObject<Env> {
     await this.refreshShareRecord();
     let session = await this.validateShareSession(control.sessionToken);
     if (!session) {
+      this.writeMetric("ws_auth_failed", { reason: "invalid_session" });
       ws.close(1008, "Invalid share session");
       return;
     }
     if (session.role == "guest" && this.shareSocketCount("guest") >= maxShareGuestPeers) {
+      this.writeMetric("rate_limit", { reason: "guest_peer_limit", role: session.role });
       ws.close(1008, "Share is full");
       return;
     }
@@ -888,6 +974,7 @@ export class GroveShareRoom extends DurableObject<Env> {
     if (ws.readyState != WebSocket.OPEN) return;
     let clientVersion = parseAuthVersionVector(control.versionVector);
     if (!clientVersion.ok) {
+      this.writeMetric("malformed_control", { reason: "version_vector", role: session.role });
       ws.close(1008, "Invalid sync version");
       return;
     }
@@ -895,6 +982,11 @@ export class GroveShareRoom extends DurableObject<Env> {
     let serverVersion = this.doc.oplogVersion();
     ws.send(encodeWireMessage(WireKind.ShareStatus, this.shareStatusPayload()));
     this.sendInitialShareDocument(ws, clientVersion.version, serverVersion);
+    this.writeMetric("ws_join", {
+      guestCount: this.shareSocketCount("guest"),
+      peerCount: this.shareSocketCount(),
+      role: session.role,
+    });
     this.broadcastShareStatus(ws);
   }
 
@@ -922,6 +1014,11 @@ export class GroveShareRoom extends DurableObject<Env> {
 
     let snapshot = this.doc.export({ mode: "snapshot" });
     if (snapshot.byteLength > maxSnapshotBytes) {
+      this.writeMetric("snapshot_too_large", {
+        bytes: snapshot.byteLength,
+        reason: "initial_sync",
+        role: this.socketRole(ws),
+      });
       ws.close(1009, "Document snapshot is too large");
       return;
     }
@@ -943,6 +1040,11 @@ export class GroveShareRoom extends DurableObject<Env> {
     let snapshot = this.doc.export({ mode: "snapshot" });
     if (snapshot.byteLength <= maxSnapshotBytes) return true;
 
+    this.writeMetric("snapshot_too_large", {
+      bytes: snapshot.byteLength,
+      reason: "product_limit",
+      role: this.socketRole(sender),
+    });
     console.warn("Closing shared file room after snapshot size exceeded the product limit");
     sender.close(1009, "Document snapshot is too large");
     this.closeShareSockets(1009, "Document snapshot is too large");
@@ -975,6 +1077,13 @@ export class GroveShareRoom extends DurableObject<Env> {
       this.maxSaveTimer = setTimeout(() => void this.flushSnapshot(), maxDelay);
     }
   }
+
+  private writeMetric(event: GroveMetricEvent, values: GroveMetricValues = {}) {
+    writeGroveMetric(this.env, event, {
+      shareId: this.shareRecord?.shareId,
+      ...values,
+    });
+  }
 }
 
 export default {
@@ -986,12 +1095,15 @@ export default {
 
     if (createSharePattern.test(url.pathname) && request.method == "POST") {
       if (!(await allowCreateShareRequest(request, env))) {
+        writeGroveMetric(env, "rate_limit", { reason: "create_share" });
         return jsonResponse({ error: "Share creation rate limit exceeded" }, 429, request);
       }
 
       let json = await readJson(request, maxCreateShareBodyBytes);
-      if (json === requestBodyTooLarge)
+      if (json === requestBodyTooLarge) {
+        writeGroveMetric(env, "frame_limit", { reason: "create_share_body_too_large" });
         return jsonResponse({ error: "Request too large" }, 413, request);
+      }
 
       let body = parseCreateShareRequest(json);
       if (!body) return jsonResponse({ error: "Invalid share" }, 400, request);
@@ -1071,6 +1183,41 @@ function serializeVersionVector(version: VersionVector) {
 
 function versionAdvanced(next: VersionVector, previous: VersionVector) {
   return next.compare(previous) == 1;
+}
+
+function writeGroveMetric(env: Env, event: GroveMetricEvent, values: GroveMetricValues = {}) {
+  let metrics = (env as Env & { GROVE_METRICS?: AnalyticsEngineDataset }).GROVE_METRICS;
+  try {
+    metrics?.writeDataPoint({
+      indexes: [event],
+      blobs: [
+        event,
+        metricBlob(values.shareId),
+        metricBlob(values.role),
+        metricBlob(values.reason),
+      ],
+      doubles: [
+        Date.now(),
+        values.count ?? 1,
+        values.bytes ?? 0,
+        values.closeCode ?? 0,
+        values.peerCount ?? 0,
+        values.guestCount ?? 0,
+      ],
+    });
+  } catch (error: unknown) {
+    console.warn("Failed to write Grove relay metric", error);
+  }
+}
+
+function metricBlob(value: string | undefined) {
+  return value?.slice(0, 160) ?? "";
+}
+
+function sumByteLength(values: Uint8Array[]) {
+  let total = 0;
+  for (let value of values) total += value.byteLength;
+  return total;
 }
 
 async function allowCreateShareRequest(request: Request, env: Env) {

@@ -26,6 +26,7 @@ describe("shared file Worker routes", () => {
   it("rate-limits public share creation before forwarding to a Durable Object", async () => {
     let { default: worker } = await import("./worker.ts");
     let getByName = vi.fn();
+    let writeDataPoint = vi.fn();
     let response = await worker.fetch(
       new Request("https://relay.example/api/shares", {
         body: "{",
@@ -36,12 +37,18 @@ describe("shared file Worker routes", () => {
         CREATE_SHARE_RATE_LIMITER: {
           limit: vi.fn(async () => ({ success: false })),
         },
+        GROVE_METRICS: { writeDataPoint },
       } as unknown as Env,
     );
 
     expect(response.status).toBe(429);
     expect(await response.json()).toEqual({ error: "Share creation rate limit exceeded" });
     expect(getByName).not.toHaveBeenCalled();
+    expect(writeDataPoint).toHaveBeenCalledWith({
+      blobs: ["rate_limit", "", "", "create_share"],
+      doubles: [expect.any(Number), 1, 0, 0, 0, 0],
+      indexes: ["rate_limit"],
+    });
   });
 
   it("compacts stored share update logs into a snapshot", async () => {

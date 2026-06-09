@@ -22,6 +22,12 @@
       },
     },
   ],
+  "analytics_engine_datasets": [
+    {
+      "binding": "GROVE_METRICS",
+      "dataset": "grove_relay_metrics",
+    },
+  ],
   "migrations": [
     {
       "tag": "v1",
@@ -30,5 +36,13 @@
   ],
   "observability": {
     "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.05,
+    },
   },
 }
