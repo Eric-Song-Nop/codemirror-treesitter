@@ -38,23 +38,15 @@ export type CollabExternalEditResolution =
       sourcePath: string;
     }
   | {
-      kind: "shared-conflict-copy";
-      path: string;
-      sourcePath: string;
-    }
-  | {
       kind: "imported";
       path: string;
     };
 
-export type CollabMaterializationConflict = {
+type MaterializationConflictDetails = {
   externalHash: string;
   kind: "external-source-conflict";
   path: string;
   sharedHash: string;
-};
-
-type MaterializationConflictDetails = CollabMaterializationConflict & {
   sharedValue: string;
   visibleValue: string;
 };
@@ -193,6 +185,16 @@ export async function materializeCollabDocument(
 
   await saveCollabDocumentSnapshot(backend, state);
   await backend.writeFile(state.path, value);
+  await acknowledgeCollabDocumentSourceSaved(backend, state, value, externalEdit);
+  return { externalEdit };
+}
+
+export async function acknowledgeCollabDocumentSourceSaved(
+  _backend: WorkspaceBackend,
+  state: CollabDocumentState,
+  value = getCollabDocumentValue(state),
+  externalEdit?: CollabExternalEditResolution,
+) {
   state.metadata = {
     ...state.metadata,
     materializedAt: Date.now(),
@@ -201,48 +203,20 @@ export async function materializeCollabDocument(
   await writeBrowserCollabSnapshot(state.metadata, state.doc.export({ mode: "snapshot" }));
   state.cleanValue = value;
   state.externalEdit = externalEdit;
-  return { externalEdit };
+  state.value = value;
 }
 
-export async function detectCollabMaterializationConflict(
+export async function reloadCollabDocumentFromSource(
   backend: WorkspaceBackend,
   state: CollabDocumentState,
-): Promise<CollabMaterializationConflict | null> {
-  let conflict = await findMaterializationConflict(backend, state);
-  if (!conflict) return null;
-  return {
-    externalHash: conflict.externalHash,
-    kind: conflict.kind,
-    path: conflict.path,
-    sharedHash: conflict.sharedHash,
-  };
-}
+  sourceValue?: string,
+): Promise<{ sourceValue: string }> {
+  let value = sourceValue ?? (await backend.readFile(state.path));
 
-export async function keepSourceAndWriteSharedConflictCopy(
-  backend: WorkspaceBackend,
-  state: CollabDocumentState,
-): Promise<{ externalEdit: CollabExternalEditResolution; sourceValue: string }> {
-  let conflict = await findMaterializationConflict(backend, state);
-  let sourceValue = conflict?.visibleValue ?? (await backend.readFile(state.path));
-  let sharedValue = conflict?.sharedValue ?? getCollabDocumentValue(state);
-  let externalEdit: CollabExternalEditResolution = {
-    kind: "shared-conflict-copy",
-    path: await writeSharedConflictCopy(backend, state.path, sharedValue),
-    sourcePath: state.path,
-  };
-
-  replaceMarkdownText(state.doc, sourceValue);
+  replaceMarkdownText(state.doc, value);
   await saveCollabDocumentSnapshot(backend, state);
-  state.metadata = {
-    ...state.metadata,
-    materializedAt: Date.now(),
-    materializedHash: hashMarkdownText(sourceValue),
-  };
-  await writeBrowserCollabSnapshot(state.metadata, state.doc.export({ mode: "snapshot" }));
-  state.cleanValue = sourceValue;
-  state.externalEdit = externalEdit;
-  state.value = sourceValue;
-  return { externalEdit, sourceValue };
+  await acknowledgeCollabDocumentSourceSaved(backend, state, value);
+  return { sourceValue: value };
 }
 
 async function reconcileExternalMarkdownEdit(
@@ -343,15 +317,11 @@ async function writeExternalConflictCopy(backend: WorkspaceBackend, path: string
   return writeConflictCopy(backend, path, value, "external-conflict");
 }
 
-async function writeSharedConflictCopy(backend: WorkspaceBackend, path: string, value: string) {
-  return writeConflictCopy(backend, path, value, "shared-conflict");
-}
-
 async function writeConflictCopy(
   backend: WorkspaceBackend,
   path: string,
   value: string,
-  label: "external-conflict" | "shared-conflict",
+  label: "external-conflict",
 ) {
   for (let attempt = 0; attempt < 1000; attempt++) {
     let conflictPath = conflictCopyPath(path, label, Date.now(), attempt);
@@ -367,12 +337,7 @@ async function writeConflictCopy(
   throw new Error("Could not allocate an external edit conflict file.");
 }
 
-function conflictCopyPath(
-  path: string,
-  label: "external-conflict" | "shared-conflict",
-  now: number,
-  attempt: number,
-) {
+function conflictCopyPath(path: string, label: "external-conflict", now: number, attempt: number) {
   let slash = path.lastIndexOf("/");
   let directory = slash == -1 ? "" : path.slice(0, slash + 1);
   let fileName = slash == -1 ? path : path.slice(slash + 1);
