@@ -1,19 +1,26 @@
 {
+  "id": "/",
   "name": "Grove",
   "short_name": "Grove",
+  "description": "A local-first Markdown workspace for editing Grove documents.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#282828",
+  "theme_color": "#1d2021",
+  "categories": ["productivity", "utilities"],
   "icons": [
     {
       "src": "/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
       "src": "/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
-  ],
-  "theme_color": "#1d2021",
-  "background_color": "#282828",
-  "display": "standalone"
+  ]
 }
