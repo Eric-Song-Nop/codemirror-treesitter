@@ -21,7 +21,7 @@
     "vitest": "catalog:"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=26.0.0"
   },
   "packageManager": "bun@1.3.14",
   "catalog": {

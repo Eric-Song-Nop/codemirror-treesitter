@@ -9,7 +9,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 ## Review Checklist
 
 - [ ] Run `vp install` after pulling remote changes and before getting started.
-- [ ] Run `vp check` and `vp test` to format, lint, type check and test changes.
+- [ ] Run `vp check` and `vp run -r test` to format, lint, type check and test changes.
 - [ ] Check if there are `vite.config.ts` tasks or `package.json` scripts necessary for validation, run via `vp run <script>`.
 - [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
 
@@ -20,7 +20,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 ## Stack Snapshot
 
 - Runtime/package management: Bun `1.3.14` through Vite+ `vp install`; Node.js
-  `>=22.12.0`.
+  `>=26.0.0`.
 - Workspace tooling: Vite+ (`vp`) for dev, build, pack, check, test, preview,
   formatting, linting, type checking, task caching, and script orchestration.
 - Language: TypeScript 6.x, ES modules, shared `tsconfig.*` files, and package
@@ -108,7 +108,6 @@ Run from the workspace root unless a package-local check is intentional.
 ```bash
 vp install
 vp check
-vp test
 vp run -r test
 vp run -r build
 vp run audit
@@ -121,13 +120,16 @@ Useful task selectors:
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
 vp run local-md-workspace#dev
+vp run local-md-workspace#test
 vp run local-md-workspace#smoke:ui
 vp run grove-relay#dev
+vp run grove-relay#test
 vp run grove-relay#types
 vp run examples#dev
 vp run live-md-benchmark#benchmark
 vp run live-md-loro-demo#dev
 vp run collab-editor#dev
+vp run collab-editor#test
 vp run collab-editor#types
 ```
 

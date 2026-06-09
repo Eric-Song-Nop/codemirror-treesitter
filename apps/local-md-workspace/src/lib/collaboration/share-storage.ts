@@ -242,7 +242,7 @@ function saveHostSecret(
   hostSecret: string,
   store: Pick<Storage, "setItem"> | undefined,
 ) {
-  let target = store ?? globalThis.localStorage;
+  let target = store ?? browserLocalStorage();
   if (!target) throw new Error("Browser storage is required to host a shared file.");
   try {
     target.setItem(key, hostSecret);
@@ -304,11 +304,24 @@ function workspaceShareNamespace(backend: WorkspaceBackend) {
 }
 
 function shareRecordStore(): ShareRecordStore {
-  try {
-    if (globalThis.localStorage) return globalThis.localStorage;
-  } catch {}
+  let storage = browserLocalStorage();
+  if (storage) return storage;
 
   return memoryShareRecordStore;
+}
+
+function browserLocalStorage(): Storage | null {
+  try {
+    let storage = (globalThis as typeof globalThis & { window?: { localStorage?: Storage } }).window
+      ?.localStorage;
+    if (storage) return storage;
+  } catch {}
+
+  let descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  if (descriptor && "value" in descriptor && descriptor.value) {
+    return descriptor.value as Storage;
+  }
+  return null;
 }
 
 const memoryShareRecordStore: ShareRecordStore = {

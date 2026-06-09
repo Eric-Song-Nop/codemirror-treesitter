@@ -36,6 +36,9 @@ in `apps/local-md-workspace`.
 - `src/share-limits.ts`: request, snapshot, update, peer, session, and rate
   limits.
 - `src/*.test.ts`: share validation, limits, and Worker route coverage.
+- `vite.config.ts`: Cloudflare Worker build config.
+- `vitest.config.ts`: Worker unit-test config without the Cloudflare Vite
+  plugin.
 - `wrangler.worker.jsonc`: deployment config.
 - `wrangler.worker.ci.jsonc`: CI-oriented Wrangler config.
 
@@ -46,9 +49,9 @@ Run from the workspace root:
 ```bash
 vp run grove-relay#dev
 vp run grove-relay#build
+vp run grove-relay#test
 vp run grove-relay#types
 vp run grove-relay#deploy:worker
-vp test apps/grove-relay
 ```
 
 `local-md-workspace#dev` starts this relay automatically when

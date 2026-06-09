@@ -10,6 +10,7 @@ on:
       - "apps/grove-relay/src/**"
       - "apps/grove-relay/tsconfig.json"
       - "apps/grove-relay/vite.config.ts"
+      - "apps/grove-relay/vitest.config.ts"
       - "apps/grove-relay/worker-configuration.d.ts"
       - "apps/grove-relay/wrangler.jsonc"
       - "apps/grove-relay/wrangler.worker.ci.jsonc"
@@ -111,6 +112,7 @@ jobs:
               apps/grove-relay/package.json | \
               apps/grove-relay/tsconfig.json | \
               apps/grove-relay/vite.config.ts | \
+              apps/grove-relay/vitest.config.ts | \
               apps/grove-relay/worker-configuration.d.ts | \
               apps/grove-relay/wrangler.jsonc | \
               apps/grove-relay/wrangler.worker.ci.jsonc | \
@@ -322,7 +324,7 @@ jobs:
       - uses: voidzero-dev/setup-vp@v1
         with:
           cache: true
-          node-version: "22"
+          node-version: "26"
 
       - name: Install dependencies
         run: vp install
@@ -356,20 +358,28 @@ jobs:
           rustup target add wasm32-unknown-unknown
           vp run @codemirror-treesitter/opendal-wasm-browser#build:wasm
 
+      - name: Check Grove relay Worker types
+        run: |
+          set -euo pipefail
+
+          cd apps/grove-relay
+          ../../node_modules/.bin/wrangler types --check
+
       - name: Check
         run: vp check
 
       - name: Test
-        run: vp test
+        run: vp run -r test
 
       - name: Build Grove relay
         run: vp run grove-relay#build
 
+      - name: Validate Grove relay deploy config
+        run: ./node_modules/.bin/wrangler deploy --dry-run --config apps/grove-relay/wrangler.worker.ci.jsonc
+
       - id: relay
         name: Resolve Grove relay origin
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CONFIGURED_RELAY_ORIGIN: ${{ vars.VITE_LOCAL_MD_SHARE_RELAY_ORIGIN }}
           DEPLOY_TARGET: ${{ needs.scope.outputs.deploy_target }}
         run: |
@@ -390,61 +400,12 @@ jobs:
             fi
           fi
 
-          if [ "$DEPLOY_TARGET" = "production" ]; then
-          node <<'NODE'
-          const { CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, GROVE_ZONE_NAME } = process.env;
-
-          if (!CLOUDFLARE_ACCOUNT_ID || !CLOUDFLARE_API_TOKEN) {
-            throw new Error("Cloudflare account ID and API token are required.");
-          }
-
-          const response = await fetch(
-            `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(GROVE_ZONE_NAME)}`,
-            { headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` } },
-          );
-          const body = await response.json().catch(() => null);
-          if (!response.ok || body?.success === false) {
-            const detail = body?.errors?.map((error) => error.message).join("; ") || response.statusText;
-            throw new Error(`Could not verify Cloudflare zone ${GROVE_ZONE_NAME}: ${detail}`);
-          }
-
-          const zone = body.result?.find(
-            (candidate) => candidate?.name === GROVE_ZONE_NAME && candidate?.account?.id === CLOUDFLARE_ACCOUNT_ID,
-          );
-          if (!zone) {
-            console.error(
-              `::error::Cloudflare zone ${GROVE_ZONE_NAME} is not visible in the configured Cloudflare account. Add the zone to the same account as the Grove Pages project, or update CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN.`,
-            );
-            process.exit(1);
-          }
-          if (zone.status !== "active") {
-            console.error(
-              `::error::Cloudflare zone ${GROVE_ZONE_NAME} is ${zone.status}; Worker custom domains require an active zone.`,
-            );
-            process.exit(1);
-          }
-          NODE
-
-            output_file="$RUNNER_TEMP/wrangler-worker-deploy.log"
-            ./node_modules/.bin/wrangler deploy \
-              --config apps/grove-relay/wrangler.worker.ci.jsonc 2>&1 | tee "$output_file"
-
-            parsed_origin="$(grep -Eo 'https://[^[:space:]]+\.workers\.dev[^[:space:]]*' "$output_file" | tail -n 1 || true)"
-            if [ -n "$parsed_origin" ]; then
-              echo "::notice::Wrangler workers.dev deployment URL: $(normalize_origin "$parsed_origin")"
-            fi
-          fi
-
           echo "relay_origin=$relay_origin" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Grove relay"
             echo
-            if [ "$DEPLOY_TARGET" = "production" ]; then
-              echo "- Worker: \`grove-relay\`"
-            else
-              echo "- Worker deploy: skipped"
-            fi
+            echo "- Worker deploy: $([ "$DEPLOY_TARGET" = "production" ] && echo "pending" || echo "skipped")"
             echo "- Origin: $relay_origin"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -481,6 +442,60 @@ jobs:
             echo "::error::Grove Pages worker is missing the root-domain redirect target."
             exit 1
           fi
+
+      - name: Deploy Grove relay Worker
+        if: ${{ needs.scope.outputs.deploy_target == 'production' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RELAY_ORIGIN: ${{ steps.relay.outputs.relay_origin }}
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const { CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, GROVE_ZONE_NAME } = process.env;
+
+          if (!CLOUDFLARE_ACCOUNT_ID || !CLOUDFLARE_API_TOKEN) {
+            throw new Error("Cloudflare account ID and API token are required.");
+          }
+
+          const response = await fetch(
+            `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(GROVE_ZONE_NAME)}`,
+            { headers: { Authorization: `Bearer ${CLOUDFLARE_API_TOKEN}` } },
+          );
+          const body = await response.json().catch(() => null);
+          if (!response.ok || body?.success === false) {
+            const detail = body?.errors?.map((error) => error.message).join("; ") || response.statusText;
+            throw new Error(`Could not verify Cloudflare zone ${GROVE_ZONE_NAME}: ${detail}`);
+          }
+
+          const zone = body.result?.find(
+            (candidate) => candidate?.name === GROVE_ZONE_NAME && candidate?.account?.id === CLOUDFLARE_ACCOUNT_ID,
+          );
+          if (!zone) {
+            console.error(
+              `::error::Cloudflare zone ${GROVE_ZONE_NAME} is not visible in the configured Cloudflare account. Add the zone to the same account as the Grove Pages project, or update CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN.`,
+            );
+            process.exit(1);
+          }
+          if (zone.status !== "active") {
+            console.error(
+              `::error::Cloudflare zone ${GROVE_ZONE_NAME} is ${zone.status}; Worker custom domains require an active zone.`,
+            );
+            process.exit(1);
+          }
+          NODE
+
+          output_file="$RUNNER_TEMP/wrangler-worker-deploy.log"
+          ./node_modules/.bin/wrangler deploy \
+            --config apps/grove-relay/wrangler.worker.ci.jsonc 2>&1 | tee "$output_file"
+
+          {
+            echo "### Grove relay deployment"
+            echo
+            echo "- Worker: \`grove-relay\`"
+            echo "- Origin: $RELAY_ORIGIN"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Deploy Grove to Cloudflare Pages
         if: ${{ needs.scope.outputs.deploy_target == 'production' }}

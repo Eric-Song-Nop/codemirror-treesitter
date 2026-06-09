@@ -21,26 +21,58 @@ import type {
 } from "@/lib/workspace-backend";
 
 let indexedDbDescriptor: PropertyDescriptor | undefined;
+let localStorageDescriptor: PropertyDescriptor | undefined;
+let localStorageValues: Map<string, string>;
 
 beforeEach(() => {
   indexedDbDescriptor = Object.getOwnPropertyDescriptor(window, "indexedDB");
+  localStorageDescriptor = Object.getOwnPropertyDescriptor(window, "localStorage");
+  localStorageValues = new Map();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      get length() {
+        return localStorageValues.size;
+      },
+      clear() {
+        localStorageValues.clear();
+      },
+      getItem(key: string) {
+        return localStorageValues.get(key) ?? null;
+      },
+      key(index: number) {
+        return [...localStorageValues.keys()][index] ?? null;
+      },
+      removeItem(key: string) {
+        localStorageValues.delete(key);
+      },
+      setItem(key: string, value: string) {
+        localStorageValues.set(key, value);
+      },
+    },
+  });
   Object.defineProperty(window, "indexedDB", {
     configurable: true,
     value: undefined,
   });
-  localStorage.clear();
+  window.localStorage.clear();
   resetBrowserCollabMemoryStoreForTests();
   resetOwnerShareRecordStoreForTests();
 });
 
 afterEach(() => {
-  localStorage.clear();
+  window.localStorage.clear();
   resetBrowserCollabMemoryStoreForTests();
   resetOwnerShareRecordStoreForTests();
   if (indexedDbDescriptor) {
     Object.defineProperty(window, "indexedDB", indexedDbDescriptor);
   } else {
     Reflect.deleteProperty(window, "indexedDB");
+  }
+  if (localStorageDescriptor) {
+    Object.defineProperty(window, "localStorage", localStorageDescriptor);
+  } else {
+    Reflect.deleteProperty(window, "localStorage");
   }
 });
 
@@ -95,7 +127,7 @@ describe("owner shared file metadata", () => {
       },
     ]);
 
-    let stored = localStorage.getItem(ownerShareRecordPath(share.record.shareId));
+    let stored = window.localStorage.getItem(ownerShareRecordPath(share.record.shareId));
     let hostSecret = hostSecrets.get(hostSecretStorageKey(share.record.shareId));
     expect(stored).toBeTruthy();
     expect(stored).not.toContain(linkParts!.guestSecret);
@@ -132,7 +164,7 @@ describe("owner shared file metadata", () => {
     ).rejects.toThrow("relay unavailable");
 
     expect(hasLiveMdFiles(backend)).toBe(false);
-    expect(localStorage.getItem(ownerShareRecordPath("missing-share-id"))).toBeNull();
+    expect(window.localStorage.getItem(ownerShareRecordPath("missing-share-id"))).toBeNull();
     expect(hostSecrets.size).toBe(0);
   });
 
@@ -190,7 +222,7 @@ describe("owner shared file metadata", () => {
       },
     ]);
 
-    let stored = localStorage.getItem(ownerShareRecordPath(share.record.shareId));
+    let stored = window.localStorage.getItem(ownerShareRecordPath(share.record.shareId));
     expect(stored).toBeTruthy();
     expect(stored).not.toContain(rotatedLink.guestSecret);
     await expect(readOwnerShareRecord(backend, share.record.shareId)).resolves.toEqual(
@@ -266,7 +298,7 @@ describe("owner shared file metadata", () => {
         shareId,
       }),
     });
-    localStorage.setItem("local-md-workspace:share-record:corrupt", "{");
+    window.localStorage.setItem("local-md-workspace:share-record:corrupt", "{");
 
     await expect(findOwnerShareRecordForPath(backend, "note.md")).resolves.toEqual(second.record);
   });

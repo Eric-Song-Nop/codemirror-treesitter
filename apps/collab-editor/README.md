@@ -29,6 +29,9 @@ through a Durable Object that stores snapshots and bounded update logs.
 - `src/initial-document.ts`: default room seeding helpers.
 - `src/*.test.ts`: room, worker route, share, limit, and initial-document
   coverage.
+- `vite.config.ts`: Cloudflare frontend and Worker build config.
+- `vitest.config.ts`: Worker unit-test config without the Cloudflare Vite
+  plugin.
 - `wrangler.jsonc` / `wrangler.worker.jsonc`: Cloudflare build and deploy
   configuration.
 
@@ -50,6 +53,7 @@ Run from the workspace root:
 ```bash
 vp run collab-editor#dev
 vp run collab-editor#build
+vp run collab-editor#test
 vp run collab-editor#preview
 vp run collab-editor#types
 vp run collab-editor#deploy:worker
@@ -59,5 +63,5 @@ vp run collab-editor#deploy:pages
 Tests are included in the workspace test run:
 
 ```bash
-vp test apps/collab-editor
+vp run -r test
 ```

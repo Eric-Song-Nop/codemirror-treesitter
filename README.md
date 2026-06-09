@@ -14,7 +14,7 @@ collaboration flows.
 ## Current Stack
 
 - **Runtime and package manager**: Bun `1.3.14` through Vite+ `vp install`,
-  with Node.js `>=22.12.0` required by the workspace.
+  with Node.js `>=26.0.0` required by the workspace.
 - **Toolchain**: Vite+ (`vp`) wraps Vite, Rolldown, Vitest, tsdown, Oxlint,
   Oxfmt, and Vite Task. Root formatting, linting, type-aware checks, task
   caching, and shared aliases are configured in `vite.config.ts`.
@@ -404,7 +404,6 @@ Use Vite+ from the workspace root:
 ```bash
 vp install
 vp check
-vp test
 vp run -r test
 vp run -r build
 vp run audit
@@ -424,13 +423,16 @@ vp run @codemirror-treesitter/live-md#build
 vp run @codemirror-treesitter/opendal-wasm-browser#auth:dropbox-token
 vp run @codemirror-treesitter/opendal-wasm-browser#validate:dropbox
 vp run local-md-workspace#dev
+vp run local-md-workspace#test
 vp run local-md-workspace#smoke:ui
 vp run grove-relay#dev
+vp run grove-relay#test
 vp run grove-relay#types
 vp run examples#dev
 vp run live-md-benchmark#benchmark
 vp run live-md-loro-demo#dev
 vp run collab-editor#dev
+vp run collab-editor#test
 vp run collab-editor#types
 ```
 

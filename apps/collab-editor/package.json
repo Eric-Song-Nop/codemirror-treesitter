@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vp dev",
     "build": "vp build",
+    "test": "vp test --config vitest.config.ts",
     "preview": "vp preview",
     "deploy": "wrangler deploy --config wrangler.worker.jsonc",
     "deploy:worker": "wrangler deploy --config wrangler.worker.jsonc",

@@ -170,8 +170,10 @@ function placeholderValue(value: string | undefined): Extension {
 }
 
 function loadPersistedValue(storageKey: string, fallback: string) {
+  let storage = browserLocalStorage();
+  if (!storage) return fallback;
   try {
-    let persistedValue = globalThis.localStorage?.getItem(storageKey);
+    let persistedValue = storage.getItem(storageKey);
     return persistedValue == null ? fallback : persistedValue;
   } catch {
     return fallback;
@@ -180,9 +182,25 @@ function loadPersistedValue(storageKey: string, fallback: string) {
 
 function savePersistedValue(storageKey: null | string, value: string) {
   if (!storageKey) return;
+  let storage = browserLocalStorage();
+  if (!storage) return;
   try {
-    globalThis.localStorage?.setItem(storageKey, value);
+    storage.setItem(storageKey, value);
   } catch {
     // Persistence is an optional host integration.
   }
+}
+
+function browserLocalStorage(): Pick<Storage, "getItem" | "setItem"> | null {
+  try {
+    let storage = (globalThis as typeof globalThis & { window?: { localStorage?: Storage } }).window
+      ?.localStorage;
+    if (storage) return storage;
+  } catch {}
+
+  let descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  if (descriptor && "value" in descriptor && descriptor.value) {
+    return descriptor.value as Storage;
+  }
+  return null;
 }

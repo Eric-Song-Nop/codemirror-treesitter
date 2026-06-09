@@ -26,7 +26,7 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.replaceChildren();
-  globalThis.localStorage?.clear();
+  if (localStorageStubbed) globalThis.localStorage.clear();
   vi.restoreAllMocks();
   if (locationDescriptor) {
     Object.defineProperty(globalThis, "location", locationDescriptor);

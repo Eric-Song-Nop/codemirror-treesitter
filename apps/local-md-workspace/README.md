@@ -73,6 +73,7 @@ Run from the workspace root:
 vp run local-md-workspace#dev
 vp run local-md-workspace#dev:frontend
 vp run local-md-workspace#build
+vp run local-md-workspace#test
 vp run local-md-workspace#preview
 vp run local-md-workspace#smoke:ui
 ```
