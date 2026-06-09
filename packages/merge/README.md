@@ -52,6 +52,14 @@ This package depends on the local language package for Tree-sitter-backed
 syntax highlighting of deleted text. It is exercised in the examples app
 against the official merge package.
 
+## Current Implementation Notes
+
+- `src/index.ts` re-exports the public surface from `diff`, `chunk`, `merge`,
+  `mergeview`, `unified`, and `deco`.
+- `src/merge.ts` owns chunk state and navigation; `src/unified.ts` owns
+  original-document state and accept/reject behavior.
+- The current automated tests focus on diff generation and chunk behavior.
+
 ## Validation
 
 Run from the workspace root:

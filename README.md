@@ -30,8 +30,10 @@ collaboration flows.
 - **Markdown product layer**: LiveMD composes the local language, commands,
   autocomplete, basic setup, language-data, and Gruvbox theme packages with
   KaTeX, Mermaid, and `beautiful-mermaid`.
-- **Collaboration layer**: Optional LiveMD Loro bindings use `loro-crdt` and
-  `loro-codemirror`. Grove's shared-file relay runs as the `grove-relay`
+- **Collaboration and workspace layer**: Optional LiveMD Loro bindings use
+  `loro-crdt` and `loro-codemirror`. Grove's local workspace app supports local
+  folders, Dropbox through the OpenDAL browser WASM wrapper, local image
+  assets, and shared-file hosting. Grove's relay runs as the `grove-relay`
   Cloudflare Worker with Durable Object persistence, WebSocket sync, Wrangler,
   and the Cloudflare Vite plugin. The `collab-editor` app remains a separate
   Cloudflare collaboration demo.
@@ -122,11 +124,12 @@ this repository replace the language-aware layers above those primitives.
    widgets, code-fence highlighting, KaTeX and Mermaid rendering, Shadow DOM
    web component integration, persistence, selection APIs, and benchmark
    fixtures.
-6. **Collaboration surface**:
-   `live-md-loro` provides optional CRDT bindings, `apps/grove-relay` hosts
-   Grove shared-file relay APIs with Cloudflare Durable Objects and WebSocket
-   transport, and `apps/collab-editor` remains a separate shareable
-   collaborative editor demo.
+6. **Workspace and collaboration surface**:
+   `live-md-loro` provides optional CRDT bindings, `apps/local-md-workspace`
+   provides the Grove local/Dropbox Markdown workspace and shared-file host or
+   guest UI, `apps/grove-relay` hosts Grove shared-file relay APIs with
+   Cloudflare Durable Objects and WebSocket transport, and `apps/collab-editor`
+   remains a separate shareable collaborative editor demo.
 
 ## Workspace Structure
 
@@ -165,11 +168,12 @@ entry points, dependency boundaries, source layout, and validation notes.
 - `apps/basic-editor`: Minimal Tree-sitter-only editor that imports
   `@codemirror-treesitter/live-md/register` and renders one
   `<live-md-editor>` element.
-- `apps/local-md-workspace`: React, Vite+, and shadcn/ui local-first Markdown
-  workspace that opens a browser-granted local folder, edits `.md` files with
-  LiveMD, supports image insert/paste/drop through sibling `assets/`
-  directories, and supports file create, rename, delete, tree browsing, and
-  autosave through the File System Access API.
+- `apps/local-md-workspace`: Grove React, Vite+, shadcn/radix local-first
+  Markdown workspace that opens a browser-granted local folder, edits `.md`
+  files with LiveMD, supports Dropbox storage through OpenDAL WASM and OAuth
+  PKCE, supports image insert/paste/drop through sibling `assets/` directories,
+  supports file/folder create, rename, delete, tree browsing, and autosave, and
+  can host or join Grove shared-file sessions through `apps/grove-relay`.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, share create/session/rotate/revoke APIs, WebSocket Loro sync,
   bounded relay queues, share expiration cleanup, and Wrangler deploy/types
@@ -182,8 +186,8 @@ entry points, dependency boundaries, source layout, and validation notes.
 - `apps/live-md-loro-demo`: Two-peer LiveMD collaboration demo with simulated
   latency, offline queueing, and Loro snapshot resync.
 - `apps/collab-editor`: Cloudflare Workers app with a Durable Object room,
-  WebSocket Loro sync, local snapshot recovery, shareable room URLs, and
-  deployment/types tasks through Wrangler.
+  WebSocket Loro sync, local snapshot recovery, hash-based room URLs,
+  standalone share lifecycle APIs, and deployment/types tasks through Wrangler.
 - `tools/audit.mjs`: Repository audit that checks package names, Lezer-free
   guarantees, public export parity, command and autocomplete stubs, basic setup
   parity, language-data metadata/load coverage, example coverage, merge/LSP

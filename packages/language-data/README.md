@@ -65,6 +65,16 @@ This package depends on `@codemirror-treesitter/language` and returns
 apps, examples, LiveMD, and any caller that wants a registry of language
 loaders.
 
+## Current Implementation Notes
+
+- `src/index.ts` is the registry implementation and contains roughly the full
+  upstream-style language catalog, with local shims where published grammars or
+  highlight queries are not directly available.
+- `src/queries/*` currently contains Markdown inline injection and raw-text
+  queries used for nested parsing.
+- `src/wasm/*` contains bundled fallback grammars copied into the built package
+  by `vite.config.ts`.
+
 ## Validation
 
 Run from the workspace root:

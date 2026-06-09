@@ -57,6 +57,16 @@ context. It is used by `@codemirror-treesitter/basic-setup`,
 `@codemirror-treesitter/lsp-client`, `@codemirror-treesitter/live-md`, and the
 apps.
 
+## Current Implementation Notes
+
+- `src/index.ts` exports the active completion state helpers
+  `completionStatus`, `currentCompletions`, `selectedCompletion`,
+  `selectedCompletionIndex`, and `setSelectedCompletion`.
+- Completion UI and selection effects live in `src/view.ts` and
+  `src/tooltip.ts`; matching logic is separated into `src/filter.ts`.
+- Tests currently cover completion source behavior, filtering, snippet-adjacent
+  completion behavior, and close-bracket insertion/deletion.
+
 ## Validation
 
 Run from the workspace root:

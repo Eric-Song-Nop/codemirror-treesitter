@@ -87,6 +87,16 @@ The wrapper currently exposes:
 `rename` uses OpenDAL native rename when the backend supports it. Otherwise it
 falls back to copy/delete when copy is available.
 
+## Source Layout
+
+- `src/lib.rs`: Rust `wasm-bindgen` wrapper around OpenDAL operators for
+  Dropbox and S3-compatible providers.
+- `src/index.ts`: TypeScript loader, config normalization, generated WASM
+  module initialization, and normalized operator facade.
+- `pkg/`: generated `wasm-pack` output consumed by the TypeScript wrapper and
+  local workspace app.
+- `smoke/*`: browser fixture and credential-gated Dropbox validation helpers.
+
 ## Build
 
 Generate the browser WASM package:

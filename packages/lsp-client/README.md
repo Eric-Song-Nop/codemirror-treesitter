@@ -59,6 +59,16 @@ This package depends on local `language` and `autocomplete` for syntax-aware
 features and completion UI. It is exercised in the examples app against the
 official LSP client package.
 
+## Current Implementation Notes
+
+- `languageServerSupport(...)` remains exported for compatibility but is marked
+  deprecated in source; prefer `LSPPlugin.create(...)` plus selected feature
+  extensions or `languageServerExtensions()`.
+- Markdown returned by servers is rendered through `src/text.ts` and can be
+  covered independently through rendering tests.
+- `src/pos.ts` owns offset/line/character mapping and has dedicated tests
+  because every LSP feature depends on that conversion.
+
 ## Validation
 
 Run from the workspace root:

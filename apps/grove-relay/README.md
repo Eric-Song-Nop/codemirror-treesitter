@@ -1,0 +1,55 @@
+# grove-relay
+
+Cloudflare Worker relay for Grove shared Markdown files. It hosts only the
+shared-file control plane and WebSocket relay; the full local workspace UI lives
+in `apps/local-md-workspace`.
+
+## Responsibilities
+
+- Create shares from host-provided Loro snapshots.
+- Issue host or guest sessions after validating share secrets.
+- Rotate guest secrets, revoke shares, expire shares, and clean up retained
+  state through Durable Object alarms.
+- Relay document, presence, snapshot, host-save acknowledgement, and share
+  status messages over WebSockets.
+- Persist snapshots, pending host-save state, and bounded update logs in a
+  Durable Object.
+- Enforce payload size, frame burst, per-minute update, session, and guest-peer
+  limits.
+
+## API Shape
+
+- `POST /api/shares`
+- `POST /api/shares/:shareId/session`
+- `POST /api/shares/:shareId/rotate`
+- `POST /api/shares/:shareId/revoke`
+- `GET /api/shares/:shareId/ws` with WebSocket upgrade
+- `GET /__debug` for local readiness checks used by
+  `apps/local-md-workspace/scripts/dev.mjs`
+
+## Source Layout
+
+- `src/worker.ts`: Worker router and `GroveShareRoom` Durable Object.
+- `src/protocol.ts`: binary wire framing for relay messages and batches.
+- `src/share.ts`: share IDs, secrets, session records, request parsing,
+  expiration, retention, and hashing helpers.
+- `src/share-limits.ts`: request, snapshot, update, peer, session, and rate
+  limits.
+- `src/*.test.ts`: share validation, limits, and Worker route coverage.
+- `wrangler.worker.jsonc`: deployment config.
+- `wrangler.worker.ci.jsonc`: CI-oriented Wrangler config.
+
+## Commands
+
+Run from the workspace root:
+
+```bash
+vp run grove-relay#dev
+vp run grove-relay#build
+vp run grove-relay#types
+vp run grove-relay#deploy:worker
+vp test apps/grove-relay
+```
+
+`local-md-workspace#dev` starts this relay automatically when
+`VITE_LOCAL_MD_SHARE_RELAY_ORIGIN` or `--relay-origin` points at a local host.

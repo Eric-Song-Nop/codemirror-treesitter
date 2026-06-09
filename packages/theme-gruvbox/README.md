@@ -45,6 +45,15 @@ This package depends on `@codemirror-treesitter/language` for
 `HighlightStyle`, `syntaxHighlighting`, and `tags`. It is used by the examples
 app and LiveMD.
 
+## Current Implementation Notes
+
+- `gruvboxDarkTheme` and `gruvboxLightTheme` style editor chrome through
+  `EditorView.theme(...)`.
+- `gruvboxDarkHighlightStyle` and `gruvboxLightHighlightStyle` are built from
+  local Tree-sitter highlight tags, not `@lezer/highlight`.
+- `gruvboxDark` and `gruvboxLight` combine editor chrome and syntax
+  highlighting for direct use as CodeMirror extensions.
+
 ## Validation
 
 Run from the workspace root:

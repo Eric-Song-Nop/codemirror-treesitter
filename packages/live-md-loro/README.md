@@ -77,6 +77,16 @@ document.body.append(editor);
 `apps/live-md-loro-demo` uses this package for an in-browser two-peer
 collaboration demo. `apps/collab-editor` uses it with Cloudflare Durable
 Objects and WebSockets to persist and relay Loro updates between clients.
+`apps/local-md-workspace` also uses it for owner and guest Grove shared-file
+editing.
+
+## Current Implementation Notes
+
+- `src/index.ts` is intentionally small: it wraps `LoroExtensions`, resolves
+  the LiveMD text container, exports undo/redo, and drains the initial
+  dispatch guard when editor and Loro content already match.
+- Presence is passed through as a `loro-codemirror` ephemeral store plus user
+  metadata; this package does not own any network transport.
 
 ## Validation
 

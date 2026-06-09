@@ -55,6 +55,16 @@ syntax-tree navigation, bracket matching, and comment token data. It is used by
 `@codemirror-treesitter/basic-setup`, `@codemirror-treesitter/live-md`, and the
 apps.
 
+## Current Implementation Notes
+
+- `src/index.ts` contains the large command/keymap surface, while
+  `src/comment.ts` and `src/history.ts` hold the comment and undo/redo
+  subsystems.
+- Syntax-aware commands call local `syntaxTree`, `matchBrackets`, `NodeProp`,
+  and indentation helpers from `@codemirror-treesitter/language`.
+- Tests are split by command behavior, history behavior, and indentation
+  behavior.
+
 ## Validation
 
 Run from the workspace root:

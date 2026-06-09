@@ -32,9 +32,11 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   assets, highlight queries, and local CodeMirror-compatible wrappers.
 - Product/runtime integrations: LiveMD uses KaTeX, Mermaid, and
   `beautiful-mermaid`; optional collaboration uses `loro-crdt` and
-  `loro-codemirror`; `apps/grove-relay` and `apps/collab-editor` use
-  Cloudflare Workers, Durable Objects, WebSockets, Wrangler, and
-  `@cloudflare/vite-plugin`.
+  `loro-codemirror`; `apps/local-md-workspace` uses React 19, shadcn/radix UI,
+  the browser File System Access API, Dropbox OAuth PKCE, the OpenDAL browser
+  WASM wrapper, and Grove shared-file relay clients; `apps/grove-relay` and
+  `apps/collab-editor` use Cloudflare Workers, Durable Objects, WebSockets,
+  Wrangler, and `@cloudflare/vite-plugin`.
 
 ## Repository Layout
 
@@ -62,8 +64,10 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `packages/opendal-wasm-browser`: Experimental browser WASM wrapper for
   OpenDAL-backed cloud workspace storage.
 - `apps/basic-editor`: Minimal `<live-md-editor>` smoke app.
-- `apps/local-md-workspace`: React shadcn/ui local-first Markdown workspace
-  using LiveMD and the browser File System Access API for `.md` files.
+- `apps/local-md-workspace`: Grove React shadcn/radix local-first Markdown
+  workspace using LiveMD, the browser File System Access API, optional Dropbox
+  storage through OpenDAL WASM, local image asset handling, and optional Grove
+  shared-file collaboration through `apps/grove-relay`.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, WebSocket Loro sync, share lifecycle APIs, and Wrangler deploy
   config.
@@ -71,7 +75,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `apps/live-md-benchmark`: LiveMD benchmark harness.
 - `apps/live-md-loro-demo`: Local two-peer Loro collaboration demo.
 - `apps/collab-editor`: Cloudflare collaboration app with Durable Object room
-  persistence and WebSocket Loro sync.
+  persistence, WebSocket Loro sync, and standalone share lifecycle APIs.
 - `tools/audit.mjs`: Network-aware parity and boundary audit for packages,
   language-data coverage, examples, benchmark wiring, and Lezer-free rules.
 
@@ -90,6 +94,12 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Grove shared-file relay APIs belong in `apps/grove-relay`; the
   `apps/collab-editor` Cloudflare app remains a separate collaboration demo.
   Package code should remain browser/library oriented.
+- Dropbox workspace access belongs in `apps/local-md-workspace` and
+  `packages/opendal-wasm-browser`. Do not put Dropbox OAuth, relay hosting, or
+  File System Access API assumptions into core editor packages.
+- `packages/opendal-wasm-browser` is private and experimental. Its generated
+  `pkg/` output must be rebuilt with the package WASM task when Rust wrapper
+  code changes.
 
 ## Common Commands
 
@@ -111,6 +121,7 @@ Useful task selectors:
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
 vp run local-md-workspace#dev
+vp run local-md-workspace#smoke:ui
 vp run grove-relay#dev
 vp run grove-relay#types
 vp run examples#dev
@@ -126,8 +137,10 @@ vp run collab-editor#types
 
 - Update the root `README.md` when package topology, apps, toolchain,
   validation workflow, or LiveMD public API changes.
-- Update package READMEs when public exports, source layout, dependencies, or
-  package responsibilities change.
+- Update package READMEs when public exports, source layout, dependencies,
+  package responsibilities, tests, or dependency boundaries change.
+- Update app READMEs when routes, commands, environment variables, deployment
+  config, storage backends, collaboration flows, or smoke validation changes.
 - Update this file when agent-facing setup, validation, dependency boundaries,
   or app/task workflows change.
 - Keep docs in sync with `package.json`, `vite.config.ts`, `vite.shared.ts`,

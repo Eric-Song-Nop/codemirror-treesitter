@@ -120,10 +120,13 @@ The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 - `src/style.css`: Shadow DOM editor styles and CSS custom properties.
 - `src/core/editor.ts`: editor controller, persistence, read-only state,
   placeholders, and async language loading.
-- `src/core/extension.ts`, `src/core/decorations.ts`, `src/core/widgets.ts`,
-  `src/core/images.ts`, `src/core/links.ts`, and `src/core/languages.ts`: live
-  Markdown extension, query-based decoration pipeline, image source resolution,
-  link interactions, widget rendering, and language loading.
+- `src/core/extension.ts`, `src/core/decorations.ts`,
+  `src/core/dirty-ranges.ts`, `src/core/features.ts`, `src/core/widgets.ts`,
+  `src/core/images.ts`, `src/core/links.ts`, `src/core/search.ts`, and
+  `src/core/languages.ts`: live Markdown extension, query-based decoration
+  pipeline, dirty-range patching, feature registration, image source
+  resolution, link interactions, search, widget rendering, and language
+  loading.
 - `src/element/*`: custom element implementation and style installation.
 - `src/fixtures/*`: reusable sample content for examples and benchmarks.
 - `vite-plugin.ts`: raw CSS helper used by apps that need to import LiveMD CSS
@@ -137,6 +140,16 @@ LiveMD composes `basic-setup`, `language`, `language-data`, `commands`,
 `autocomplete`, and `theme-gruvbox`. Optional collaboration is layered through
 `@codemirror-treesitter/live-md-loro` so this package stays independent of Loro
 and Cloudflare-specific code.
+
+## Current Implementation Notes
+
+- Public exports are limited to the editor controller, live Markdown extension,
+  image source helpers, code-fence highlighting, and custom element definition.
+- `./register` only defines the custom element and re-exports the element API.
+- `./fixtures` currently exposes benchmark/example Markdown content such as
+  `createInitialMarkdown(...)`.
+- The custom element installs package CSS into Shadow DOM; hosts can also import
+  `./style.css` for bundler-visible styling.
 
 ## Validation
 

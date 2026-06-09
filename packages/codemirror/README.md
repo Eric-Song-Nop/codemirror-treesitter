@@ -48,6 +48,15 @@ This package composes local `language`, `commands`, and `autocomplete` with
 official CodeMirror packages that do not introduce Lezer into the local
 implementation path. It is used directly by examples and by LiveMD.
 
+## Current Implementation Notes
+
+- `src/index.ts` is the only source file and is the package's public root.
+- The package name is `@codemirror-treesitter/basic-setup`, even though the
+  workspace directory remains `packages/codemirror` for compatibility with the
+  upstream `codemirror` package concept.
+- `tests/setup.test.ts` verifies exported setup arrays and ordering-sensitive
+  composition.
+
 ## Validation
 
 Run from the workspace root:

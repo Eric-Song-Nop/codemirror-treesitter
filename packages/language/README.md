@@ -74,6 +74,17 @@ Every package that needs syntax information depends on this one. It is consumed
 by `language-data`, `commands`, `autocomplete`, `basic-setup`, `merge`,
 `lsp-client`, `theme-gruvbox`, `live-md`, and the apps.
 
+## Current Implementation Notes
+
+- `src/index.ts` re-exports the runtime surface from focused modules instead of
+  defining behavior inline.
+- `src/language.ts` owns Tree-sitter parser integration, query helpers,
+  language facets, nested parser support, and syntax-tree availability.
+- `src/tree.ts` provides CodeMirror-facing tree/node/cursor wrappers over
+  Tree-sitter nodes.
+- The tests include parser, tree, highlighting, indentation, folding,
+  fold-gutter, bidi isolation, incremental range, and stream-parser coverage.
+
 ## Validation
 
 Run from the workspace root:
