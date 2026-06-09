@@ -21,6 +21,8 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
 - Create, rotate, revoke, and host shared-file links through the Grove relay.
 - Open guest shared-file routes and sync through the relay without requiring
   access to the owner's local or Dropbox workspace.
+- Install as a PWA with an app manifest and production service worker for the
+  app shell, icons, and same-origin static assets.
 
 ## Source Layout
 
@@ -64,6 +66,23 @@ VITE_LOCAL_MD_SHARE_RELAY_ORIGIN="http://127.0.0.1:8787"
 If the relay origin is local, `vp run local-md-workspace#dev` starts
 `apps/grove-relay` automatically unless an existing relay responds at
 `/__debug`.
+
+## PWA Support
+
+The app ships `public/site.webmanifest` and `public/service-worker.js`. The
+service worker is registered only for production builds, so normal
+`dev:frontend` sessions do not keep stale development assets. Use
+`vp run local-md-workspace#build` followed by `vp run local-md-workspace#preview`
+to test installability and offline app-shell loading.
+
+The service worker caches same-origin GET navigations and static assets. Dropbox
+requests, relay API mutations, and relay WebSockets remain network-only.
+
+When the browser reports that the app is installable, after `appinstalled`, or
+when the app starts in standalone display mode, the production app preloads the
+LiveMD preview runtime for KaTeX and Mermaid after the service worker controls
+the page. Those lazy chunks are then available from the runtime cache for
+offline PWA sessions that use LaTeX or Mermaid previews.
 
 ## Commands
 

@@ -102,7 +102,7 @@ await editor.ready;
 - LiveMD, a Markdown editor runtime built from the local Tree-sitter packages,
   exposed through `createLiveMdEditor()`, `liveMarkdown()`,
   `liveMdCodeFenceHighlighting()`, `defineLiveMdEditor()`, and
-  `<live-md-editor>`.
+  `preloadLiveMdPreviewAssets()`, plus `<live-md-editor>`.
 - Optional LiveMD collaboration bindings for Loro documents, presence, custom
   text containers, and collaborative undo/redo.
 - Validation tooling and apps that check public export parity, package
@@ -330,7 +330,9 @@ relative Markdown links for Shift-click link jumps. The controller exposes
 `view`, `value`, `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`,
 `setPlaceholder()`, `setReadOnly()`, and `destroy()`.
 `liveMdCodeFenceHighlighting(...)` can be passed through `extensions` to align
-fenced code token colors with a host theme.
+fenced code token colors with a host theme. `preloadLiveMdPreviewAssets()`
+eagerly loads the KaTeX and Mermaid preview runtime for hosts that want to warm
+service-worker caches before offline use.
 
 ## Optional Loro Collaboration
 

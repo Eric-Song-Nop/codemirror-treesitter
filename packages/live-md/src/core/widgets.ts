@@ -146,6 +146,12 @@ let beautifulMermaidPromise: Promise<BeautifulMermaidModule> | null = null;
 let mermaidPromise: Promise<Mermaid> | null = null;
 let mermaidRenderSequence = 0;
 
+export async function preloadLiveMdPreviewAssets() {
+  katex.renderToString("x", { ...latexOptions, displayMode: false });
+  let [, mermaid] = await Promise.all([loadBeautifulMermaid(), loadMermaid()]);
+  await preloadMermaidMathPreviewAssets(mermaid);
+}
+
 export class MermaidWidget extends WidgetType {
   private source: string;
 
@@ -362,6 +368,17 @@ async function renderMermaidSvgWithOfficialRenderer(source: string): Promise<Mer
   let mermaid = await loadMermaid();
   let id = `cm-md-mermaid-${++mermaidRenderSequence}`;
   return mermaid.render(id, source);
+}
+
+async function preloadMermaidMathPreviewAssets(mermaid: Mermaid) {
+  try {
+    await mermaid.render(
+      `cm-md-mermaid-preload-${++mermaidRenderSequence}`,
+      'flowchart TD\n  A["$$x$$"]',
+    );
+  } catch {
+    // Loading the core renderers is still useful if a browser cannot render the warmup graph.
+  }
 }
 
 function prepareBeautifulMermaidSvg(svg: string) {
