@@ -63,7 +63,6 @@ import {
 } from "@/components/ui/empty";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   FileTree,
@@ -1565,7 +1564,7 @@ function LocalWorkspaceApp() {
             !sidebarOpen && "hidden",
           )}
         >
-          <div className="flex h-12 shrink-0 items-center gap-2 px-3">
+          <div className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
             <GroveMark className="size-8" decorative />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{rootName}</div>
@@ -1603,7 +1602,6 @@ function LocalWorkspaceApp() {
               <PlusIcon data-icon="inline-start" />
             </TooltipIconButton>
           </div>
-          <Separator />
           {tree ? (
             <FileTree
               root={tree}
