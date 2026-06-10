@@ -6,6 +6,7 @@ export {
   type LiveMdEditorOptions,
 } from "./core/editor.js";
 export { liveMarkdown, type LiveMarkdownOptions } from "./core/extension.js";
+export { liveMdDefaultFeatures } from "./core/default-features.js";
 export {
   liveMdFeature,
   liveMdFeatures,

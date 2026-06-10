@@ -47,6 +47,7 @@ import {
   liveMdMarkdownDocumentClass,
   liveMdMarkdownDocumentCss,
   liveMdMarkdownDocumentCssVariables,
+  liveMdDefaultFeatures,
   liveMdFeature,
   liveMdFeatures,
   liveMdImageSource,
@@ -126,6 +127,8 @@ Hosts can add Tree-sitter-query-driven Markdown behavior with
 the same LiveMD analysis pass as the built-in Markdown features, so they share
 viewport-limited query matching, active-line checks, line classes, decorations,
 widgets, atomic ranges, consumed ranges, and search visibility hooks.
+The built-in Markdown behavior is exposed as `liveMdDefaultFeatures`, a
+feature list used by the default `liveMarkdown()` setup.
 
 ```ts
 import { createLiveMdEditor, liveMdFeature } from "@codemirror-treesitter/live-md";
@@ -195,10 +198,11 @@ The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 - `src/core/editor.ts`: editor controller, persistence, read-only state,
   placeholders, and async language loading.
 - `src/core/extension.ts`, `src/core/decorations.ts`,
-  `src/core/dirty-ranges.ts`, `src/core/features.ts`, `src/core/widgets.ts`,
-  `src/core/images.ts`, `src/core/links.ts`, `src/core/search.ts`, and
-  `src/core/languages.ts`: live Markdown extension, query-based decoration
-  pipeline, dirty-range patching, feature registration, image source
+  `src/core/default-features.ts`, `src/core/dirty-ranges.ts`,
+  `src/core/features.ts`, `src/core/widgets.ts`, `src/core/images.ts`,
+  `src/core/links.ts`, `src/core/search.ts`, and `src/core/languages.ts`: live
+  Markdown extension, query-based decoration pipeline, built-in Markdown
+  feature extensions, dirty-range patching, feature registration, image source
   resolution, link interactions, search, widget rendering, and language
   loading.
 - `src/core/markdown-html.ts`: Tree-sitter Markdown-to-HTML renderer and scoped

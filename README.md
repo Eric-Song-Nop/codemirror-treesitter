@@ -301,6 +301,7 @@ custom properties on the host element.
 import {
   createLiveMdEditor,
   liveMdCodeFenceHighlighting,
+  liveMdDefaultFeatures,
   liveMdFeature,
 } from "@codemirror-treesitter/live-md";
 import { gruvboxDarkHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
@@ -340,7 +341,8 @@ fenced code token colors with a host theme.
 `liveMdFeature(...)` and `liveMdFeatures(...)` can also be passed through
 `extensions` when hosts need Tree-sitter-query-driven Markdown behavior such as
 custom line classes, decorations, widgets, consumed ranges, or search visibility
-rules for syntax already exposed by the Markdown grammar.
+rules for syntax already exposed by the Markdown grammar. The built-in Markdown
+behavior is exposed as the reusable `liveMdDefaultFeatures` feature list.
 
 ## Optional Loro Collaboration
 
