@@ -35,16 +35,10 @@ export type CollabDocumentState = {
   value: string;
 };
 
-export type CollabExternalEditResolution =
-  | {
-      kind: "conflict-copy";
-      path: string;
-      sourcePath: string;
-    }
-  | {
-      kind: "imported";
-      path: string;
-    };
+export type CollabExternalEditResolution = {
+  kind: "imported";
+  path: string;
+};
 
 export type CollabSourceState =
   | {
@@ -103,15 +97,17 @@ export async function openMarkdownCollabDocument(
   let docId = await createDocumentId(backend, path);
   let workspaceId = workspaceDocumentNamespace(backend);
   let stored = await loadBrowserCollabDocument(docId);
+  let storedMetadata =
+    stored.metadata && stored.metadata.path == path && stored.metadata.workspaceId == workspaceId
+      ? stored.metadata
+      : null;
   let doc = new LoroDoc();
   let externalEdit: CollabExternalEditResolution | undefined;
   let sourceState: CollabSourceState = { kind: "synced" };
-  let metadata: BrowserCollabDocumentMetadata =
-    stored.metadata && stored.metadata.path == path && stored.metadata.workspaceId == workspaceId
-      ? stored.metadata
-      : { docId, path, workspaceId };
+  let metadata: BrowserCollabDocumentMetadata;
 
-  if (stored.snapshot) {
+  if (stored.snapshot && storedMetadata) {
+    metadata = storedMetadata;
     doc.import(stored.snapshot);
     if (stored.updates.length) doc.importBatch(stored.updates);
     if (options.reconcileExternalEdits ?? true) {
@@ -126,7 +122,9 @@ export async function openMarkdownCollabDocument(
     if (initialValue) text.insert(0, initialValue);
     if (initialValue) doc.commit();
     metadata = {
-      ...metadata,
+      docId,
+      path,
+      workspaceId,
       ...currentDocumentMaterializationFields(doc, initialValue),
     };
     await compactDocumentSnapshot(metadata, doc);
@@ -343,38 +341,36 @@ async function importExternalMarkdownEdit(
     };
   }
 
-  let checkpoint = sourceCheckpointFromMetadata(metadata);
-  if (checkpoint) {
-    try {
-      let fork = doc.forkAt(checkpoint.frontiers);
-      let forkText = fork.getText(textKey);
-      if (forkText.toString() == checkpoint.value) {
-        forkText.update(visibleValue);
-        let update = fork.export({ mode: "update", from: checkpoint.versionVector });
-        let nextMetadata = {
-          ...metadata,
-          ...sourceCheckpointFields(
-            visibleValue,
-            serializeFrontiers(fork.frontiers()),
-            serializeVersionVector(fork.oplogVersion()),
-          ),
-        };
-        if (update.byteLength) doc.import(update);
-        let value = doc.getText(textKey).toString();
-        return {
-          externalEdit: { kind: "imported", path: metadata.path },
-          metadata: nextMetadata,
-          sourceState: sourceStateForSourceValue(value, visibleValue),
-          update: update.byteLength ? new Uint8Array(update) : null,
-          value,
-        };
-      }
-    } catch {
-      // Fall through to the legacy checkpoint path below.
+  try {
+    let checkpoint = sourceCheckpointFromMetadata(metadata);
+    let fork = doc.forkAt(checkpoint.frontiers);
+    let forkText = fork.getText(textKey);
+    if (forkText.toString() == checkpoint.value) {
+      forkText.update(visibleValue);
+      let update = fork.export({ mode: "update", from: checkpoint.versionVector });
+      let nextMetadata = {
+        ...metadata,
+        ...sourceCheckpointFields(
+          visibleValue,
+          serializeFrontiers(fork.frontiers()),
+          serializeVersionVector(fork.oplogVersion()),
+        ),
+      };
+      if (update.byteLength) doc.import(update);
+      let value = doc.getText(textKey).toString();
+      return {
+        externalEdit: { kind: "imported", path: metadata.path },
+        metadata: nextMetadata,
+        sourceState: sourceStateForSourceValue(value, visibleValue),
+        update: update.byteLength ? new Uint8Array(update) : null,
+        value,
+      };
     }
+  } catch {
+    // A complete but unusable checkpoint is treated as a bad browser snapshot.
   }
 
-  if (!metadata.materializedHash || currentHash == metadata.materializedHash) {
+  if (currentHash == metadata.materializedHash) {
     let fromVersion = doc.oplogVersion();
     let text = doc.getText(textKey);
     text.update(visibleValue);
@@ -391,31 +387,22 @@ async function importExternalMarkdownEdit(
     };
   }
 
-  let nextMetadata = metadataWithLegacySourceSeen(metadata, visibleValue);
+  let fromVersion = doc.oplogVersion();
+  replaceMarkdownText(doc, visibleValue);
+  let update = doc.export({ mode: "update", from: fromVersion });
   return {
-    externalEdit: {
-      kind: "conflict-copy",
-      path: await writeExternalConflictCopy(backend, metadata.path, visibleValue),
-      sourcePath: metadata.path,
+    externalEdit: { kind: "imported", path: metadata.path },
+    metadata: {
+      ...metadata,
+      ...currentDocumentMaterializationFields(doc, visibleValue),
     },
-    metadata: nextMetadata,
-    sourceState: { kind: "needs-write" },
-    update: null,
-    value: currentValue,
+    sourceState: { kind: "synced" },
+    update: update.byteLength ? new Uint8Array(update) : null,
+    value: visibleValue,
   };
 }
 
-function sourceCheckpointFromMetadata(
-  metadata: BrowserCollabDocumentMetadata,
-): SourceCheckpoint | null {
-  if (
-    metadata.materializedValue == null ||
-    !metadata.materializedFrontiers ||
-    !metadata.materializedVersionVector
-  ) {
-    return null;
-  }
-
+function sourceCheckpointFromMetadata(metadata: BrowserCollabDocumentMetadata): SourceCheckpoint {
   return {
     frontiers: deserializeFrontiers(metadata.materializedFrontiers),
     value: metadata.materializedValue,
@@ -424,7 +411,7 @@ function sourceCheckpointFromMetadata(
 }
 
 function sourceStateForValue(metadata: BrowserCollabDocumentMetadata, value: string) {
-  return metadata.materializedValue != null && metadata.materializedValue != value
+  return metadata.materializedValue != value
     ? ({ kind: "needs-write" } as const)
     : ({ kind: "synced" } as const);
 }
@@ -452,23 +439,6 @@ function sourceCheckpointFields(
     materializedHash: hashMarkdownText(value),
     materializedValue: value,
     materializedVersionVector: versionVector,
-  };
-}
-
-function metadataWithLegacySourceSeen(
-  metadata: BrowserCollabDocumentMetadata,
-  value: string,
-): BrowserCollabDocumentMetadata {
-  let {
-    materializedFrontiers: _frontiers,
-    materializedVersionVector: _version,
-    ...rest
-  } = metadata;
-  return {
-    ...rest,
-    materializedAt: Date.now(),
-    materializedHash: hashMarkdownText(value),
-    materializedValue: value,
   };
 }
 
@@ -513,44 +483,6 @@ function replaceMarkdownText(doc: LoroDoc, value: string) {
   if (current) text.delete(0, current.length);
   if (value) text.insert(0, value);
   doc.commit();
-}
-
-async function writeExternalConflictCopy(backend: WorkspaceBackend, path: string, value: string) {
-  return writeConflictCopy(backend, path, value, "external-conflict");
-}
-
-async function writeConflictCopy(
-  backend: WorkspaceBackend,
-  path: string,
-  value: string,
-  label: "external-conflict",
-) {
-  for (let attempt = 0; attempt < 1000; attempt++) {
-    let conflictPath = conflictCopyPath(path, label, Date.now(), attempt);
-    if (backend.stat) {
-      let stat = await backend.stat(conflictPath);
-      if (stat.exists) continue;
-    }
-
-    await backend.writeFile(conflictPath, value);
-    return conflictPath;
-  }
-
-  throw new Error("Could not allocate an external edit conflict file.");
-}
-
-function conflictCopyPath(path: string, label: "external-conflict", now: number, attempt: number) {
-  let slash = path.lastIndexOf("/");
-  let directory = slash == -1 ? "" : path.slice(0, slash + 1);
-  let fileName = slash == -1 ? path : path.slice(slash + 1);
-  let extension = fileName.match(/\.md$/i)?.[0] ?? ".md";
-  let stem = fileName.slice(0, fileName.length - extension.length) || "document";
-  let suffix = attempt ? `-${attempt + 1}` : "";
-  return `${directory}${stem}.${label}-${timestampForPath(now)}${suffix}${extension}`;
-}
-
-function timestampForPath(now: number) {
-  return new Date(now).toISOString().replace(/\D/g, "").slice(0, 14);
 }
 
 async function createDocumentId(backend: WorkspaceBackend, path: string) {

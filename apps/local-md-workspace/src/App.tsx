@@ -876,9 +876,6 @@ function LocalWorkspaceApp() {
           version: current.version + 1,
         }));
         setSaveStateSynced(needsSourceWrite ? "pending" : "saved");
-        if (document?.externalEdit?.kind == "conflict-copy") {
-          setErrorMessage(externalEditConflictMessage(document.externalEdit.path));
-        }
         setActiveShareRecord(restoredShareRecord);
         setCreatedShare(null);
         if (restoredShareRecord && document) {
@@ -1534,9 +1531,6 @@ function LocalWorkspaceApp() {
         version: currentDocument.version + 1,
       }));
       setSaveStateSynced(needsSourceWrite ? "pending" : "saved");
-      if (document.externalEdit?.kind == "conflict-copy") {
-        setErrorMessage(externalEditConflictMessage(document.externalEdit.path));
-      }
       if (needsSourceWrite) scheduleAutoSave();
       return document;
     },
@@ -2648,10 +2642,6 @@ function imageAltText(fileName: string) {
     .replace(/\.[^.]+$/, "")
     .replace(/[-_]+/g, " ")
     .trim();
-}
-
-function externalEditConflictMessage(path: string) {
-  return `The Markdown file changed outside LiveMD, but this older shared document cannot merge that change safely. The external version was copied to ${path}.`;
 }
 
 function workspaceFileConflictMessage(path: string) {
