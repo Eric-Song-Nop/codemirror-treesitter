@@ -30,14 +30,29 @@ export type CollabDocumentState = {
   path: string;
   pendingUpdates: Uint8Array[];
   persistence: Promise<void>;
+  sourceState: CollabSourceState;
   undoManager: UndoManager;
   value: string;
 };
 
-export type CollabExternalEditResolution = {
-  kind: "imported";
-  path: string;
-};
+export type CollabExternalEditResolution =
+  | {
+      kind: "conflict-copy";
+      path: string;
+      sourcePath: string;
+    }
+  | {
+      kind: "imported";
+      path: string;
+    };
+
+export type CollabSourceState =
+  | {
+      kind: "needs-write";
+    }
+  | {
+      kind: "synced";
+    };
 
 export type CollabSourceImportResult = {
   externalEdit: CollabExternalEditResolution;
@@ -75,6 +90,7 @@ type SourceCheckpoint = {
 type SourceImportOutcome = {
   externalEdit?: CollabExternalEditResolution;
   metadata: BrowserCollabDocumentMetadata;
+  sourceState: CollabSourceState;
   update: Uint8Array | null;
   value: string;
 };
@@ -89,6 +105,7 @@ export async function openMarkdownCollabDocument(
   let stored = await loadBrowserCollabDocument(docId);
   let doc = new LoroDoc();
   let externalEdit: CollabExternalEditResolution | undefined;
+  let sourceState: CollabSourceState = { kind: "synced" };
   let metadata: BrowserCollabDocumentMetadata =
     stored.metadata && stored.metadata.path == path && stored.metadata.workspaceId == workspaceId
       ? stored.metadata
@@ -101,6 +118,7 @@ export async function openMarkdownCollabDocument(
       let result = await reconcileExternalMarkdownEdit(backend, metadata, doc);
       externalEdit = result.externalEdit;
       metadata = result.metadata;
+      sourceState = result.sourceState;
     }
   } else {
     let initialValue = await backend.readFile(path);
@@ -116,6 +134,9 @@ export async function openMarkdownCollabDocument(
 
   let undoManager = new UndoManager(doc, {});
   let value = doc.getText(textKey).toString();
+  if (!(options.reconcileExternalEdits ?? true)) {
+    sourceState = sourceStateForValue(metadata, value);
+  }
   let pendingUpdates: Uint8Array[] = [];
   let unsubscribeLocalUpdates = doc.subscribeLocalUpdates((bytes) => {
     pendingUpdates.push(new Uint8Array(bytes));
@@ -132,6 +153,7 @@ export async function openMarkdownCollabDocument(
     path,
     pendingUpdates,
     persistence: Promise.resolve(),
+    sourceState,
     undoManager,
     value,
   };
@@ -139,6 +161,10 @@ export async function openMarkdownCollabDocument(
 
 export function getCollabDocumentValue(state: CollabDocumentState) {
   return state.doc.getText(textKey).toString();
+}
+
+export function collabDocumentNeedsSourceWrite(state: CollabDocumentState) {
+  return state.sourceState.kind == "needs-write";
 }
 
 export async function saveCollabDocumentSnapshot(
@@ -214,6 +240,7 @@ export async function acknowledgeCollabDocumentSourceSaved(
   await writeBrowserCollabSnapshot(state.metadata, state.doc.export({ mode: "snapshot" }));
   state.cleanValue = value;
   state.externalEdit = options.externalEdit;
+  state.sourceState = { kind: "synced" };
   state.value = value;
 }
 
@@ -238,6 +265,7 @@ export async function ingestExternalMarkdownEdit(
 ): Promise<CollabSourceImportResult | null> {
   let outcome = await importExternalMarkdownEdit(backend, state.metadata, state.doc, sourceValue);
   state.metadata = outcome.metadata;
+  state.sourceState = outcome.sourceState;
   state.value = outcome.value;
 
   if (!outcome.externalEdit) return null;
@@ -270,6 +298,7 @@ async function reconcileExternalMarkdownEdit(
 ): Promise<{
   externalEdit?: CollabExternalEditResolution;
   metadata: BrowserCollabDocumentMetadata;
+  sourceState: CollabSourceState;
 }> {
   let outcome = await importExternalMarkdownEdit(backend, metadata, doc);
   if (outcome.metadata != metadata || outcome.externalEdit) {
@@ -278,6 +307,7 @@ async function reconcileExternalMarkdownEdit(
   return {
     externalEdit: outcome.externalEdit,
     metadata: outcome.metadata,
+    sourceState: outcome.sourceState,
   };
 }
 
@@ -298,13 +328,19 @@ async function importExternalMarkdownEdit(
         ...metadata,
         ...currentDocumentMaterializationFields(doc, visibleValue),
       },
+      sourceState: { kind: "synced" },
       update: null,
       value: currentValue,
     };
   }
 
   if (visibleHash == metadata.materializedHash) {
-    return { metadata, update: null, value: currentValue };
+    return {
+      metadata,
+      sourceState: sourceStateForSourceValue(currentValue, visibleValue),
+      update: null,
+      value: currentValue,
+    };
   }
 
   let checkpoint = sourceCheckpointFromMetadata(metadata);
@@ -324,11 +360,13 @@ async function importExternalMarkdownEdit(
           ),
         };
         if (update.byteLength) doc.import(update);
+        let value = doc.getText(textKey).toString();
         return {
           externalEdit: { kind: "imported", path: metadata.path },
           metadata: nextMetadata,
+          sourceState: sourceStateForSourceValue(value, visibleValue),
           update: update.byteLength ? new Uint8Array(update) : null,
-          value: doc.getText(textKey).toString(),
+          value,
         };
       }
     } catch {
@@ -347,22 +385,23 @@ async function importExternalMarkdownEdit(
         ...metadata,
         ...currentDocumentMaterializationFields(doc, visibleValue),
       },
+      sourceState: { kind: "synced" },
       update: update.byteLength ? new Uint8Array(update) : null,
       value: doc.getText(textKey).toString(),
     };
   }
 
-  let fromVersion = doc.oplogVersion();
-  doc.getText(textKey).update(visibleValue);
-  let update = doc.export({ mode: "update", from: fromVersion });
+  let nextMetadata = metadataWithLegacySourceSeen(metadata, visibleValue);
   return {
-    externalEdit: { kind: "imported", path: metadata.path },
-    metadata: {
-      ...metadata,
-      ...currentDocumentMaterializationFields(doc, doc.getText(textKey).toString()),
+    externalEdit: {
+      kind: "conflict-copy",
+      path: await writeExternalConflictCopy(backend, metadata.path, visibleValue),
+      sourcePath: metadata.path,
     },
-    update: update.byteLength ? new Uint8Array(update) : null,
-    value: doc.getText(textKey).toString(),
+    metadata: nextMetadata,
+    sourceState: { kind: "needs-write" },
+    update: null,
+    value: currentValue,
   };
 }
 
@@ -384,6 +423,16 @@ function sourceCheckpointFromMetadata(
   };
 }
 
+function sourceStateForValue(metadata: BrowserCollabDocumentMetadata, value: string) {
+  return metadata.materializedValue != null && metadata.materializedValue != value
+    ? ({ kind: "needs-write" } as const)
+    : ({ kind: "synced" } as const);
+}
+
+function sourceStateForSourceValue(value: string, sourceValue: string): CollabSourceState {
+  return value == sourceValue ? { kind: "synced" } : { kind: "needs-write" };
+}
+
 function currentDocumentMaterializationFields(doc: LoroDoc, value: string) {
   return sourceCheckpointFields(
     value,
@@ -403,6 +452,23 @@ function sourceCheckpointFields(
     materializedHash: hashMarkdownText(value),
     materializedValue: value,
     materializedVersionVector: versionVector,
+  };
+}
+
+function metadataWithLegacySourceSeen(
+  metadata: BrowserCollabDocumentMetadata,
+  value: string,
+): BrowserCollabDocumentMetadata {
+  let {
+    materializedFrontiers: _frontiers,
+    materializedVersionVector: _version,
+    ...rest
+  } = metadata;
+  return {
+    ...rest,
+    materializedAt: Date.now(),
+    materializedHash: hashMarkdownText(value),
+    materializedValue: value,
   };
 }
 
@@ -447,6 +513,44 @@ function replaceMarkdownText(doc: LoroDoc, value: string) {
   if (current) text.delete(0, current.length);
   if (value) text.insert(0, value);
   doc.commit();
+}
+
+async function writeExternalConflictCopy(backend: WorkspaceBackend, path: string, value: string) {
+  return writeConflictCopy(backend, path, value, "external-conflict");
+}
+
+async function writeConflictCopy(
+  backend: WorkspaceBackend,
+  path: string,
+  value: string,
+  label: "external-conflict",
+) {
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    let conflictPath = conflictCopyPath(path, label, Date.now(), attempt);
+    if (backend.stat) {
+      let stat = await backend.stat(conflictPath);
+      if (stat.exists) continue;
+    }
+
+    await backend.writeFile(conflictPath, value);
+    return conflictPath;
+  }
+
+  throw new Error("Could not allocate an external edit conflict file.");
+}
+
+function conflictCopyPath(path: string, label: "external-conflict", now: number, attempt: number) {
+  let slash = path.lastIndexOf("/");
+  let directory = slash == -1 ? "" : path.slice(0, slash + 1);
+  let fileName = slash == -1 ? path : path.slice(slash + 1);
+  let extension = fileName.match(/\.md$/i)?.[0] ?? ".md";
+  let stem = fileName.slice(0, fileName.length - extension.length) || "document";
+  let suffix = attempt ? `-${attempt + 1}` : "";
+  return `${directory}${stem}.${label}-${timestampForPath(now)}${suffix}${extension}`;
+}
+
+function timestampForPath(now: number) {
+  return new Date(now).toISOString().replace(/\D/g, "").slice(0, 14);
 }
 
 async function createDocumentId(backend: WorkspaceBackend, path: string) {

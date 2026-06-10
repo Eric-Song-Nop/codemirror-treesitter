@@ -88,6 +88,7 @@ import {
 import {
   acknowledgeCollabDocumentSourceSaved,
   captureCollabDocumentMaterialization,
+  collabDocumentNeedsSourceWrite,
   getCollabDocumentValue,
   ingestExternalMarkdownEdit,
   openMarkdownCollabDocument,
@@ -431,7 +432,12 @@ function LocalWorkspaceApp() {
         }
         editVersion = editVersionRef.current;
 
-        if (!sourceImport && !dirtyRef.current && value == cleanValueRef.current) {
+        if (
+          !sourceImport &&
+          !collabDocumentNeedsSourceWrite(document) &&
+          !dirtyRef.current &&
+          value == cleanValueRef.current
+        ) {
           setSaveStateSynced("saved");
           return true;
         }
@@ -855,10 +861,11 @@ function LocalWorkspaceApp() {
             onRemoteUpdate: handleRemoteDocumentUpdate,
           });
         }
+        let needsSourceWrite = document ? collabDocumentNeedsSourceWrite(document) : false;
         editorValueRef.current = value;
         cleanValueRef.current = value;
         cleanHashRef.current = hashMarkdownText(value);
-        dirtyRef.current = false;
+        dirtyRef.current = needsSourceWrite;
         editVersionRef.current = 0;
         setSelectedFile(file);
         setCollabDocument(document);
@@ -868,12 +875,16 @@ function LocalWorkspaceApp() {
           value,
           version: current.version + 1,
         }));
-        setSaveStateSynced("saved");
+        setSaveStateSynced(needsSourceWrite ? "pending" : "saved");
+        if (document?.externalEdit?.kind == "conflict-copy") {
+          setErrorMessage(externalEditConflictMessage(document.externalEdit.path));
+        }
         setActiveShareRecord(restoredShareRecord);
         setCreatedShare(null);
         if (restoredShareRecord && document) {
           void startOwnerShareHost(restoredShareRecord, backend, document);
         }
+        if (needsSourceWrite) scheduleAutoSave();
         setRetryLoadPath(null);
       } catch (error) {
         setErrorMessage(errorToMessage(error));
@@ -1510,10 +1521,11 @@ function LocalWorkspaceApp() {
       });
 
       let value = document.value;
+      let needsSourceWrite = collabDocumentNeedsSourceWrite(document);
       editorValueRef.current = value;
       cleanValueRef.current = value;
       cleanHashRef.current = hashMarkdownText(value);
-      dirtyRef.current = false;
+      dirtyRef.current = needsSourceWrite;
       editVersionRef.current += 1;
       setCollabDocument(document);
       setEditorDocument((currentDocument) => ({
@@ -1521,7 +1533,11 @@ function LocalWorkspaceApp() {
         value,
         version: currentDocument.version + 1,
       }));
-      setSaveStateSynced("saved");
+      setSaveStateSynced(needsSourceWrite ? "pending" : "saved");
+      if (document.externalEdit?.kind == "conflict-copy") {
+        setErrorMessage(externalEditConflictMessage(document.externalEdit.path));
+      }
+      if (needsSourceWrite) scheduleAutoSave();
       return document;
     },
     [scheduleAutoSave, setSaveStateSynced],
@@ -2632,6 +2648,10 @@ function imageAltText(fileName: string) {
     .replace(/\.[^.]+$/, "")
     .replace(/[-_]+/g, " ")
     .trim();
+}
+
+function externalEditConflictMessage(path: string) {
+  return `The Markdown file changed outside LiveMD, but this older shared document cannot merge that change safely. The external version was copied to ${path}.`;
 }
 
 function workspaceFileConflictMessage(path: string) {

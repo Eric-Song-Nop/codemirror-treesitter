@@ -1,7 +1,10 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
-import { resetBrowserCollabMemoryStoreForTests } from "./collab-browser-store.ts";
+import {
+  resetBrowserCollabMemoryStoreForTests,
+  writeBrowserCollabSnapshot,
+} from "./collab-browser-store.ts";
 import {
   getCollabDocumentValue,
   hashMarkdownText,
@@ -63,6 +66,7 @@ describe("Markdown collaboration documents", () => {
     expect(reopened.docId).toBe(first.docId);
     expect(reopened.value).toBe("# External edit\n");
     expect(reopened.externalEdit).toEqual({ kind: "imported", path: "note.md" });
+    expect(reopened.sourceState).toEqual({ kind: "synced" });
     expect(hasLiveMdFiles(backend)).toBe(false);
   });
 
@@ -80,6 +84,7 @@ describe("Markdown collaboration documents", () => {
     expect(result?.externalEdit).toEqual({ kind: "imported", path: "note.md" });
     expect(result?.update?.byteLength).toBeGreaterThan(0);
     expectMergedParagraphs(getCollabDocumentValue(document));
+    expect(document.sourceState).toEqual({ kind: "needs-write" });
     expect(backend.files.get("note.md")).toBe("# First\n\nExternal paragraph.\n");
     expect([...backend.files.keys()]).not.toEqual(
       expect.arrayContaining([expect.stringMatching(/external-conflict-\d{14}\.md$/)]),
@@ -100,10 +105,16 @@ describe("Markdown collaboration documents", () => {
 
     expectMergedParagraphs(reopened.value);
     expect(reopened.externalEdit).toEqual({ kind: "imported", path: "note.md" });
+    expect(reopened.sourceState).toEqual({ kind: "needs-write" });
     expect(backend.files.get("note.md")).toBe("# First\n\nExternal paragraph.\n");
     expect([...backend.files.keys()]).not.toEqual(
       expect.arrayContaining([expect.stringMatching(/external-conflict-\d{14}\.md$/)]),
     );
+
+    let secondImport = await ingestExternalMarkdownEdit(backend, reopened);
+
+    expect(secondImport).toBeNull();
+    expect(reopened.sourceState).toEqual({ kind: "needs-write" });
   });
 
   it("materializes shared text to the Markdown source and updates browser metadata", async () => {
@@ -122,6 +133,7 @@ describe("Markdown collaboration documents", () => {
     expect(document.cleanValue).toBe("# Updated\n");
     expect(document.metadata.materializedHash).toBe("997e77f1");
     expect(document.metadata.materializedValue).toBe("# Updated\n");
+    expect(document.sourceState).toEqual({ kind: "synced" });
     expect(hasLiveMdFiles(backend)).toBe(false);
   });
 
@@ -141,9 +153,49 @@ describe("Markdown collaboration documents", () => {
     expectMergedParagraphs(mergedValue);
     expect(backend.files.get("note.md")).toBe(mergedValue);
     expect(document.metadata.materializedValue).toBe(mergedValue);
+    expect(document.sourceState).toEqual({ kind: "synced" });
     expect([...backend.files.keys()]).not.toEqual(
       expect.arrayContaining([expect.stringMatching(/external-conflict-\d{14}\.md$/)]),
     );
+  });
+
+  it("keeps legacy hash-only shared edits when the source file also changed", async () => {
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let legacyMetadata = {
+      docId: document.metadata.docId,
+      materializedAt: document.metadata.materializedAt,
+      materializedHash: document.metadata.materializedHash,
+      path: document.metadata.path,
+      workspaceId: document.metadata.workspaceId,
+    };
+    let text = document.doc.getText("markdown");
+
+    text.delete(0, text.toString().length);
+    text.insert(0, "# Shared edit\n");
+    document.doc.commit();
+    await writeBrowserCollabSnapshot(legacyMetadata, document.doc.export({ mode: "snapshot" }));
+    backend.files.set("note.md", "# External edit\n");
+
+    let reopened = await openMarkdownCollabDocument(backend, "note.md");
+
+    expect(reopened.value).toBe("# Shared edit\n");
+    expect(reopened.sourceState).toEqual({ kind: "needs-write" });
+    expect(reopened.externalEdit).toMatchObject({
+      kind: "conflict-copy",
+      sourcePath: "note.md",
+    });
+    expect(reopened.externalEdit?.path).toMatch(/^note\.external-conflict-\d{14}\.md$/);
+    expect(backend.files.get(reopened.externalEdit!.path)).toBe("# External edit\n");
+    expect(backend.files.get("note.md")).toBe("# External edit\n");
+
+    let secondImport = await ingestExternalMarkdownEdit(backend, reopened);
+
+    expect(secondImport).toBeNull();
+    expect(getCollabDocumentValue(reopened)).toBe("# Shared edit\n");
+    expect(
+      [...backend.files.keys()].filter((path) => path.includes(".external-conflict-")),
+    ).toHaveLength(1);
   });
 
   it("can keep the external source without writing shared edits to a conflict copy", async () => {
