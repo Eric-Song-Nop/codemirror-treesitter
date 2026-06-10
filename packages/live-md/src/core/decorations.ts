@@ -11,6 +11,7 @@ import {
   type Range,
 } from "@codemirror/state";
 import {
+  compileTreeSitterQuery,
   highlightTree,
   queryTreeMatches,
   syntaxTree,
@@ -18,7 +19,6 @@ import {
   type SyntaxNode,
   type Tree,
   type TreeSitterParser,
-  type TreeSitterQueryCapture,
   type TreeSitterQueryMatch,
 } from "@codemirror-treesitter/language";
 import {
@@ -43,6 +43,15 @@ import {
 import { forEachLineInRange, isWhitespace, isWhitespaceOnly, splitRangeByLine } from "./util.js";
 import { liveMdLinkBaseUrl, liveMdLinkMark } from "./links.js";
 import {
+  liveMdFeatureFacet,
+  liveMdFeatures,
+  type LiveMdFeature,
+  type LiveMdFeatureContext,
+  type LiveMdFeatureCreateContext,
+  type LiveMdFeatureMatch,
+  type LiveMdQueryTarget,
+} from "./features.js";
+import {
   ImagePreviewWidget,
   LatexWidget,
   ListMarkerWidget,
@@ -53,8 +62,6 @@ import {
   type MermaidDiagram,
   type MarkdownTable,
 } from "./widgets.js";
-import liveMdMarkdownInlineQuerySource from "./queries/decorations-markdown-inline.scm?raw";
-import liveMdMarkdownQuerySource from "./queries/decorations-markdown.scm?raw";
 
 type LiveMdBuild = {
   activeLines: Set<number>;
@@ -72,6 +79,22 @@ type LiveMdBuild = {
 type DocRange = {
   from: number;
   to: number;
+};
+
+type PlannedLiveMdFeature = {
+  feature: LiveMdFeature<unknown>;
+  fromPattern: number;
+  toPattern: number;
+};
+
+type LiveMdFeatureQueryPlan = {
+  features: PlannedLiveMdFeature[];
+  source: string;
+  target: LiveMdQueryTarget;
+};
+
+type PlannedLiveMdFeatureMatch = LiveMdFeatureMatch & {
+  feature: LiveMdFeature<unknown>;
 };
 
 type CodeFenceParser =
@@ -133,7 +156,9 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
       !codeFenceLanguagesChanged(transaction.startState, transaction.state) &&
       transaction.startState.facet(liveMdImageSourceResolver) ==
         transaction.state.facet(liveMdImageSourceResolver) &&
-      transaction.startState.facet(liveMdLinkBaseUrl) == transaction.state.facet(liveMdLinkBaseUrl)
+      transaction.startState.facet(liveMdLinkBaseUrl) ==
+        transaction.state.facet(liveMdLinkBaseUrl) &&
+      !liveMdFeaturesChanged(transaction.startState, transaction.state)
     ) {
       return value;
     }
@@ -187,8 +212,6 @@ class LiveMdViewportPlugin {
 
 const liveMdViewportPlugin = ViewPlugin.fromClass(LiveMdViewportPlugin);
 
-export const liveMdAnalysis: Extension = [liveMdAnalysisField, liveMdViewportPlugin];
-
 class AtomicRange extends RangeValue {
   eq(other: RangeValue) {
     return other instanceof AtomicRange;
@@ -214,6 +237,62 @@ function createLiveMdBuild(
     linkBaseUrl: state.facet(liveMdLinkBaseUrl),
     state,
   };
+}
+
+function createLiveMdFeatureContext(build: LiveMdBuild): LiveMdFeatureContext {
+  let claimed = new Set<string>();
+  let consumed: Array<{ from: number; to: number }> = [];
+
+  return {
+    activeLines: build.activeLines,
+    atomic: (from, to) => addAtom(build, from, to),
+    capture,
+    captures,
+    claim(key) {
+      if (claimed.has(key)) return false;
+      claimed.add(key);
+      return true;
+    },
+    consume(from, to) {
+      if (from < to) consumed.push({ from, to });
+    },
+    isConsumed(from, to) {
+      return consumed.some((range) => from >= range.from && to <= range.to);
+    },
+    highlightCodeFence: (contentFrom, contentTo, language) =>
+      addCodeFenceHighlights(build, contentFrom, contentTo, language),
+    lineClass: (from, to, className) => addLineRangeClass(build, from, to, className),
+    lineClassAt: (lineNumber, className) => addLineClass(build, lineNumber, className),
+    linkBaseUrl: build.linkBaseUrl,
+    mark: (from, to, decoration) => addMark(build, from, to, decoration),
+    nodeKey,
+    onlyVisibleContentOnLine: (lineFrom, lineTo, contentFrom, contentTo) =>
+      isOnlyVisibleContentOnLine(build.state, lineFrom, lineTo, contentFrom, contentTo),
+    replace: (from, to, widget, block = false) => addReplace(build, from, to, widget, block),
+    resolveImageSource: (source) => resolveLiveMdImageSource(source, build.imageSourceResolver),
+    state: build.state,
+    syntax: (from, to, decoration) => addSyntax(build, from, to, decoration),
+    text: (node) => build.state.sliceDoc(node.from, node.to),
+    touchesActiveLine: (from, to) => rangeTouchesActiveLine(build, from, to),
+  };
+}
+
+function createLiveMdFeatureStates(
+  features: readonly LiveMdFeature[],
+  context: LiveMdFeatureCreateContext,
+) {
+  let states = new Map<LiveMdFeature<unknown>, unknown>();
+  for (let feature of features) {
+    states.set(feature as LiveMdFeature<unknown>, feature.create?.(context));
+  }
+  return states;
+}
+
+function isMatchConsumed(match: LiveMdFeatureMatch, context: LiveMdFeatureContext) {
+  return (
+    match.captures.length > 0 &&
+    match.captures.every((item) => context.isConsumed(item.node.from, item.node.to))
+  );
 }
 
 function addLineClass(build: LiveMdBuild, lineNumber: number, className: string) {
@@ -335,36 +414,112 @@ function buildLiveMdBuild(
   ranges: readonly DocRange[],
 ) {
   let build = createLiveMdBuild(state, activeLines, codeFenceLanguages);
+  let features = state.facet(liveMdFeatureFacet);
 
   let tree = syntaxTree(state);
-  let skipped: Array<{ from: number; to: number }> = [];
-  let matches = queryLiveMdMatches(tree, ranges);
-  let paragraphContainers = new Map<string, ParagraphContainer>();
-  let tables = new Map<string, CapturedTable>();
+  let matches = queryLiveMdFeatureMatches(tree, features, ranges);
+  let context = createLiveMdFeatureContext(build);
+  let featureStates = createLiveMdFeatureStates(features, context);
+
   for (let match of matches) {
-    collectParagraphContainer(match, paragraphContainers);
-    collectTable(match, tables);
+    match.feature.collect?.(match, featureStates.get(match.feature), context);
   }
-  let processed = new Set<string>();
+
   for (let match of matches) {
-    let root = matchRoot(match);
-    if (root && isInsideSkippedRange(root, skipped)) continue;
-    if (processLiveMdMatch(build, match, tables, processed, skipped) === false && root) {
-      skipped.push({ from: root.from, to: root.to });
-    }
+    if (isMatchConsumed(match, context)) continue;
+    match.feature.apply?.(match, featureStates.get(match.feature), context);
   }
-  markParagraphBreaks(build, paragraphContainers);
+
+  for (let feature of features) {
+    feature.finish?.(featureStates.get(feature), context);
+  }
 
   return build;
 }
 
-function queryLiveMdMatches(tree: Tree, ranges: readonly DocRange[]) {
-  let matches: TreeSitterQueryMatch[] = [];
+function queryLiveMdFeatureMatches(
+  tree: Tree,
+  features: readonly LiveMdFeature[],
+  ranges: readonly DocRange[],
+) {
+  let matches: PlannedLiveMdFeatureMatch[] = [];
   for (let { from, to } of ranges) {
     let options = from <= 0 && to >= tree.length ? undefined : { from, to };
-    matches.push(...queryTreeMatches(tree, liveMdQuerySource, options));
+    let plans = new WeakMap<Tree, LiveMdFeatureQueryPlan>();
+    let source = (parser: TreeSitterParser, queryTree: Tree) => {
+      let plan = liveMdFeatureQueryPlan(parser, queryTree, features);
+      if (!plan) return null;
+      plans.set(queryTree, plan);
+      return plan.source;
+    };
+    for (let match of queryTreeMatches(tree, source, options)) {
+      let plan = matchPlan(match, plans);
+      if (!plan) continue;
+      let feature = planFeature(plan, match.patternIndex);
+      if (!feature) continue;
+      matches.push({
+        ...match,
+        feature: feature.feature,
+        patternIndex: match.patternIndex - feature.fromPattern,
+        target: plan.target,
+      });
+    }
   }
   return matches;
+}
+
+function liveMdFeatureQueryPlan(
+  parser: TreeSitterParser,
+  tree: Tree,
+  features: readonly LiveMdFeature[],
+): LiveMdFeatureQueryPlan | null {
+  let target = liveMdQueryTarget(tree);
+  if (!target) return null;
+
+  let offset = 0;
+  let sources: string[] = [];
+  let plannedFeatures: PlannedLiveMdFeature[] = [];
+  for (let feature of features) {
+    let source = feature.query?.[target]?.trim();
+    if (!source) continue;
+
+    let patternCount = compileTreeSitterQuery(parser, source).patternCount();
+    if (patternCount <= 0) continue;
+
+    sources.push(source);
+    plannedFeatures.push({
+      feature: feature as LiveMdFeature<unknown>,
+      fromPattern: offset,
+      toPattern: offset + patternCount,
+    });
+    offset += patternCount;
+  }
+
+  if (!sources.length) return null;
+  return {
+    features: plannedFeatures,
+    source: sources.join("\n\n"),
+    target,
+  };
+}
+
+function liveMdQueryTarget(tree: Tree): LiveMdQueryTarget | null {
+  if (tree.topNode.name == "document") return "document";
+  if (tree.topNode.name == "inline") return "inline";
+  return null;
+}
+
+function matchPlan(match: TreeSitterQueryMatch, plans: WeakMap<Tree, LiveMdFeatureQueryPlan>) {
+  let tree = match.captures[0]?.node.tree;
+  return tree ? (plans.get(tree) ?? null) : null;
+}
+
+function planFeature(plan: LiveMdFeatureQueryPlan, patternIndex: number) {
+  return (
+    plan.features.find(
+      (feature) => patternIndex >= feature.fromPattern && patternIndex < feature.toPattern,
+    ) ?? null
+  );
 }
 
 function fullDocRange(state: EditorState): readonly DocRange[] {
@@ -470,16 +625,6 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function liveMdQuerySource(_parser: TreeSitterParser, tree: Tree) {
-  if (tree.topNode.name == "document") return liveMdMarkdownQuerySource;
-  if (tree.topNode.name == "inline") return liveMdMarkdownInlineQuerySource;
-  return null;
-}
-
-function isInsideSkippedRange(node: SyntaxNode, ranges: readonly { from: number; to: number }[]) {
-  return ranges.some((range) => node.from >= range.from && node.to <= range.to);
-}
-
 type ParagraphContainerKind = "block" | "document" | "list" | "listItem";
 
 type ParagraphContainer = {
@@ -506,24 +651,6 @@ type CapturedTableDelimiterCell = {
 type CapturedTableRow = {
   cells: Map<string, SyntaxNode>;
   node: SyntaxNode;
-};
-
-type LiveMdMatchKind = "codeFence" | "heading" | "image" | "latex" | "link" | "rule" | "table";
-
-type SimpleCaptureHandler = (build: LiveMdBuild, node: SyntaxNode) => void;
-
-const simpleCaptureHandlers: Record<string, SimpleCaptureHandler> = {
-  blockquote: (build, node) => addLineRangeClass(build, node.from, node.to, "cm-md-blockquote"),
-  "list.item": (build, node) => addLineRangeClass(build, node.from, node.to, "cm-md-list-line"),
-  "list.marker": applyListMarker,
-  "mark.emphasis": (build, node) => addMark(build, node.from, node.to, emphasisMark),
-  "mark.inlineCode": (build, node) => addMark(build, node.from, node.to, inlineCodeMark),
-  "mark.strike": (build, node) => addMark(build, node.from, node.to, strikeMark),
-  "mark.strong": (build, node) => addMark(build, node.from, node.to, strongMark),
-  syntax: (build, node) => addSyntax(build, node.from, node.to),
-  "task.checked": (build, node) => applyTaskMarker(build, node, true),
-  "task.unchecked": (build, node) => applyTaskMarker(build, node, false),
-  uriAutolink: applyUriAutolink,
 };
 
 function collectParagraphContainer(
@@ -604,7 +731,7 @@ function capturedTableRow(table: CapturedTable, node: SyntaxNode) {
 }
 
 function markParagraphBreaks(
-  build: LiveMdBuild,
+  context: LiveMdFeatureContext,
   containers: ReadonlyMap<string, ParagraphContainer>,
 ) {
   for (let container of containers.values()) {
@@ -612,30 +739,30 @@ function markParagraphBreaks(
     let siblings = sortedNodes(container.children);
     let previousFrom =
       container.kind == "list"
-        ? (node: SyntaxNode) => blockContainerBreakFrom(build, node, containers)
-        : (node: SyntaxNode) => blockBreakFrom(build, node);
+        ? (node: SyntaxNode) => blockContainerBreakFrom(context, node, containers)
+        : (node: SyntaxNode) => blockBreakFrom(context, node);
     for (let index = 1; index < siblings.length; index++) {
-      markParagraphBreakRun(build, previousFrom(siblings[index - 1]!), siblings[index]!.from);
+      markParagraphBreakRun(context, previousFrom(siblings[index - 1]!), siblings[index]!.from);
     }
     let last = siblings.at(-1);
-    if (last) markParagraphBreakRun(build, previousFrom(last), container.node.to);
+    if (last) markParagraphBreakRun(context, previousFrom(last), container.node.to);
   }
 }
 
-function blockBreakFrom(build: LiveMdBuild, node: SyntaxNode): number {
+function blockBreakFrom(context: LiveMdFeatureContext, node: SyntaxNode): number {
   if (node.to <= node.from) return node.to;
   let before = node.to - 1;
-  if (build.state.sliceDoc(before, node.to) != "\n") return node.to;
-  return build.state.doc.lineAt(before).to;
+  if (context.state.sliceDoc(before, node.to) != "\n") return node.to;
+  return context.state.doc.lineAt(before).to;
 }
 
 function blockContainerBreakFrom(
-  build: LiveMdBuild,
+  context: LiveMdFeatureContext,
   node: SyntaxNode,
   containers: ReadonlyMap<string, ParagraphContainer>,
 ) {
   let blocks = sortedNodes(containers.get(nodeKey(node))?.children);
-  return blocks.length ? blockBreakFrom(build, blocks[blocks.length - 1]!) : node.to;
+  return blocks.length ? blockBreakFrom(context, blocks[blocks.length - 1]!) : node.to;
 }
 
 function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) {
@@ -644,37 +771,23 @@ function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) 
   );
 }
 
+function liveMdFeaturesChanged(startState: EditorState, state: EditorState) {
+  let startFeatures = startState.facet(liveMdFeatureFacet);
+  let features = state.facet(liveMdFeatureFacet);
+  if (startFeatures == features) return false;
+  if (startFeatures.length != features.length) return true;
+  for (let index = 0; index < features.length; index++) {
+    if (startFeatures[index] != features[index]) return true;
+  }
+  return false;
+}
+
 function getActiveLines(state: EditorState) {
   let lines = new Set<number>();
   for (let range of state.selection.ranges) {
     lines.add(state.doc.lineAt(range.head).number);
   }
   return lines;
-}
-
-function matchRoot(match: TreeSitterQueryMatch): SyntaxNode | null {
-  return capture(match, "feature")?.node ?? match.captures[0]?.node ?? null;
-}
-
-function matchKind(match: TreeSitterQueryMatch): LiveMdMatchKind | null {
-  let kind = match.setProperties?.["liveMd.kind"];
-  if (typeof kind != "string" || !isLiveMdMatchKind(kind)) return null;
-  return kind;
-}
-
-function isLiveMdMatchKind(kind: string): kind is LiveMdMatchKind {
-  switch (kind) {
-    case "codeFence":
-    case "heading":
-    case "image":
-    case "latex":
-    case "link":
-    case "rule":
-    case "table":
-      return true;
-    default:
-      return false;
-  }
 }
 
 function isParagraphContainerKind(kind: string): kind is ParagraphContainerKind {
@@ -697,10 +810,6 @@ function captures(match: TreeSitterQueryMatch, name: string) {
   return match.captures.filter((item) => item.name == name);
 }
 
-function captureKey(capture: TreeSitterQueryCapture) {
-  return `${capture.name}:${nodeKey(capture.node)}`;
-}
-
 function nodeKey(node: SyntaxNode) {
   return `${node.name}:${node.id}:${node.from}:${node.to}`;
 }
@@ -713,11 +822,11 @@ function compareNodes(left: SyntaxNode, right: SyntaxNode) {
   return left.from - right.from || left.to - right.to || left.name.localeCompare(right.name);
 }
 
-function markParagraphBreakRun(build: LiveMdBuild, from: number, to: number) {
-  if (from >= to || !isWhitespaceOnly(build.state.sliceDoc(from, to))) return;
+function markParagraphBreakRun(context: LiveMdFeatureContext, from: number, to: number) {
+  if (from >= to || !isWhitespaceOnly(context.state.sliceDoc(from, to))) return;
 
   let newlinePositions: number[] = [];
-  let source = build.state.sliceDoc(from, to);
+  let source = context.state.sliceDoc(from, to);
   for (let index = 0; index < source.length; index++) {
     if (source.charCodeAt(index) == 10) newlinePositions.push(from + index);
   }
@@ -726,261 +835,218 @@ function markParagraphBreakRun(build: LiveMdBuild, from: number, to: number) {
   if (!separatorCount) return;
 
   let blankLines: number[] = [];
-  forEachLineInRange(build.state, from, to, (line) => {
-    if (line.from > from && isWhitespaceOnly(build.state.sliceDoc(line.from, line.to))) {
+  forEachLineInRange(context.state, from, to, (line) => {
+    if (line.from > from && isWhitespaceOnly(context.state.sliceDoc(line.from, line.to))) {
       blankLines.push(line.number);
     }
   });
 
   for (let index = 0; index < separatorCount; index++) {
-    addAtom(build, newlinePositions[index * 2], newlinePositions[index * 2 + 1] + 1);
+    context.atomic(newlinePositions[index * 2]!, newlinePositions[index * 2 + 1]! + 1);
 
     let separatorLine = blankLines[index * 2];
     if (separatorLine == null) return;
-    addLineClass(build, separatorLine, "cm-md-block-separator");
+    context.lineClassAt(separatorLine, "cm-md-block-separator");
   }
 }
 
-function processLiveMdMatch(
-  build: LiveMdBuild,
-  match: TreeSitterQueryMatch,
-  tables: ReadonlyMap<string, CapturedTable>,
-  processed: Set<string>,
-  skipped: readonly { from: number; to: number }[],
-): false | void {
-  switch (matchKind(match)) {
-    case "codeFence":
-      return applyCodeFence(build, match);
-    case "heading":
-      return applyHeadingMatch(build, match);
-    case "image":
-      return applyImage(build, match);
-    case "latex":
-      return applyLatex(build, match);
-    case "link":
-      return applyInlineLink(build, match);
-    case "rule": {
-      let node = capture(match, "rule")?.node;
-      if (node) return applyRule(build, node);
-      return;
-    }
-    case "table":
-      return applyTable(build, match, tables, processed);
-  }
-
-  for (let item of match.captures) {
-    if (isInsideSkippedRange(item.node, skipped)) continue;
-    let handler = simpleCaptureHandlers[item.name];
-    if (!handler) continue;
-    let key = captureKey(item);
-    if (processed.has(key)) continue;
-    processed.add(key);
-    handler(build, item.node);
-  }
-}
-
-function applyHeadingMatch(build: LiveMdBuild, match: TreeSitterQueryMatch) {
+function applyHeadingMatch(context: LiveMdFeatureContext, match: LiveMdFeatureMatch) {
   let node = capture(match, "heading")?.node;
   if (!node) return;
   let level = Number(match.setProperties?.["heading.level"]) || 1;
-  applyHeading(build, node, level, capture(match, "heading.marker")?.node);
+  applyHeading(context, node, level, capture(match, "heading.marker")?.node);
 }
 
-function applyHeading(build: LiveMdBuild, node: SyntaxNode, level: number, marker?: SyntaxNode) {
-  addLineRangeClass(build, node.from, node.to, "cm-md-heading");
-  addLineRangeClass(build, node.from, node.to, `cm-md-heading-${level}`);
-  if (marker) addSyntax(build, marker.from, marker.to);
+function applyHeading(
+  context: LiveMdFeatureContext,
+  node: SyntaxNode,
+  level: number,
+  marker?: SyntaxNode,
+) {
+  context.lineClass(node.from, node.to, "cm-md-heading");
+  context.lineClass(node.from, node.to, `cm-md-heading-${level}`);
+  if (marker) context.syntax(marker.from, marker.to);
 }
 
-function applyListMarker(build: LiveMdBuild, node: SyntaxNode) {
-  let line = build.state.doc.lineAt(node.from);
-  addLineClass(build, line.number, "cm-md-list-line");
-  if (build.activeLines.has(line.number)) {
-    addSyntax(build, node.from, node.to);
+function applyListMarker(context: LiveMdFeatureContext, node: SyntaxNode) {
+  let line = context.state.doc.lineAt(node.from);
+  context.lineClassAt(line.number, "cm-md-list-line");
+  if (context.activeLines.has(line.number)) {
+    context.syntax(node.from, node.to);
   } else {
-    addReplace(
-      build,
+    context.replace(
       node.from,
       node.to,
-      new ListMarkerWidget(build.state.sliceDoc(node.from, node.to).trim()),
+      new ListMarkerWidget(context.state.sliceDoc(node.from, node.to).trim()),
     );
   }
 }
 
-function applyTaskMarker(build: LiveMdBuild, node: SyntaxNode, checked: boolean) {
-  let line = build.state.doc.lineAt(node.from);
-  addLineClass(build, line.number, "cm-md-list-line");
-  addLineClass(build, line.number, "cm-md-task-line");
-  if (checked) addLineClass(build, line.number, "is-checked");
-  addReplace(build, node.from, node.to, new TaskCheckboxWidget(checked));
+function applyTaskMarker(context: LiveMdFeatureContext, node: SyntaxNode, checked: boolean) {
+  let line = context.state.doc.lineAt(node.from);
+  context.lineClassAt(line.number, "cm-md-list-line");
+  context.lineClassAt(line.number, "cm-md-task-line");
+  if (checked) context.lineClassAt(line.number, "is-checked");
+  context.replace(node.from, node.to, new TaskCheckboxWidget(checked));
 }
 
-function applyRule(build: LiveMdBuild, node: SyntaxNode): false {
-  addLineRangeClass(build, node.from, node.to, "cm-md-rule-line");
-  addSyntax(build, node.from, node.to);
-  return false;
+function applyRule(context: LiveMdFeatureContext, node: SyntaxNode) {
+  context.lineClass(node.from, node.to, "cm-md-rule-line");
+  context.syntax(node.from, node.to);
+  context.consume(node.from, node.to);
 }
 
-function applyInlineLink(build: LiveMdBuild, match: TreeSitterQueryMatch) {
+function applyInlineLink(context: LiveMdFeatureContext, match: LiveMdFeatureMatch) {
   let node = capture(match, "link")?.node;
   let text = capture(match, "link.text")?.node;
   let destination = capture(match, "link.destination")?.node;
   if (!node) return;
   if (!text) return;
-  addSyntax(build, node.from, text.from);
-  addMark(
-    build,
+  context.syntax(node.from, text.from);
+  context.mark(
     text.from,
     text.to,
     liveMdLinkMark(
-      destination ? build.state.sliceDoc(destination.from, destination.to) : null,
-      build.linkBaseUrl,
+      destination ? context.state.sliceDoc(destination.from, destination.to) : null,
+      context.linkBaseUrl,
     ),
   );
-  addSyntax(build, text.to, node.to);
+  context.syntax(text.to, node.to);
 }
 
-function applyUriAutolink(build: LiveMdBuild, node: SyntaxNode) {
+function applyUriAutolink(context: LiveMdFeatureContext, node: SyntaxNode) {
   if (node.to - node.from <= 2) return;
-  addSyntax(build, node.from, node.from + 1);
-  addMark(
-    build,
+  context.syntax(node.from, node.from + 1);
+  context.mark(
     node.from + 1,
     node.to - 1,
-    liveMdLinkMark(build.state.sliceDoc(node.from + 1, node.to - 1), build.linkBaseUrl),
+    liveMdLinkMark(context.state.sliceDoc(node.from + 1, node.to - 1), context.linkBaseUrl),
   );
-  addSyntax(build, node.to - 1, node.to);
+  context.syntax(node.to - 1, node.to);
 }
 
-function applyImage(build: LiveMdBuild, match: TreeSitterQueryMatch): false | void {
+function applyImage(context: LiveMdFeatureContext, match: LiveMdFeatureMatch) {
   let node = capture(match, "image")?.node;
-  if (!node) return false;
+  if (!node) return;
   let description = capture(match, "image.description")?.node;
   let destination = capture(match, "image.destination")?.node;
-  let alt = description ? build.state.sliceDoc(description.from, description.to) : "";
-  let src = destination ? build.state.sliceDoc(destination.from, destination.to).trim() : "";
-  if (!src) return false;
+  let alt = description ? context.state.sliceDoc(description.from, description.to) : "";
+  let src = destination ? context.state.sliceDoc(destination.from, destination.to).trim() : "";
+  if (!src) return;
 
-  let line = build.state.doc.lineAt(node.from);
-  let active = build.activeLines.has(line.number);
-  let widget = new ImagePreviewWidget(
-    alt,
-    resolveLiveMdImageSource(src, build.imageSourceResolver),
-  );
-  if (!active && isOnlyVisibleContentOnLine(build.state, line.from, line.to, node.from, node.to)) {
-    addReplace(build, line.from, line.to, widget, true);
-    return false;
+  let line = context.state.doc.lineAt(node.from);
+  let active = context.activeLines.has(line.number);
+  let widget = new ImagePreviewWidget(alt, context.resolveImageSource(src));
+  if (!active && context.onlyVisibleContentOnLine(line.from, line.to, node.from, node.to)) {
+    context.replace(line.from, line.to, widget, true);
+    context.consume(line.from, line.to);
+    return;
   }
 
   if (!active) {
-    addReplace(build, node.from, node.to, widget);
-    return false;
+    context.replace(node.from, node.to, widget);
+    context.consume(node.from, node.to);
+    return;
   }
 
   if (description) {
-    addSyntax(build, node.from, description.from);
-    addMark(build, description.from, description.to, liveMdLinkMark(null, build.linkBaseUrl));
-    addSyntax(build, description.to, node.to);
+    context.syntax(node.from, description.from);
+    context.mark(description.from, description.to, liveMdLinkMark(null, context.linkBaseUrl));
+    context.syntax(description.to, node.to);
   }
-  return false;
+  context.consume(node.from, node.to);
 }
 
-function applyLatex(build: LiveMdBuild, match: TreeSitterQueryMatch): false | void {
+function applyLatex(context: LiveMdFeatureContext, match: LiveMdFeatureMatch) {
   let node = capture(match, "latex")?.node;
   let openingDelimiter = capture(match, "latex.open")?.node;
   let closingDelimiter = capture(match, "latex.close")?.node;
-  if (!node || !openingDelimiter || !closingDelimiter) return false;
-  let formula = readLatexFormula(build.state, node, openingDelimiter, closingDelimiter);
-  if (!formula) return false;
-  if (rangeTouchesActiveLine(build, node.from, node.to)) return;
+  if (!node || !openingDelimiter || !closingDelimiter) return;
+  let formula = readLatexFormula(context.state, node, openingDelimiter, closingDelimiter);
+  if (!formula) return;
+  if (context.touchesActiveLine(node.from, node.to)) return;
 
-  let range = latexReplacementRange(build.state, node, formula.displayMode);
-  addReplace(
-    build,
+  let range = latexReplacementRange(context.state, node, formula.displayMode);
+  context.replace(
     range.from,
     range.to,
     new LatexWidget({ ...formula, block: range.block }),
     range.block,
   );
-  return false;
+  context.consume(range.from, range.to);
 }
 
 function applyTable(
-  build: LiveMdBuild,
-  match: TreeSitterQueryMatch,
+  context: LiveMdFeatureContext,
+  match: LiveMdFeatureMatch,
   tables: ReadonlyMap<string, CapturedTable>,
-  processed: Set<string>,
-): false | void {
+) {
   let tableCapture = capture(match, "table");
   if (!tableCapture) return;
   let node = tableCapture.node;
   let key = `table:${nodeKey(node)}`;
-  if (processed.has(key)) return;
-  processed.add(key);
+  if (!context.claim(key)) return;
 
   let captured = tables.get(nodeKey(node));
-  let table = captured ? readTableFromCaptures(build.state, captured) : null;
-  if (table && !tableTouchesActiveLine(build, node.from, node.to, table)) {
-    addReplace(build, node.from, node.to, new TablePreviewWidget(table), true);
-    return false;
+  let table = captured ? readTableFromCaptures(context.state, captured) : null;
+  if (table && !tableTouchesActiveLine(context, node.from, node.to, table)) {
+    context.replace(node.from, node.to, new TablePreviewWidget(table), true);
+    context.consume(node.from, node.to);
+    return;
   }
 
-  addLineRangeClass(build, node.from, node.to, "cm-md-table-line");
+  context.lineClass(node.from, node.to, "cm-md-table-line");
   if (captured?.delimiterRow) {
-    addLineRangeClass(
-      build,
-      captured.delimiterRow.from,
-      captured.delimiterRow.to,
-      "cm-md-table-divider",
-    );
+    context.lineClass(captured.delimiterRow.from, captured.delimiterRow.to, "cm-md-table-divider");
   }
   for (let pipe of sortedNodes(captured?.pipes.values())) {
-    addSyntax(build, pipe.from, pipe.to, tablePipeMark);
+    context.syntax(pipe.from, pipe.to, tablePipeMark);
   }
-  return false;
+  context.consume(node.from, node.to);
 }
 
-function applyCodeFence(build: LiveMdBuild, match: TreeSitterQueryMatch): false {
+function applyCodeFence(context: LiveMdFeatureContext, match: LiveMdFeatureMatch) {
   let node = capture(match, "codeFence")?.node;
   let openingDelimiter = capture(match, "codeFence.open")?.node;
-  if (!node || !openingDelimiter) return false;
+  if (!node || !openingDelimiter) return;
 
   let closingDelimiter = capture(match, "codeFence.close")?.node ?? null;
   let content = capture(match, "codeFence.content")?.node;
-  let language = readFenceLanguage(build.state, capture(match, "codeFence.language")?.node);
+  let language = readFenceLanguage(context.state, capture(match, "codeFence.language")?.node);
 
   if (content && content.from < content.to) {
-    let diagram = readMermaidDiagram(build.state, content, language);
-    if (diagram && !rangeTouchesActiveLine(build, node.from, node.to)) {
-      addReplace(build, node.from, node.to, new MermaidWidget(diagram), true);
-      return false;
+    let diagram = readMermaidDiagram(context.state, content, language);
+    if (diagram && !context.touchesActiveLine(node.from, node.to)) {
+      context.replace(node.from, node.to, new MermaidWidget(diagram), true);
+      context.consume(node.from, node.to);
+      return;
     }
   }
 
-  let openingLineNumber = build.state.doc.lineAt(openingDelimiter.from).number;
+  let openingLineNumber = context.state.doc.lineAt(openingDelimiter.from).number;
   let blockEndLineNumber = openingLineNumber;
 
-  addLineClass(build, openingLineNumber, "cm-md-code-fence-line");
-  addLineClass(build, openingLineNumber, "cm-md-code-block-start");
-  addSyntax(build, openingDelimiter.from, openingDelimiter.to);
+  context.lineClassAt(openingLineNumber, "cm-md-code-fence-line");
+  context.lineClassAt(openingLineNumber, "cm-md-code-block-start");
+  context.syntax(openingDelimiter.from, openingDelimiter.to);
 
   if (content && content.from < content.to) {
-    forEachLineInRange(build.state, content.from, content.to, (line) => {
-      addLineClass(build, line.number, "cm-md-code-line");
+    forEachLineInRange(context.state, content.from, content.to, (line) => {
+      context.lineClassAt(line.number, "cm-md-code-line");
       blockEndLineNumber = line.number;
     });
-    addCodeFenceHighlights(build, content.from, content.to, language);
+    context.highlightCodeFence(content.from, content.to, language);
   }
 
   if (closingDelimiter) {
-    let closingLineNumber = build.state.doc.lineAt(closingDelimiter.from).number;
+    let closingLineNumber = context.state.doc.lineAt(closingDelimiter.from).number;
     blockEndLineNumber = closingLineNumber;
-    addLineClass(build, closingLineNumber, "cm-md-code-fence-line");
-    addSyntax(build, closingDelimiter.from, closingDelimiter.to);
+    context.lineClassAt(closingLineNumber, "cm-md-code-fence-line");
+    context.syntax(closingDelimiter.from, closingDelimiter.to);
   }
 
-  addLineClass(build, blockEndLineNumber, "cm-md-code-block-end");
-  return false;
+  context.lineClassAt(blockEndLineNumber, "cm-md-code-block-end");
+  context.consume(node.from, node.to);
 }
 
 function readLatexFormula(
@@ -1163,21 +1229,21 @@ function rangeTouchesActiveLine(build: LiveMdBuild, from: number, to: number) {
 }
 
 function tableTouchesActiveLine(
-  build: LiveMdBuild,
+  context: LiveMdFeatureContext,
   from: number,
   to: number,
   table: MarkdownTable,
 ) {
-  if (rangeTouchesActiveLine(build, from, to)) return true;
+  if (context.touchesActiveLine(from, to)) return true;
   if (table.rows.length) return false;
-  let end = Math.min(to, build.state.doc.length);
-  let lastLine = build.state.doc.lineAt(Math.max(from, end - 1));
+  let end = Math.min(to, context.state.doc.length);
+  let lastLine = context.state.doc.lineAt(Math.max(from, end - 1));
   let nextLineNumber = lastLine.number + 1;
-  if (!build.activeLines.has(nextLineNumber) || nextLineNumber > build.state.doc.lines) {
+  if (!context.activeLines.has(nextLineNumber) || nextLineNumber > context.state.doc.lines) {
     return false;
   }
-  let nextLine = build.state.doc.line(nextLineNumber);
-  return isWhitespaceOnly(build.state.sliceDoc(nextLine.from, nextLine.to));
+  let nextLine = context.state.doc.line(nextLineNumber);
+  return isWhitespaceOnly(context.state.sliceDoc(nextLine.from, nextLine.to));
 }
 
 function isOnlyVisibleContentOnLine(
@@ -1206,4 +1272,321 @@ function normalizeTableAlignments(
   let normalized = alignments.slice(0, columnCount);
   while (normalized.length < columnCount) normalized.push("default");
   return normalized;
+}
+
+const paragraphBreakFeature: LiveMdFeature<Map<string, ParagraphContainer>> = {
+  id: "paragraphBreak",
+  priority: 10,
+  query: {
+    document: `
+((document (section) @paragraph.child) @paragraph.container
+  (#set! paragraph.kind "document"))
+
+((section [
+  (atx_heading)
+  (block_quote)
+  (fenced_code_block)
+  (list)
+  (paragraph)
+  (pipe_table)
+  (setext_heading)
+  (thematic_break)
+] @paragraph.child) @paragraph.container
+  (#set! paragraph.kind "block"))
+
+((block_quote [
+  (block_quote)
+  (fenced_code_block)
+  (list)
+  (paragraph)
+  (pipe_table)
+  (setext_heading)
+  (thematic_break)
+] @paragraph.child) @paragraph.container
+  (#set! paragraph.kind "block"))
+
+((list (list_item) @paragraph.child) @paragraph.container
+  (#set! paragraph.kind "list"))
+
+((list_item [
+  (block_quote)
+  (fenced_code_block)
+  (list)
+  (paragraph)
+  (pipe_table)
+  (setext_heading)
+  (thematic_break)
+] @paragraph.child) @paragraph.container
+  (#set! paragraph.kind "listItem"))
+`,
+  },
+  create: () => new Map(),
+  collect: (match, containers) => collectParagraphContainer(match, containers),
+  finish: (containers, context) => markParagraphBreaks(context, containers),
+};
+
+const headingFeature: LiveMdFeature = {
+  id: "heading",
+  priority: 20,
+  query: {
+    document: `
+((atx_heading . (atx_h1_marker) @heading.marker) @heading
+  (#set! heading.level "1"))
+((atx_heading . (atx_h2_marker) @heading.marker) @heading
+  (#set! heading.level "2"))
+((atx_heading . (atx_h3_marker) @heading.marker) @heading
+  (#set! heading.level "3"))
+((atx_heading . (atx_h4_marker) @heading.marker) @heading
+  (#set! heading.level "4"))
+((atx_heading . (atx_h5_marker) @heading.marker) @heading
+  (#set! heading.level "5"))
+((atx_heading . (atx_h6_marker) @heading.marker) @heading
+  (#set! heading.level "6"))
+((setext_heading heading_content: (paragraph) (setext_h1_underline) @heading.marker) @heading
+  (#set! heading.level "1"))
+((setext_heading heading_content: (paragraph) (setext_h2_underline) @heading.marker) @heading
+  (#set! heading.level "2"))
+`,
+  },
+  apply: (match, _state, context) => applyHeadingMatch(context, match),
+};
+
+const syntaxFeature: LiveMdFeature = {
+  id: "syntax",
+  priority: 30,
+  query: {
+    document: `
+(block_continuation) @syntax
+(block_quote_marker) @syntax
+`,
+    inline: `
+(code_span_delimiter) @syntax
+(emphasis_delimiter) @syntax
+`,
+  },
+  apply(match, _state, context) {
+    for (let item of captures(match, "syntax")) {
+      let key = `syntax:${nodeKey(item.node)}`;
+      if (context.claim(key)) context.syntax(item.node.from, item.node.to);
+    }
+  },
+};
+
+const blockquoteFeature: LiveMdFeature = {
+  id: "blockquote",
+  priority: 40,
+  query: {
+    document: `(block_quote) @blockquote`,
+  },
+  apply(match, _state, context) {
+    for (let item of captures(match, "blockquote")) {
+      context.lineClass(item.node.from, item.node.to, "cm-md-blockquote");
+    }
+  },
+};
+
+const listFeature: LiveMdFeature = {
+  id: "list",
+  priority: 50,
+  query: {
+    document: `
+(list_item) @list.item
+(list_marker_dot) @list.marker
+(list_marker_minus) @list.marker
+(list_marker_parenthesis) @list.marker
+(list_marker_plus) @list.marker
+(list_marker_star) @list.marker
+`,
+  },
+  apply(match, _state, context) {
+    for (let item of captures(match, "list.item")) {
+      context.lineClass(item.node.from, item.node.to, "cm-md-list-line");
+    }
+    for (let item of captures(match, "list.marker")) {
+      let key = `list.marker:${nodeKey(item.node)}`;
+      if (context.claim(key)) applyListMarker(context, item.node);
+    }
+  },
+};
+
+const taskFeature: LiveMdFeature = {
+  id: "task",
+  priority: 60,
+  query: {
+    document: `
+(task_list_marker_checked) @task.checked
+(task_list_marker_unchecked) @task.unchecked
+`,
+  },
+  apply(match, _state, context) {
+    for (let item of captures(match, "task.checked")) applyTaskMarker(context, item.node, true);
+    for (let item of captures(match, "task.unchecked")) applyTaskMarker(context, item.node, false);
+  },
+};
+
+const ruleFeature: LiveMdFeature = {
+  id: "rule",
+  priority: 70,
+  query: {
+    document: `(thematic_break) @rule`,
+  },
+  apply(match, _state, context) {
+    let node = capture(match, "rule")?.node;
+    if (node) applyRule(context, node);
+  },
+};
+
+const codeFenceFeature: LiveMdFeature = {
+  id: "codeFence",
+  priority: 80,
+  query: {
+    document: `
+((fenced_code_block
+  .
+  (fenced_code_block_delimiter) @codeFence.open
+  (info_string (language) @codeFence.language)?
+  (block_continuation)?
+  (code_fence_content)? @codeFence.content
+  (fenced_code_block_delimiter)? @codeFence.close
+  .) @codeFence)
+`,
+  },
+  apply: (match, _state, context) => applyCodeFence(context, match),
+};
+
+const tableFeature: LiveMdFeature<Map<string, CapturedTable>> = {
+  id: "table",
+  priority: 90,
+  query: {
+    document: `
+(pipe_table) @table
+((pipe_table (pipe_table_header (pipe_table_cell) @table.header.cell) @table.header) @table)
+((pipe_table (pipe_table_delimiter_row) @table.delimiter.row) @table)
+((pipe_table
+  (pipe_table_delimiter_row
+    (pipe_table_delimiter_cell
+      (pipe_table_align_left)? @table.align.left
+      (pipe_table_align_right)? @table.align.right) @table.delimiter.cell)) @table)
+((pipe_table (pipe_table_row (pipe_table_cell) @table.row.cell) @table.row) @table)
+((pipe_table (pipe_table_header "|" @table.pipe)) @table)
+((pipe_table (pipe_table_delimiter_row "|" @table.pipe)) @table)
+((pipe_table (pipe_table_row "|" @table.pipe)) @table)
+`,
+  },
+  create: () => new Map(),
+  collect: (match, tables) => collectTable(match, tables),
+  apply: (match, tables, context) => applyTable(context, match, tables),
+};
+
+const inlineMarkFeature: LiveMdFeature = {
+  id: "inlineMark",
+  priority: 100,
+  query: {
+    inline: `
+(code_span) @mark.inlineCode
+(emphasis) @mark.emphasis
+(strikethrough) @mark.strike
+(strong_emphasis) @mark.strong
+`,
+  },
+  apply(match, _state, context) {
+    for (let item of captures(match, "mark.inlineCode")) {
+      context.mark(item.node.from, item.node.to, inlineCodeMark);
+    }
+    for (let item of captures(match, "mark.emphasis")) {
+      context.mark(item.node.from, item.node.to, emphasisMark);
+    }
+    for (let item of captures(match, "mark.strike")) {
+      context.mark(item.node.from, item.node.to, strikeMark);
+    }
+    for (let item of captures(match, "mark.strong")) {
+      context.mark(item.node.from, item.node.to, strongMark);
+    }
+  },
+};
+
+const autolinkFeature: LiveMdFeature = {
+  id: "autolink",
+  priority: 110,
+  query: {
+    inline: `(uri_autolink) @uriAutolink`,
+  },
+  apply(match, _state, context) {
+    for (let item of captures(match, "uriAutolink")) applyUriAutolink(context, item.node);
+  },
+};
+
+const linkFeature: LiveMdFeature = {
+  id: "link",
+  priority: 120,
+  query: {
+    inline: `
+((inline_link
+  .
+  (link_text) @link.text
+  (link_destination)? @link.destination
+  (link_title)?
+  .) @link)
+`,
+  },
+  apply: (match, _state, context) => applyInlineLink(context, match),
+};
+
+const imageFeature: LiveMdFeature = {
+  id: "image",
+  priority: 130,
+  query: {
+    inline: `
+((image
+  .
+  (image_description)? @image.description
+  (link_destination)? @image.destination
+  (link_title)?
+  .) @image)
+`,
+  },
+  apply: (match, _state, context) => applyImage(context, match),
+};
+
+const latexFeature: LiveMdFeature = {
+  id: "latex",
+  priority: 140,
+  query: {
+    inline: `
+((latex_block
+  .
+  (latex_span_delimiter) @latex.open
+  (latex_span_delimiter) @latex.close
+  .) @latex
+  (#set! injection.language "latex"))
+`,
+  },
+  apply: (match, _state, context) => applyLatex(context, match),
+};
+
+const defaultLiveMdFeatures: readonly LiveMdFeature<unknown>[] = [
+  eraseLiveMdFeatureState(paragraphBreakFeature),
+  eraseLiveMdFeatureState(headingFeature),
+  eraseLiveMdFeatureState(syntaxFeature),
+  eraseLiveMdFeatureState(blockquoteFeature),
+  eraseLiveMdFeatureState(listFeature),
+  eraseLiveMdFeatureState(taskFeature),
+  eraseLiveMdFeatureState(ruleFeature),
+  eraseLiveMdFeatureState(codeFenceFeature),
+  eraseLiveMdFeatureState(tableFeature),
+  eraseLiveMdFeatureState(inlineMarkFeature),
+  eraseLiveMdFeatureState(autolinkFeature),
+  eraseLiveMdFeatureState(linkFeature),
+  eraseLiveMdFeatureState(imageFeature),
+  eraseLiveMdFeatureState(latexFeature),
+];
+
+export const liveMdAnalysis: Extension = [
+  liveMdFeatures(defaultLiveMdFeatures),
+  liveMdAnalysisField,
+  liveMdViewportPlugin,
+];
+
+function eraseLiveMdFeatureState<State>(feature: LiveMdFeature<State>) {
+  return feature as unknown as LiveMdFeature<unknown>;
 }

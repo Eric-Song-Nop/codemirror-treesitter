@@ -47,6 +47,8 @@ import {
   liveMdMarkdownDocumentClass,
   liveMdMarkdownDocumentCss,
   liveMdMarkdownDocumentCssVariables,
+  liveMdFeature,
+  liveMdFeatures,
   liveMdImageSource,
   liveMarkdown,
   renderMarkdownToHtml,
@@ -117,6 +119,50 @@ custom properties listed in `liveMdMarkdownDocumentCssVariables`, which lets an
 app snapshot its current LiveMD theme variables and inline them into standalone
 HTML exports without leaking workspace, reset, or component-library CSS.
 
+## Feature Extensions
+
+Hosts can add Tree-sitter-query-driven Markdown behavior with
+`liveMdFeature(...)` or `liveMdFeatures(...)`. Feature extensions run inside
+the same LiveMD analysis pass as the built-in Markdown features, so they share
+viewport-limited query matching, active-line checks, line classes, decorations,
+widgets, atomic ranges, consumed ranges, and search visibility hooks.
+
+```ts
+import { createLiveMdEditor, liveMdFeature } from "@codemirror-treesitter/live-md";
+
+const calloutFeature = liveMdFeature({
+  id: "callout",
+  query: {
+    document: `(block_quote) @callout.block`,
+  },
+  apply(match, _featureState, context) {
+    const block = context.capture(match, "callout.block")?.node;
+    if (!block) return;
+
+    const kind = context
+      .text(block)
+      .match(/^>\s*\[!(\w+)\]/)?.[1]
+      ?.toLowerCase();
+    if (!kind) return;
+    context.lineClass(block.from, block.to, `cm-md-callout cm-md-callout-${kind}`);
+  },
+  search: {
+    hiddenQuery: {
+      document: `(block_quote (block_quote_marker) @callout.syntax)`,
+    },
+  },
+});
+
+createLiveMdEditor({
+  parent: document.body,
+  extensions: [calloutFeature],
+});
+```
+
+Feature queries target the current Markdown grammars (`document` for block
+Markdown and `inline` for nested inline Markdown). They do not add new Markdown
+grammar nodes; features interpret captures that Tree-sitter already exposes.
+
 ## Web Component
 
 ```html
@@ -132,9 +178,10 @@ The element reflects the runtime API through `value`, `defaultValue`,
 `setSelectionRange(...)`, and `select()`.
 
 JavaScript hosts can add `liveMdImageSource(...)` and
-`liveMdCodeFenceHighlighting(...)` to the `extensions` property when a web
-component needs custom image preview URL resolution or themed code-fence token
-highlighting.
+`liveMdCodeFenceHighlighting(...)`, `liveMdFeature(...)`, and other CodeMirror
+extensions to the `extensions` property when a web component needs custom image
+preview URL resolution, themed code-fence token highlighting, or host-specific
+Markdown behavior.
 
 The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 `select`. Styling is installed into Shadow DOM and can be themed with
@@ -172,9 +219,10 @@ and Cloudflare-specific code.
 
 ## Current Implementation Notes
 
-- Public exports are limited to the editor controller, live Markdown extension,
-  image source helpers, code-fence highlighting, Markdown HTML rendering,
-  scoped document CSS helpers, and custom element definition.
+- Public exports include the editor controller, live Markdown extension, feature
+  extension helpers, image source helpers, code-fence highlighting, Markdown HTML rendering,
+  scoped document CSS helpers, and custom
+  element definition.
 - `./register` only defines the custom element and re-exports the element API.
 - `./fixtures` currently exposes benchmark/example Markdown content such as
   `createInitialMarkdown(...)`.

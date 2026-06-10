@@ -298,7 +298,11 @@ custom properties on the host element.
 ## Programmatic API
 
 ```ts
-import { createLiveMdEditor, liveMdCodeFenceHighlighting } from "@codemirror-treesitter/live-md";
+import {
+  createLiveMdEditor,
+  liveMdCodeFenceHighlighting,
+  liveMdFeature,
+} from "@codemirror-treesitter/live-md";
 import { gruvboxDarkHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
 
 const imageAssetUrlMap = new Map<string, string>();
@@ -333,6 +337,10 @@ relative Markdown links for Shift-click link jumps. The controller exposes
 `setPlaceholder()`, `setReadOnly()`, and `destroy()`.
 `liveMdCodeFenceHighlighting(...)` can be passed through `extensions` to align
 fenced code token colors with a host theme.
+`liveMdFeature(...)` and `liveMdFeatures(...)` can also be passed through
+`extensions` when hosts need Tree-sitter-query-driven Markdown behavior such as
+custom line classes, decorations, widgets, consumed ranges, or search visibility
+rules for syntax already exposed by the Markdown grammar.
 
 ## Optional Loro Collaboration
 

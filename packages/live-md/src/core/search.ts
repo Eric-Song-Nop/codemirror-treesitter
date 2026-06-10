@@ -1,7 +1,15 @@
 import { EditorState, type Extension, type StateEffect, type Transaction } from "@codemirror/state";
 import { SearchQuery, search, searchKeymap, setSearchQuery } from "@codemirror/search";
-import { syntaxTree, type SyntaxNode } from "@codemirror-treesitter/language";
+import {
+  ensureSyntaxTree,
+  queryTreeCaptures,
+  syntaxTree,
+  type SyntaxNode,
+  type Tree,
+  type TreeSitterParser,
+} from "@codemirror-treesitter/language";
 import { keymap } from "@codemirror/view";
+import { liveMdFeatureFacet, type LiveMdFeature, type LiveMdQueryTarget } from "./features.js";
 
 type SearchTest = NonNullable<SearchQuery["test"]>;
 
@@ -62,6 +70,8 @@ export function __testIsLiveMdSearchVisible(state: EditorState, from: number, to
 
 function isLiveMdSearchVisible(state: EditorState, from: number, to: number) {
   if (from >= to) return true;
+  let featureVisibility = liveMdFeatureSearchVisibility(state, from, to);
+  if (featureVisibility != null) return featureVisibility;
   if (isHiddenMarkdownSourceRange(state, from, to)) return false;
 
   let visible = true;
@@ -99,6 +109,58 @@ function isLiveMdSearchVisible(state: EditorState, from: number, to: number) {
     },
   });
   return visible;
+}
+
+function liveMdFeatureSearchVisibility(state: EditorState, from: number, to: number) {
+  let features = state.facet(liveMdFeatureFacet);
+  if (!features.length) return undefined;
+
+  if (isHiddenByFeatureSearchQuery(state, features, from, to)) return false;
+
+  for (let feature of features) {
+    let visible = feature.search?.isVisible?.(
+      { from, to },
+      {
+        state,
+        text: (node) => state.sliceDoc(node.from, node.to),
+      },
+    );
+    if (visible != null) return visible;
+  }
+
+  return undefined;
+}
+
+function isHiddenByFeatureSearchQuery(
+  state: EditorState,
+  features: readonly LiveMdFeature[],
+  from: number,
+  to: number,
+) {
+  let source = liveMdFeatureSearchQuerySource(features);
+  if (!source) return false;
+  let tree = ensureSyntaxTree(state, to, 50) ?? syntaxTree(state);
+  return queryTreeCaptures(tree, source).some((capture) =>
+    rangesOverlap(from, to, capture.node.from, capture.node.to),
+  );
+}
+
+function liveMdFeatureSearchQuerySource(features: readonly LiveMdFeature[]) {
+  if (!features.some((feature) => feature.search?.hiddenQuery)) return null;
+  return (_parser: TreeSitterParser, tree: Tree) => {
+    let target = liveMdSearchQueryTarget(tree);
+    if (!target) return null;
+    let sources = features
+      .map((feature) => feature.search?.hiddenQuery?.[target]?.trim())
+      .filter((source): source is string => !!source);
+    return sources.length ? sources.join("\n\n") : null;
+  };
+}
+
+function liveMdSearchQueryTarget(tree: Tree): LiveMdQueryTarget | null {
+  if (tree.topNode.name == "document") return "document";
+  if (tree.topNode.name == "inline") return "inline";
+  return null;
 }
 
 function isHiddenMarkdownNode(node: SyntaxNode) {
