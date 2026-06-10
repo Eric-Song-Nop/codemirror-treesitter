@@ -7,10 +7,20 @@ const updateDocIdIndexName = "docId";
 export type BrowserCollabDocumentMetadata = {
   docId: string;
   materializedAt?: number;
+  materializedFrontiers?: SerializedCollabFrontier[];
   materializedHash?: string;
+  materializedValue?: string;
+  materializedVersionVector?: SerializedCollabVersionVector;
   path: string;
   workspaceId: string;
 };
+
+export type SerializedCollabFrontier = {
+  counter: number;
+  peer: `${number}`;
+};
+
+export type SerializedCollabVersionVector = Array<[`${number}`, number]>;
 
 export type BrowserCollabDocumentState = {
   metadata: BrowserCollabDocumentMetadata | null;
@@ -194,12 +204,53 @@ function metadataFromRecord(record: StoredDocumentRecord): BrowserCollabDocument
   return {
     docId: record.docId,
     ...(typeof record.materializedAt == "number" ? { materializedAt: record.materializedAt } : {}),
+    ...(isSerializedFrontiers(record.materializedFrontiers)
+      ? { materializedFrontiers: record.materializedFrontiers }
+      : {}),
     ...(typeof record.materializedHash == "string"
       ? { materializedHash: record.materializedHash }
+      : {}),
+    ...(typeof record.materializedValue == "string"
+      ? { materializedValue: record.materializedValue }
+      : {}),
+    ...(isSerializedVersionVector(record.materializedVersionVector)
+      ? { materializedVersionVector: record.materializedVersionVector }
       : {}),
     path: record.path,
     workspaceId: record.workspaceId,
   };
+}
+
+function isSerializedFrontiers(value: unknown): value is SerializedCollabFrontier[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (frontier) =>
+        frontier &&
+        typeof frontier == "object" &&
+        typeof (frontier as Partial<SerializedCollabFrontier>).peer == "string" &&
+        /^\d+$/.test((frontier as Partial<SerializedCollabFrontier>).peer ?? "") &&
+        typeof (frontier as Partial<SerializedCollabFrontier>).counter == "number" &&
+        Number.isSafeInteger((frontier as Partial<SerializedCollabFrontier>).counter) &&
+        (frontier as Partial<SerializedCollabFrontier>).counter! >= 0,
+    )
+  );
+}
+
+function isSerializedVersionVector(value: unknown): value is SerializedCollabVersionVector {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        Array.isArray(entry) &&
+        entry.length == 2 &&
+        typeof entry[0] == "string" &&
+        /^\d+$/.test(entry[0]) &&
+        typeof entry[1] == "number" &&
+        Number.isSafeInteger(entry[1]) &&
+        entry[1] >= 0,
+    )
+  );
 }
 
 function loadMemoryDocument(docId: string): BrowserCollabDocumentState {

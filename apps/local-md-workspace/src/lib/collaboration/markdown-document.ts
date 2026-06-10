@@ -1,6 +1,7 @@
 import { liveMdLoroCollaboration } from "@codemirror-treesitter/live-md-loro";
 import type { Extension } from "@codemirror/state";
-import { LoroDoc, UndoManager } from "loro-crdt";
+import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
+import type { Frontiers } from "loro-crdt";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
 import { hashMarkdownText } from "../markdown-hash.ts";
 import {
@@ -9,6 +10,8 @@ import {
   loadBrowserCollabDocument,
   writeBrowserCollabSnapshot,
   type BrowserCollabDocumentMetadata,
+  type SerializedCollabFrontier,
+  type SerializedCollabVersionVector,
 } from "./collab-browser-store.ts";
 
 export { hashMarkdownText } from "../markdown-hash.ts";
@@ -31,36 +34,49 @@ export type CollabDocumentState = {
   value: string;
 };
 
-export type CollabExternalEditResolution =
-  | {
-      kind: "conflict-copy";
-      path: string;
-      sourcePath: string;
-    }
-  | {
-      kind: "imported";
-      path: string;
-    };
-
-type MaterializationConflictDetails = {
-  externalHash: string;
-  kind: "external-source-conflict";
+export type CollabExternalEditResolution = {
+  kind: "imported";
   path: string;
-  sharedHash: string;
-  sharedValue: string;
-  visibleValue: string;
 };
 
-type MaterializeCollabDocumentOptions = {
-  conflictStrategy?: "copy-external" | "overwrite-source";
+export type CollabSourceImportResult = {
+  externalEdit: CollabExternalEditResolution;
+  update: Uint8Array | null;
+  value: string;
 };
 
 type OpenMarkdownCollabDocumentOptions = {
   reconcileExternalEdits?: boolean;
 };
 
+export type CollabDocumentMaterialization = {
+  frontiers: SerializedCollabFrontier[];
+  value: string;
+  version: VersionVector;
+  versionVector: SerializedCollabVersionVector;
+};
+
 export type MaterializeCollabDocumentResult = {
   externalEdit?: CollabExternalEditResolution;
+};
+
+type AcknowledgeCollabDocumentSourceSavedOptions = {
+  externalEdit?: CollabExternalEditResolution;
+  frontiers?: SerializedCollabFrontier[];
+  versionVector?: SerializedCollabVersionVector;
+};
+
+type SourceCheckpoint = {
+  frontiers: Frontiers;
+  value: string;
+  versionVector: VersionVector;
+};
+
+type SourceImportOutcome = {
+  externalEdit?: CollabExternalEditResolution;
+  metadata: BrowserCollabDocumentMetadata;
+  update: Uint8Array | null;
+  value: string;
 };
 
 export async function openMarkdownCollabDocument(
@@ -93,8 +109,7 @@ export async function openMarkdownCollabDocument(
     if (initialValue) doc.commit();
     metadata = {
       ...metadata,
-      materializedAt: Date.now(),
-      materializedHash: hashMarkdownText(initialValue),
+      ...currentDocumentMaterializationFields(doc, initialValue),
     };
     await compactDocumentSnapshot(metadata, doc);
   }
@@ -169,41 +184,70 @@ export async function savePendingCollabDocumentUpdates(
 export async function materializeCollabDocument(
   backend: WorkspaceBackend,
   state: CollabDocumentState,
-  options: MaterializeCollabDocumentOptions = {},
 ): Promise<MaterializeCollabDocumentResult> {
-  let value = getCollabDocumentValue(state);
-  let conflict = await findMaterializationConflict(backend, state, value);
-  let externalEdit: CollabExternalEditResolution | undefined;
-
-  if (conflict && options.conflictStrategy != "overwrite-source") {
-    externalEdit = {
-      kind: "conflict-copy",
-      path: await writeExternalConflictCopy(backend, state.path, conflict.visibleValue),
-      sourcePath: state.path,
-    };
-  }
-
+  let sourceImport = await ingestExternalMarkdownEdit(backend, state);
+  let materialization = captureCollabDocumentMaterialization(state);
   await saveCollabDocumentSnapshot(backend, state);
-  await backend.writeFile(state.path, value);
-  await acknowledgeCollabDocumentSourceSaved(backend, state, value, externalEdit);
-  return { externalEdit };
+  await backend.writeFile(state.path, materialization.value);
+  await acknowledgeCollabDocumentSourceSaved(backend, state, materialization.value, {
+    externalEdit: sourceImport?.externalEdit,
+    frontiers: materialization.frontiers,
+    versionVector: materialization.versionVector,
+  });
+  return { externalEdit: sourceImport?.externalEdit };
 }
 
 export async function acknowledgeCollabDocumentSourceSaved(
   _backend: WorkspaceBackend,
   state: CollabDocumentState,
   value = getCollabDocumentValue(state),
-  externalEdit?: CollabExternalEditResolution,
+  options: AcknowledgeCollabDocumentSourceSavedOptions = {},
 ) {
   state.metadata = {
     ...state.metadata,
-    materializedAt: Date.now(),
-    materializedHash: hashMarkdownText(value),
+    ...sourceCheckpointFields(
+      value,
+      options.frontiers ?? serializeFrontiers(state.doc.frontiers()),
+      options.versionVector ?? serializeVersionVector(state.doc.oplogVersion()),
+    ),
   };
   await writeBrowserCollabSnapshot(state.metadata, state.doc.export({ mode: "snapshot" }));
   state.cleanValue = value;
-  state.externalEdit = externalEdit;
+  state.externalEdit = options.externalEdit;
   state.value = value;
+}
+
+export function captureCollabDocumentMaterialization(
+  state: CollabDocumentState,
+): CollabDocumentMaterialization {
+  state.doc.commit();
+  let value = getCollabDocumentValue(state);
+  let version = state.doc.oplogVersion();
+  return {
+    frontiers: serializeFrontiers(state.doc.frontiers()),
+    value,
+    version,
+    versionVector: serializeVersionVector(version),
+  };
+}
+
+export async function ingestExternalMarkdownEdit(
+  backend: WorkspaceBackend,
+  state: CollabDocumentState,
+  sourceValue?: string,
+): Promise<CollabSourceImportResult | null> {
+  let outcome = await importExternalMarkdownEdit(backend, state.metadata, state.doc, sourceValue);
+  state.metadata = outcome.metadata;
+  state.value = outcome.value;
+
+  if (!outcome.externalEdit) return null;
+  state.externalEdit = outcome.externalEdit;
+  if (outcome.update?.byteLength) state.pendingUpdates.push(new Uint8Array(outcome.update));
+  return {
+    externalEdit: outcome.externalEdit,
+    update: outcome.update?.byteLength ? new Uint8Array(outcome.update) : null,
+    value: outcome.value,
+  };
 }
 
 export async function reloadCollabDocumentFromSource(
@@ -227,69 +271,161 @@ async function reconcileExternalMarkdownEdit(
   externalEdit?: CollabExternalEditResolution;
   metadata: BrowserCollabDocumentMetadata;
 }> {
-  if (!metadata.materializedHash) {
-    let visibleValue = await backend.readFile(metadata.path);
-    if (hashMarkdownText(visibleValue) == hashMarkdownText(doc.getText(textKey).toString())) {
-      let nextMetadata = {
-        ...metadata,
-        materializedAt: Date.now(),
-        materializedHash: hashMarkdownText(visibleValue),
-      };
-      await writeBrowserCollabSnapshot(nextMetadata, doc.export({ mode: "snapshot" }));
-      return { metadata: nextMetadata };
-    }
-    return { metadata };
+  let outcome = await importExternalMarkdownEdit(backend, metadata, doc);
+  if (outcome.metadata != metadata || outcome.externalEdit) {
+    await compactDocumentSnapshot(outcome.metadata, doc);
   }
-
-  let visibleValue = await backend.readFile(metadata.path);
-  let visibleHash = hashMarkdownText(visibleValue);
-  if (visibleHash == metadata.materializedHash) return { metadata };
-
-  let docValue = doc.getText(textKey).toString();
-  if (hashMarkdownText(docValue) == metadata.materializedHash) {
-    replaceMarkdownText(doc, visibleValue);
-    let nextMetadata = {
-      ...metadata,
-      materializedAt: Date.now(),
-      materializedHash: visibleHash,
-    };
-    await compactDocumentSnapshot(nextMetadata, doc);
-    return {
-      externalEdit: { kind: "imported", path: metadata.path },
-      metadata: nextMetadata,
-    };
-  }
-
   return {
-    externalEdit: {
-      kind: "conflict-copy",
-      path: await writeExternalConflictCopy(backend, metadata.path, visibleValue),
-      sourcePath: metadata.path,
-    },
-    metadata,
+    externalEdit: outcome.externalEdit,
+    metadata: outcome.metadata,
   };
 }
 
-async function findMaterializationConflict(
+async function importExternalMarkdownEdit(
   backend: WorkspaceBackend,
-  state: CollabDocumentState,
-  value = getCollabDocumentValue(state),
-): Promise<MaterializationConflictDetails | null> {
-  let materializedHash = state.metadata.materializedHash;
-  if (!materializedHash) return null;
+  metadata: BrowserCollabDocumentMetadata,
+  doc: LoroDoc,
+  sourceValue?: string,
+): Promise<SourceImportOutcome> {
+  let visibleValue = sourceValue ?? (await backend.readFile(metadata.path));
+  let visibleHash = hashMarkdownText(visibleValue);
+  let currentValue = doc.getText(textKey).toString();
+  let currentHash = hashMarkdownText(currentValue);
 
-  let visibleValue = await backend.readFile(state.path);
-  let externalHash = hashMarkdownText(visibleValue);
-  if (externalHash == materializedHash || visibleValue == value) return null;
+  if (visibleValue == currentValue) {
+    return {
+      metadata: {
+        ...metadata,
+        ...currentDocumentMaterializationFields(doc, visibleValue),
+      },
+      update: null,
+      value: currentValue,
+    };
+  }
+
+  if (visibleHash == metadata.materializedHash) {
+    return { metadata, update: null, value: currentValue };
+  }
+
+  let checkpoint = sourceCheckpointFromMetadata(metadata);
+  if (checkpoint) {
+    try {
+      let fork = doc.forkAt(checkpoint.frontiers);
+      let forkText = fork.getText(textKey);
+      if (forkText.toString() == checkpoint.value) {
+        forkText.update(visibleValue);
+        let update = fork.export({ mode: "update", from: checkpoint.versionVector });
+        let nextMetadata = {
+          ...metadata,
+          ...sourceCheckpointFields(
+            visibleValue,
+            serializeFrontiers(fork.frontiers()),
+            serializeVersionVector(fork.oplogVersion()),
+          ),
+        };
+        if (update.byteLength) doc.import(update);
+        return {
+          externalEdit: { kind: "imported", path: metadata.path },
+          metadata: nextMetadata,
+          update: update.byteLength ? new Uint8Array(update) : null,
+          value: doc.getText(textKey).toString(),
+        };
+      }
+    } catch {
+      // Fall through to the legacy checkpoint path below.
+    }
+  }
+
+  if (!metadata.materializedHash || currentHash == metadata.materializedHash) {
+    let fromVersion = doc.oplogVersion();
+    let text = doc.getText(textKey);
+    text.update(visibleValue);
+    let update = doc.export({ mode: "update", from: fromVersion });
+    return {
+      externalEdit: { kind: "imported", path: metadata.path },
+      metadata: {
+        ...metadata,
+        ...currentDocumentMaterializationFields(doc, visibleValue),
+      },
+      update: update.byteLength ? new Uint8Array(update) : null,
+      value: doc.getText(textKey).toString(),
+    };
+  }
+
+  let fromVersion = doc.oplogVersion();
+  doc.getText(textKey).update(visibleValue);
+  let update = doc.export({ mode: "update", from: fromVersion });
+  return {
+    externalEdit: { kind: "imported", path: metadata.path },
+    metadata: {
+      ...metadata,
+      ...currentDocumentMaterializationFields(doc, doc.getText(textKey).toString()),
+    },
+    update: update.byteLength ? new Uint8Array(update) : null,
+    value: doc.getText(textKey).toString(),
+  };
+}
+
+function sourceCheckpointFromMetadata(
+  metadata: BrowserCollabDocumentMetadata,
+): SourceCheckpoint | null {
+  if (
+    metadata.materializedValue == null ||
+    !metadata.materializedFrontiers ||
+    !metadata.materializedVersionVector
+  ) {
+    return null;
+  }
 
   return {
-    externalHash,
-    kind: "external-source-conflict",
-    path: state.path,
-    sharedHash: hashMarkdownText(value),
-    sharedValue: value,
-    visibleValue,
+    frontiers: deserializeFrontiers(metadata.materializedFrontiers),
+    value: metadata.materializedValue,
+    versionVector: deserializeVersionVector(metadata.materializedVersionVector),
   };
+}
+
+function currentDocumentMaterializationFields(doc: LoroDoc, value: string) {
+  return sourceCheckpointFields(
+    value,
+    serializeFrontiers(doc.frontiers()),
+    serializeVersionVector(doc.oplogVersion()),
+  );
+}
+
+function sourceCheckpointFields(
+  value: string,
+  frontiers: SerializedCollabFrontier[],
+  versionVector: SerializedCollabVersionVector,
+) {
+  return {
+    materializedAt: Date.now(),
+    materializedFrontiers: frontiers,
+    materializedHash: hashMarkdownText(value),
+    materializedValue: value,
+    materializedVersionVector: versionVector,
+  };
+}
+
+function serializeFrontiers(frontiers: Frontiers): SerializedCollabFrontier[] {
+  return frontiers.map((frontier) => ({
+    counter: frontier.counter,
+    peer: String(frontier.peer) as `${number}`,
+  }));
+}
+
+function deserializeFrontiers(frontiers: SerializedCollabFrontier[]): Frontiers {
+  return frontiers.map((frontier) => ({
+    counter: frontier.counter,
+    peer: frontier.peer,
+  }));
+}
+
+function serializeVersionVector(version: VersionVector): SerializedCollabVersionVector {
+  return [...version.toJSON()].map(([peer, counter]) => [String(peer) as `${number}`, counter]);
+}
+
+function deserializeVersionVector(value: SerializedCollabVersionVector): VersionVector {
+  return new VersionVector(new Map(value));
 }
 
 function enqueueDocumentPersistence(state: CollabDocumentState, operation: () => Promise<void>) {
@@ -311,44 +447,6 @@ function replaceMarkdownText(doc: LoroDoc, value: string) {
   if (current) text.delete(0, current.length);
   if (value) text.insert(0, value);
   doc.commit();
-}
-
-async function writeExternalConflictCopy(backend: WorkspaceBackend, path: string, value: string) {
-  return writeConflictCopy(backend, path, value, "external-conflict");
-}
-
-async function writeConflictCopy(
-  backend: WorkspaceBackend,
-  path: string,
-  value: string,
-  label: "external-conflict",
-) {
-  for (let attempt = 0; attempt < 1000; attempt++) {
-    let conflictPath = conflictCopyPath(path, label, Date.now(), attempt);
-    if (backend.stat) {
-      let stat = await backend.stat(conflictPath);
-      if (stat.exists) continue;
-    }
-
-    await backend.writeFile(conflictPath, value);
-    return conflictPath;
-  }
-
-  throw new Error("Could not allocate an external edit conflict file.");
-}
-
-function conflictCopyPath(path: string, label: "external-conflict", now: number, attempt: number) {
-  let slash = path.lastIndexOf("/");
-  let directory = slash == -1 ? "" : path.slice(0, slash + 1);
-  let fileName = slash == -1 ? path : path.slice(slash + 1);
-  let extension = fileName.match(/\.md$/i)?.[0] ?? ".md";
-  let stem = fileName.slice(0, fileName.length - extension.length) || "document";
-  let suffix = attempt ? `-${attempt + 1}` : "";
-  return `${directory}${stem}.${label}-${timestampForPath(now)}${suffix}${extension}`;
-}
-
-function timestampForPath(now: number) {
-  return new Date(now).toISOString().replace(/\D/g, "").slice(0, 14);
 }
 
 async function createDocumentId(backend: WorkspaceBackend, path: string) {
