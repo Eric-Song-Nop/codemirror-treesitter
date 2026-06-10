@@ -6,11 +6,21 @@ const updateDocIdIndexName = "docId";
 
 export type BrowserCollabDocumentMetadata = {
   docId: string;
-  materializedAt?: number;
-  materializedHash?: string;
+  materializedAt: number;
+  materializedFrontiers: SerializedCollabFrontier[];
+  materializedHash: string;
+  materializedValue: string;
+  materializedVersionVector: SerializedCollabVersionVector;
   path: string;
   workspaceId: string;
 };
+
+export type SerializedCollabFrontier = {
+  counter: number;
+  peer: `${number}`;
+};
+
+export type SerializedCollabVersionVector = Array<[`${number}`, number]>;
 
 export type BrowserCollabDocumentState = {
   metadata: BrowserCollabDocumentMetadata | null;
@@ -18,8 +28,8 @@ export type BrowserCollabDocumentState = {
   updates: Uint8Array[];
 };
 
-type StoredDocumentRecord = BrowserCollabDocumentMetadata & {
-  snapshot?: Uint8Array;
+type StoredDocumentRecord = Partial<BrowserCollabDocumentMetadata> & {
+  snapshot?: Uint8Array | ArrayBuffer;
 };
 
 type StoredUpdateRecord = {
@@ -50,8 +60,11 @@ export async function loadBrowserCollabDocument(
       done,
     ]);
 
+    let metadata = record ? metadataFromRecord(record) : null;
+    if (!metadata) return emptyBrowserCollabDocumentState();
+
     return {
-      metadata: record ? metadataFromRecord(record) : null,
+      metadata,
       snapshot: record?.snapshot ? toUint8Array(record.snapshot) : null,
       updates: updates
         .sort((left, right) => left.sequence - right.sequence)
@@ -190,27 +203,84 @@ function openBrowserCollabDatabase() {
   }).catch(() => null);
 }
 
-function metadataFromRecord(record: StoredDocumentRecord): BrowserCollabDocumentMetadata {
+function metadataFromRecord(record: StoredDocumentRecord): BrowserCollabDocumentMetadata | null {
+  if (
+    typeof record.docId != "string" ||
+    typeof record.materializedAt != "number" ||
+    !isSerializedFrontiers(record.materializedFrontiers) ||
+    typeof record.materializedHash != "string" ||
+    typeof record.materializedValue != "string" ||
+    !isSerializedVersionVector(record.materializedVersionVector) ||
+    typeof record.path != "string" ||
+    typeof record.workspaceId != "string"
+  ) {
+    return null;
+  }
+
   return {
     docId: record.docId,
-    ...(typeof record.materializedAt == "number" ? { materializedAt: record.materializedAt } : {}),
-    ...(typeof record.materializedHash == "string"
-      ? { materializedHash: record.materializedHash }
-      : {}),
+    materializedAt: record.materializedAt,
+    materializedFrontiers: record.materializedFrontiers,
+    materializedHash: record.materializedHash,
+    materializedValue: record.materializedValue,
+    materializedVersionVector: record.materializedVersionVector,
     path: record.path,
     workspaceId: record.workspaceId,
   };
 }
 
+function isSerializedFrontiers(value: unknown): value is SerializedCollabFrontier[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (frontier) =>
+        frontier &&
+        typeof frontier == "object" &&
+        typeof (frontier as Partial<SerializedCollabFrontier>).peer == "string" &&
+        /^\d+$/.test((frontier as Partial<SerializedCollabFrontier>).peer ?? "") &&
+        typeof (frontier as Partial<SerializedCollabFrontier>).counter == "number" &&
+        Number.isSafeInteger((frontier as Partial<SerializedCollabFrontier>).counter) &&
+        (frontier as Partial<SerializedCollabFrontier>).counter! >= 0,
+    )
+  );
+}
+
+function isSerializedVersionVector(value: unknown): value is SerializedCollabVersionVector {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        Array.isArray(entry) &&
+        entry.length == 2 &&
+        typeof entry[0] == "string" &&
+        /^\d+$/.test(entry[0]) &&
+        typeof entry[1] == "number" &&
+        Number.isSafeInteger(entry[1]) &&
+        entry[1] >= 0,
+    )
+  );
+}
+
 function loadMemoryDocument(docId: string): BrowserCollabDocumentState {
   let record = memoryDocuments.get(docId) ?? null;
+  let metadata = record ? metadataFromRecord(record) : null;
+  if (!metadata) return emptyBrowserCollabDocumentState();
+
   let updates = memoryUpdates.get(docId) ?? [];
   return {
-    metadata: record ? metadataFromRecord(record) : null,
+    metadata,
     snapshot: record?.snapshot ? new Uint8Array(record.snapshot) : null,
     updates: updates
       .sort((left, right) => left.sequence - right.sequence)
       .map((update) => new Uint8Array(update.update)),
+  };
+}
+
+function emptyBrowserCollabDocumentState(): BrowserCollabDocumentState {
+  return {
+    metadata: null,
+    snapshot: null,
+    updates: [],
   };
 }
 
