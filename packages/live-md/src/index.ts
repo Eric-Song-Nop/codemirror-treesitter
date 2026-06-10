@@ -12,4 +12,13 @@ export {
   type LiveMdImageSourceResolver,
 } from "./core/images.js";
 export { liveMdCodeFenceHighlighting } from "./core/languages.js";
+export {
+  liveMdMarkdownDocumentClass,
+  liveMdMarkdownDocumentCss,
+  liveMdMarkdownDocumentCssVariables,
+  renderMarkdownToHtml,
+  type MarkdownHtmlImage,
+  type MarkdownHtmlImageSourceResolver,
+  type MarkdownHtmlRenderOptions,
+} from "./core/markdown-html.js";
 export { defineLiveMdEditor, LiveMdEditorElement } from "./element/live-md-editor.js";
