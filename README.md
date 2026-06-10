@@ -101,8 +101,8 @@ await editor.ready;
   brackets, basic setup, merge views, LSP integration, and Gruvbox themes.
 - LiveMD, a Markdown editor runtime built from the local Tree-sitter packages,
   exposed through `createLiveMdEditor()`, `liveMarkdown()`,
-  `liveMdCodeFenceHighlighting()`, `defineLiveMdEditor()`, and
-  `<live-md-editor>`.
+  `liveMdCodeFenceHighlighting()`, `renderMarkdownToHtml()`,
+  `defineLiveMdEditor()`, and `<live-md-editor>`.
 - Optional LiveMD collaboration bindings for Loro documents, presence, custom
   text containers, and collaborative undo/redo.
 - Validation tooling and apps that check public export parity, package
@@ -194,7 +194,8 @@ entry points, dependency boundaries, source layout, and validation notes.
   files with LiveMD, supports Dropbox storage through OpenDAL WASM and OAuth
   PKCE, supports image insert/paste/drop through sibling `assets/` directories,
   supports file/folder create, rename, delete, tree browsing, and autosave, and
-  can host or join Grove shared-file sessions through `apps/grove-relay`.
+  can export standalone HTML, and can host or join Grove shared-file sessions
+  through `apps/grove-relay`.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, share create/session/rotate/revoke APIs, WebSocket Loro sync,
   bounded relay queues, share expiration cleanup, and Wrangler deploy/types

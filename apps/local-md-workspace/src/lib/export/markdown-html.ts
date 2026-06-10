@@ -1,4 +1,4 @@
-import { Marked, Renderer, type Token, type Tokens } from "marked";
+import { renderMarkdownToHtml } from "@codemirror-treesitter/live-md";
 
 export type MarkdownHtmlExportAsset =
   | ArrayBuffer
@@ -44,32 +44,18 @@ export async function createStandaloneMarkdownHtml({
   title = defaultExportTitle,
 }: MarkdownHtmlExportOptions): Promise<MarkdownHtmlExportResult> {
   let warnings: MarkdownHtmlExportWarning[] = [];
-  let renderer = new Renderer();
-  renderer.html = ({ text }) => escapeHtml(text);
-
-  let marked = new Marked({
-    async: true,
-    gfm: true,
-    renderer,
-    walkTokens: async (token) => {
-      if (!isImageToken(token)) return;
-      await embedImageToken(token, {
+  let body = await renderMarkdownToHtml(markdown, {
+    resolveImageSource: async ({ source }) =>
+      embedImageSource(source, {
         documentPath,
         resolveAsset,
         warnings,
-      });
-    },
+      }),
   });
-
-  let body = await marked.parse(markdown);
   return {
     html: wrapStandaloneHtml(body, { title }),
     warnings,
   };
-}
-
-function isImageToken(token: Token): token is Tokens.Image {
-  return token.type == "image" && "href" in token;
 }
 
 export function resolveMarkdownImagePath(source: string, documentPath: string) {
@@ -109,8 +95,8 @@ ${body.trimEnd()}
 `;
 }
 
-async function embedImageToken(
-  token: Tokens.Image,
+async function embedImageSource(
+  source: string,
   {
     documentPath,
     resolveAsset,
@@ -121,11 +107,10 @@ async function embedImageToken(
     warnings: MarkdownHtmlExportWarning[];
   },
 ) {
-  if (!resolveAsset) return;
+  if (!resolveAsset) return undefined;
 
-  let source = token.href;
   let path = resolveMarkdownImagePath(source, documentPath);
-  if (!path) return;
+  if (!path) return undefined;
 
   try {
     let asset = await resolveAsset(path, source);
@@ -136,10 +121,10 @@ async function embedImageToken(
         path,
         source,
       });
-      return;
+      return undefined;
     }
 
-    token.href = await assetToDataUrl(asset, path);
+    return assetToDataUrl(asset, path);
   } catch (error) {
     warnings.push({
       kind: "image-read-error",
@@ -147,6 +132,7 @@ async function embedImageToken(
       path,
       source,
     });
+    return undefined;
   }
 }
 
