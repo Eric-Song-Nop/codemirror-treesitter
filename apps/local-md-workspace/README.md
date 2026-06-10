@@ -14,6 +14,8 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
   operations.
 - Build a Markdown file tree, create/rename/delete files and folders, autosave
   edits, and surface permission/storage errors.
+- Open a command palette with `Cmd/Ctrl+Shift+P` for file navigation and core
+  workspace actions.
 - Insert pasted, dropped, or selected image files into sibling `assets/`
   directories and resolve Markdown image previews through blob URLs.
 - Maintain optional Loro-backed document state for a selected file so local

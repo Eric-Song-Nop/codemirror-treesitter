@@ -72,6 +72,7 @@ import {
 import { GroveMark } from "@/components/GroveMark";
 import { LiveMdEditor, type LiveMdImageFilesInput } from "@/components/LiveMdEditor";
 import { isSharedFilePath, SharedFileEditor } from "@/components/SharedFileEditor";
+import { WorkspaceCommandPalette } from "@/components/WorkspaceCommandPalette";
 import {
   authorizeDropboxWithPkce,
   completeDropboxRedirectOAuthIfPresent,
@@ -1224,6 +1225,10 @@ function LocalWorkspaceApp() {
     [loadFile, workspaceBackend],
   );
 
+  let toggleSidebar = useCallback(() => {
+    setSidebarOpen((open) => !open);
+  }, []);
+
   let openCreateDialog = (
     target: FileTreeDeleteTarget | null = treeSelection,
     kind: FileTreeCreateKind = "file",
@@ -1757,7 +1762,7 @@ function LocalWorkspaceApp() {
               label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
               size="icon-sm"
               variant="ghost"
-              onClick={() => setSidebarOpen((open) => !open)}
+              onClick={toggleSidebar}
             >
               <MenuIcon data-icon="inline-start" />
             </TooltipIconButton>
@@ -1940,6 +1945,27 @@ function LocalWorkspaceApp() {
           }
           onReloadFile={reloadWorkspaceFileConflict}
           onUsePendingValue={overwriteWorkspaceFileConflict}
+        />
+
+        <WorkspaceCommandPalette
+          browserSupported={browserSupported}
+          busy={busy}
+          canInsertImage={Boolean(workspaceBackend?.createImageAsset && selectedFile)}
+          disabled={
+            fileDialogMode != null ||
+            shareDialogOpen ||
+            deleteTarget != null ||
+            workspaceFileConflict != null
+          }
+          dropboxConnecting={dropboxConnecting}
+          files={files}
+          selectedPath={selectedPath}
+          sidebarOpen={sidebarOpen}
+          onConnectDropbox={connectDropbox}
+          onInsertImage={() => imageInputRef.current?.click()}
+          onOpenFolder={() => void openWorkspace()}
+          onSelectFile={selectFile}
+          onToggleSidebar={toggleSidebar}
         />
 
         <AlertDialog open={deleteTarget != null} onOpenChange={closeDeleteDialog}>
