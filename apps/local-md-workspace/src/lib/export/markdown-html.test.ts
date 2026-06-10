@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   createStandaloneMarkdownHtml,
   resolveMarkdownImagePath,
+  snapshotMarkdownHtmlExportTheme,
   type MarkdownHtmlExportAsset,
 } from "./markdown-html.ts";
 
@@ -25,7 +26,12 @@ describe("Markdown HTML export", () => {
     expect(result.warnings).toEqual([]);
     expect(result.html).toContain("<!doctype html>");
     expect(result.html).toContain("<title>Today &lt;draft&gt;</title>");
+    expect(result.html).toContain('<main class="live-md-document" data-live-md-document>');
+    expect(result.html).toContain(".live-md-document h1");
+    expect(result.html).toContain(".live-md-document .live-md-task-item.is-checked");
+    expect(result.html).not.toContain("markdown-document");
     expect(result.html).toContain("<h1>Today</h1>");
+    expect(result.html).toContain('<li class="live-md-task-item is-checked">');
     expect(result.html).toContain('checked="" disabled="" type="checkbox"');
     expect(result.html).toContain("<table>");
     expect(result.html).toContain("<td>Ready</td>");
@@ -99,5 +105,63 @@ describe("Markdown HTML export", () => {
     expect(resolveMarkdownImagePath("/assets/a.png", "notes/today.md")).toBe("assets/a.png");
     expect(resolveMarkdownImagePath("../../a.png", "notes/today.md")).toBeNull();
     expect(resolveMarkdownImagePath("https://example.com/a.png", "notes/today.md")).toBeNull();
+  });
+
+  it("inlines scoped LiveMD theme variables when provided", async () => {
+    let result = await createStandaloneMarkdownHtml({
+      documentPath: "notes/today.md",
+      markdown: "# Today",
+      theme: {
+        colorScheme: "dark",
+        pageBackground: "#282828",
+        variables: {
+          "--live-md-bg": "#282828",
+          "--live-md-font-body": '"Geist Variable", ui-sans-serif',
+          "--live-md-text": "#ebdbb2",
+        },
+      },
+    });
+
+    expect(result.html).toContain("color-scheme: dark;");
+    expect(result.html).toContain("background: #282828;");
+    expect(result.html).toContain(".live-md-document {\n  --live-md-bg: #282828;");
+    expect(result.html).toContain('  --live-md-font-body: "Geist Variable", ui-sans-serif;');
+    expect(result.html).toContain("  --live-md-text: #ebdbb2;");
+  });
+
+  it("snapshots export theme variables from the current LiveMD element", () => {
+    let originalGetComputedStyle = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
+    Object.defineProperty(globalThis, "getComputedStyle", {
+      configurable: true,
+      value: () => ({
+        colorScheme: "normal",
+        getPropertyValue(name: string) {
+          return (
+            {
+              "--live-md-bg": "#282828",
+              "--live-md-font-body": '"Geist Variable", ui-sans-serif',
+              "--live-md-text": "#ebdbb2",
+            }[name] ?? ""
+          );
+        },
+      }),
+    });
+    try {
+      let theme = snapshotMarkdownHtmlExportTheme({} as Element);
+
+      expect(theme.colorScheme).toBe("dark");
+      expect(theme.pageBackground).toBe("#282828");
+      expect(theme.variables).toMatchObject({
+        "--live-md-bg": "#282828",
+        "--live-md-font-body": '"Geist Variable", ui-sans-serif',
+        "--live-md-text": "#ebdbb2",
+      });
+    } finally {
+      if (originalGetComputedStyle) {
+        Object.defineProperty(globalThis, "getComputedStyle", originalGetComputedStyle);
+      } else {
+        delete (globalThis as { getComputedStyle?: unknown }).getComputedStyle;
+      }
+    }
   });
 });

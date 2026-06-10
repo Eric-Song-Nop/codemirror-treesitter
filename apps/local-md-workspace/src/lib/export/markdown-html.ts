@@ -1,4 +1,9 @@
-import { renderMarkdownToHtml } from "@codemirror-treesitter/live-md";
+import {
+  liveMdMarkdownDocumentClass,
+  liveMdMarkdownDocumentCss,
+  liveMdMarkdownDocumentCssVariables,
+  renderMarkdownToHtml,
+} from "@codemirror-treesitter/live-md";
 
 export type MarkdownHtmlExportAsset =
   | ArrayBuffer
@@ -21,6 +26,12 @@ export type MarkdownHtmlExportResult = {
   warnings: MarkdownHtmlExportWarning[];
 };
 
+export type MarkdownHtmlExportTheme = {
+  colorScheme?: string;
+  pageBackground?: string;
+  variables?: Record<string, string>;
+};
+
 export type MarkdownHtmlExportOptions = {
   documentPath: string;
   markdown: string;
@@ -32,6 +43,7 @@ export type MarkdownHtmlExportOptions = {
     | null
     | undefined
     | Promise<MarkdownHtmlExportAsset | null | undefined>;
+  theme?: MarkdownHtmlExportTheme | null;
   title?: string;
 };
 
@@ -41,6 +53,7 @@ export async function createStandaloneMarkdownHtml({
   documentPath,
   markdown,
   resolveAsset,
+  theme,
   title = defaultExportTitle,
 }: MarkdownHtmlExportOptions): Promise<MarkdownHtmlExportResult> {
   let warnings: MarkdownHtmlExportWarning[] = [];
@@ -53,8 +66,26 @@ export async function createStandaloneMarkdownHtml({
       }),
   });
   return {
-    html: wrapStandaloneHtml(body, { title }),
+    html: wrapStandaloneHtml(body, { theme, title }),
     warnings,
+  };
+}
+
+export function snapshotMarkdownHtmlExportTheme(element: Element | null): MarkdownHtmlExportTheme {
+  if (!element || typeof getComputedStyle != "function") return {};
+
+  let computed = getComputedStyle(element);
+  let variables: Record<string, string> = {};
+  for (let variable of liveMdMarkdownDocumentCssVariables) {
+    let value = cssDeclarationValue(computed.getPropertyValue(variable));
+    if (value) variables[variable] = value;
+  }
+
+  let pageBackground = variables["--live-md-bg"];
+  return {
+    colorScheme: normalizeColorScheme(computed.colorScheme) ?? colorSchemeFromColor(pageBackground),
+    pageBackground,
+    variables,
   };
 }
 
@@ -75,7 +106,10 @@ export function resolveMarkdownImagePath(source: string, documentPath: string) {
   );
 }
 
-function wrapStandaloneHtml(body: string, { title }: { title: string }) {
+function wrapStandaloneHtml(
+  body: string,
+  { theme, title }: { theme?: MarkdownHtmlExportTheme | null; title: string },
+) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -83,11 +117,13 @@ function wrapStandaloneHtml(body: string, { title }: { title: string }) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(title)}</title>
   <style>
-${standaloneMarkdownHtmlCss()}
+${standaloneMarkdownHtmlShellCss(theme)}
+${markdownHtmlExportThemeCss(theme)}
+${liveMdMarkdownDocumentCss()}
   </style>
 </head>
 <body>
-  <main class="markdown-document">
+  <main class="${liveMdMarkdownDocumentClass}" data-live-md-document>
 ${body.trimEnd()}
   </main>
 </body>
@@ -252,162 +288,80 @@ function escapeHtml(value: string) {
   });
 }
 
-function standaloneMarkdownHtmlCss() {
-  return `:root {
-  color-scheme: light;
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f6f5f0;
-  color: #202523;
-}
-
-* {
-  box-sizing: border-box;
+function standaloneMarkdownHtmlShellCss(theme: MarkdownHtmlExportTheme | null | undefined) {
+  let colorScheme = normalizeColorScheme(theme?.colorScheme) ?? "light";
+  let pageBackground =
+    cssDeclarationValue(theme?.pageBackground) ??
+    cssDeclarationValue(theme?.variables?.["--live-md-bg"]) ??
+    "#fffdfa";
+  return `html {
+  color-scheme: ${colorScheme};
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  background: #f6f5f0;
-}
-
-.markdown-document {
-  width: min(760px, calc(100% - 40px));
-  margin: 0 auto;
-  padding: 56px 0 72px;
-  line-height: 1.68;
-  font-size: 16px;
-}
-
-.markdown-document > :first-child {
-  margin-top: 0;
-}
-
-.markdown-document > :last-child {
-  margin-bottom: 0;
-}
-
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  margin: 1.8em 0 0.65em;
-  line-height: 1.18;
-  color: #18201d;
-}
-
-h1 {
-  padding-bottom: 0.28em;
-  border-bottom: 1px solid #d9d7cc;
-  font-size: 2.1rem;
-}
-
-h2 {
-  font-size: 1.55rem;
-}
-
-h3 {
-  font-size: 1.25rem;
-}
-
-p,
-ul,
-ol,
-blockquote,
-pre,
-table,
-figure {
-  margin: 0 0 1.05em;
-}
-
-a {
-  color: #0f766e;
-  text-underline-offset: 0.18em;
-}
-
-blockquote {
-  border-left: 3px solid #9aa49f;
-  padding: 0.1em 0 0.1em 1em;
-  color: #59645f;
-}
-
-code {
-  border-radius: 4px;
-  background: #e8e5da;
-  padding: 0.14em 0.32em;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 0.92em;
-}
-
-pre {
-  overflow-x: auto;
-  border: 1px solid #d9d7cc;
-  border-radius: 8px;
-  background: #202523;
-  padding: 1em;
-}
-
-pre code {
-  display: block;
-  border-radius: 0;
-  background: transparent;
-  padding: 0;
-  color: #f6f5f0;
-}
-
-img {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  border-radius: 8px;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  overflow: hidden;
-}
-
-th,
-td {
-  border: 1px solid #d9d7cc;
-  padding: 0.55em 0.7em;
-  text-align: left;
-  vertical-align: top;
-}
-
-th {
-  background: #e8e5da;
-  font-weight: 650;
-}
-
-hr {
-  border: 0;
-  border-top: 1px solid #d9d7cc;
-  margin: 2em 0;
-}
-
-input[type="checkbox"] {
-  margin-right: 0.5em;
-}
-
-@media print {
-  :root,
-  body {
-    background: #fff;
-  }
-
-  .markdown-document {
-    width: auto;
-    padding: 0;
-  }
-
-  pre,
-  img,
-  table {
-    break-inside: avoid;
-  }
+  background: ${pageBackground};
 }`;
+}
+
+function markdownHtmlExportThemeCss(theme: MarkdownHtmlExportTheme | null | undefined) {
+  let declarations = Object.entries(theme?.variables ?? {})
+    .map(([property, value]) => [cssCustomPropertyName(property), cssDeclarationValue(value)])
+    .filter((entry): entry is [string, string] => Boolean(entry[0] && entry[1]))
+    .map(([property, value]) => `  ${property}: ${value};`);
+
+  if (!declarations.length) return "";
+  return `.${liveMdMarkdownDocumentClass} {
+${declarations.join("\n")}
+}`;
+}
+
+function cssCustomPropertyName(value: string) {
+  return /^--[a-zA-Z0-9_-]+$/.test(value) ? value : null;
+}
+
+function cssDeclarationValue(value: string | null | undefined) {
+  let trimmed = value?.trim();
+  if (!trimmed || /[;{}]/.test(trimmed)) return null;
+  return trimmed;
+}
+
+function normalizeColorScheme(value: string | null | undefined) {
+  let normalized = cssDeclarationValue(value);
+  if (
+    normalized == "dark" ||
+    normalized == "light" ||
+    normalized == "dark light" ||
+    normalized == "light dark"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function colorSchemeFromColor(value: string | null | undefined) {
+  let rgb = parseCssHexColor(value);
+  if (!rgb) return "light";
+  let relativeLuminance = (0.2126 * rgb.red + 0.7152 * rgb.green + 0.0722 * rgb.blue) / 255;
+  return relativeLuminance < 0.5 ? "dark" : "light";
+}
+
+function parseCssHexColor(value: string | null | undefined) {
+  let match = /^#([a-fA-F0-9]{3}|[a-fA-F0-9]{6})$/.exec(value?.trim() ?? "");
+  if (!match) return null;
+
+  let hex = match[1]!;
+  if (hex.length == 3) {
+    return {
+      red: Number.parseInt(hex[0]! + hex[0]!, 16),
+      green: Number.parseInt(hex[1]! + hex[1]!, 16),
+      blue: Number.parseInt(hex[2]! + hex[2]!, 16),
+    };
+  }
+  return {
+    red: Number.parseInt(hex.slice(0, 2), 16),
+    green: Number.parseInt(hex.slice(2, 4), 16),
+    blue: Number.parseInt(hex.slice(4, 6), 16),
+  };
 }

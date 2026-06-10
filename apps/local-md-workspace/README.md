@@ -19,7 +19,8 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
 - Insert pasted, dropped, or selected image files into sibling `assets/`
   directories and resolve Markdown image previews through blob URLs.
 - Export Markdown files to standalone HTML through LiveMD's Tree-sitter
-  Markdown renderer, embedding workspace image assets when available.
+  Markdown renderer, embedding workspace image assets when available and
+  snapshotting the current LiveMD theme variables for scoped document styling.
 - Maintain optional Loro-backed document state for a selected file so local
   edits can become a shared Grove file.
 - Create, rotate, revoke, and host shared-file links through the Grove relay.
@@ -44,8 +45,8 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
   Dropbox OAuth PKCE and OpenDAL-backed workspace backend.
 - `src/lib/workspace-backend.ts`: normalized workspace tree, path, image, and
   backend contracts.
-- `src/lib/export/markdown-html.ts`: standalone HTML export wrapper and
-  workspace image embedding.
+- `src/lib/export/markdown-html.ts`: standalone HTML export wrapper, LiveMD
+  theme snapshotting, and workspace image embedding.
 - `src/lib/collaboration/*`: local Loro document persistence, share identity,
   relay protocol/client/connection, share storage, and document sync helpers.
 - `src/components/ui/*`: local shadcn/radix UI primitives.

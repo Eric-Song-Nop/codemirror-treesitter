@@ -16,6 +16,49 @@ export type MarkdownHtmlRenderOptions = {
   resolveImageSource?: MarkdownHtmlImageSourceResolver | null;
 };
 
+export const liveMdMarkdownDocumentClass = "live-md-document";
+
+export const liveMdMarkdownDocumentCssVariables = [
+  "--live-md-bg",
+  "--live-md-text",
+  "--live-md-muted",
+  "--live-md-accent",
+  "--live-md-border",
+  "--live-md-code-bg",
+  "--live-md-code-text",
+  "--live-md-code-muted",
+  "--live-md-code-border",
+  "--live-md-heading-1",
+  "--live-md-heading-2",
+  "--live-md-heading-3",
+  "--live-md-heading-rest",
+  "--live-md-inline-code-bg",
+  "--live-md-inline-code-text",
+  "--live-md-inline-code-border",
+  "--live-md-link",
+  "--live-md-link-underline",
+  "--live-md-blockquote",
+  "--live-md-blockquote-border",
+  "--live-md-ordered-marker",
+  "--live-md-task-border",
+  "--live-md-task-bg",
+  "--live-md-task-check",
+  "--live-md-task-checked",
+  "--live-md-task-checked-strong",
+  "--live-md-rule",
+  "--live-md-table-bg",
+  "--live-md-table-border",
+  "--live-md-table-header-bg",
+  "--live-md-table-header-text",
+  "--live-md-content-width",
+  "--live-md-content-padding-block-start",
+  "--live-md-content-padding-inline",
+  "--live-md-content-padding-block-end",
+  "--live-md-font-body",
+  "--live-md-font-ui",
+  "--live-md-font-code",
+] as const;
+
 type MarkdownHtmlParsers = {
   block: MarkdownHtmlBlockParser;
   inline: MarkdownHtmlInlineParser;
@@ -56,6 +99,272 @@ export async function renderMarkdownToHtml(
     text,
   };
   return renderBlockChildren(context, tree.topNode);
+}
+
+export function liveMdMarkdownDocumentCss() {
+  return `.${liveMdMarkdownDocumentClass} {
+  box-sizing: border-box;
+  width: min(var(--live-md-content-width, 880px), 100%);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding-block-start: var(--live-md-content-padding-block-start, clamp(34px, 6vw, 72px));
+  padding-block-end: var(--live-md-content-padding-block-end, 120px);
+  padding-inline: var(--live-md-content-padding-inline, clamp(22px, 7vw, 78px));
+  background: var(--live-md-bg, #fffdfa);
+  color: var(--live-md-text, #202523);
+  font-family: var(--live-md-font-body, "Iowan Old Style", "Palatino Linotype", Georgia, "Noto Serif", serif);
+  font-size: 18px;
+  line-height: 1.72;
+  font-synthesis: weight style;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.${liveMdMarkdownDocumentClass},
+.${liveMdMarkdownDocumentClass} * {
+  box-sizing: border-box;
+}
+
+.${liveMdMarkdownDocumentClass} > :first-child {
+  margin-top: 0;
+}
+
+.${liveMdMarkdownDocumentClass} > :last-child {
+  margin-bottom: 0;
+}
+
+.${liveMdMarkdownDocumentClass} h1,
+.${liveMdMarkdownDocumentClass} h2,
+.${liveMdMarkdownDocumentClass} h3,
+.${liveMdMarkdownDocumentClass} h4,
+.${liveMdMarkdownDocumentClass} h5,
+.${liveMdMarkdownDocumentClass} h6 {
+  margin: 1.55em 0 0.58em;
+  font-family: var(--live-md-font-ui, "Avenir Next", "Gill Sans", ui-sans-serif, system-ui, sans-serif);
+  font-weight: 800;
+  line-height: 1.18;
+}
+
+.${liveMdMarkdownDocumentClass} h1 {
+  color: var(--live-md-heading-1, #13231f);
+  font-size: 2.25em;
+}
+
+.${liveMdMarkdownDocumentClass} h2 {
+  color: var(--live-md-heading-2, #183630);
+  font-size: 1.62em;
+}
+
+.${liveMdMarkdownDocumentClass} h3 {
+  color: var(--live-md-heading-3, #24433d);
+  font-size: 1.28em;
+}
+
+.${liveMdMarkdownDocumentClass} h4,
+.${liveMdMarkdownDocumentClass} h5,
+.${liveMdMarkdownDocumentClass} h6 {
+  color: var(--live-md-heading-rest, #355750);
+  font-size: 1.08em;
+}
+
+.${liveMdMarkdownDocumentClass} p,
+.${liveMdMarkdownDocumentClass} ul,
+.${liveMdMarkdownDocumentClass} ol,
+.${liveMdMarkdownDocumentClass} blockquote,
+.${liveMdMarkdownDocumentClass} pre,
+.${liveMdMarkdownDocumentClass} table,
+.${liveMdMarkdownDocumentClass} figure {
+  margin: 0 0 1.05em;
+}
+
+.${liveMdMarkdownDocumentClass} ul,
+.${liveMdMarkdownDocumentClass} ol {
+  padding-left: 1.45em;
+}
+
+.${liveMdMarkdownDocumentClass} li + li {
+  margin-top: 0.18em;
+}
+
+.${liveMdMarkdownDocumentClass} ol > li::marker {
+  color: var(--live-md-ordered-marker, #8b4a35);
+  font-family: var(--live-md-font-ui, "Avenir Next", "Gill Sans", ui-sans-serif, system-ui, sans-serif);
+  font-weight: 800;
+}
+
+.${liveMdMarkdownDocumentClass} ul > li::marker {
+  color: var(--live-md-accent, #0f766e);
+}
+
+.${liveMdMarkdownDocumentClass} a {
+  color: var(--live-md-link, #0f6a85);
+  text-decoration: underline;
+  text-decoration-color: var(--live-md-link-underline, rgba(15, 106, 133, 0.35));
+  text-underline-offset: 0.18em;
+}
+
+.${liveMdMarkdownDocumentClass} strong {
+  font-weight: 800;
+}
+
+.${liveMdMarkdownDocumentClass} del {
+  color: var(--live-md-muted, #66706c);
+}
+
+.${liveMdMarkdownDocumentClass} blockquote {
+  position: relative;
+  color: var(--live-md-blockquote, #4d5f5a);
+  font-style: italic;
+  padding-left: 18px;
+}
+
+.${liveMdMarkdownDocumentClass} blockquote::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.22em;
+  bottom: 0.22em;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--live-md-blockquote-border, #86aaa0);
+}
+
+.${liveMdMarkdownDocumentClass} code {
+  border: 1px solid var(--live-md-inline-code-border, #d4c9bc);
+  border-radius: 5px;
+  background: var(--live-md-inline-code-bg, #f1ece4);
+  color: var(--live-md-inline-code-text, #8d3525);
+  font-family: var(--live-md-font-code, "SFMono-Regular", "Cascadia Code", ui-monospace, monospace);
+  font-size: 0.86em;
+  padding: 0.05em 0.28em;
+}
+
+.${liveMdMarkdownDocumentClass} pre {
+  overflow-x: auto;
+  border: 1px solid var(--live-md-code-border, #ddd6ca);
+  border-radius: 8px;
+  background: var(--live-md-code-bg, #f4f1ea);
+  color: var(--live-md-code-text, #2f3437);
+  padding: 1em 1.1em;
+}
+
+.${liveMdMarkdownDocumentClass} pre code {
+  display: block;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 0.88em;
+  line-height: 1.55;
+}
+
+.${liveMdMarkdownDocumentClass} img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--live-md-border, #d5dcd8);
+  border-radius: 8px;
+}
+
+.${liveMdMarkdownDocumentClass} table {
+  width: 100%;
+  min-width: min(520px, 100%);
+  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid var(--live-md-table-border, #d9e0dc);
+  border-radius: 8px;
+  background: var(--live-md-table-bg, #fbfcfa);
+  font-family: var(--live-md-font-ui, "Avenir Next", "Gill Sans", ui-sans-serif, system-ui, sans-serif);
+  font-size: 0.86em;
+  line-height: 1.45;
+}
+
+.${liveMdMarkdownDocumentClass} th,
+.${liveMdMarkdownDocumentClass} td {
+  border-right: 1px solid var(--live-md-table-border, #d9e0dc);
+  border-bottom: 1px solid var(--live-md-table-border, #d9e0dc);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.${liveMdMarkdownDocumentClass} th:last-child,
+.${liveMdMarkdownDocumentClass} td:last-child {
+  border-right: 0;
+}
+
+.${liveMdMarkdownDocumentClass} tr:last-child td {
+  border-bottom: 0;
+}
+
+.${liveMdMarkdownDocumentClass} th {
+  background: var(--live-md-table-header-bg, #edf3ef);
+  color: var(--live-md-table-header-text, #213d37);
+  font-weight: 800;
+}
+
+.${liveMdMarkdownDocumentClass} td {
+  background: color-mix(in srgb, var(--live-md-bg, #fffdfa) 90%, transparent);
+}
+
+.${liveMdMarkdownDocumentClass} hr {
+  border: 0;
+  border-top: 1px solid var(--live-md-rule, #ccd6d1);
+  margin: 2em 0;
+}
+
+.${liveMdMarkdownDocumentClass} input[type="checkbox"] {
+  appearance: none;
+  display: inline-block;
+  width: 1.05em;
+  height: 1.05em;
+  margin: 0 0.42em 0 0;
+  border: 1.6px solid var(--live-md-task-border, #87958f);
+  border-radius: 4px;
+  background: var(--live-md-task-bg, #fffefa);
+  opacity: 1;
+  vertical-align: -0.12em;
+}
+
+.${liveMdMarkdownDocumentClass} input[type="checkbox"]:checked {
+  border-color: var(--live-md-accent, #0f766e);
+  background:
+    linear-gradient(135deg, transparent 45%, var(--live-md-task-check, #fff) 45% 55%, transparent 55%),
+    linear-gradient(45deg, transparent 37%, var(--live-md-task-check, #fff) 37% 48%, transparent 48%),
+    var(--live-md-accent, #0f766e);
+}
+
+.${liveMdMarkdownDocumentClass} .live-md-task-item.is-checked {
+  color: var(--live-md-task-checked, #7c8581);
+}
+
+.${liveMdMarkdownDocumentClass} .live-md-task-item.is-checked strong,
+.${liveMdMarkdownDocumentClass} .live-md-task-item.is-checked em {
+  color: var(--live-md-task-checked-strong, #6f7874);
+}
+
+@media (max-width: 560px) {
+  .${liveMdMarkdownDocumentClass} {
+    font-size: 16px;
+  }
+}
+
+@media print {
+  .${liveMdMarkdownDocumentClass} {
+    width: auto;
+    min-height: 0;
+    padding: 0;
+  }
+
+  .${liveMdMarkdownDocumentClass} pre,
+  .${liveMdMarkdownDocumentClass} img,
+  .${liveMdMarkdownDocumentClass} table {
+    break-inside: avoid;
+  }
+}`;
 }
 
 function normalizeMarkdownLineEndings(markdown: string) {
@@ -202,12 +511,14 @@ async function renderListItem(context: MarkdownHtmlRenderContext, node: SyntaxNo
       !isListMarker(child) && !isTaskListMarker(child) && child.name != "block_continuation",
   );
   let taskMarker = node.namedChildren.find(isTaskListMarker);
-  let taskPrefix = taskMarker
-    ? renderTaskCheckbox(taskMarker.name == "task_list_marker_checked")
+  let taskChecked = taskMarker?.name == "task_list_marker_checked";
+  let itemClassAttribute = taskMarker
+    ? ` class="live-md-task-item${taskChecked ? " is-checked" : ""}"`
     : "";
+  let taskPrefix = taskMarker ? renderTaskCheckbox(taskChecked) : "";
 
   if (children.length == 1 && children[0]!.name == "paragraph") {
-    return `<li>${taskPrefix}${await renderParagraphContents(context, children[0]!)}</li>`;
+    return `<li${itemClassAttribute}>${taskPrefix}${await renderParagraphContents(context, children[0]!)}</li>`;
   }
 
   let parts: string[] = [];
@@ -226,7 +537,7 @@ async function renderListItem(context: MarkdownHtmlRenderContext, node: SyntaxNo
     }
   }
   if (taskPrefix && !usedTaskPrefix) parts.unshift(taskPrefix.trimEnd());
-  return `<li>\n${parts.filter(Boolean).join("\n")}\n</li>`;
+  return `<li${itemClassAttribute}>\n${parts.filter(Boolean).join("\n")}\n</li>`;
 }
 
 function renderTaskCheckbox(checked: boolean) {

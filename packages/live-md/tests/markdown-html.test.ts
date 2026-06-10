@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { renderMarkdownToHtml } from "../src/index.js";
+import {
+  liveMdMarkdownDocumentClass,
+  liveMdMarkdownDocumentCss,
+  liveMdMarkdownDocumentCssVariables,
+  renderMarkdownToHtml,
+} from "../src/index.js";
 
 describe("Tree-sitter Markdown HTML rendering", () => {
   it("renders common Markdown blocks and inline marks", async () => {
@@ -19,7 +24,9 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     );
 
     expect(html).toContain("<h1>Today</h1>");
+    expect(html).toContain('<li class="live-md-task-item is-checked">');
     expect(html).toContain('<input checked="" disabled="" type="checkbox"> Ship export');
+    expect(html).toContain('<li class="live-md-task-item">');
     expect(html).toContain('<input disabled="" type="checkbox"> Add PDF later');
     expect(html).toContain("<table>");
     expect(html).toContain('<th style="text-align: left">Format</th>');
@@ -98,5 +105,19 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     expect(html).toContain("<h1>Windows</h1>");
     expect(html).toContain('<img src="assets/chart.png" alt="Chart">');
     expect(html).not.toContain("\r");
+  });
+
+  it("exports scoped document CSS driven by LiveMD variables", () => {
+    let css = liveMdMarkdownDocumentCss();
+
+    expect(liveMdMarkdownDocumentClass).toBe("live-md-document");
+    expect(liveMdMarkdownDocumentCssVariables).toContain("--live-md-bg");
+    expect(liveMdMarkdownDocumentCssVariables).toContain("--live-md-font-body");
+    expect(css).toContain(".live-md-document h1");
+    expect(css).toContain(".live-md-document .live-md-task-item.is-checked");
+    expect(css).toContain("var(--live-md-bg, #fffdfa)");
+    expect(css).not.toMatch(/(^|\n)h1\s*\{/);
+    expect(css).not.toContain(":has(");
+    expect(css).not.toContain(":root");
   });
 });

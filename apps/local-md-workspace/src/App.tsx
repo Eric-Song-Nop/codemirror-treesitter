@@ -138,7 +138,11 @@ import {
 } from "@/lib/workspace-backend";
 import { workspaceErrorMessage } from "@/lib/workspace-errors";
 import { cn } from "@/lib/utils";
-import { createStandaloneMarkdownHtml, resolveMarkdownImagePath } from "@/lib/export/markdown-html";
+import {
+  createStandaloneMarkdownHtml,
+  resolveMarkdownImagePath,
+  snapshotMarkdownHtmlExportTheme,
+} from "@/lib/export/markdown-html";
 import {
   loadStoredDropboxWorkspaceConfig,
   loadStoredWorkspaceKind,
@@ -1461,6 +1465,7 @@ function LocalWorkspaceApp() {
         resolveAsset(path) {
           return imageAssetsRef.current.get(path)?.file ?? null;
         },
+        theme: snapshotMarkdownHtmlExportTheme(editorElementRef.current),
         title: htmlExportTitle(file.name),
       });
 

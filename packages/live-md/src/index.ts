@@ -13,6 +13,9 @@ export {
 } from "./core/images.js";
 export { liveMdCodeFenceHighlighting } from "./core/languages.js";
 export {
+  liveMdMarkdownDocumentClass,
+  liveMdMarkdownDocumentCss,
+  liveMdMarkdownDocumentCssVariables,
   renderMarkdownToHtml,
   type MarkdownHtmlImage,
   type MarkdownHtmlImageSourceResolver,

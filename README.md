@@ -102,7 +102,8 @@ await editor.ready;
 - LiveMD, a Markdown editor runtime built from the local Tree-sitter packages,
   exposed through `createLiveMdEditor()`, `liveMarkdown()`,
   `liveMdCodeFenceHighlighting()`, `renderMarkdownToHtml()`,
-  `defineLiveMdEditor()`, and `<live-md-editor>`.
+  `liveMdMarkdownDocumentCss()`, `defineLiveMdEditor()`, and
+  `<live-md-editor>`.
 - Optional LiveMD collaboration bindings for Loro documents, presence, custom
   text containers, and collaborative undo/redo.
 - Validation tooling and apps that check public export parity, package
@@ -177,7 +178,7 @@ this repository replace the language-aware layers above those primitives.
 | `packages/theme-gruvbox`        | `@codemirror-treesitter/theme-gruvbox`        | Gruvbox dark/light editor themes, highlight styles, combined extensions, and palettes.                                          |
 | `packages/merge`                | `@codemirror-treesitter/merge`                | Diff, split merge view, unified merge view, chunks, and accept/reject commands.                                                 |
 | `packages/lsp-client`           | `@codemirror-treesitter/lsp-client`           | LSP client, workspace mapping, diagnostics, completions, hover, formatting, rename, definition, references, and signature help. |
-| `packages/live-md`              | `@codemirror-treesitter/live-md`              | Live Markdown editor runtime, web component, registration entry, fixtures, and CSS export.                                      |
+| `packages/live-md`              | `@codemirror-treesitter/live-md`              | Live Markdown editor runtime, web component, registration entry, fixtures, Markdown HTML renderer, and CSS exports.             |
 | `packages/live-md-loro`         | `@codemirror-treesitter/live-md-loro`         | Optional Loro collaboration bindings for LiveMD documents, presence, custom text containers, and collaborative undo/redo.       |
 | `packages/opendal-wasm-browser` | `@codemirror-treesitter/opendal-wasm-browser` | Experimental browser WASM wrapper for OpenDAL-backed cloud workspace storage.                                                   |
 
@@ -193,9 +194,9 @@ entry points, dependency boundaries, source layout, and validation notes.
   Markdown workspace that opens a browser-granted local folder, edits `.md`
   files with LiveMD, supports Dropbox storage through OpenDAL WASM and OAuth
   PKCE, supports image insert/paste/drop through sibling `assets/` directories,
-  supports file/folder create, rename, delete, tree browsing, and autosave, and
-  can export standalone HTML, and can host or join Grove shared-file sessions
-  through `apps/grove-relay`.
+  supports file/folder create, rename, delete, tree browsing, and autosave, can
+  export standalone HTML with scoped LiveMD document styling, and can host or
+  join Grove shared-file sessions through `apps/grove-relay`.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, share create/session/rotate/revoke APIs, WebSocket Loro sync,
   bounded relay queues, share expiration cleanup, and Wrangler deploy/types

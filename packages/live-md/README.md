@@ -3,7 +3,7 @@
 LiveMD is the product-facing Markdown editor runtime built from the local
 CodeMirror Tree-sitter packages. It exposes a programmatic API, a
 `<live-md-editor>` web component, a side-effect registration entry, fixtures,
-an HTML renderer, and a CSS export.
+an HTML renderer, scoped document CSS helpers, and a CSS export.
 
 ## Stack and Boundaries
 
@@ -25,6 +25,9 @@ an HTML renderer, and a CSS export.
   `@codemirror-treesitter/language-data`.
 - Render Markdown documents to sanitized HTML through
   `renderMarkdownToHtml(...)` using the same Tree-sitter Markdown grammar.
+- Provide scoped document CSS through `liveMdMarkdownDocumentCss()` so host apps
+  can style exported HTML with the same `--live-md-*` theme tokens as the
+  editor without importing app-level styles.
 - Render live Markdown decorations for headings, lists, task checkboxes,
   blockquotes, inline emphasis/strong/strike/code/link syntax, tables, images,
   thematic breaks, LaTeX, Mermaid diagrams, and code fences.
@@ -41,6 +44,9 @@ import {
   createLiveMdEditor,
   defineLiveMdEditor,
   liveMdCodeFenceHighlighting,
+  liveMdMarkdownDocumentClass,
+  liveMdMarkdownDocumentCss,
+  liveMdMarkdownDocumentCssVariables,
   liveMdImageSource,
   liveMarkdown,
   renderMarkdownToHtml,
@@ -105,6 +111,12 @@ const html = await renderMarkdownToHtml(markdown, {
 });
 ```
 
+`liveMdMarkdownDocumentCss()` returns CSS scoped to the exported document root
+class from `liveMdMarkdownDocumentClass`. The stylesheet is driven by the
+custom properties listed in `liveMdMarkdownDocumentCssVariables`, which lets an
+app snapshot its current LiveMD theme variables and inline them into standalone
+HTML exports without leaking workspace, reset, or component-library CSS.
+
 ## Web Component
 
 ```html
@@ -142,8 +154,8 @@ The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
   pipeline, dirty-range patching, feature registration, image source
   resolution, link interactions, search, widget rendering, and language
   loading.
-- `src/core/markdown-html.ts`: Tree-sitter Markdown-to-HTML renderer for hosts
-  that need sanitized document export.
+- `src/core/markdown-html.ts`: Tree-sitter Markdown-to-HTML renderer and scoped
+  document CSS helpers for hosts that need sanitized document export.
 - `src/element/*`: custom element implementation and style installation.
 - `src/fixtures/*`: reusable sample content for examples and benchmarks.
 - `vite-plugin.ts`: raw CSS helper used by apps that need to import LiveMD CSS
@@ -161,8 +173,8 @@ and Cloudflare-specific code.
 ## Current Implementation Notes
 
 - Public exports are limited to the editor controller, live Markdown extension,
-  image source helpers, code-fence highlighting, Markdown HTML rendering, and
-  custom element definition.
+  image source helpers, code-fence highlighting, Markdown HTML rendering,
+  scoped document CSS helpers, and custom element definition.
 - `./register` only defines the custom element and re-exports the element API.
 - `./fixtures` currently exposes benchmark/example Markdown content such as
   `createInitialMarkdown(...)`.
