@@ -92,19 +92,13 @@ import {
   getCollabDocumentValue,
   ingestExternalMarkdownEdit,
   openMarkdownCollabDocument,
-  reloadCollabDocumentFromSource,
   saveCollabDocumentSnapshot,
   savePendingCollabDocumentUpdates,
   type CollabDocumentState,
   type CollabSourceImportResult,
 } from "@/lib/collaboration/markdown-document";
 import { hashMarkdownText } from "@/lib/markdown-hash";
-import {
-  createWorkspaceFileConflict,
-  detectWorkspaceFileConflict,
-  isWorkspaceWriteConflictError,
-  type WorkspaceFileConflict,
-} from "@/lib/workspace-file-conflict";
+import { isWorkspaceWriteConflictError } from "@/lib/workspace-file-conflict";
 import { createCollabDocumentBroadcastSync } from "@/lib/collaboration/document-sync";
 import {
   createOwnerShare,
@@ -225,10 +219,6 @@ function LocalWorkspaceApp() {
   let [shareCopied, setShareCopied] = useState(false);
   let [createdShare, setCreatedShare] = useState<CreatedOwnerShare | null>(null);
   let [activeShareRecord, setActiveShareRecord] = useState<ActiveOwnerShareRecord | null>(null);
-  let [workspaceFileConflict, setWorkspaceFileConflict] = useState<WorkspaceFileConflict | null>(
-    null,
-  );
-  let [workspaceFileConflictBusy, setWorkspaceFileConflictBusy] = useState(false);
   let [imageAssetVersion, setImageAssetVersion] = useState(0);
 
   let editorElementRef = useRef<LiveMdEditorElement | null>(null);
@@ -240,10 +230,8 @@ function LocalWorkspaceApp() {
   let shareHostConnectionRef = useRef<ShareRelayConnection | null>(null);
   let shareHostRecordRef = useRef<OwnerShareRecord | null>(null);
   let shareHostUpdateCleanupRef = useRef<() => void>(() => {});
-  let workspaceFileConflictRef = useRef<WorkspaceFileConflict | null>(null);
   let editorValueRef = useRef("");
   let cleanValueRef = useRef("");
-  let cleanHashRef = useRef(hashMarkdownText(""));
   let dirtyRef = useRef(false);
   let editVersionRef = useRef(0);
   let saveStateRef = useRef<SaveState>("idle");
@@ -269,10 +257,6 @@ function LocalWorkspaceApp() {
   useEffect(() => {
     collabDocumentRef.current = collabDocument;
   }, [collabDocument]);
-
-  useEffect(() => {
-    workspaceFileConflictRef.current = workspaceFileConflict;
-  }, [workspaceFileConflict]);
 
   useEffect(
     () => () => {
@@ -307,21 +291,6 @@ function LocalWorkspaceApp() {
     saveStateRef.current = nextState;
     setSaveState(nextState);
   }, []);
-
-  let clearWorkspaceFileConflict = useCallback(() => {
-    workspaceFileConflictRef.current = null;
-    setWorkspaceFileConflict(null);
-  }, []);
-
-  let showWorkspaceFileConflict = useCallback(
-    (conflict: WorkspaceFileConflict) => {
-      workspaceFileConflictRef.current = conflict;
-      setWorkspaceFileConflict(conflict);
-      setSaveStateSynced("error");
-      setErrorMessage(workspaceFileConflictMessage(conflict.path));
-    },
-    [setSaveStateSynced],
-  );
 
   let replaceImageAssets = useCallback((nextAssets: WorkspaceImageAsset[]) => {
     revokeImageAssetUrls(imageAssetsRef.current);
@@ -403,7 +372,6 @@ function LocalWorkspaceApp() {
     let document = selectedDocument?.path == file.path ? selectedDocument : null;
     let value = document ? getCollabDocumentValue(document) : editorValueRef.current;
     let editVersion = editVersionRef.current;
-    let baseHash = document?.metadata.materializedHash ?? cleanHashRef.current;
     if (!document && !dirtyRef.current && value == cleanValueRef.current) return true;
 
     if (saveTimerRef.current != null) {
@@ -441,25 +409,6 @@ function LocalWorkspaceApp() {
           setSaveStateSynced("saved");
           return true;
         }
-      } else {
-        let activeConflict = workspaceFileConflictRef.current;
-        if (activeConflict?.path == file.path) {
-          let nextConflict = {
-            ...activeConflict,
-            localHash: hashMarkdownText(value),
-          };
-          workspaceFileConflictRef.current = nextConflict;
-          setWorkspaceFileConflict(nextConflict);
-          setSaveStateSynced("error");
-          setErrorMessage(workspaceFileConflictMessage(file.path));
-          return false;
-        }
-
-        let conflict = await detectWorkspaceFileConflict(backend, file.path, baseHash, value);
-        if (conflict) {
-          showWorkspaceFileConflict(conflict);
-          return false;
-        }
       }
 
       if (document && document.path == file.path) {
@@ -478,8 +427,6 @@ function LocalWorkspaceApp() {
       }
       if (operation == saveOperationRef.current && selectedFileRef.current?.path == file.path) {
         cleanValueRef.current = value;
-        cleanHashRef.current = hashMarkdownText(value);
-        if (workspaceFileConflictRef.current?.path == file.path) clearWorkspaceFileConflict();
         if (editVersion == editVersionRef.current) {
           dirtyRef.current = false;
           setSaveStateSynced("saved");
@@ -515,8 +462,6 @@ function LocalWorkspaceApp() {
               selectedFileRef.current?.path == file.path
             ) {
               cleanValueRef.current = value;
-              cleanHashRef.current = hashMarkdownText(value);
-              clearWorkspaceFileConflict();
               if (editVersion == editVersionRef.current) {
                 dirtyRef.current = false;
                 setSaveStateSynced("saved");
@@ -531,26 +476,12 @@ function LocalWorkspaceApp() {
               selectedFileRef.current?.path == file.path
             ) {
               cleanValueRef.current = value;
-              cleanHashRef.current = hashMarkdownText(value);
-              clearWorkspaceFileConflict();
               if (editVersion == editVersionRef.current) {
                 dirtyRef.current = false;
                 setSaveStateSynced("saved");
               }
             }
             return true;
-          }
-
-          let conflict = createWorkspaceFileConflict(
-            "write-conflict",
-            file.path,
-            baseHash,
-            value,
-            externalValue,
-          );
-          if (conflict) {
-            showWorkspaceFileConflict(conflict);
-            return false;
           }
         } catch {
           // Fall through to the original storage error below.
@@ -562,139 +493,7 @@ function LocalWorkspaceApp() {
       setErrorMessage(errorToMessage(error));
       return false;
     }
-  }, [
-    applyCollabDocumentValue,
-    clearWorkspaceFileConflict,
-    sendHostDocumentUpdate,
-    sendHostSaveAck,
-    setSaveStateSynced,
-    showWorkspaceFileConflict,
-  ]);
-
-  let overwriteWorkspaceFileConflict = useCallback(async () => {
-    let backend = selectedFileBackendRef.current;
-    let file = selectedFileRef.current;
-    let conflict = workspaceFileConflictRef.current;
-    if (!backend || !file || !conflict || conflict.path != file.path) return;
-    let document = collabDocumentRef.current?.path == file.path ? collabDocumentRef.current : null;
-
-    if (saveTimerRef.current != null) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-
-    let value = document ? getCollabDocumentValue(document) : editorValueRef.current;
-    let operation = ++saveOperationRef.current;
-    setWorkspaceFileConflictBusy(true);
-    setSaveStateSynced("saving");
-    setErrorMessage("");
-
-    try {
-      if (document) {
-        let materialization = captureCollabDocumentMaterialization(document);
-        value = materialization.value;
-        await saveCollabDocumentSnapshot(backend, document);
-        await backend.writeFile(file.path, materialization.value);
-        await acknowledgeCollabDocumentSourceSaved(backend, document, materialization.value, {
-          frontiers: materialization.frontiers,
-          versionVector: materialization.versionVector,
-        });
-        sendHostSaveAck(file.path, materialization.value, materialization.version);
-      } else {
-        await backend.writeFile(file.path, value);
-      }
-      if (operation == saveOperationRef.current && selectedFileRef.current?.path == file.path) {
-        cleanValueRef.current = value;
-        cleanHashRef.current = hashMarkdownText(value);
-        dirtyRef.current = false;
-        clearWorkspaceFileConflict();
-        setSaveStateSynced("saved");
-      }
-    } catch (error) {
-      if (isWorkspaceWriteConflictError(error)) {
-        try {
-          let externalValue = await backend.readFile(file.path);
-          if (externalValue == value) {
-            if (document) {
-              let materialization = captureCollabDocumentMaterialization(document);
-              value = materialization.value;
-              await acknowledgeCollabDocumentSourceSaved(backend, document, materialization.value, {
-                frontiers: materialization.frontiers,
-                versionVector: materialization.versionVector,
-              });
-              sendHostSaveAck(file.path, materialization.value, materialization.version);
-            }
-            cleanValueRef.current = value;
-            cleanHashRef.current = hashMarkdownText(value);
-            dirtyRef.current = false;
-            clearWorkspaceFileConflict();
-            setSaveStateSynced("saved");
-            return;
-          }
-
-          let nextConflict = createWorkspaceFileConflict(
-            "write-conflict",
-            file.path,
-            cleanHashRef.current,
-            value,
-            externalValue,
-          );
-          if (nextConflict) {
-            showWorkspaceFileConflict(nextConflict);
-            return;
-          }
-        } catch {
-          // Fall through to the original storage error below.
-        }
-      }
-
-      setSaveStateSynced("error");
-      setErrorMessage(errorToMessage(error));
-    } finally {
-      setWorkspaceFileConflictBusy(false);
-    }
-  }, [clearWorkspaceFileConflict, sendHostSaveAck, setSaveStateSynced, showWorkspaceFileConflict]);
-
-  let reloadWorkspaceFileConflict = useCallback(async () => {
-    let backend = selectedFileBackendRef.current;
-    let file = selectedFileRef.current;
-    let conflict = workspaceFileConflictRef.current;
-    if (!backend || !file || !conflict || conflict.path != file.path) return;
-    let document = collabDocumentRef.current?.path == file.path ? collabDocumentRef.current : null;
-
-    if (saveTimerRef.current != null) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-
-    setWorkspaceFileConflictBusy(true);
-    setErrorMessage("");
-    try {
-      let value = await backend.readFile(file.path);
-      if (document) {
-        await reloadCollabDocumentFromSource(backend, document, value);
-        sendHostSaveAck(file.path, value, document.doc.oplogVersion());
-      }
-      saveOperationRef.current += 1;
-      editorValueRef.current = value;
-      cleanValueRef.current = value;
-      cleanHashRef.current = hashMarkdownText(value);
-      dirtyRef.current = false;
-      editVersionRef.current += 1;
-      clearWorkspaceFileConflict();
-      setEditorDocument((current) => ({
-        path: file.path,
-        value,
-        version: current.version + 1,
-      }));
-      setSaveStateSynced("saved");
-    } catch (error) {
-      setSaveStateSynced("error");
-      setErrorMessage(errorToMessage(error));
-    } finally {
-      setWorkspaceFileConflictBusy(false);
-    }
-  }, [clearWorkspaceFileConflict, sendHostSaveAck, setSaveStateSynced]);
+  }, [applyCollabDocumentValue, sendHostDocumentUpdate, sendHostSaveAck, setSaveStateSynced]);
 
   let scheduleAutoSave = useCallback(() => {
     if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
@@ -786,19 +585,6 @@ function LocalWorkspaceApp() {
       editVersionRef.current += 1;
       dirtyRef.current = true;
 
-      let conflict = workspaceFileConflictRef.current;
-      if (conflict && conflict.path == selectedFileRef.current?.path) {
-        let nextConflict = {
-          ...conflict,
-          localHash: hashMarkdownText(value),
-        };
-        workspaceFileConflictRef.current = nextConflict;
-        setWorkspaceFileConflict(nextConflict);
-        setSaveStateSynced("error");
-        setErrorMessage(workspaceFileConflictMessage(conflict.path));
-        return;
-      }
-
       if (saveStateRef.current != "pending") {
         setSaveStateSynced("pending");
       }
@@ -818,18 +604,13 @@ function LocalWorkspaceApp() {
 
       setBusy(true);
       setErrorMessage("");
-      clearWorkspaceFileConflict();
       setRetryLoadPath(null);
       try {
         let restoredShareRecord = await findOwnerShareRecordForPath(backend, file.path).catch(
           () => null,
         );
-        let document = restoredShareRecord
-          ? await openMarkdownCollabDocument(backend, file.path, {
-              reconcileExternalEdits: false,
-            })
-          : null;
-        let value = document ? document.value : await backend.readFile(file.path);
+        let document = await openMarkdownCollabDocument(backend, file.path);
+        let value = document.value;
         if (shareHostRecordRef.current?.path != file.path) stopOwnerShareHost();
         collabSyncCleanupRef.current();
         collabDocumentRef.current?.dispose();
@@ -864,7 +645,6 @@ function LocalWorkspaceApp() {
         let needsSourceWrite = document ? collabDocumentNeedsSourceWrite(document) : false;
         editorValueRef.current = value;
         cleanValueRef.current = value;
-        cleanHashRef.current = hashMarkdownText(value);
         dirtyRef.current = needsSourceWrite;
         editVersionRef.current = 0;
         setSelectedFile(file);
@@ -891,7 +671,6 @@ function LocalWorkspaceApp() {
       }
     },
     [
-      clearWorkspaceFileConflict,
       saveCurrentFile,
       scheduleAutoSave,
       setSaveStateSynced,
@@ -933,10 +712,8 @@ function LocalWorkspaceApp() {
         collabDocumentRef.current = null;
         editorValueRef.current = "";
         cleanValueRef.current = "";
-        cleanHashRef.current = hashMarkdownText("");
         dirtyRef.current = false;
         editVersionRef.current = 0;
-        clearWorkspaceFileConflict();
         setActiveShareRecord(null);
         setCreatedShare(null);
         setSelectedFile(null);
@@ -950,13 +727,7 @@ function LocalWorkspaceApp() {
         setSaveStateSynced("idle");
       }
     },
-    [
-      clearWorkspaceFileConflict,
-      loadFile,
-      replaceImageAssets,
-      setSaveStateSynced,
-      stopOwnerShareHost,
-    ],
+    [loadFile, replaceImageAssets, setSaveStateSynced, stopOwnerShareHost],
   );
 
   let rememberWorkspaceHandle = useCallback((handle: AccessDirectoryHandle) => {
@@ -1521,7 +1292,6 @@ function LocalWorkspaceApp() {
       let needsSourceWrite = collabDocumentNeedsSourceWrite(document);
       editorValueRef.current = value;
       cleanValueRef.current = value;
-      cleanHashRef.current = hashMarkdownText(value);
       dirtyRef.current = needsSourceWrite;
       editVersionRef.current += 1;
       setCollabDocument(document);
@@ -1744,9 +1514,6 @@ function LocalWorkspaceApp() {
     activeShareRecord.revokedAt == null
       ? activeShareRecord
       : null;
-  let workspaceFileConflictUsesSharedDocument = Boolean(
-    workspaceFileConflict && collabDocument?.path == workspaceFileConflict.path,
-  );
   let restoreAvailable = Boolean(storedWorkspaceHandle);
   let dropboxRestoreAvailable = Boolean(storedDropboxConfig);
 
@@ -1954,17 +1721,6 @@ function LocalWorkspaceApp() {
           {errorMessage && (
             <div className="flex items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
               <div className="min-w-0 flex-1">{errorMessage}</div>
-              {workspaceFileConflict && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={workspaceFileConflictBusy}
-                  onClick={() => setWorkspaceFileConflict(workspaceFileConflictRef.current)}
-                >
-                  <TriangleAlertIcon data-icon="inline-start" />
-                  Resolve
-                </Button>
-              )}
               {retryLoadPath && (
                 <Button
                   size="sm"
@@ -2040,27 +1796,11 @@ function LocalWorkspaceApp() {
           onStopSharing={stopSharingFile}
         />
 
-        <WorkspaceFileConflictDialog
-          busy={workspaceFileConflictBusy}
-          conflict={workspaceFileConflict}
-          pendingLabel={workspaceFileConflictUsesSharedDocument ? "Shared" : "Editor"}
-          usePendingLabel={
-            workspaceFileConflictUsesSharedDocument ? "Use shared edit" : "Use my edit"
-          }
-          onReloadFile={reloadWorkspaceFileConflict}
-          onUsePendingValue={overwriteWorkspaceFileConflict}
-        />
-
         <WorkspaceCommandPalette
           browserSupported={browserSupported}
           busy={busy}
           canInsertImage={Boolean(workspaceBackend?.createImageAsset && selectedFile)}
-          disabled={
-            fileDialogMode != null ||
-            shareDialogOpen ||
-            deleteTarget != null ||
-            workspaceFileConflict != null
-          }
+          disabled={fileDialogMode != null || shareDialogOpen || deleteTarget != null}
           dropboxConnecting={dropboxConnecting}
           files={files}
           selectedPath={selectedPath}
@@ -2315,70 +2055,6 @@ function FileNameDialog({
         </form>
       </DialogContent>
     </Dialog>
-  );
-}
-
-type WorkspaceFileConflictDialogProps = {
-  busy: boolean;
-  conflict: WorkspaceFileConflict | null;
-  pendingLabel: string;
-  usePendingLabel: string;
-  onReloadFile: () => void | Promise<void>;
-  onUsePendingValue: () => void | Promise<void>;
-};
-
-function WorkspaceFileConflictDialog({
-  busy,
-  conflict,
-  pendingLabel,
-  usePendingLabel,
-  onReloadFile,
-  onUsePendingValue,
-}: WorkspaceFileConflictDialogProps) {
-  return (
-    <AlertDialog open={Boolean(conflict)}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogMedia>
-            <TriangleAlertIcon />
-          </AlertDialogMedia>
-          <AlertDialogTitle>File changed outside LiveMD</AlertDialogTitle>
-          <AlertDialogDescription>
-            The selected Markdown file changed after it was opened. Reload the file or overwrite it
-            with the pending edits.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        {conflict && (
-          <div className="flex flex-col gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
-            <div className="min-w-0">
-              <div className="text-xs text-muted-foreground">File</div>
-              <div className="truncate font-medium">{conflict.path}</div>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-              <div className="truncate">Current {conflict.externalHash}</div>
-              <div className="truncate">
-                {pendingLabel} {conflict.localHash}
-              </div>
-            </div>
-          </div>
-        )}
-        <AlertDialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={busy}
-            onClick={() => void onReloadFile()}
-          >
-            <RefreshCwIcon data-icon="inline-start" />
-            Reload file
-          </Button>
-          <Button type="button" disabled={busy} onClick={() => void onUsePendingValue()}>
-            <SaveIcon data-icon="inline-start" />
-            {usePendingLabel}
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }
 
@@ -2642,10 +2318,6 @@ function imageAltText(fileName: string) {
     .replace(/\.[^.]+$/, "")
     .replace(/[-_]+/g, " ")
     .trim();
-}
-
-function workspaceFileConflictMessage(path: string) {
-  return `${path} changed outside LiveMD. Reload the file or overwrite it with pending edits.`;
 }
 
 function blockInsertText(

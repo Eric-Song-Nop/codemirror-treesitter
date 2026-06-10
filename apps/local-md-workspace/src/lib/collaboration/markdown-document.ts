@@ -276,19 +276,6 @@ export async function ingestExternalMarkdownEdit(
   };
 }
 
-export async function reloadCollabDocumentFromSource(
-  backend: WorkspaceBackend,
-  state: CollabDocumentState,
-  sourceValue?: string,
-): Promise<{ sourceValue: string }> {
-  let value = sourceValue ?? (await backend.readFile(state.path));
-
-  replaceMarkdownText(state.doc, value);
-  await saveCollabDocumentSnapshot(backend, state);
-  await acknowledgeCollabDocumentSourceSaved(backend, state, value);
-  return { sourceValue: value };
-}
-
 async function reconcileExternalMarkdownEdit(
   backend: WorkspaceBackend,
   metadata: BrowserCollabDocumentMetadata,
