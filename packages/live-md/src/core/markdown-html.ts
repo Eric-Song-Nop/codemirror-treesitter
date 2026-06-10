@@ -1,9 +1,5 @@
 import { Text } from "@codemirror/state";
-import {
-  TreeSitterLanguage,
-  TreeSitterParser,
-  type SyntaxNode,
-} from "@codemirror-treesitter/language";
+import type { SyntaxNode, TreeSitterParser } from "@codemirror-treesitter/language";
 import { languages } from "@codemirror-treesitter/language-data";
 
 export type MarkdownHtmlImage = {
@@ -21,12 +17,18 @@ export type MarkdownHtmlRenderOptions = {
 };
 
 type MarkdownHtmlParsers = {
-  block: TreeSitterParser;
-  inline: TreeSitterParser;
+  block: MarkdownHtmlBlockParser;
+  inline: MarkdownHtmlInlineParser;
 };
 
+type MarkdownHtmlBlockParser = Pick<TreeSitterParser, "parse"> & {
+  nestedParsers: readonly { parser: unknown }[];
+};
+
+type MarkdownHtmlInlineParser = Pick<TreeSitterParser, "parse">;
+
 type MarkdownHtmlRenderContext = {
-  inlineParser: TreeSitterParser;
+  inlineParser: MarkdownHtmlInlineParser;
   options: MarkdownHtmlRenderOptions;
   text: Text;
 };
@@ -70,19 +72,33 @@ async function loadMarkdownHtmlParsersOnce(): Promise<MarkdownHtmlParsers> {
   if (!description) throw new Error("Markdown language support is unavailable");
 
   let support = await description.load();
-  if (!(support.language instanceof TreeSitterLanguage)) {
+  let block = (support.language as { parser?: unknown }).parser;
+  if (!isMarkdownHtmlBlockParser(block)) {
     throw new Error("Markdown language support is not tree-sitter backed");
   }
 
-  let inline = support.language.parser.nestedParsers
-    .map((source) => source.parser)
-    .find((parser): parser is TreeSitterParser => parser instanceof TreeSitterParser);
+  let inline = block.nestedParsers.map((source) => source.parser).find(isMarkdownHtmlInlineParser);
   if (!inline) throw new Error("Markdown inline parser is unavailable");
 
   return {
-    block: support.language.parser,
+    block,
     inline,
   };
+}
+
+function isMarkdownHtmlBlockParser(value: unknown): value is MarkdownHtmlBlockParser {
+  return (
+    isMarkdownHtmlInlineParser(value) &&
+    Array.isArray((value as { nestedParsers?: unknown }).nestedParsers)
+  );
+}
+
+function isMarkdownHtmlInlineParser(value: unknown): value is MarkdownHtmlInlineParser {
+  return (
+    typeof value == "object" &&
+    value != null &&
+    typeof (value as { parse?: unknown }).parse == "function"
+  );
 }
 
 async function renderBlockChildren(context: MarkdownHtmlRenderContext, node: SyntaxNode) {
