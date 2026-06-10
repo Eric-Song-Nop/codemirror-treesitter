@@ -11,6 +11,7 @@ import {
   CloudIcon,
   Clock3Icon,
   CopyIcon,
+  DownloadIcon,
   FileTextIcon,
   FolderOpenIcon,
   ImagePlusIcon,
@@ -137,6 +138,7 @@ import {
 } from "@/lib/workspace-backend";
 import { workspaceErrorMessage } from "@/lib/workspace-errors";
 import { cn } from "@/lib/utils";
+import { createStandaloneMarkdownHtml, resolveMarkdownImagePath } from "@/lib/export/markdown-html";
 import {
   loadStoredDropboxWorkspaceConfig,
   loadStoredWorkspaceKind,
@@ -1441,9 +1443,41 @@ function LocalWorkspaceApp() {
     }
   }, [createdShare]);
 
+  let exportCurrentFileAsHtml = useCallback(async () => {
+    let file = selectedFileRef.current;
+    if (!file) return;
+    if (!(await saveCurrentFile())) return;
+
+    let activeDocument =
+      collabDocumentRef.current?.path == file.path ? collabDocumentRef.current : null;
+    let markdown = activeDocument ? getCollabDocumentValue(activeDocument) : editorValueRef.current;
+
+    setBusy(true);
+    setErrorMessage("");
+    try {
+      let result = await createStandaloneMarkdownHtml({
+        documentPath: file.path,
+        markdown,
+        resolveAsset(path) {
+          return imageAssetsRef.current.get(path)?.file ?? null;
+        },
+        title: htmlExportTitle(file.name),
+      });
+
+      downloadTextFile(htmlExportFileName(file.name), result.html, "text/html;charset=utf-8");
+      if (result.warnings.length) {
+        setErrorMessage(markdownHtmlExportWarningMessage(result.warnings.length));
+      }
+    } catch (error) {
+      setErrorMessage(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [saveCurrentFile]);
+
   let resolveImageSource = useMemo<LiveMdImageSourceResolver>(() => {
     return (source) => {
-      let imagePath = workspaceImagePathForSource(source, editorDocument.path);
+      let imagePath = resolveMarkdownImagePath(source, editorDocument.path);
       if (!imagePath) return source;
       return imageAssetsRef.current.get(imagePath)?.url ?? source;
     };
@@ -1690,6 +1724,15 @@ function LocalWorkspaceApp() {
               onClick={() => imageInputRef.current?.click()}
             >
               <ImagePlusIcon data-icon="inline-start" />
+            </TooltipIconButton>
+            <TooltipIconButton
+              label="Export HTML"
+              size="icon-sm"
+              variant="ghost"
+              disabled={!selectedFile || busy}
+              onClick={() => void exportCurrentFileAsHtml()}
+            >
+              <DownloadIcon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
               label="Refresh"
@@ -2334,44 +2377,45 @@ function blockInsertText(
   return `${prefix}${markdown}${suffix}`;
 }
 
-function workspaceImagePathForSource(source: string, documentPath: string) {
-  if (!documentPath || isExternalImageSource(source)) return null;
+function htmlExportTitle(fileName: string) {
+  return fileName.replace(/\.md$/i, "").replace(/[-_]+/g, " ").trim() || "Markdown export";
+}
 
-  let path = stripImageSourceSuffix(source);
-  if (!path || path.startsWith("//")) return null;
+function htmlExportFileName(fileName: string) {
+  let baseName = fileName.replace(/\.md$/i, "").trim() || "markdown-export";
+  return `${sanitizeExportFileName(baseName)}.html`;
+}
 
-  try {
-    path = decodeURI(path);
-  } catch {
-    return null;
+function sanitizeExportFileName(value: string) {
+  let sanitized = "";
+  for (let character of value) {
+    sanitized +=
+      character.charCodeAt(0) < 32 || invalidExportFileNameCharacters.has(character)
+        ? "-"
+        : character;
   }
-
-  return normalizeWorkspacePath(
-    path.startsWith("/") ? path.slice(1) : joinWorkspacePath(directoryPath(documentPath), path),
-  );
+  return sanitized.replace(/-+/g, "-").replace(/^-+|-+$/g, "") || "export";
 }
 
-function isExternalImageSource(source: string) {
-  return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(source);
+const invalidExportFileNameCharacters = new Set(["<", ">", ":", '"', "/", "\\", "|", "?", "*"]);
+
+function markdownHtmlExportWarningMessage(count: number) {
+  return count == 1
+    ? "Exported HTML, but 1 image could not be embedded."
+    : `Exported HTML, but ${count} images could not be embedded.`;
 }
 
-function stripImageSourceSuffix(source: string) {
-  let suffixIndex = source.search(/[?#]/);
-  return suffixIndex == -1 ? source : source.slice(0, suffixIndex);
-}
-
-function normalizeWorkspacePath(path: string) {
-  let parts: string[] = [];
-  for (let part of path.replace(/\\/g, "/").split("/")) {
-    if (!part || part == ".") continue;
-    if (part == "..") {
-      if (!parts.length) return null;
-      parts.pop();
-    } else {
-      parts.push(part);
-    }
-  }
-  return parts.join("/");
+function downloadTextFile(fileName: string, value: string, type: string) {
+  let blob = new Blob([value], { type });
+  let url = URL.createObjectURL(blob);
+  let anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.rel = "noopener";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function directoryPath(path: string) {
