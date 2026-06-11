@@ -118,7 +118,8 @@ async function assertGitHubRepositoryLink(client, sessionId) {
   let state = await client.evaluate(
     `
       (() => {
-        let link = document.querySelector(${JSON.stringify(`a[href="${GITHUB_REPOSITORY_URL}"]`)});
+        let links = Array.from(document.querySelectorAll(${JSON.stringify(`a[href="${GITHUB_REPOSITORY_URL}"]`)}));
+        let link = links.find((item) => item.getClientRects().length) ?? links[0] ?? null;
         return {
           ariaLabel: link?.getAttribute("aria-label") ?? null,
           found: Boolean(link),
@@ -133,6 +134,53 @@ async function assertGitHubRepositoryLink(client, sessionId) {
     sessionId,
   );
 
+  if (state.found && !state.visible) {
+    await client.evaluate(
+      `
+        (() => {
+          let button = Array.from(document.querySelectorAll("button")).find((item) =>
+            item.getAttribute("aria-label") == "More actions" && item.getClientRects().length
+          );
+          button?.dispatchEvent(
+            new PointerEvent("pointerdown", {
+              bubbles: true,
+              button: 0,
+              pointerType: "mouse"
+            })
+          );
+          button?.dispatchEvent(
+            new PointerEvent("pointerup", {
+              bubbles: true,
+              button: 0,
+              pointerType: "mouse"
+            })
+          );
+          button?.click();
+        })()
+      `,
+      sessionId,
+    );
+    await waitForSettledUi();
+    state = await client.evaluate(
+      `
+        (() => {
+          let links = Array.from(document.querySelectorAll(${JSON.stringify(`a[href="${GITHUB_REPOSITORY_URL}"]`)}));
+          let link = links.find((item) => item.getClientRects().length) ?? links[0] ?? null;
+          return {
+            ariaLabel: link?.getAttribute("aria-label") ?? null,
+            found: Boolean(link),
+            hasIcon: Boolean(link?.querySelector("svg")),
+            rel: link?.getAttribute("rel") ?? null,
+            target: link?.getAttribute("target") ?? null,
+            text: link?.textContent?.trim() ?? null,
+            visible: Boolean(link?.getClientRects().length)
+          };
+        })()
+      `,
+      sessionId,
+    );
+  }
+
   if (
     !state.found ||
     !state.visible ||
@@ -144,6 +192,19 @@ async function assertGitHubRepositoryLink(client, sessionId) {
   ) {
     throw new Error(`GitHub repository link did not render correctly: ${JSON.stringify(state)}`);
   }
+
+  await client.evaluate(
+    `
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "Escape",
+        key: "Escape"
+      }));
+    `,
+    sessionId,
+  );
+  await waitForSettledUi();
 }
 
 async function assertInitialDropboxUi(client, sessionId) {
@@ -157,6 +218,31 @@ async function assertInitialDropboxUi(client, sessionId) {
     `,
     sessionId,
   );
+
+  if (state.hasRoot && !state.body.includes("Connect Dropbox")) {
+    await client.evaluate(
+      `
+        (() => {
+          let button = Array.from(document.querySelectorAll("button")).find((item) =>
+            item.textContent.trim() == "Show sidebar" && item.getClientRects().length
+          );
+          button?.click();
+        })()
+      `,
+      sessionId,
+    );
+    await waitForSettledUi();
+    state = await client.evaluate(
+      `
+        (() => ({
+          body: document.body.innerText,
+          hasRoot: Boolean(document.querySelector("#root")),
+          title: document.title
+        }))()
+      `,
+      sessionId,
+    );
+  }
 
   if (!state.hasRoot || !state.body.includes("Connect Dropbox")) {
     throw new Error(

@@ -7,11 +7,13 @@ import {
   type ChangeEvent,
   type ComponentProps,
 } from "react";
+import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import {
   CloudIcon,
   Clock3Icon,
   CopyIcon,
   DownloadIcon,
+  EllipsisIcon,
   FileTextIcon,
   FolderOpenIcon,
   ImagePlusIcon,
@@ -163,6 +165,15 @@ type EditorDocument = {
 
 const emptyEditorExtensions: Extension[] = [];
 const githubRepositoryUrl = "https://github.com/Eric-Song-Nop/codemirror-treesitter";
+const mobileSidebarMediaQuery = "(max-width: 767px)";
+
+function isMobileSidebarViewport() {
+  return typeof window != "undefined" && window.matchMedia(mobileSidebarMediaQuery).matches;
+}
+
+function defaultSidebarOpen() {
+  return !isMobileSidebarViewport();
+}
 
 type WorkspaceImageAsset = WorkspaceImageNode & {
   url: string;
@@ -210,7 +221,7 @@ function LocalWorkspaceApp() {
   let [busy, setBusy] = useState(false);
   let [dropboxConnecting, setDropboxConnecting] = useState(false);
   let [restoreChecking, setRestoreChecking] = useState(false);
-  let [sidebarOpen, setSidebarOpen] = useState(true);
+  let [sidebarOpen, setSidebarOpen] = useState(() => defaultSidebarOpen());
   let [fileDialogMode, setFileDialogMode] = useState<FileDialogMode | null>(null);
   let [fileDialogTarget, setFileDialogTarget] = useState<FileTreeDeleteTarget | null>(null);
   let [fileDialogValue, setFileDialogValue] = useState("");
@@ -286,6 +297,14 @@ function LocalWorkspaceApp() {
       ? ""
       : selectedFile.path
     : "";
+  let headerTitle = selectedFile?.name ?? rootName;
+  let headerSubtitle = selectedFile
+    ? selectedPathLabel
+    : workspaceBackend
+      ? files.length == 1
+        ? "1 markdown file"
+        : `${files.length} markdown files`
+      : "";
   let browserSupported = supportsDirectoryPicker();
   let folderAccessUnavailableMessage = browserSupported
     ? ""
@@ -845,7 +864,7 @@ function LocalWorkspaceApp() {
       dropboxTokenAppKeyRef.current = "";
       setWorkspaceBackend(backend);
       rememberWorkspaceHandle(handle);
-      setSidebarOpen(true);
+      setSidebarOpen(defaultSidebarOpen());
       await loadTree(backend, null);
     } catch (error) {
       if (!isAbortError(error)) setErrorMessage(errorToMessage(error));
@@ -905,7 +924,7 @@ function LocalWorkspaceApp() {
         setStoredWorkspaceKind("dropbox");
         saveStoredDropboxWorkspaceConfig(storedConfig);
         saveStoredWorkspaceKind("dropbox");
-        setSidebarOpen(true);
+        setSidebarOpen(defaultSidebarOpen());
         await loadTree(backend, options.restoreDraft?.selectedPath ?? null, {
           saveBeforeSelect: false,
         });
@@ -940,7 +959,7 @@ function LocalWorkspaceApp() {
       dropboxTokenRef.current = null;
       dropboxTokenAppKeyRef.current = "";
       setWorkspaceBackend(backend);
-      setSidebarOpen(true);
+      setSidebarOpen(defaultSidebarOpen());
       await loadTree(backend, null, { saveBeforeSelect: false });
     } catch (error) {
       setErrorMessage(errorToMessage(error));
@@ -1069,7 +1088,7 @@ function LocalWorkspaceApp() {
         dropboxTokenRef.current = null;
         dropboxTokenAppKeyRef.current = "";
         setWorkspaceBackend(backend);
-        setSidebarOpen(true);
+        setSidebarOpen(defaultSidebarOpen());
         await loadTree(backend, null, { saveBeforeSelect: false });
       } catch (error) {
         if (!canceled) setErrorMessage(errorToMessage(error));
@@ -1119,7 +1138,9 @@ function LocalWorkspaceApp() {
 
   let selectFile = useCallback(
     (file: MarkdownFileNode) => {
-      if (workspaceBackend) void loadFile(workspaceBackend, file);
+      if (!workspaceBackend) return;
+      void loadFile(workspaceBackend, file);
+      if (isMobileSidebarViewport()) setSidebarOpen(false);
     },
     [loadFile, workspaceBackend],
   );
@@ -1636,45 +1657,7 @@ function LocalWorkspaceApp() {
               onSelectFile={selectFile}
             />
           ) : (
-            <div className="flex min-h-0 flex-1 items-center justify-center p-4">
-              <div className="flex w-full max-w-60 flex-col gap-2">
-                {restoreAvailable && (
-                  <Button
-                    onClick={() => void restoreStoredWorkspace()}
-                    disabled={!browserSupported || busy || restoreChecking}
-                  >
-                    <FolderOpenIcon data-icon="inline-start" />
-                    Continue previous folder
-                  </Button>
-                )}
-                {dropboxRestoreAvailable && (
-                  <Button
-                    variant={restoreAvailable ? "outline" : "default"}
-                    onClick={() => void restoreDropboxWorkspace()}
-                    disabled={busy || dropboxConnecting}
-                  >
-                    <CloudIcon data-icon="inline-start" />
-                    Continue Dropbox
-                  </Button>
-                )}
-                <Button
-                  variant={restoreAvailable || dropboxRestoreAvailable ? "outline" : "default"}
-                  onClick={() => void openWorkspace()}
-                  disabled={!browserSupported || busy}
-                >
-                  <FolderOpenIcon data-icon="inline-start" />
-                  Open folder
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={connectDropbox}
-                  disabled={busy || dropboxConnecting}
-                >
-                  <CloudIcon data-icon="inline-start" />
-                  Connect Dropbox
-                </Button>
-              </div>
-            </div>
+            <div className="min-h-0 flex-1" />
           )}
         </aside>
 
@@ -1698,11 +1681,9 @@ function LocalWorkspaceApp() {
               <MenuIcon data-icon="inline-start" />
             </TooltipIconButton>
             <div className="min-w-0 flex-1">
-              {selectedFile && (
-                <div className="truncate text-sm font-medium">{selectedFile.name}</div>
-              )}
-              {selectedPathLabel && (
-                <div className="truncate text-xs text-muted-foreground">{selectedPathLabel}</div>
+              <div className="truncate text-sm font-medium">{headerTitle}</div>
+              {headerSubtitle && (
+                <div className="truncate text-xs text-muted-foreground">{headerSubtitle}</div>
               )}
             </div>
             <Badge variant={saveState == "error" ? "destructive" : "secondary"}>
@@ -1710,7 +1691,7 @@ function LocalWorkspaceApp() {
               {saveLabel}
             </Badge>
             {workspaceBackend && storageLabel && (
-              <Badge variant="secondary">
+              <Badge className="max-md:hidden" variant="secondary">
                 {workspaceBackend.kind == "opendal-dropbox" ? (
                   <CloudIcon data-icon="inline-start" />
                 ) : (
@@ -1720,7 +1701,7 @@ function LocalWorkspaceApp() {
               </Badge>
             )}
             {activeShareForSelectedFile && (
-              <Badge variant="secondary">
+              <Badge className="max-md:hidden" variant="secondary">
                 <Share2Icon data-icon="inline-start" />
                 Shared file
               </Badge>
@@ -1734,6 +1715,7 @@ function LocalWorkspaceApp() {
               onChange={handleImageInputChange}
             />
             <TooltipIconButton
+              className="max-md:hidden"
               label="Share file"
               size="icon-sm"
               variant="ghost"
@@ -1743,6 +1725,7 @@ function LocalWorkspaceApp() {
               <Share2Icon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
+              className="max-md:hidden"
               label="Insert image"
               size="icon-sm"
               variant="ghost"
@@ -1752,6 +1735,7 @@ function LocalWorkspaceApp() {
               <ImagePlusIcon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
+              className="max-md:hidden"
               label="Export HTML"
               size="icon-sm"
               variant="ghost"
@@ -1761,6 +1745,7 @@ function LocalWorkspaceApp() {
               <DownloadIcon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
+              className="max-md:hidden"
               label="Refresh"
               size="icon-sm"
               variant="ghost"
@@ -1769,9 +1754,22 @@ function LocalWorkspaceApp() {
             >
               <RefreshCwIcon data-icon="inline-start" />
             </TooltipIconButton>
+            <MobileWorkspaceActions
+              activeShare={Boolean(activeShareForSelectedFile)}
+              busy={busy}
+              canInsertImage={Boolean(workspaceBackend?.createImageAsset && selectedFile)}
+              canRefresh={Boolean(workspaceBackend)}
+              selectedFile={Boolean(selectedFile)}
+              storageKind={workspaceBackend?.kind ?? null}
+              storageLabel={storageLabel}
+              onExportHtml={() => void exportCurrentFileAsHtml()}
+              onInsertImage={() => imageInputRef.current?.click()}
+              onRefresh={() => void refreshWorkspace()}
+              onShareFile={openShareDialog}
+            />
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button asChild size="icon-sm" variant="ghost">
+                <Button asChild className="max-md:hidden" size="icon-sm" variant="ghost">
                   <a
                     aria-label="Open GitHub repository"
                     href={githubRepositoryUrl}
@@ -1933,6 +1931,117 @@ function TooltipIconButton({ children, label, ...props }: TooltipIconButtonProps
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
+  );
+}
+
+type MobileWorkspaceActionsProps = {
+  activeShare: boolean;
+  busy: boolean;
+  canInsertImage: boolean;
+  canRefresh: boolean;
+  selectedFile: boolean;
+  storageKind: WorkspaceBackend["kind"] | null;
+  storageLabel: string;
+  onExportHtml: () => void;
+  onInsertImage: () => void;
+  onRefresh: () => void;
+  onShareFile: () => void;
+};
+
+function MobileWorkspaceActions({
+  activeShare,
+  busy,
+  canInsertImage,
+  canRefresh,
+  selectedFile,
+  storageKind,
+  storageLabel,
+  onExportHtml,
+  onInsertImage,
+  onRefresh,
+  onShareFile,
+}: MobileWorkspaceActionsProps) {
+  return (
+    <DropdownMenuPrimitive.Root>
+      <DropdownMenuPrimitive.Trigger asChild>
+        <Button aria-label="More actions" className="md:hidden" size="icon-sm" variant="ghost">
+          <EllipsisIcon data-icon="inline-start" />
+          <span className="sr-only">More actions</span>
+        </Button>
+      </DropdownMenuPrimitive.Trigger>
+      <DropdownMenuPrimitive.Portal>
+        <DropdownMenuPrimitive.Content
+          align="end"
+          sideOffset={8}
+          className="z-50 flex min-w-56 max-w-[calc(100vw-1rem)] flex-col gap-1 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+        >
+          {(storageLabel || activeShare) && (
+            <>
+              <div className="flex flex-col gap-1 px-2 py-1.5 text-xs text-muted-foreground">
+                {storageLabel && (
+                  <div className="flex min-w-0 items-center gap-2">
+                    {storageKind == "opendal-dropbox" ? (
+                      <CloudIcon className="size-3.5 shrink-0" />
+                    ) : (
+                      <FolderOpenIcon className="size-3.5 shrink-0" />
+                    )}
+                    <span className="truncate">{storageLabel}</span>
+                  </div>
+                )}
+                {activeShare && (
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Share2Icon className="size-3.5 shrink-0" />
+                    <span className="truncate">Shared file</span>
+                  </div>
+                )}
+              </div>
+              <DropdownMenuPrimitive.Separator className="-mx-1 h-px bg-border" />
+            </>
+          )}
+          <MobileDropdownItem disabled={!selectedFile || busy} onSelect={onShareFile}>
+            <Share2Icon />
+            Share file
+          </MobileDropdownItem>
+          <MobileDropdownItem disabled={!canInsertImage || busy} onSelect={onInsertImage}>
+            <ImagePlusIcon />
+            Insert image
+          </MobileDropdownItem>
+          <MobileDropdownItem disabled={!selectedFile || busy} onSelect={onExportHtml}>
+            <DownloadIcon />
+            Export HTML
+          </MobileDropdownItem>
+          <MobileDropdownItem disabled={!canRefresh || busy} onSelect={onRefresh}>
+            <RefreshCwIcon />
+            Refresh
+          </MobileDropdownItem>
+          <DropdownMenuPrimitive.Separator className="-mx-1 h-px bg-border" />
+          <DropdownMenuPrimitive.Item asChild>
+            <a
+              aria-label="Open GitHub repository"
+              className={mobileDropdownItemClassName}
+              href={githubRepositoryUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <GitHubIcon data-icon="inline-start" />
+              GitHub repository
+            </a>
+          </DropdownMenuPrimitive.Item>
+        </DropdownMenuPrimitive.Content>
+      </DropdownMenuPrimitive.Portal>
+    </DropdownMenuPrimitive.Root>
+  );
+}
+
+const mobileDropdownItemClassName =
+  "flex min-h-10 cursor-default items-center gap-2 rounded-md px-2.5 py-2 text-sm outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-45 data-[highlighted]:bg-muted data-[highlighted]:text-foreground [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
+
+function MobileDropdownItem({
+  className,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.Item>) {
+  return (
+    <DropdownMenuPrimitive.Item className={cn(mobileDropdownItemClassName, className)} {...props} />
   );
 }
 
