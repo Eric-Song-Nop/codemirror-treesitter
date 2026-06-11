@@ -119,7 +119,6 @@ import {
   createRelayShareSession,
 } from "@/lib/collaboration/share-relay-client";
 import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
-import { createDropboxWorkspaceBackend } from "@/lib/dropbox-workspace-backend";
 import {
   createLocalWorkspaceBackend,
   ensureReadWritePermission,
@@ -893,6 +892,7 @@ function LocalWorkspaceApp() {
         };
 
         await getAccessToken();
+        let { createDropboxWorkspaceBackend } = await import("@/lib/dropbox-workspace-backend");
         let backend = createDropboxWorkspaceBackend({
           getAccessToken,
           name: "Dropbox workspace",
