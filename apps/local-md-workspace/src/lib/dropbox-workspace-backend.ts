@@ -1,11 +1,8 @@
-import { createOpendalBrowserOperator } from "@codemirror-treesitter/opendal-wasm-browser";
 import type {
   CreateOpendalBrowserOperatorOptions,
   OpendalBrowserOperator,
   OpendalBrowserOperatorConfig,
 } from "@codemirror-treesitter/opendal-wasm-browser";
-import generatedModuleUrl from "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser.js?url";
-import wasmModuleUrl from "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser_bg.wasm?url";
 import type { DropboxAccessToken } from "./dropbox-oauth.ts";
 import {
   buildMarkdownTreeFromEntries,
@@ -17,6 +14,15 @@ import {
 } from "./workspace-backend.ts";
 
 const TOKEN_EXPIRY_SKEW_MS = 5 * 60 * 1000;
+const OPENDAL_WASM_BUILD_COMMAND = "vp run @codemirror-treesitter/opendal-wasm-browser#build:wasm";
+const opendalWasmAssetUrls = import.meta.glob<string>(
+  "../../../../packages/opendal-wasm-browser/pkg/{opendal_wasm_browser.js,opendal_wasm_browser_bg.wasm}",
+  {
+    eager: true,
+    import: "default",
+    query: "?url",
+  },
+);
 
 export type DropboxWorkspaceBackendOptions = {
   createOperator?: DropboxOperatorFactory;
@@ -54,8 +60,7 @@ export function createDropboxWorkspaceBackend(
   let createdDirectories = new Set<string>();
   let writeQueues = new Map<string, DropboxWriteQueue>();
   let root = normalizeDropboxRoot(options.root);
-  let createOperator =
-    options.createOperator ?? devTestDropboxOperatorFactory() ?? createOpendalBrowserOperator;
+  let createOperator = options.createOperator ?? devTestDropboxOperatorFactory();
 
   async function ensureOperator(forceRefresh = false) {
     if (forceRefresh || !token || token.expiresAt <= Date.now() + TOKEN_EXPIRY_SKEW_MS) {
@@ -64,10 +69,10 @@ export function createDropboxWorkspaceBackend(
     }
 
     if (!operator) {
-      operator = await createOperator(dropboxOperatorConfig(token, root), {
-        generatedModuleUrl,
-        wasmModuleUrl,
-      });
+      let config = dropboxOperatorConfig(token, root);
+      operator = createOperator
+        ? await createOperator(config, dropboxOperatorRuntimeOptions() ?? {})
+        : await createDefaultDropboxOperator(config);
     }
 
     return operator;
@@ -302,6 +307,40 @@ function dropboxOperatorConfig(
     provider: "dropbox",
     root,
   };
+}
+
+async function createDefaultDropboxOperator(config: OpendalBrowserOperatorConfig) {
+  try {
+    let runtimeOptions = dropboxOperatorRuntimeOptions();
+    if (!runtimeOptions) {
+      throw new Error("OpenDAL browser WASM assets are missing from the build.");
+    }
+    let { createOpendalBrowserOperator } =
+      await import("@codemirror-treesitter/opendal-wasm-browser");
+    return await createOpendalBrowserOperator(config, runtimeOptions);
+  } catch (error) {
+    throw unavailableOpendalRuntimeError(error);
+  }
+}
+
+function dropboxOperatorRuntimeOptions(): CreateOpendalBrowserOperatorOptions | null {
+  let generatedModuleUrl = opendalWasmAssetUrl("opendal_wasm_browser.js");
+  let wasmModuleUrl = opendalWasmAssetUrl("opendal_wasm_browser_bg.wasm");
+  return generatedModuleUrl && wasmModuleUrl ? { generatedModuleUrl, wasmModuleUrl } : null;
+}
+
+function opendalWasmAssetUrl(fileName: string) {
+  for (let [path, url] of Object.entries(opendalWasmAssetUrls)) {
+    if (path.endsWith(`/${fileName}`)) return url;
+  }
+  return null;
+}
+
+function unavailableOpendalRuntimeError(error: unknown) {
+  let detail = error instanceof Error ? error.message : String(error);
+  return new Error(
+    `Dropbox storage runtime is unavailable. Build the OpenDAL browser WASM package with \`${OPENDAL_WASM_BUILD_COMMAND}\`, then reconnect Dropbox workspace. ${detail}`,
+  );
 }
 
 function devTestDropboxOperatorFactory() {
