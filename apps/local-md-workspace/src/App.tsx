@@ -1128,34 +1128,39 @@ function LocalWorkspaceApp() {
     setSidebarOpen((open) => !open);
   }, []);
 
-  let openCreateDialog = (
-    target: FileTreeDeleteTarget | null = treeSelection,
-    kind: FileTreeCreateKind = "file",
-  ) => {
-    setFileDialogError("");
-    setFileDialogTarget(null);
-    setFileDialogValue(
-      kind == "directory" ? defaultNewFolderPath(tree, target) : defaultNewFilePath(files, target),
-    );
-    setFileDialogMode("create");
-  };
+  let openCreateDialog = useCallback(
+    (target: FileTreeDeleteTarget | null = treeSelection, kind: FileTreeCreateKind = "file") => {
+      setFileDialogError("");
+      setFileDialogTarget(null);
+      setFileDialogValue(
+        kind == "directory"
+          ? defaultNewFolderPath(tree, target)
+          : defaultNewFilePath(files, target),
+      );
+      setFileDialogMode("create");
+    },
+    [files, tree, treeSelection],
+  );
 
-  let openRenameDialog = (target?: FileTreeDeleteTarget) => {
-    let renameTarget =
-      target ??
-      (selectedFile
-        ? {
-            kind: "file" as const,
-            name: selectedFile.name,
-            path: selectedFile.path,
-          }
-        : null);
-    if (!renameTarget) return;
-    setFileDialogError("");
-    setFileDialogTarget(renameTarget);
-    setFileDialogValue(renameTarget.name);
-    setFileDialogMode("rename");
-  };
+  let openRenameDialog = useCallback(
+    (target?: FileTreeDeleteTarget) => {
+      let renameTarget =
+        target ??
+        (selectedFile
+          ? {
+              kind: "file" as const,
+              name: selectedFile.name,
+              path: selectedFile.path,
+            }
+          : null);
+      if (!renameTarget) return;
+      setFileDialogError("");
+      setFileDialogTarget(renameTarget);
+      setFileDialogValue(renameTarget.name);
+      setFileDialogMode("rename");
+    },
+    [selectedFile],
+  );
 
   let connectDropbox = () => {
     let appKey = defaultDropboxAppKey();
@@ -1624,7 +1629,7 @@ function LocalWorkspaceApp() {
             <FileTree
               root={tree}
               selectedPath={selectedPath}
-              onCreateEntry={(target, kind) => openCreateDialog(target, kind)}
+              onCreateEntry={openCreateDialog}
               onDeleteEntry={requestDeleteEntry}
               onRenameEntry={openRenameDialog}
               onSelectEntry={setTreeSelection}
