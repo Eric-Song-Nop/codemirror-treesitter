@@ -242,6 +242,7 @@ function LocalWorkspaceApp() {
   let saveStateRef = useRef<SaveState>("idle");
   let saveTimerRef = useRef<number | null>(null);
   let saveOperationRef = useRef(0);
+  let loadFileRequestRef = useRef(0);
   let dropboxTokenRef = useRef<DropboxAccessToken | null>(null);
   let dropboxTokenAppKeyRef = useRef("");
   let dropboxAuthPromiseRef = useRef<Promise<DropboxAccessToken> | null>(null);
@@ -515,8 +516,9 @@ function LocalWorkspaceApp() {
       record: OwnerShareRecord,
       backend: WorkspaceBackend,
       document: CollabDocumentState,
-      options: { actionLabel?: string } = {},
+      options: { actionLabel?: string; shouldContinue?: () => boolean } = {},
     ) => {
+      if (options.shouldContinue && !options.shouldContinue()) return;
       stopOwnerShareHost();
 
       let actionLabel = options.actionLabel ?? "Link created";
@@ -533,6 +535,7 @@ function LocalWorkspaceApp() {
           "host",
           hostSecret,
         );
+        if (options.shouldContinue && !options.shouldContinue()) return;
         setActiveShareRecord((current) =>
           current?.shareId == record.shareId
             ? {
@@ -573,6 +576,7 @@ function LocalWorkspaceApp() {
         });
         connection.connect();
       } catch (error) {
+        if (options.shouldContinue && !options.shouldContinue()) return;
         setShareError(`${actionLabel}, but host sync did not start: ${errorToMessage(error)}`);
       }
     },
@@ -605,16 +609,26 @@ function LocalWorkspaceApp() {
       file: MarkdownFileNode,
       options: { saveCurrent?: boolean } = {},
     ) => {
-      if ((options.saveCurrent ?? true) && !(await saveCurrentFile())) return;
+      let requestId = ++loadFileRequestRef.current;
+      let isCurrentLoadRequest = () => loadFileRequestRef.current == requestId;
 
       setBusy(true);
       setErrorMessage("");
       setRetryLoadPath(null);
+
       try {
+        if ((options.saveCurrent ?? true) && !(await saveCurrentFile())) return;
+        if (!isCurrentLoadRequest()) return;
+
         let restoredShareRecord = await findOwnerShareRecordForPath(backend, file.path).catch(
           () => null,
         );
+        if (!isCurrentLoadRequest()) return;
         let document = await openMarkdownCollabDocument(backend, file.path);
+        if (!isCurrentLoadRequest()) {
+          document.dispose();
+          return;
+        }
         let value = document.value;
         if (shareHostRecordRef.current?.path != file.path) stopOwnerShareHost();
         collabSyncCleanupRef.current();
@@ -664,15 +678,18 @@ function LocalWorkspaceApp() {
         setActiveShareRecord(restoredShareRecord);
         setCreatedShare(null);
         if (restoredShareRecord && document) {
-          void startOwnerShareHost(restoredShareRecord, backend, document);
+          void startOwnerShareHost(restoredShareRecord, backend, document, {
+            shouldContinue: isCurrentLoadRequest,
+          });
         }
         if (needsSourceWrite) scheduleAutoSave();
         setRetryLoadPath(null);
       } catch (error) {
+        if (!isCurrentLoadRequest()) return;
         setErrorMessage(errorToMessage(error));
         setRetryLoadPath(file.path);
       } finally {
-        setBusy(false);
+        if (isCurrentLoadRequest()) setBusy(false);
       }
     },
     [
@@ -708,6 +725,7 @@ function LocalWorkspaceApp() {
           saveCurrent: options.saveBeforeSelect ?? true,
         });
       } else {
+        loadFileRequestRef.current += 1;
         stopOwnerShareHost();
         collabSyncCleanupRef.current();
         collabSyncCleanupRef.current = () => {};
