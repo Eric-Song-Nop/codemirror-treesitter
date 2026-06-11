@@ -15,14 +15,14 @@ import {
 
 const TOKEN_EXPIRY_SKEW_MS = 5 * 60 * 1000;
 const OPENDAL_WASM_BUILD_COMMAND = "vp run @codemirror-treesitter/opendal-wasm-browser#build:wasm";
-const opendalWasmAssetUrls = import.meta.glob<string>(
-  "../../../../packages/opendal-wasm-browser/pkg/{opendal_wasm_browser.js,opendal_wasm_browser_bg.wasm}",
-  {
-    eager: true,
-    import: "default",
-    query: "?url",
-  },
-);
+const generatedModuleUrl = new URL(
+  "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser.js",
+  import.meta.url,
+).href;
+const wasmModuleUrl = new URL(
+  "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser_bg.wasm",
+  import.meta.url,
+).href;
 
 export type DropboxWorkspaceBackendOptions = {
   createOperator?: DropboxOperatorFactory;
@@ -324,16 +324,7 @@ async function createDefaultDropboxOperator(config: OpendalBrowserOperatorConfig
 }
 
 function dropboxOperatorRuntimeOptions(): CreateOpendalBrowserOperatorOptions | null {
-  let generatedModuleUrl = opendalWasmAssetUrl("opendal_wasm_browser.js");
-  let wasmModuleUrl = opendalWasmAssetUrl("opendal_wasm_browser_bg.wasm");
   return generatedModuleUrl && wasmModuleUrl ? { generatedModuleUrl, wasmModuleUrl } : null;
-}
-
-function opendalWasmAssetUrl(fileName: string) {
-  for (let [path, url] of Object.entries(opendalWasmAssetUrls)) {
-    if (path.endsWith(`/${fileName}`)) return url;
-  }
-  return null;
 }
 
 function unavailableOpendalRuntimeError(error: unknown) {
