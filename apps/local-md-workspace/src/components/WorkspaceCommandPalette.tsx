@@ -145,6 +145,7 @@ export function WorkspaceCommandPalette({
     setOpen(false);
     action();
   };
+  let showFileCommands = open && files.length > 0;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -173,7 +174,7 @@ export function WorkspaceCommandPalette({
               No matching files or commands.
             </CommandPrimitive.Empty>
 
-            {files.length > 0 && (
+            {showFileCommands && (
               <CommandPrimitive.Group
                 heading="Files"
                 className="overflow-hidden p-1 text-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground"
