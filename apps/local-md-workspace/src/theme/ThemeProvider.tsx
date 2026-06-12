@@ -1,8 +1,18 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
-import { defaultTheme, nextTheme, type Theme } from "./theme";
+import {
+  defaultTheme,
+  nextTheme,
+  themeAppearance,
+  themeDefinition,
+  type Theme,
+  type ThemeAppearance,
+  type ThemeDefinition,
+} from "./theme";
 
 type ThemeContextValue = {
+  appearance: ThemeAppearance;
   theme: Theme;
+  themeDefinition: ThemeDefinition;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
 };
@@ -17,7 +27,16 @@ type ThemeProviderProps = {
 export function ThemeProvider({ children, initialTheme = defaultTheme }: ThemeProviderProps) {
   let [theme, setTheme] = useState<Theme>(initialTheme);
   let toggleTheme = useCallback(() => setTheme((current) => nextTheme(current)), []);
-  let value = useMemo(() => ({ theme, setTheme, toggleTheme }), [theme, toggleTheme]);
+  let value = useMemo(
+    () => ({
+      appearance: themeAppearance(theme),
+      theme,
+      themeDefinition: themeDefinition(theme),
+      setTheme,
+      toggleTheme,
+    }),
+    [theme, toggleTheme],
+  );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }

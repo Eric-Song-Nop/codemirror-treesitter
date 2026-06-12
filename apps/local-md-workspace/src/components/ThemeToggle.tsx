@@ -3,14 +3,17 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { MoonIcon, SunIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useTheme } from "@/theme";
+import { themeDefinition as getThemeDefinition, useTheme } from "@/theme";
 
 type ThemeToggleProps = Omit<ComponentProps<typeof Button>, "aria-label" | "children" | "onClick">;
 
 export function ThemeToggle({ size = "icon-sm", variant = "ghost", ...props }: ThemeToggleProps) {
-  let { theme, toggleTheme } = useTheme();
-  let label = theme == "dark" ? "Switch to light theme" : "Switch to dark theme";
-  let Icon = theme == "dark" ? SunIcon : MoonIcon;
+  let { appearance, themeDefinition, toggleTheme } = useTheme();
+  let pairedTheme = themeDefinition.pairedTheme
+    ? getThemeDefinition(themeDefinition.pairedTheme)
+    : null;
+  let label = pairedTheme ? `Switch to ${pairedTheme.label}` : "Switch paired theme";
+  let Icon = appearance == "dark" ? SunIcon : MoonIcon;
 
   return (
     <Tooltip>
@@ -30,9 +33,12 @@ type ThemeDropdownItemProps = {
 };
 
 export function ThemeDropdownItem({ className }: ThemeDropdownItemProps) {
-  let { theme, toggleTheme } = useTheme();
-  let label = theme == "dark" ? "Switch to light theme" : "Switch to dark theme";
-  let Icon = theme == "dark" ? SunIcon : MoonIcon;
+  let { appearance, themeDefinition, toggleTheme } = useTheme();
+  let pairedTheme = themeDefinition.pairedTheme
+    ? getThemeDefinition(themeDefinition.pairedTheme)
+    : null;
+  let label = pairedTheme ? `Switch to ${pairedTheme.label}` : "Switch paired theme";
+  let Icon = appearance == "dark" ? SunIcon : MoonIcon;
 
   return (
     <DropdownMenuPrimitive.Item className={className} onSelect={() => toggleTheme()}>

@@ -1,19 +1,23 @@
 import { useLayoutEffect } from "react";
 import { useTheme } from "./ThemeProvider";
-import type { Theme } from "./theme";
+import { themeAppearance, type Theme, type ThemeAppearance } from "./theme";
 
 export function ThemeDocumentSync() {
-  let { theme } = useTheme();
+  let { appearance, theme } = useTheme();
 
   useLayoutEffect(() => {
-    applyThemeToDocument(theme);
-  }, [theme]);
+    applyThemeToDocument(theme, appearance);
+  }, [appearance, theme]);
 
   return null;
 }
 
-export function applyThemeToDocument(theme: Theme, root = document.documentElement) {
+export function applyThemeToDocument(
+  theme: Theme,
+  appearance: ThemeAppearance = themeAppearance(theme),
+  root = document.documentElement,
+) {
   root.dataset.theme = theme;
-  root.classList.toggle("dark", theme == "dark");
-  root.style.colorScheme = theme;
+  root.classList.toggle("dark", appearance == "dark");
+  root.style.colorScheme = appearance;
 }

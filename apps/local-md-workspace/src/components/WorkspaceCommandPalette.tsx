@@ -66,7 +66,7 @@ export function WorkspaceCommandPalette({
   onToggleSidebar,
 }: WorkspaceCommandPaletteProps) {
   let [open, setOpen] = useState(false);
-  let { theme, toggleTheme } = useTheme();
+  let { appearance, themeDefinition, toggleTheme } = useTheme();
 
   useEffect(() => {
     let handleKeyDown = (event: KeyboardEvent) => {
@@ -132,11 +132,11 @@ export function WorkspaceCommandPalette({
         onSelect: onInsertImage,
       },
       {
-        detail: theme == "dark" ? "Use the light app palette" : "Use the dark app palette",
-        icon: theme == "dark" ? SunIcon : MoonIcon,
+        detail: `Current theme is ${themeDefinition.label}`,
+        icon: appearance == "dark" ? SunIcon : MoonIcon,
         id: "toggle-theme",
         keywords: ["appearance", "theme", "dark", "light"],
-        title: theme == "dark" ? "Switch to light theme" : "Switch to dark theme",
+        title: "Switch paired theme",
         onSelect: toggleTheme,
       },
     ],
@@ -150,7 +150,8 @@ export function WorkspaceCommandPalette({
       onOpenFolder,
       onToggleSidebar,
       sidebarOpen,
-      theme,
+      appearance,
+      themeDefinition,
       toggleTheme,
     ],
   );

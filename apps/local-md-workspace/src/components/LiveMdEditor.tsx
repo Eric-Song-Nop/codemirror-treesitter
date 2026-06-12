@@ -106,7 +106,7 @@ const liveMdGruvboxLightExtensions: Extension[] = [
 ];
 
 function liveMdThemeExtensions(theme: Theme) {
-  return theme == "dark" ? liveMdGruvboxDarkExtensions : liveMdGruvboxLightExtensions;
+  return theme == "gruvbox-dark" ? liveMdGruvboxDarkExtensions : liveMdGruvboxLightExtensions;
 }
 
 function imageInputExtension(onImageFilesRef: RefObject<LiveMdEditorProps["onImageFiles"]>) {
