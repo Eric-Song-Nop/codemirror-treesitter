@@ -20,6 +20,23 @@ const themeDefinitionSeeds = [
     label: "Gruvbox Dark",
     pairedTheme: "gruvbox-light",
   },
+  {
+    appearance: "light",
+    id: "github-light",
+    label: "GitHub Light",
+  },
+  {
+    appearance: "light",
+    id: "catppuccin-latte",
+    label: "Catppuccin Latte",
+    pairedTheme: "catppuccin-macchiato",
+  },
+  {
+    appearance: "dark",
+    id: "catppuccin-macchiato",
+    label: "Catppuccin Macchiato",
+    pairedTheme: "catppuccin-latte",
+  },
 ] as const satisfies readonly ThemeDefinitionSeed[];
 
 export type Theme = (typeof themeDefinitionSeeds)[number]["id"];

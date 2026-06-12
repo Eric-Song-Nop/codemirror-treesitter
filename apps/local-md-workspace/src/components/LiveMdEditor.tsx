@@ -14,6 +14,14 @@ import {
   gruvboxLight,
   gruvboxLightHighlightStyle,
 } from "@codemirror-treesitter/theme-gruvbox";
+import {
+  catppuccinLatte,
+  catppuccinLatteHighlightStyle,
+  catppuccinMacchiato,
+  catppuccinMacchiatoHighlightStyle,
+  githubLight,
+  githubLightHighlightStyle,
+} from "@/theme/codemirror-theme-extensions";
 import { useTheme, type Theme } from "@/theme";
 
 export type LiveMdImageFilesInput = {
@@ -105,8 +113,34 @@ const liveMdGruvboxLightExtensions: Extension[] = [
   liveMdCodeFenceHighlighting(gruvboxLightHighlightStyle),
 ];
 
+const liveMdGithubLightExtensions: Extension[] = [
+  githubLight,
+  liveMdCodeFenceHighlighting(githubLightHighlightStyle),
+];
+
+const liveMdCatppuccinLatteExtensions: Extension[] = [
+  catppuccinLatte,
+  liveMdCodeFenceHighlighting(catppuccinLatteHighlightStyle),
+];
+
+const liveMdCatppuccinMacchiatoExtensions: Extension[] = [
+  catppuccinMacchiato,
+  liveMdCodeFenceHighlighting(catppuccinMacchiatoHighlightStyle),
+];
+
 function liveMdThemeExtensions(theme: Theme) {
-  return theme == "gruvbox-dark" ? liveMdGruvboxDarkExtensions : liveMdGruvboxLightExtensions;
+  switch (theme) {
+    case "catppuccin-latte":
+      return liveMdCatppuccinLatteExtensions;
+    case "catppuccin-macchiato":
+      return liveMdCatppuccinMacchiatoExtensions;
+    case "github-light":
+      return liveMdGithubLightExtensions;
+    case "gruvbox-dark":
+      return liveMdGruvboxDarkExtensions;
+    case "gruvbox-light":
+      return liveMdGruvboxLightExtensions;
+  }
 }
 
 function imageInputExtension(onImageFilesRef: RefObject<LiveMdEditorProps["onImageFiles"]>) {

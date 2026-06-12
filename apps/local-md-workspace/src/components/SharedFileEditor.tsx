@@ -8,7 +8,7 @@ import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from "@/comp
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GroveMark } from "@/components/GroveMark";
 import { LiveMdEditor } from "@/components/LiveMdEditor";
-import { ThemeToggle } from "@/components/ThemeToggle";
+import { ThemeSelector } from "@/components/ThemeSelector";
 import {
   ShareRelayConnection,
   type ShareRelayConnectionState,
@@ -195,7 +195,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
               {saveStatus}
             </Badge>
           )}
-          <ThemeToggle className="shrink-0" />
+          <ThemeSelector className="shrink-0" />
         </header>
 
         {errorMessage && (

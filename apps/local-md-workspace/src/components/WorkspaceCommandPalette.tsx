@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import type { MarkdownFileNode } from "@/lib/workspace-backend";
 import { cn } from "@/lib/utils";
-import { useTheme } from "@/theme";
+import { themeDefinitions, useTheme } from "@/theme";
 
 type WorkspaceCommandPaletteProps = {
   browserSupported: boolean;
@@ -41,6 +41,7 @@ type WorkspaceCommandPaletteProps = {
 };
 
 type PaletteAction = {
+  active?: boolean;
   detail: string;
   disabled?: boolean;
   icon: ComponentType<LucideProps>;
@@ -66,7 +67,7 @@ export function WorkspaceCommandPalette({
   onToggleSidebar,
 }: WorkspaceCommandPaletteProps) {
   let [open, setOpen] = useState(false);
-  let { appearance, themeDefinition, toggleTheme } = useTheme();
+  let { setTheme, theme } = useTheme();
 
   useEffect(() => {
     let handleKeyDown = (event: KeyboardEvent) => {
@@ -131,14 +132,16 @@ export function WorkspaceCommandPalette({
         title: "Insert image",
         onSelect: onInsertImage,
       },
-      {
-        detail: `Current theme is ${themeDefinition.label}`,
-        icon: appearance == "dark" ? SunIcon : MoonIcon,
-        id: "toggle-theme",
-        keywords: ["appearance", "theme", "dark", "light"],
-        title: "Switch paired theme",
-        onSelect: toggleTheme,
-      },
+      ...themeDefinitions.map((definition) => ({
+        active: definition.id == theme,
+        detail:
+          definition.id == theme ? "Current theme" : `${definition.appearance} workspace theme`,
+        icon: definition.appearance == "dark" ? MoonIcon : SunIcon,
+        id: `theme-${definition.id}`,
+        keywords: ["appearance", "theme", definition.appearance, definition.label],
+        title: definition.id == theme ? `${definition.label} (current)` : `Use ${definition.label}`,
+        onSelect: () => setTheme(definition.id),
+      })),
     ],
     [
       browserSupported,
@@ -150,9 +153,8 @@ export function WorkspaceCommandPalette({
       onOpenFolder,
       onToggleSidebar,
       sidebarOpen,
-      appearance,
-      themeDefinition,
-      toggleTheme,
+      setTheme,
+      theme,
     ],
   );
 
@@ -216,6 +218,7 @@ export function WorkspaceCommandPalette({
               {actions.map((action) => (
                 <CommandItem
                   key={action.id}
+                  active={action.active}
                   detail={action.detail}
                   disabled={action.disabled}
                   icon={action.icon}

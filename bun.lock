@@ -115,6 +115,7 @@
       "name": "local-md-workspace",
       "version": "0.0.0",
       "dependencies": {
+        "@codemirror-treesitter/language": "workspace:*",
         "@codemirror-treesitter/live-md": "workspace:*",
         "@codemirror-treesitter/live-md-loro": "workspace:*",
         "@codemirror-treesitter/opendal-wasm-browser": "workspace:*",
