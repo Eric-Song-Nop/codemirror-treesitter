@@ -3,6 +3,7 @@ import { EditorView } from "@codemirror/view";
 import { HighlightStyle, syntaxHighlighting, tags as t } from "@codemirror-treesitter/language";
 
 type WorkspaceEditorColors = {
+  activeLine: string;
   aqua: string;
   bg0: string;
   bg1: string;
@@ -16,16 +17,21 @@ type WorkspaceEditorColors = {
   fg3: string;
   fg4: string;
   green: string;
+  heading: string;
+  matchingBracket: string;
+  nonmatchingBracket: string;
   orange: string;
   purple: string;
   red: string;
   search: string;
   searchSelected: string;
   selection: string;
+  selectionMatch: string;
   yellow: string;
 };
 
 export const githubLightColors: WorkspaceEditorColors = {
+  activeLine: "#f6f8fa",
   aqua: "#1a7f37",
   bg0: "#ffffff",
   bg1: "#f6f8fa",
@@ -39,16 +45,21 @@ export const githubLightColors: WorkspaceEditorColors = {
   fg3: "#6e7781",
   fg4: "#6e7781",
   green: "#116329",
+  heading: "#24292f",
+  matchingBracket: "#0969da26",
+  nonmatchingBracket: "#cf222e26",
   orange: "#bc4c00",
   purple: "#8250df",
   red: "#cf222e",
   search: "#fff8c5",
   searchSelected: "#ffd33d66",
   selection: "#d0d7de",
+  selectionMatch: "#0969da1f",
   yellow: "#9a6700",
 };
 
 export const catppuccinLatteColors: WorkspaceEditorColors = {
+  activeLine: "#ccd0da66",
   aqua: "#179299",
   bg0: "#eff1f5",
   bg1: "#e6e9ef",
@@ -62,16 +73,21 @@ export const catppuccinLatteColors: WorkspaceEditorColors = {
   fg3: "#7c7f93",
   fg4: "#8c8fa1",
   green: "#40a02b",
+  heading: "#8839ef",
+  matchingBracket: "#17929930",
+  nonmatchingBracket: "#d20f3930",
   orange: "#fe640b",
   purple: "#8839ef",
   red: "#d20f39",
   search: "#df8e1d40",
   searchSelected: "#fe640b50",
   selection: "#ccd0da",
+  selectionMatch: "#40a02b30",
   yellow: "#df8e1d",
 };
 
 export const catppuccinMacchiatoColors: WorkspaceEditorColors = {
+  activeLine: "#363a4f66",
   aqua: "#8bd5ca",
   bg0: "#24273a",
   bg1: "#1e2030",
@@ -85,12 +101,16 @@ export const catppuccinMacchiatoColors: WorkspaceEditorColors = {
   fg3: "#939ab7",
   fg4: "#8087a2",
   green: "#a6da95",
+  heading: "#c6a0f6",
+  matchingBracket: "#8bd5ca30",
+  nonmatchingBracket: "#ed879630",
   orange: "#f5a97f",
   purple: "#c6a0f6",
   red: "#ed8796",
   search: "#eed49f40",
   searchSelected: "#f5a97f50",
   selection: "#494d64",
+  selectionMatch: "#a6da9530",
   yellow: "#eed49f",
 };
 
@@ -130,17 +150,17 @@ function editorTheme(colors: WorkspaceEditorColors, dark: boolean) {
         backgroundColor: colors.searchSelected,
       },
       ".cm-activeLine": {
-        backgroundColor: dark ? "#ffffff0a" : "#24292f0a",
+        backgroundColor: colors.activeLine,
       },
       ".cm-selectionMatch": {
-        backgroundColor: dark ? "#a6da9530" : "#40a02b30",
+        backgroundColor: colors.selectionMatch,
       },
       "&.cm-focused .cm-matchingBracket": {
-        backgroundColor: dark ? "#8bd5ca30" : "#17929930",
+        backgroundColor: colors.matchingBracket,
         outline: `1px solid ${colors.aqua}`,
       },
       "&.cm-focused .cm-nonmatchingBracket": {
-        backgroundColor: dark ? "#ed879630" : "#d20f3930",
+        backgroundColor: colors.nonmatchingBracket,
         outline: `1px solid ${colors.red}`,
       },
       ".cm-gutters": {
@@ -211,7 +231,7 @@ function highlightStyle(colors: WorkspaceEditorColors) {
     { tag: t.emphasis, fontStyle: "italic" },
     { tag: t.strikethrough, textDecoration: "line-through" },
     { tag: t.link, color: colors.aqua, textDecoration: "underline" },
-    { tag: t.heading, fontWeight: "bold", color: colors.orange },
+    { tag: t.heading, fontWeight: "bold", color: colors.heading },
     { tag: [t.atom, t.bool, t.special(t.variableName)], color: colors.purple },
     { tag: [t.processingInstruction, t.string, t.inserted], color: colors.green },
     { tag: t.invalid, color: colors.red },

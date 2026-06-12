@@ -113,9 +113,11 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     expect(liveMdMarkdownDocumentClass).toBe("live-md-document");
     expect(liveMdMarkdownDocumentCssVariables).toContain("--live-md-bg");
     expect(liveMdMarkdownDocumentCssVariables).toContain("--live-md-font-body");
+    expect(liveMdMarkdownDocumentCssVariables).toContain("--live-md-list-marker");
     expect(css).toContain(".live-md-document h1");
     expect(css).toContain(".live-md-document .live-md-task-item.is-checked");
     expect(css).toContain("var(--live-md-bg, #fffdfa)");
+    expect(css).toContain("var(--live-md-list-marker, #0f766e)");
     expect(css).not.toMatch(/(^|\n)h1\s*\{/);
     expect(css).not.toContain(":has(");
     expect(css).not.toContain(":root");

@@ -23,6 +23,7 @@ export const liveMdMarkdownDocumentCssVariables = [
   "--live-md-text",
   "--live-md-muted",
   "--live-md-accent",
+  "--live-md-list-marker",
   "--live-md-border",
   "--live-md-code-bg",
   "--live-md-code-text",
@@ -194,7 +195,7 @@ export function liveMdMarkdownDocumentCss() {
 }
 
 .${liveMdMarkdownDocumentClass} ul > li::marker {
-  color: var(--live-md-accent, #0f766e);
+  color: var(--live-md-list-marker, #0f766e);
 }
 
 .${liveMdMarkdownDocumentClass} a {
