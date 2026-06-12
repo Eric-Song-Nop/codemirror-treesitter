@@ -1601,7 +1601,7 @@ function LocalWorkspaceApp() {
 
   return (
     <TooltipProvider>
-      <div className="dark flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
+      <div className="flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
         <aside
           className={cn(
             "flex w-[19rem] shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:w-[min(21rem,88vw)]",
