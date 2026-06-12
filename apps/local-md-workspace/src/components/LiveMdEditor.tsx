@@ -8,7 +8,13 @@ import {
   type LiveMdImageSourceResolver,
 } from "@codemirror-treesitter/live-md";
 import "@codemirror-treesitter/live-md/register";
-import { gruvboxDark, gruvboxDarkHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
+import {
+  gruvboxDark,
+  gruvboxDarkHighlightStyle,
+  gruvboxLight,
+  gruvboxLightHighlightStyle,
+} from "@codemirror-treesitter/theme-gruvbox";
+import { useTheme, type Theme } from "@/theme";
 
 export type LiveMdImageFilesInput = {
   files: File[];
@@ -37,6 +43,7 @@ export function LiveMdEditor({
   onImageFiles,
   onInput,
 }: LiveMdEditorProps) {
+  let { theme } = useTheme();
   let editorRef = useRef<LiveMdEditorElement | null>(null);
   let onImageFilesRef = useRef(onImageFiles);
   let onInputRef = useRef(onInput);
@@ -61,8 +68,7 @@ export function LiveMdEditor({
     if (!editor) return;
 
     let extensions: Extension[] = [
-      gruvboxDark,
-      liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle),
+      ...liveMdThemeExtensions(theme),
       liveMdImageSource(imageSource),
       ...extraExtensions,
     ];
@@ -77,15 +83,30 @@ export function LiveMdEditor({
       onEditorReady?.(null);
       editor.extensions = [];
     };
-  }, [extraExtensions, imageSource, onEditorReady, onImageFiles]);
+  }, [extraExtensions, imageSource, onEditorReady, onImageFiles, theme]);
 
   return (
     <live-md-editor
       ref={editorRef}
       className="local-md-live-editor block size-full min-h-0"
+      data-theme={theme}
       placeholder={placeholder}
     />
   );
+}
+
+const liveMdGruvboxDarkExtensions: Extension[] = [
+  gruvboxDark,
+  liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle),
+];
+
+const liveMdGruvboxLightExtensions: Extension[] = [
+  gruvboxLight,
+  liveMdCodeFenceHighlighting(gruvboxLightHighlightStyle),
+];
+
+function liveMdThemeExtensions(theme: Theme) {
+  return theme == "dark" ? liveMdGruvboxDarkExtensions : liveMdGruvboxLightExtensions;
 }
 
 function imageInputExtension(onImageFilesRef: RefObject<LiveMdEditorProps["onImageFiles"]>) {
