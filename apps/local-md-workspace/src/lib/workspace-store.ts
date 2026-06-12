@@ -6,6 +6,7 @@ const STORE_NAME = "workspace";
 const HANDLE_KEY = "directory-handle";
 const DROPBOX_CONFIG_KEY = "local-md-workspace:dropbox-config";
 const WORKSPACE_KIND_KEY = "local-md-workspace:workspace-kind";
+const SELECTED_PATH_KEY_PREFIX = "local-md-workspace:selected-path";
 
 export type StoredDropboxWorkspaceConfig = {
   appKey: string;
@@ -13,6 +14,11 @@ export type StoredDropboxWorkspaceConfig = {
 };
 
 export type StoredWorkspaceKind = "local" | "dropbox";
+
+export type StoredWorkspaceSelectedPathContext = {
+  kind: StoredWorkspaceKind;
+  workspaceId: string;
+};
 
 export async function loadStoredWorkspaceHandle() {
   if (!canUseIndexedDb()) return null;
@@ -80,6 +86,45 @@ export function saveStoredWorkspaceKind(kind: StoredWorkspaceKind) {
   } catch {}
 }
 
+export function loadStoredWorkspaceSelectedPath(context: StoredWorkspaceSelectedPathContext) {
+  if (!canUseLocalStorage()) return null;
+
+  let key = selectedPathStorageKey(context);
+  if (!key) return null;
+
+  try {
+    return normalizeWorkspacePath(window.localStorage.getItem(key));
+  } catch {
+    return null;
+  }
+}
+
+export function saveStoredWorkspaceSelectedPath(
+  context: StoredWorkspaceSelectedPathContext,
+  path: string,
+) {
+  if (!canUseLocalStorage()) return;
+
+  let key = selectedPathStorageKey(context);
+  let normalized = normalizeWorkspacePath(path);
+  if (!key || !normalized) return;
+
+  try {
+    window.localStorage.setItem(key, normalized);
+  } catch {}
+}
+
+export function clearStoredWorkspaceSelectedPath(context: StoredWorkspaceSelectedPathContext) {
+  if (!canUseLocalStorage()) return;
+
+  let key = selectedPathStorageKey(context);
+  if (!key) return;
+
+  try {
+    window.localStorage.removeItem(key);
+  } catch {}
+}
+
 function canUseIndexedDb() {
   return typeof window != "undefined" && Boolean(window.indexedDB);
 }
@@ -111,6 +156,19 @@ function parseWorkspaceKind(value: unknown): StoredWorkspaceKind | null {
   if (typeof value != "string") return null;
   if (value == "local" || value == "dropbox") return value;
   return null;
+}
+
+function selectedPathStorageKey(context: StoredWorkspaceSelectedPathContext) {
+  let workspaceId = normalizeWorkspacePath(context.workspaceId);
+  if (!workspaceId) return null;
+  return `${SELECTED_PATH_KEY_PREFIX}:${context.kind}:${encodeURIComponent(workspaceId)}`;
+}
+
+function normalizeWorkspacePath(value: unknown) {
+  if (typeof value != "string") return null;
+
+  let path = value.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  return path ? path : null;
 }
 
 function openWorkspaceDatabase() {

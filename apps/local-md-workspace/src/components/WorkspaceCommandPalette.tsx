@@ -3,9 +3,12 @@ import { Command as CommandPrimitive } from "cmdk";
 import {
   CheckIcon,
   CloudIcon,
+  DownloadIcon,
   FileTextIcon,
   FolderOpenIcon,
   ImagePlusIcon,
+  PlusIcon,
+  SaveIcon,
   SearchIcon,
   SidebarCloseIcon,
   SidebarOpenIcon,
@@ -25,14 +28,20 @@ type WorkspaceCommandPaletteProps = {
   browserSupported: boolean;
   busy: boolean;
   canInsertImage: boolean;
+  canSaveAs: boolean;
+  canSaveAsLocal: boolean;
   disabled?: boolean;
   dropboxConnecting: boolean;
   files: MarkdownFileNode[];
   selectedPath: string | null;
   sidebarOpen: boolean;
   onConnectDropbox: () => void;
+  onDownloadCopy: () => void;
   onInsertImage: () => void;
+  onNewDraft: () => void;
   onOpenFolder: () => void;
+  onSaveAsDropbox: () => void;
+  onSaveAsLocal: () => void;
   onSelectFile: (file: MarkdownFileNode) => void;
   onToggleSidebar: () => void;
 };
@@ -51,14 +60,20 @@ export function WorkspaceCommandPalette({
   browserSupported,
   busy,
   canInsertImage,
+  canSaveAs,
+  canSaveAsLocal,
   disabled = false,
   dropboxConnecting,
   files,
   selectedPath,
   sidebarOpen,
   onConnectDropbox,
+  onDownloadCopy,
   onInsertImage,
+  onNewDraft,
   onOpenFolder,
+  onSaveAsDropbox,
+  onSaveAsLocal,
   onSelectFile,
   onToggleSidebar,
 }: WorkspaceCommandPaletteProps) {
@@ -80,6 +95,42 @@ export function WorkspaceCommandPalette({
 
   let actions = useMemo<PaletteAction[]>(
     () => [
+      {
+        detail: busy ? "Busy" : "Draft",
+        disabled: busy,
+        icon: PlusIcon,
+        id: "new-draft",
+        keywords: ["single file", "untitled", "draft"],
+        title: "New draft",
+        onSelect: onNewDraft,
+      },
+      {
+        detail: canSaveAsLocal ? "This device" : "Unavailable",
+        disabled: busy || !canSaveAs || !canSaveAsLocal,
+        icon: SaveIcon,
+        id: "save-as-local",
+        keywords: ["save", "local", "device", "file"],
+        title: "Save As",
+        onSelect: onSaveAsLocal,
+      },
+      {
+        detail: dropboxConnecting ? "Connecting" : "Dropbox",
+        disabled: busy || dropboxConnecting || !canSaveAs,
+        icon: CloudIcon,
+        id: "save-as-dropbox",
+        keywords: ["save", "cloud", "dropbox"],
+        title: "Save As Dropbox",
+        onSelect: onSaveAsDropbox,
+      },
+      {
+        detail: "Markdown",
+        disabled: busy || !canSaveAs,
+        icon: DownloadIcon,
+        id: "download-copy",
+        keywords: ["download", "copy", "markdown"],
+        title: "Download copy",
+        onSelect: onDownloadCopy,
+      },
       {
         detail: busy
           ? "Workspace is busy"
@@ -132,10 +183,16 @@ export function WorkspaceCommandPalette({
       browserSupported,
       busy,
       canInsertImage,
+      canSaveAs,
+      canSaveAsLocal,
       dropboxConnecting,
       onConnectDropbox,
+      onDownloadCopy,
       onInsertImage,
+      onNewDraft,
       onOpenFolder,
+      onSaveAsDropbox,
+      onSaveAsLocal,
       onToggleSidebar,
       sidebarOpen,
     ],
