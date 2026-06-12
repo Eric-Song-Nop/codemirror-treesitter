@@ -74,7 +74,7 @@ async function main() {
   await checkAutocompletePublicExports();
   await checkAutocompleteHasNoKnownStubs();
   await checkLanguageTreeSitterHighlightHelpers();
-  await checkGruvboxThemePackage();
+  await checkThemePackages();
   await checkMergePublicExports();
   await checkMergeUsesLocalHighlighting();
   await checkLspClientPublicExports();
@@ -190,30 +190,83 @@ async function checkLanguageTreeSitterHighlightHelpers() {
   pass("language package exposes tree-sitter highlight compatibility helpers");
 }
 
-async function checkGruvboxThemePackage() {
-  let pkg = JSON.parse(await readText("packages/theme-gruvbox/package.json"));
-  if (pkg.dependencies?.["@codemirror-treesitter/language"] == null) {
-    fail("theme-gruvbox does not depend on the local tree-sitter language package");
-  }
-  for (let name of ["@codemirror/language", "@lezer/highlight"]) {
-    if (pkg.dependencies?.[name] != null) fail(`theme-gruvbox depends on ${name}`);
+async function checkThemePackages() {
+  let packages = [
+    {
+      dir: "theme-gruvbox",
+      exports: [
+        "gruvboxDarkColors",
+        "gruvboxDarkThemeSpec",
+        "gruvboxDarkTheme",
+        "gruvboxDarkHighlightStyle",
+        "gruvboxDark",
+        "gruvboxDarkLiveMdExtensions",
+        "gruvboxLightColors",
+        "gruvboxLightThemeSpec",
+        "gruvboxLightTheme",
+        "gruvboxLightHighlightStyle",
+        "gruvboxLight",
+        "gruvboxLightLiveMdExtensions",
+      ],
+    },
+    {
+      dir: "theme-github",
+      exports: [
+        "githubLightColors",
+        "githubLightThemeSpec",
+        "githubLightTheme",
+        "githubLightHighlightStyle",
+        "githubLight",
+        "githubLightLiveMdExtensions",
+      ],
+    },
+    {
+      dir: "theme-catppuccin",
+      exports: [
+        "catppuccinLatteColors",
+        "catppuccinLatteThemeSpec",
+        "catppuccinLatteTheme",
+        "catppuccinLatteHighlightStyle",
+        "catppuccinLatte",
+        "catppuccinLatteLiveMdExtensions",
+        "catppuccinMacchiatoColors",
+        "catppuccinMacchiatoThemeSpec",
+        "catppuccinMacchiatoTheme",
+        "catppuccinMacchiatoHighlightStyle",
+        "catppuccinMacchiato",
+        "catppuccinMacchiatoLiveMdExtensions",
+      ],
+    },
+  ];
+
+  for (let themePackage of packages) {
+    let pkg = JSON.parse(await readText(`packages/${themePackage.dir}/package.json`));
+    if (pkg.dependencies?.["@codemirror-treesitter/theme"] == null) {
+      fail(`${themePackage.dir} does not depend on the shared semantic theme package`);
+    }
+    if (pkg.dependencies?.["@codemirror-treesitter/live-md"] == null) {
+      fail(`${themePackage.dir} does not depend on LiveMD for nested code-fence bundles`);
+    }
+    for (let name of ["@codemirror/language", "@lezer/highlight"]) {
+      if (pkg.dependencies?.[name] != null) fail(`${themePackage.dir} depends on ${name}`);
+    }
+
+    let source = await readText(`packages/${themePackage.dir}/src/index.ts`);
+    for (let snippet of [
+      'from "@codemirror-treesitter/theme"',
+      "liveMdCodeFenceHighlighting",
+      ...themePackage.exports,
+    ]) {
+      if (!source.includes(snippet)) fail(`${themePackage.dir} source is missing ${snippet}`);
+    }
+    for (let duplicateMapping of ["EditorView.theme(", "HighlightStyle.define("]) {
+      if (source.includes(duplicateMapping)) {
+        fail(`${themePackage.dir} duplicates shared theme mapping through ${duplicateMapping}`);
+      }
+    }
   }
 
-  let source = await readText("packages/theme-gruvbox/src/index.ts");
-  for (let snippet of [
-    'from "@codemirror-treesitter/language"',
-    "gruvboxDarkColors",
-    "gruvboxDarkTheme",
-    "gruvboxDarkHighlightStyle",
-    "gruvboxDark",
-    "gruvboxLightColors",
-    "gruvboxLightTheme",
-    "gruvboxLightHighlightStyle",
-    "gruvboxLight",
-  ]) {
-    if (!source.includes(snippet)) fail(`theme-gruvbox source is missing ${snippet}`);
-  }
-  pass("theme-gruvbox exposes local dark and light Gruvbox themes");
+  pass("theme packages use shared semantic helpers and expose LiveMD bundles");
 }
 
 async function checkMergePublicExports() {

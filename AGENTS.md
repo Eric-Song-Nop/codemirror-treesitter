@@ -55,6 +55,10 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `packages/theme`: Shared semantic theme token contracts and CodeMirror
   editor/highlight extension factories for concrete theme packages.
 - `packages/theme-gruvbox`: Local Gruvbox editor themes and highlight styles.
+- `packages/theme-github`: Local GitHub editor themes and LiveMD-ready
+  highlight bundles.
+- `packages/theme-catppuccin`: Local Catppuccin editor themes and LiveMD-ready
+  highlight bundles.
 - `packages/merge`: Diff, split merge view, unified merge view, chunk helpers,
   and local highlighting for deletion widgets.
 - `packages/lsp-client`: LSP transport, plugin, workspace mapping,

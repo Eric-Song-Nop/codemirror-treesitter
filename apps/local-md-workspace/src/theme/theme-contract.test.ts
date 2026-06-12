@@ -11,7 +11,12 @@ describe("workspace theme contract", () => {
     let themeIds = themeDefinitions.map((theme) => theme.id).sort();
     let cssThemeIds = cssThemeBlockIds(workspaceCss).sort();
     let liveMdAdapterThemeIds = Array.from(
-      new Set(Array.from(liveMdEditorSource.matchAll(/case "([^"]+)":/g), (match) => match[1]!)),
+      new Set(
+        Array.from(
+          liveMdThemeExtensionMapBlock(liveMdEditorSource).matchAll(/"([^"]+)":/g),
+          (match) => match[1]!,
+        ),
+      ),
     ).sort();
 
     expect(cssThemeIds).toEqual(themeIds);
@@ -75,6 +80,13 @@ function themeBlock(css: string, theme: string) {
 
 function hostBlock(css: string) {
   return cssBlock(css, ":host");
+}
+
+function liveMdThemeExtensionMapBlock(source: string) {
+  return regexMatch(
+    source,
+    /const liveMdThemeExtensionMap = \{([\s\S]*?)\n\} satisfies Record<Theme, Extension>/,
+  );
 }
 
 function cssBlock(css: string, selector: string) {

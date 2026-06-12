@@ -12,7 +12,9 @@ extensions.
 - Built as an ES module package with Vite+ `vp pack`.
 - Intentionally avoids `@codemirror/language` and `@lezer/highlight`.
 - Does not define product-specific palettes. Concrete themes live in packages
-  such as `@codemirror-treesitter/theme-gruvbox`.
+  such as `@codemirror-treesitter/theme-gruvbox`,
+  `@codemirror-treesitter/theme-github`, and
+  `@codemirror-treesitter/theme-catppuccin`.
 
 ## Responsibilities
 

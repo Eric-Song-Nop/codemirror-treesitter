@@ -43,9 +43,8 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
   actions.
 - `src/components/SharedFileEditor.tsx`: guest shared-file route and relay
   connection UI.
-- `src/theme/*`: shared named-theme contract, document/storage adapters, CSS
-  token ownership, and app-local CodeMirror extension constants for the local
-  and shared workspace routes.
+- `src/theme/*`: shared named-theme contract, document/storage adapters, and
+  CSS token ownership for the local and shared workspace routes.
 - `src/lib/file-system.ts`: File System Access API backend.
 - `src/lib/dropbox-oauth.ts` and `src/lib/dropbox-workspace-backend.ts`:
   Dropbox OAuth PKCE and OpenDAL-backed workspace backend.

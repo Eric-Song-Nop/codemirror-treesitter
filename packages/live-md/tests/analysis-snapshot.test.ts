@@ -2,11 +2,7 @@
 
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { ensureSyntaxTree, tags as t, Tree } from "@codemirror-treesitter/language";
-import {
-  gruvboxDarkHighlightStyle,
-  gruvboxLightHighlightStyle,
-} from "@codemirror-treesitter/theme-gruvbox";
+import { ensureSyntaxTree, HighlightStyle, tags as t, Tree } from "@codemirror-treesitter/language";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   __testBuildLiveMdAnalysis,
@@ -25,6 +21,14 @@ import {
 } from "../src/core/languages.js";
 
 let locationDescriptor: PropertyDescriptor | undefined;
+
+const testLightCodeFenceHighlightStyle = HighlightStyle.define([
+  { tag: t.keyword, color: "#0969da" },
+]);
+
+const testDarkCodeFenceHighlightStyle = HighlightStyle.define([
+  { tag: t.keyword, color: "#f5a97f" },
+]);
 
 beforeEach(() => {
   locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
@@ -139,11 +143,11 @@ describe("LiveMD analysis snapshot", () => {
   it("rebuilds code fence highlights when the highlighter changes", async () => {
     let highlighterCompartment = new Compartment();
     let view = await markdownAnalysisView("```ts\nlet answer = 1;\n```\n", "", [
-      highlighterCompartment.of(liveMdCodeFenceHighlighting(gruvboxLightHighlightStyle)),
+      highlighterCompartment.of(liveMdCodeFenceHighlighting(testLightCodeFenceHighlightStyle)),
     ]);
     view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
-    let lightKeywordClass = gruvboxLightHighlightStyle.style([t.keyword]);
-    let darkKeywordClass = gruvboxDarkHighlightStyle.style([t.keyword]);
+    let lightKeywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
+    let darkKeywordClass = testDarkCodeFenceHighlightStyle.style([t.keyword]);
 
     expect(lightKeywordClass).toBeTruthy();
     expect(darkKeywordClass).toBeTruthy();
@@ -151,7 +155,7 @@ describe("LiveMD analysis snapshot", () => {
 
     view.dispatch({
       effects: highlighterCompartment.reconfigure(
-        liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle),
+        liveMdCodeFenceHighlighting(testDarkCodeFenceHighlightStyle),
       ),
     });
 

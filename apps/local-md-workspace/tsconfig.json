@@ -17,6 +17,9 @@
       "@codemirror-treesitter/opendal-wasm-browser": [
         "../../packages/opendal-wasm-browser/src/index.ts"
       ],
+      "@codemirror-treesitter/theme": ["../../packages/theme/src/index.ts"],
+      "@codemirror-treesitter/theme-catppuccin": ["../../packages/theme-catppuccin/src/index.ts"],
+      "@codemirror-treesitter/theme-github": ["../../packages/theme-github/src/index.ts"],
       "@codemirror-treesitter/theme-gruvbox": ["../../packages/theme-gruvbox/src/index.ts"],
       "loro-codemirror": ["./src/loro-codemirror.d.ts"],
       "@/*": ["./src/*"]

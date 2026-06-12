@@ -2,26 +2,20 @@ import { useEffect, useRef, type RefObject } from "react";
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
-  liveMdCodeFenceHighlighting,
   liveMdImageSource,
   type LiveMdEditorElement,
   type LiveMdImageSourceResolver,
 } from "@codemirror-treesitter/live-md";
 import "@codemirror-treesitter/live-md/register";
 import {
-  gruvboxDark,
-  gruvboxDarkHighlightStyle,
-  gruvboxLight,
-  gruvboxLightHighlightStyle,
+  gruvboxDarkLiveMdExtensions,
+  gruvboxLightLiveMdExtensions,
 } from "@codemirror-treesitter/theme-gruvbox";
 import {
-  catppuccinLatte,
-  catppuccinLatteHighlightStyle,
-  catppuccinMacchiato,
-  catppuccinMacchiatoHighlightStyle,
-  githubLight,
-  githubLightHighlightStyle,
-} from "@/theme/codemirror-theme-extensions";
+  catppuccinLatteLiveMdExtensions,
+  catppuccinMacchiatoLiveMdExtensions,
+} from "@codemirror-treesitter/theme-catppuccin";
+import { githubLightLiveMdExtensions } from "@codemirror-treesitter/theme-github";
 import { useTheme, type Theme } from "@/theme";
 
 export type LiveMdImageFilesInput = {
@@ -76,7 +70,7 @@ export function LiveMdEditor({
     if (!editor) return;
 
     let extensions: Extension[] = [
-      ...liveMdThemeExtensions(theme),
+      liveMdThemeExtensions(theme),
       liveMdImageSource(imageSource),
       ...extraExtensions,
     ];
@@ -103,44 +97,16 @@ export function LiveMdEditor({
   );
 }
 
-const liveMdGruvboxDarkExtensions: Extension[] = [
-  gruvboxDark,
-  liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle),
-];
-
-const liveMdGruvboxLightExtensions: Extension[] = [
-  gruvboxLight,
-  liveMdCodeFenceHighlighting(gruvboxLightHighlightStyle),
-];
-
-const liveMdGithubLightExtensions: Extension[] = [
-  githubLight,
-  liveMdCodeFenceHighlighting(githubLightHighlightStyle),
-];
-
-const liveMdCatppuccinLatteExtensions: Extension[] = [
-  catppuccinLatte,
-  liveMdCodeFenceHighlighting(catppuccinLatteHighlightStyle),
-];
-
-const liveMdCatppuccinMacchiatoExtensions: Extension[] = [
-  catppuccinMacchiato,
-  liveMdCodeFenceHighlighting(catppuccinMacchiatoHighlightStyle),
-];
+const liveMdThemeExtensionMap = {
+  "catppuccin-latte": catppuccinLatteLiveMdExtensions,
+  "catppuccin-macchiato": catppuccinMacchiatoLiveMdExtensions,
+  "github-light": githubLightLiveMdExtensions,
+  "gruvbox-dark": gruvboxDarkLiveMdExtensions,
+  "gruvbox-light": gruvboxLightLiveMdExtensions,
+} satisfies Record<Theme, Extension>;
 
 function liveMdThemeExtensions(theme: Theme) {
-  switch (theme) {
-    case "catppuccin-latte":
-      return liveMdCatppuccinLatteExtensions;
-    case "catppuccin-macchiato":
-      return liveMdCatppuccinMacchiatoExtensions;
-    case "github-light":
-      return liveMdGithubLightExtensions;
-    case "gruvbox-dark":
-      return liveMdGruvboxDarkExtensions;
-    case "gruvbox-light":
-      return liveMdGruvboxLightExtensions;
-  }
+  return liveMdThemeExtensionMap[theme];
 }
 
 function imageInputExtension(onImageFilesRef: RefObject<LiveMdEditorProps["onImageFiles"]>) {

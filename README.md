@@ -73,7 +73,7 @@ collaboration flows.
 
 A single import registers the `<live-md-editor>` web component with
 Tree-sitter-powered Markdown parsing, syntax highlighting, live Markdown
-decorations, Shadow DOM styling, and Gruvbox theming. See
+decorations, Shadow DOM styling, and host-provided theming. See
 [Web Component](#web-component) for the full API.
 
 The programmatic API exposes the same runtime without custom elements:
@@ -99,7 +99,8 @@ await editor.ready;
 - A language-data registry that mirrors CodeMirror language metadata while
   lazily loading Tree-sitter WASM grammars and highlight queries.
 - Lezer-free implementations of CodeMirror commands, autocompletion, close
-  brackets, basic setup, merge views, LSP integration, and Gruvbox themes.
+  brackets, basic setup, merge views, LSP integration, and semantic editor
+  themes.
 - LiveMD, a Markdown editor runtime built from the local Tree-sitter packages,
   exposed through `createLiveMdEditor()`, `liveMarkdown()`,
   `liveMdCodeFenceHighlighting()`, `renderMarkdownToHtml()`,
@@ -178,6 +179,8 @@ this repository replace the language-aware layers above those primitives.
 | `packages/codemirror`           | `@codemirror-treesitter/basic-setup`          | `basicSetup` and `minimalSetup` assembled from the local Tree-sitter packages.                                                  |
 | `packages/theme`                | `@codemirror-treesitter/theme`                | Shared semantic theme token contracts and CodeMirror editor/highlight extension factories.                                      |
 | `packages/theme-gruvbox`        | `@codemirror-treesitter/theme-gruvbox`        | Gruvbox dark/light editor themes, highlight styles, combined extensions, and palettes.                                          |
+| `packages/theme-github`         | `@codemirror-treesitter/theme-github`         | GitHub Light editor theme, highlight style, combined extension, and LiveMD-ready bundle.                                        |
+| `packages/theme-catppuccin`     | `@codemirror-treesitter/theme-catppuccin`     | Catppuccin Latte/Macchiato editor themes, highlight styles, combined extensions, and LiveMD-ready bundles.                      |
 | `packages/merge`                | `@codemirror-treesitter/merge`                | Diff, split merge view, unified merge view, chunks, and accept/reject commands.                                                 |
 | `packages/lsp-client`           | `@codemirror-treesitter/lsp-client`           | LSP client, workspace mapping, diagnostics, completions, hover, formatting, rename, definition, references, and signature help. |
 | `packages/live-md`              | `@codemirror-treesitter/live-md`              | Live Markdown editor runtime, web component, registration entry, fixtures, Markdown HTML renderer, and CSS exports.             |
@@ -415,9 +418,9 @@ main contract:
   all built language entries load a parser.
 - `@codemirror-treesitter/theme` exports shared semantic theme helpers built on
   the local Tree-sitter highlight tags.
-- `@codemirror-treesitter/theme-gruvbox` exports both dark and light Gruvbox
-  themes and imports syntax highlighting from the local Tree-sitter language
-  package.
+- Concrete theme packages such as `theme-gruvbox`, `theme-github`, and
+  `theme-catppuccin` export CodeMirror themes and LiveMD-ready nested
+  code-fence bundles without duplicating the shared selector or tag mapping.
 - `@codemirror-treesitter/merge` and
   `@codemirror-treesitter/lsp-client` expose upstream-compatible public
   surfaces and use the local Tree-sitter language/highlighting packages.
