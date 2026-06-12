@@ -40,6 +40,9 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
   actions.
 - `src/components/SharedFileEditor.tsx`: guest shared-file route and relay
   connection UI.
+- `src/i18n/*.json` and `src/lib/i18n.tsx`: English/Chinese i18next resources,
+  react-i18next hooks, locale persistence, and known error-message
+  localization.
 - `src/lib/file-system.ts`: File System Access API backend.
 - `src/lib/dropbox-oauth.ts` and `src/lib/dropbox-workspace-backend.ts`:
   Dropbox OAuth PKCE and OpenDAL-backed workspace backend.
@@ -93,6 +96,7 @@ Run from the workspace root:
 vp run local-md-workspace#dev
 vp run local-md-workspace#dev:frontend
 vp run local-md-workspace#build
+vp run local-md-workspace#i18n:check
 vp run local-md-workspace#test
 vp run local-md-workspace#preview
 vp run local-md-workspace#smoke:ui

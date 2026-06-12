@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { MarkdownFileNode } from "@/lib/workspace-backend";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type WorkspaceCommandPaletteProps = {
@@ -62,6 +63,7 @@ export function WorkspaceCommandPalette({
   onSelectFile,
   onToggleSidebar,
 }: WorkspaceCommandPaletteProps) {
+  let { t } = useI18n();
   let [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -82,49 +84,51 @@ export function WorkspaceCommandPalette({
     () => [
       {
         detail: busy
-          ? "Workspace is busy"
+          ? t("command.openFolder.detail.busy")
           : browserSupported
-            ? "Choose a local Markdown workspace"
-            : "Local folder access is unavailable",
+            ? t("command.openFolder.detail.ready")
+            : t("command.openFolder.detail.unavailable"),
         disabled: busy || !browserSupported,
         icon: FolderOpenIcon,
         id: "open-folder",
-        keywords: ["local", "workspace", "directory", "folder"],
-        title: "Open folder",
+        keywords: t("command.openFolder.keywords").split(/\s+/),
+        title: t("actions.openFolder"),
         onSelect: onOpenFolder,
       },
       {
         detail: dropboxConnecting
-          ? "Connecting to Dropbox"
+          ? t("command.connectDropbox.detail.connecting")
           : busy
-            ? "Workspace is busy"
-            : "Open a Dropbox-backed workspace",
+            ? t("command.connectDropbox.detail.busy")
+            : t("command.connectDropbox.detail.ready"),
         disabled: busy || dropboxConnecting,
         icon: CloudIcon,
         id: "connect-dropbox",
-        keywords: ["cloud", "workspace", "storage"],
-        title: "Connect Dropbox",
+        keywords: t("command.connectDropbox.keywords").split(/\s+/),
+        title: t("actions.connectDropbox"),
         onSelect: onConnectDropbox,
       },
       {
-        detail: sidebarOpen ? "Hide the file tree" : "Show the file tree",
+        detail: sidebarOpen
+          ? t("command.toggleSidebar.detail.hide")
+          : t("command.toggleSidebar.detail.show"),
         icon: sidebarOpen ? SidebarCloseIcon : SidebarOpenIcon,
         id: "toggle-sidebar",
-        keywords: ["file tree", "panel", "navigation"],
-        title: "Toggle sidebar",
+        keywords: t("command.toggleSidebar.keywords").split(/\s+/),
+        title: t("command.toggleSidebar.title"),
         onSelect: onToggleSidebar,
       },
       {
         detail: busy
-          ? "Workspace is busy"
+          ? t("command.insertImage.detail.busy")
           : canInsertImage
-            ? "Add images to the selected file"
-            : "Select a file that supports assets",
+            ? t("command.insertImage.detail.ready")
+            : t("command.insertImage.detail.unavailable"),
         disabled: busy || !canInsertImage,
         icon: ImagePlusIcon,
         id: "insert-image",
-        keywords: ["asset", "photo", "picture", "media"],
-        title: "Insert image",
+        keywords: t("command.insertImage.keywords").split(/\s+/),
+        title: t("actions.insertImage"),
         onSelect: onInsertImage,
       },
     ],
@@ -138,6 +142,7 @@ export function WorkspaceCommandPalette({
       onOpenFolder,
       onToggleSidebar,
       sidebarOpen,
+      t,
     ],
   );
 
@@ -154,11 +159,11 @@ export function WorkspaceCommandPalette({
         showCloseButton={false}
       >
         <DialogHeader className="sr-only">
-          <DialogTitle>Command palette</DialogTitle>
-          <DialogDescription>Search files and run workspace commands.</DialogDescription>
+          <DialogTitle>{t("command.title")}</DialogTitle>
+          <DialogDescription>{t("command.searchDescription")}</DialogDescription>
         </DialogHeader>
         <CommandPrimitive
-          label="Command palette"
+          label={t("command.label")}
           className="flex max-h-[min(640px,72svh)] min-h-0 flex-col overflow-hidden bg-popover text-popover-foreground"
         >
           <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3 text-muted-foreground [&_svg:not([class*='size-'])]:size-4">
@@ -166,17 +171,17 @@ export function WorkspaceCommandPalette({
             <CommandPrimitive.Input
               autoFocus
               className="h-full min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
-              placeholder="Search files and commands..."
+              placeholder={t("command.placeholder")}
             />
           </div>
           <CommandPrimitive.List className="max-h-[calc(min(640px,72svh)-2.75rem)] min-h-0 overflow-y-auto p-1">
             <CommandPrimitive.Empty className="py-8 text-center text-sm text-muted-foreground">
-              No matching files or commands.
+              {t("command.empty")}
             </CommandPrimitive.Empty>
 
             {showFileCommands && (
               <CommandPrimitive.Group
-                heading="Files"
+                heading={t("command.files")}
                 className="overflow-hidden p-1 text-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground"
               >
                 {files.map((file) => (
@@ -195,7 +200,7 @@ export function WorkspaceCommandPalette({
             )}
 
             <CommandPrimitive.Group
-              heading="Workspace"
+              heading={t("command.workspace")}
               className="overflow-hidden p-1 text-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground"
             >
               {actions.map((action) => (
