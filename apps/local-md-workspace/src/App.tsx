@@ -20,6 +20,7 @@ import {
   LinkIcon,
   MenuIcon,
   PlusIcon,
+  PrinterIcon,
   RefreshCwIcon,
   SaveIcon,
   Share2Icon,
@@ -143,6 +144,7 @@ import {
   resolveMarkdownImagePath,
   snapshotMarkdownHtmlExportTheme,
 } from "@/lib/export/markdown-html";
+import { openStandaloneHtmlPrintView } from "@/lib/export/browser-print";
 import {
   loadStoredDropboxWorkspaceConfig,
   loadStoredWorkspaceKind,
@@ -1490,28 +1492,31 @@ function LocalWorkspaceApp() {
     }
   }, [createdShare]);
 
+  let createCurrentFileHtmlExport = useCallback(async (file: MarkdownFileNode) => {
+    let activeDocument =
+      collabDocumentRef.current?.path == file.path ? collabDocumentRef.current : null;
+    let markdown = activeDocument ? getCollabDocumentValue(activeDocument) : editorValueRef.current;
+
+    return createStandaloneMarkdownHtml({
+      documentPath: file.path,
+      markdown,
+      resolveAsset(path) {
+        return imageAssetsRef.current.get(path)?.file ?? null;
+      },
+      theme: snapshotMarkdownHtmlExportTheme(editorElementRef.current),
+      title: htmlExportTitle(file.name),
+    });
+  }, []);
+
   let exportCurrentFileAsHtml = useCallback(async () => {
     let file = selectedFileRef.current;
     if (!file) return;
     if (!(await saveCurrentFile())) return;
 
-    let activeDocument =
-      collabDocumentRef.current?.path == file.path ? collabDocumentRef.current : null;
-    let markdown = activeDocument ? getCollabDocumentValue(activeDocument) : editorValueRef.current;
-
     setBusy(true);
     setErrorMessage("");
     try {
-      let result = await createStandaloneMarkdownHtml({
-        documentPath: file.path,
-        markdown,
-        resolveAsset(path) {
-          return imageAssetsRef.current.get(path)?.file ?? null;
-        },
-        theme: snapshotMarkdownHtmlExportTheme(editorElementRef.current),
-        title: htmlExportTitle(file.name),
-      });
-
+      let result = await createCurrentFileHtmlExport(file);
       downloadTextFile(htmlExportFileName(file.name), result.html, "text/html;charset=utf-8");
       if (result.warnings.length) {
         setErrorMessage(markdownHtmlExportWarningMessage(result.warnings.length));
@@ -1521,7 +1526,40 @@ function LocalWorkspaceApp() {
     } finally {
       setBusy(false);
     }
-  }, [saveCurrentFile]);
+  }, [createCurrentFileHtmlExport, saveCurrentFile]);
+
+  let printCurrentFileAsPdf = useCallback(async () => {
+    let file = selectedFileRef.current;
+    if (!file) return;
+
+    let printView: ReturnType<typeof openStandaloneHtmlPrintView>;
+    try {
+      printView = openStandaloneHtmlPrintView({ title: htmlExportTitle(file.name) });
+    } catch (error) {
+      setErrorMessage(errorToMessage(error));
+      return;
+    }
+
+    if (!(await saveCurrentFile())) {
+      printView.close();
+      return;
+    }
+
+    setBusy(true);
+    setErrorMessage("");
+    try {
+      let result = await createCurrentFileHtmlExport(file);
+      await printView.printHtml(result.html);
+      if (result.warnings.length) {
+        setErrorMessage(markdownPrintWarningMessage(result.warnings.length));
+      }
+    } catch (error) {
+      printView.close();
+      setErrorMessage(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [createCurrentFileHtmlExport, saveCurrentFile]);
 
   let resolveImageSource = useMemo<LiveMdImageSourceResolver>(() => {
     return (source) => {
@@ -1746,6 +1784,16 @@ function LocalWorkspaceApp() {
             </TooltipIconButton>
             <TooltipIconButton
               className="max-md:hidden"
+              label="Print / Save as PDF"
+              size="icon-sm"
+              variant="ghost"
+              disabled={!selectedFile || busy}
+              onClick={() => void printCurrentFileAsPdf()}
+            >
+              <PrinterIcon data-icon="inline-start" />
+            </TooltipIconButton>
+            <TooltipIconButton
+              className="max-md:hidden"
               label="Refresh"
               size="icon-sm"
               variant="ghost"
@@ -1763,6 +1811,7 @@ function LocalWorkspaceApp() {
               storageKind={workspaceBackend?.kind ?? null}
               storageLabel={storageLabel}
               onExportHtml={() => void exportCurrentFileAsHtml()}
+              onPrintPdf={() => void printCurrentFileAsPdf()}
               onInsertImage={() => imageInputRef.current?.click()}
               onRefresh={() => void refreshWorkspace()}
               onShareFile={openShareDialog}
@@ -1943,6 +1992,7 @@ type MobileWorkspaceActionsProps = {
   storageKind: WorkspaceBackend["kind"] | null;
   storageLabel: string;
   onExportHtml: () => void;
+  onPrintPdf: () => void;
   onInsertImage: () => void;
   onRefresh: () => void;
   onShareFile: () => void;
@@ -1957,6 +2007,7 @@ function MobileWorkspaceActions({
   storageKind,
   storageLabel,
   onExportHtml,
+  onPrintPdf,
   onInsertImage,
   onRefresh,
   onShareFile,
@@ -2009,6 +2060,10 @@ function MobileWorkspaceActions({
           <MobileDropdownItem disabled={!selectedFile || busy} onSelect={onExportHtml}>
             <DownloadIcon />
             Export HTML
+          </MobileDropdownItem>
+          <MobileDropdownItem disabled={!selectedFile || busy} onSelect={onPrintPdf}>
+            <PrinterIcon />
+            Print / Save as PDF
           </MobileDropdownItem>
           <MobileDropdownItem disabled={!canRefresh || busy} onSelect={onRefresh}>
             <RefreshCwIcon />
@@ -2538,6 +2593,12 @@ function markdownHtmlExportWarningMessage(count: number) {
   return count == 1
     ? "Exported HTML, but 1 image could not be embedded."
     : `Exported HTML, but ${count} images could not be embedded.`;
+}
+
+function markdownPrintWarningMessage(count: number) {
+  return count == 1
+    ? "Opened print view, but 1 image could not be embedded."
+    : `Opened print view, but ${count} images could not be embedded.`;
 }
 
 function downloadTextFile(fileName: string, value: string, type: string) {
