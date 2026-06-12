@@ -74,6 +74,7 @@ import {
 import { GroveMark } from "@/components/GroveMark";
 import { LiveMdEditor, type LiveMdImageFilesInput } from "@/components/LiveMdEditor";
 import { isSharedFilePath, SharedFileEditor } from "@/components/SharedFileEditor";
+import { ThemeDropdownItem, ThemeToggle } from "@/components/ThemeToggle";
 import { WorkspaceCommandPalette } from "@/components/WorkspaceCommandPalette";
 import {
   authorizeDropboxWithPkce,
@@ -1706,6 +1707,7 @@ function LocalWorkspaceApp() {
                 Shared file
               </Badge>
             )}
+            <ThemeToggle className="max-md:hidden" />
             <input
               ref={imageInputRef}
               className="sr-only"
@@ -2014,6 +2016,7 @@ function MobileWorkspaceActions({
             <RefreshCwIcon />
             Refresh
           </MobileDropdownItem>
+          <ThemeDropdownItem className={mobileDropdownItemClassName} />
           <DropdownMenuPrimitive.Separator className="-mx-1 h-px bg-border" />
           <DropdownMenuPrimitive.Item asChild>
             <a

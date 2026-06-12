@@ -4,6 +4,7 @@ import { App } from "./App";
 import "./index.css";
 import { registerAppServiceWorker } from "./lib/pwa";
 import {
+  applyThemeToDocument,
   defaultTheme,
   loadStoredTheme,
   ThemeDocumentSync,
@@ -11,9 +12,12 @@ import {
   ThemeStorageSync,
 } from "./theme";
 
+let initialTheme = loadStoredTheme() ?? defaultTheme;
+applyThemeToDocument(initialTheme);
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider initialTheme={loadStoredTheme() ?? defaultTheme}>
+    <ThemeProvider initialTheme={initialTheme}>
       <ThemeDocumentSync />
       <ThemeStorageSync />
       <App />

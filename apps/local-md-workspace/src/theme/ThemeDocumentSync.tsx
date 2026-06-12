@@ -1,13 +1,19 @@
 import { useLayoutEffect } from "react";
 import { useTheme } from "./ThemeProvider";
+import type { Theme } from "./theme";
 
 export function ThemeDocumentSync() {
   let { theme } = useTheme();
 
   useLayoutEffect(() => {
-    document.documentElement.classList.toggle("dark", theme == "dark");
-    document.documentElement.style.colorScheme = theme;
+    applyThemeToDocument(theme);
   }, [theme]);
 
   return null;
+}
+
+export function applyThemeToDocument(theme: Theme, root = document.documentElement) {
+  root.dataset.theme = theme;
+  root.classList.toggle("dark", theme == "dark");
+  root.style.colorScheme = theme;
 }

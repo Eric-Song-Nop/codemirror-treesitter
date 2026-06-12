@@ -6,9 +6,11 @@ import {
   FileTextIcon,
   FolderOpenIcon,
   ImagePlusIcon,
+  MoonIcon,
   SearchIcon,
   SidebarCloseIcon,
   SidebarOpenIcon,
+  SunIcon,
   type LucideProps,
 } from "lucide-react";
 import {
@@ -20,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import type { MarkdownFileNode } from "@/lib/workspace-backend";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/theme";
 
 type WorkspaceCommandPaletteProps = {
   browserSupported: boolean;
@@ -63,6 +66,7 @@ export function WorkspaceCommandPalette({
   onToggleSidebar,
 }: WorkspaceCommandPaletteProps) {
   let [open, setOpen] = useState(false);
+  let { theme, toggleTheme } = useTheme();
 
   useEffect(() => {
     let handleKeyDown = (event: KeyboardEvent) => {
@@ -127,6 +131,14 @@ export function WorkspaceCommandPalette({
         title: "Insert image",
         onSelect: onInsertImage,
       },
+      {
+        detail: theme == "dark" ? "Use the light app palette" : "Use the dark app palette",
+        icon: theme == "dark" ? SunIcon : MoonIcon,
+        id: "toggle-theme",
+        keywords: ["appearance", "theme", "dark", "light"],
+        title: theme == "dark" ? "Switch to light theme" : "Switch to dark theme",
+        onSelect: toggleTheme,
+      },
     ],
     [
       browserSupported,
@@ -138,6 +150,8 @@ export function WorkspaceCommandPalette({
       onOpenFolder,
       onToggleSidebar,
       sidebarOpen,
+      theme,
+      toggleTheme,
     ],
   );
 
