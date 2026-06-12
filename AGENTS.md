@@ -52,6 +52,8 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   snippets, word completion, and close brackets.
 - `packages/codemirror`: `@codemirror-treesitter/basic-setup`, including
   `basicSetup`, `minimalSetup`, and the compatibility `EditorView` export.
+- `packages/theme`: Shared semantic theme token contracts and CodeMirror
+  editor/highlight extension factories for concrete theme packages.
 - `packages/theme-gruvbox`: Local Gruvbox editor themes and highlight styles.
 - `packages/merge`: Diff, split merge view, unified merge view, chunk helpers,
   and local highlighting for deletion widgets.

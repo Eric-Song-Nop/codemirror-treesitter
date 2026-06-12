@@ -49,8 +49,9 @@ collaboration flows.
   WASM assets, highlight queries, incremental reparsing, and included ranges
   for nested languages.
 - **Markdown product layer**: LiveMD composes the local language, commands,
-  autocomplete, basic setup, language-data, and Gruvbox theme packages with
-  KaTeX, Mermaid, and `beautiful-mermaid`.
+  autocomplete, basic setup, and language-data packages with KaTeX, Mermaid,
+  and `beautiful-mermaid`. Host apps or theme packages provide concrete editor
+  and code-fence highlighting themes.
 - **Collaboration and workspace layer**: Optional LiveMD Loro bindings use
   `loro-crdt` and `loro-codemirror`. Grove's local workspace app supports local
   folders, Dropbox through the OpenDAL browser WASM wrapper, local image
@@ -138,9 +139,9 @@ this repository replace the language-aware layers above those primitives.
    CodeMirror feature packages that need syntax information. They depend on the
    local language runtime instead of `@codemirror/language` or Lezer.
 4. **Assembly and styling**:
-   `basic-setup` assembles a CodeMirror setup from local feature packages, and
-   `theme-gruvbox` provides editor themes and highlight styles using local
-   highlight tags.
+   `basic-setup` assembles a CodeMirror setup from local feature packages,
+   `theme` defines shared semantic theme helpers, and concrete theme packages
+   provide editor themes and highlight styles using local highlight tags.
 5. **Product surface**:
    `live-md` composes the local packages into a Markdown editor with live block
    widgets, code-fence highlighting, KaTeX and Mermaid rendering, Shadow DOM
@@ -175,6 +176,7 @@ this repository replace the language-aware layers above those primitives.
 | `packages/commands`             | `@codemirror-treesitter/commands`             | Cursor movement, selection, deletion, indentation, commenting, history, and keymaps.                                            |
 | `packages/autocomplete`         | `@codemirror-treesitter/autocomplete`         | Completion contexts, sources, results, tooltip UI, filtering, snippets, word completion, and close brackets.                    |
 | `packages/codemirror`           | `@codemirror-treesitter/basic-setup`          | `basicSetup` and `minimalSetup` assembled from the local Tree-sitter packages.                                                  |
+| `packages/theme`                | `@codemirror-treesitter/theme`                | Shared semantic theme token contracts and CodeMirror editor/highlight extension factories.                                      |
 | `packages/theme-gruvbox`        | `@codemirror-treesitter/theme-gruvbox`        | Gruvbox dark/light editor themes, highlight styles, combined extensions, and palettes.                                          |
 | `packages/merge`                | `@codemirror-treesitter/merge`                | Diff, split merge view, unified merge view, chunks, and accept/reject commands.                                                 |
 | `packages/lsp-client`           | `@codemirror-treesitter/lsp-client`           | LSP client, workspace mapping, diagnostics, completions, hover, formatting, rename, definition, references, and signature help. |
@@ -411,6 +413,8 @@ main contract:
   `minimalSetup`, and basic keymap ordering.
 - `@codemirror-treesitter/language-data` mirrors upstream language metadata and
   all built language entries load a parser.
+- `@codemirror-treesitter/theme` exports shared semantic theme helpers built on
+  the local Tree-sitter highlight tags.
 - `@codemirror-treesitter/theme-gruvbox` exports both dark and light Gruvbox
   themes and imports syntax highlighting from the local Tree-sitter language
   package.

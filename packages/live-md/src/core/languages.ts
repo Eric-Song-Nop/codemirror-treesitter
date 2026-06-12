@@ -2,11 +2,11 @@ import { Facet, StateEffect, StateField, type Extension } from "@codemirror/stat
 import {
   HighlightStyle,
   TreeSitterLanguage,
+  tags as t,
   type Highlighter,
   type TreeSitterParser,
 } from "@codemirror-treesitter/language";
 import { languages } from "@codemirror-treesitter/language-data";
-import { gruvboxLightHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
 import { EditorView } from "@codemirror/view";
 
 export type CodeFenceLanguageMap = ReadonlyMap<string, TreeSitterParser>;
@@ -14,9 +14,27 @@ export type CodeFenceLanguageMap = ReadonlyMap<string, TreeSitterParser>;
 export const emptyCodeFenceLanguages: CodeFenceLanguageMap = new Map();
 export const setCodeFenceLanguages = StateEffect.define<CodeFenceLanguageMap>();
 
+const neutralCodeFenceHighlightStyle = HighlightStyle.define([
+  { tag: t.keyword, color: "#9b392b" },
+  { tag: [t.name, t.definition(t.name), t.separator], color: "#2f3437" },
+  { tag: [t.function(t.variableName), t.labelName], color: "#0f6a85" },
+  { tag: [t.propertyName, t.attributeName], color: "#0f6a85" },
+  { tag: [t.number, t.constant(t.name), t.standard(t.name)], color: "#8b4a35" },
+  { tag: [t.typeName, t.className, t.annotation, t.modifier], color: "#8d3525" },
+  { tag: [t.operator, t.operatorKeyword, t.url, t.escape, t.regexp, t.link], color: "#0f766e" },
+  { tag: [t.meta, t.comment], color: "#66706c" },
+  { tag: t.strong, fontWeight: "bold" },
+  { tag: t.emphasis, fontStyle: "italic" },
+  { tag: t.strikethrough, textDecoration: "line-through" },
+  { tag: t.heading, fontWeight: "bold", color: "#13231f" },
+  { tag: [t.atom, t.bool, t.special(t.variableName)], color: "#6d4b8f" },
+  { tag: [t.processingInstruction, t.string, t.inserted, t.special(t.string)], color: "#0f766e" },
+  { tag: [t.deleted, t.invalid], color: "#9b392b" },
+]);
+
 export const codeFenceHighlighterFacet = Facet.define<Highlighter, Highlighter>({
   combine(values) {
-    return values.at(-1) ?? gruvboxLightHighlightStyle;
+    return values.at(-1) ?? neutralCodeFenceHighlightStyle;
   },
 });
 
@@ -41,7 +59,7 @@ export function liveMdCodeFenceHighlighting(highlighter: Highlighter): Extension
 }
 
 export const liveMdDefaultCodeFenceHighlighting = liveMdCodeFenceHighlighting(
-  gruvboxLightHighlightStyle,
+  neutralCodeFenceHighlightStyle,
 );
 
 let markdownExtensionPromise: Promise<Extension> | null = null;

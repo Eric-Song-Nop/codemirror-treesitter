@@ -7,9 +7,8 @@ an HTML renderer, scoped document CSS helpers, and a CSS export.
 
 ## Stack and Boundaries
 
-- Depends on local `autocomplete`, `basic-setup`, `commands`, `language`,
-  `language-data`, and `theme-gruvbox` packages plus official CodeMirror
-  state/view packages.
+- Depends on local `autocomplete`, `basic-setup`, `commands`, `language`, and
+  `language-data` packages plus official CodeMirror state/view packages.
 - Uses KaTeX, Mermaid, and `beautiful-mermaid` for rich Markdown widgets.
 - Built as an ES module package with Vite+ `vp pack`.
 - Keeps collaboration optional. Loro-specific code belongs in
@@ -165,10 +164,10 @@ The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 
 ## Relationship to Other Packages
 
-LiveMD composes `basic-setup`, `language`, `language-data`, `commands`,
-`autocomplete`, and `theme-gruvbox`. Optional collaboration is layered through
-`@codemirror-treesitter/live-md-loro` so this package stays independent of Loro
-and Cloudflare-specific code.
+LiveMD composes `basic-setup`, `language`, `language-data`, `commands`, and
+`autocomplete`. Optional collaboration is layered through
+`@codemirror-treesitter/live-md-loro` so this package stays independent of Loro,
+Cloudflare-specific code, and concrete theme packages.
 
 ## Current Implementation Notes
 

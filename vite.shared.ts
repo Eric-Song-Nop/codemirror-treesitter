@@ -20,6 +20,7 @@ export const workspaceAliases = {
     "packages/opendal-wasm-browser/src/index.ts",
     import.meta.url,
   ).pathname,
+  "@codemirror-treesitter/theme": new URL("packages/theme/src/index.ts", import.meta.url).pathname,
   "@codemirror-treesitter/theme-gruvbox": new URL(
     "packages/theme-gruvbox/src/index.ts",
     import.meta.url,
