@@ -165,6 +165,14 @@ type EditorDocument = {
   version: number;
 };
 
+type MarkdownHtmlExportInput = {
+  documentPath: string;
+  fileName: string;
+  markdown: string;
+  theme: ReturnType<typeof snapshotMarkdownHtmlExportTheme>;
+  title: string;
+};
+
 const emptyEditorExtensions: Extension[] = [];
 const githubRepositoryUrl = "https://github.com/Eric-Song-Nop/codemirror-treesitter";
 const mobileSidebarMediaQuery = "(max-width: 767px)";
@@ -1492,19 +1500,31 @@ function LocalWorkspaceApp() {
     }
   }, [createdShare]);
 
-  let createCurrentFileHtmlExport = useCallback(async (file: MarkdownFileNode) => {
+  let snapshotCurrentFileHtmlExport = useCallback((file: MarkdownFileNode) => {
+    if (selectedFileRef.current?.path != file.path) return null;
+
     let activeDocument =
       collabDocumentRef.current?.path == file.path ? collabDocumentRef.current : null;
     let markdown = activeDocument ? getCollabDocumentValue(activeDocument) : editorValueRef.current;
 
-    return createStandaloneMarkdownHtml({
+    return {
       documentPath: file.path,
+      fileName: file.name,
       markdown,
+      theme: snapshotMarkdownHtmlExportTheme(editorElementRef.current),
+      title: htmlExportTitle(file.name),
+    };
+  }, []);
+
+  let createCurrentFileHtmlExport = useCallback(async (input: MarkdownHtmlExportInput) => {
+    return createStandaloneMarkdownHtml({
+      documentPath: input.documentPath,
+      markdown: input.markdown,
       resolveAsset(path) {
         return imageAssetsRef.current.get(path)?.file ?? null;
       },
-      theme: snapshotMarkdownHtmlExportTheme(editorElementRef.current),
-      title: htmlExportTitle(file.name),
+      theme: input.theme,
+      title: input.title,
     });
   }, []);
 
@@ -1512,12 +1532,18 @@ function LocalWorkspaceApp() {
     let file = selectedFileRef.current;
     if (!file) return;
     if (!(await saveCurrentFile())) return;
+    let exportInput = snapshotCurrentFileHtmlExport(file);
+    if (!exportInput) return;
 
     setBusy(true);
     setErrorMessage("");
     try {
-      let result = await createCurrentFileHtmlExport(file);
-      downloadTextFile(htmlExportFileName(file.name), result.html, "text/html;charset=utf-8");
+      let result = await createCurrentFileHtmlExport(exportInput);
+      downloadTextFile(
+        htmlExportFileName(exportInput.fileName),
+        result.html,
+        "text/html;charset=utf-8",
+      );
       if (result.warnings.length) {
         setErrorMessage(markdownHtmlExportWarningMessage(result.warnings.length));
       }
@@ -1526,7 +1552,7 @@ function LocalWorkspaceApp() {
     } finally {
       setBusy(false);
     }
-  }, [createCurrentFileHtmlExport, saveCurrentFile]);
+  }, [createCurrentFileHtmlExport, saveCurrentFile, snapshotCurrentFileHtmlExport]);
 
   let printCurrentFileAsPdf = useCallback(async () => {
     let file = selectedFileRef.current;
@@ -1544,11 +1570,16 @@ function LocalWorkspaceApp() {
       printView.close();
       return;
     }
+    let exportInput = snapshotCurrentFileHtmlExport(file);
+    if (!exportInput) {
+      printView.close();
+      return;
+    }
 
     setBusy(true);
     setErrorMessage("");
     try {
-      let result = await createCurrentFileHtmlExport(file);
+      let result = await createCurrentFileHtmlExport(exportInput);
       await printView.printHtml(result.html);
       if (result.warnings.length) {
         setErrorMessage(markdownPrintWarningMessage(result.warnings.length));
@@ -1559,7 +1590,7 @@ function LocalWorkspaceApp() {
     } finally {
       setBusy(false);
     }
-  }, [createCurrentFileHtmlExport, saveCurrentFile]);
+  }, [createCurrentFileHtmlExport, saveCurrentFile, snapshotCurrentFileHtmlExport]);
 
   let resolveImageSource = useMemo<LiveMdImageSourceResolver>(() => {
     return (source) => {
