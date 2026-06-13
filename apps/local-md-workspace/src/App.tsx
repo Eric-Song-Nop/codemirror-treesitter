@@ -297,6 +297,7 @@ function LocalWorkspaceApp() {
   let imageAssetsRef = useRef(new Map<string, WorkspaceImageAsset>());
   let imageInputRef = useRef<HTMLInputElement | null>(null);
   let [localRestoreChecked, setLocalRestoreChecked] = useState(false);
+  let [dropboxAutoRestoreChecked, setDropboxAutoRestoreChecked] = useState(false);
 
   useEffect(() => {
     workspaceBackendRef.current = workspaceBackend;
@@ -1236,6 +1237,7 @@ function LocalWorkspaceApp() {
       } finally {
         dropboxRedirectPendingRef.current = false;
         if (!canceled) {
+          setDropboxAutoRestoreChecked(true);
           setDropboxConnecting(false);
           setBusy(false);
         }
@@ -1302,36 +1304,31 @@ function LocalWorkspaceApp() {
   }, [browserSupported, loadTree, storedDropboxConfig, storedWorkspaceKind, workspaceBackend]);
 
   useEffect(() => {
-    if (
-      !localRestoreChecked ||
-      dropboxRedirectPendingRef.current ||
-      workspaceBackend ||
-      !storedDropboxConfig ||
-      dropboxAutoRestoreAttemptedRef.current
-    ) {
+    if (!localRestoreChecked || dropboxRedirectPendingRef.current) {
       return;
     }
-    if (storedWorkspaceKind && storedWorkspaceKind != "dropbox") return;
-    if (!storedWorkspaceKind && storedWorkspaceHandle) return;
+    if (dropboxAutoRestoreAttemptedRef.current) return;
+    if (
+      workspaceBackend ||
+      !storedDropboxConfig ||
+      (storedWorkspaceKind && storedWorkspaceKind != "dropbox") ||
+      (!storedWorkspaceKind && storedWorkspaceHandle)
+    ) {
+      setDropboxAutoRestoreChecked(true);
+      return;
+    }
 
     dropboxAutoRestoreAttemptedRef.current = true;
-    let canceled = false;
+    setDropboxAutoRestoreChecked(false);
     void (async () => {
-      let restored = await openDropboxWorkspace(storedDropboxConfig, { skipSaveCurrent: true });
-      if (!restored && !canceled) {
-        await openSingleFileDraft({
-          reuseLast: true,
-          saveCurrent: false,
-          shouldContinue: () => !selectedFileRef.current,
-        });
+      try {
+        await openDropboxWorkspace(storedDropboxConfig, { skipSaveCurrent: true });
+      } finally {
+        setDropboxAutoRestoreChecked(true);
       }
     })();
-    return () => {
-      canceled = true;
-    };
   }, [
     localRestoreChecked,
-    openSingleFileDraft,
     openDropboxWorkspace,
     storedDropboxConfig,
     storedWorkspaceHandle,
@@ -1340,14 +1337,21 @@ function LocalWorkspaceApp() {
   ]);
 
   useEffect(() => {
-    if (dropboxRedirectPendingRef.current || selectedFile) return;
+    if (
+      !localRestoreChecked ||
+      !dropboxAutoRestoreChecked ||
+      dropboxRedirectPendingRef.current ||
+      selectedFile
+    ) {
+      return;
+    }
 
     void openSingleFileDraft({
       reuseLast: true,
       saveCurrent: false,
       shouldContinue: () => !selectedFileRef.current,
     });
-  }, [openSingleFileDraft, selectedFile]);
+  }, [dropboxAutoRestoreChecked, localRestoreChecked, openSingleFileDraft, selectedFile]);
 
   useEffect(
     () => () => {
