@@ -287,6 +287,7 @@ function LocalWorkspaceApp() {
   let saveStateRef = useRef<SaveState>("idle");
   let saveTimerRef = useRef<number | null>(null);
   let saveOperationRef = useRef(0);
+  let activeDocumentGenerationRef = useRef(0);
   let loadFileRequestRef = useRef(0);
   let dropboxTokenRef = useRef<DropboxAccessToken | null>(null);
   let dropboxTokenAppKeyRef = useRef("");
@@ -384,8 +385,14 @@ function LocalWorkspaceApp() {
     shareHostRecordRef.current = null;
   }, []);
 
+  let invalidateActiveDocumentSave = useCallback(() => {
+    activeDocumentGenerationRef.current += 1;
+    saveOperationRef.current += 1;
+  }, []);
+
   let clearActiveDocument = useCallback(() => {
     loadFileRequestRef.current += 1;
+    invalidateActiveDocumentSave();
     if (saveTimerRef.current != null) {
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -415,7 +422,7 @@ function LocalWorkspaceApp() {
       version: current.version + 1,
     }));
     setSaveStateSynced("idle");
-  }, [setSaveStateSynced, stopOwnerShareHost]);
+  }, [invalidateActiveDocumentSave, setSaveStateSynced, stopOwnerShareHost]);
 
   let activateSingleFileDocument = useCallback(
     (
@@ -425,6 +432,7 @@ function LocalWorkspaceApp() {
       value: string,
     ) => {
       loadFileRequestRef.current += 1;
+      invalidateActiveDocumentSave();
       if (saveTimerRef.current != null) {
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
@@ -457,7 +465,7 @@ function LocalWorkspaceApp() {
       setErrorMessage("");
       setRetryLoadPath(null);
     },
-    [setSaveStateSynced, stopOwnerShareHost],
+    [invalidateActiveDocumentSave, setSaveStateSynced, stopOwnerShareHost],
   );
 
   let discardMaterializedDraft = useCallback((source: SingleFileSource | null) => {
@@ -499,7 +507,7 @@ function LocalWorkspaceApp() {
 
   let applyCollabDocumentValue = useCallback(
     (document: CollabDocumentState, value = getCollabDocumentValue(document)) => {
-      if (selectedFileRef.current?.path != document.path) return value;
+      if (collabDocumentRef.current !== document) return value;
       editorValueRef.current = value;
       editVersionRef.current += 1;
       setEditorDocument((current) => ({
@@ -516,6 +524,7 @@ function LocalWorkspaceApp() {
     let backend = selectedFileBackendRef.current;
     let file = selectedFileRef.current;
     if (!backend || !file) return true;
+    let documentGeneration = activeDocumentGenerationRef.current;
 
     let selectedDocument = collabDocumentRef.current;
     let document = selectedDocument?.path == file.path ? selectedDocument : null;
@@ -535,6 +544,11 @@ function LocalWorkspaceApp() {
     }
 
     let operation = ++saveOperationRef.current;
+    let isCurrentSaveTarget = () =>
+      operation == saveOperationRef.current &&
+      documentGeneration == activeDocumentGenerationRef.current &&
+      selectedFileBackendRef.current === backend &&
+      selectedFileRef.current === file;
     setSaveStateSynced("saving");
 
     try {
@@ -555,7 +569,7 @@ function LocalWorkspaceApp() {
           !dirtyRef.current &&
           value == cleanValueRef.current
         ) {
-          setSaveStateSynced("saved");
+          if (isCurrentSaveTarget()) setSaveStateSynced("saved");
           return true;
         }
       }
@@ -574,7 +588,7 @@ function LocalWorkspaceApp() {
       } else {
         await backend.writeFile(file.path, value);
       }
-      if (operation == saveOperationRef.current && selectedFileRef.current?.path == file.path) {
+      if (isCurrentSaveTarget()) {
         cleanValueRef.current = value;
         if (editVersion == editVersionRef.current) {
           dirtyRef.current = false;
@@ -606,10 +620,7 @@ function LocalWorkspaceApp() {
               versionVector: materialization.versionVector,
             });
             sendHostSaveAck(file.path, materialization.value, materialization.version);
-            if (
-              operation == saveOperationRef.current &&
-              selectedFileRef.current?.path == file.path
-            ) {
+            if (isCurrentSaveTarget()) {
               cleanValueRef.current = value;
               if (editVersion == editVersionRef.current) {
                 dirtyRef.current = false;
@@ -620,10 +631,7 @@ function LocalWorkspaceApp() {
           }
 
           if (externalValue == value) {
-            if (
-              operation == saveOperationRef.current &&
-              selectedFileRef.current?.path == file.path
-            ) {
+            if (isCurrentSaveTarget()) {
               cleanValueRef.current = value;
               if (editVersion == editVersionRef.current) {
                 dirtyRef.current = false;
@@ -637,6 +645,7 @@ function LocalWorkspaceApp() {
         }
       }
 
+      if (!isCurrentSaveTarget()) return true;
       setSaveStateSynced("error");
       setRetryLoadPath(null);
       setErrorMessage(errorToMessage(error));
@@ -815,12 +824,13 @@ function LocalWorkspaceApp() {
         collabSyncCleanupRef.current();
         collabDocumentRef.current?.dispose();
         collabSyncCleanupRef.current = () => {};
+        invalidateActiveDocumentSave();
         selectedFileRef.current = file;
         selectedFileBackendRef.current = backend;
         collabDocumentRef.current = document;
         if (document) {
           let handleRemoteDocumentUpdate = () => {
-            if (selectedFileRef.current?.path != document.path) return;
+            if (collabDocumentRef.current !== document) return;
             void (async () => {
               try {
                 editorValueRef.current = getCollabDocumentValue(document);
