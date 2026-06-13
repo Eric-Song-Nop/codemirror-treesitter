@@ -32,9 +32,14 @@ const neutralCodeFenceHighlightStyle = HighlightStyle.define([
   { tag: [t.deleted, t.invalid], color: "#9b392b" },
 ]);
 
-export const codeFenceHighlighterFacet = Facet.define<Highlighter, Highlighter>({
+export const codeFenceHighlighterFacet = Facet.define<
+  Highlighter | readonly Highlighter[],
+  readonly Highlighter[] | null
+>({
   combine(values) {
-    return values.at(-1) ?? neutralCodeFenceHighlightStyle;
+    let value = values.at(-1);
+    if (!value) return null;
+    return Array.isArray(value) ? value : [value];
   },
 });
 
@@ -58,9 +63,11 @@ export function liveMdCodeFenceHighlighting(highlighter: Highlighter): Extension
   return extensions;
 }
 
-export const liveMdDefaultCodeFenceHighlighting = liveMdCodeFenceHighlighting(
-  neutralCodeFenceHighlightStyle,
-);
+export const liveMdDefaultCodeFenceHighlighter = neutralCodeFenceHighlightStyle;
+
+export const liveMdDefaultCodeFenceHighlighting: Extension = neutralCodeFenceHighlightStyle.module
+  ? [EditorView.styleModule.of(neutralCodeFenceHighlightStyle.module)]
+  : [];
 
 let markdownExtensionPromise: Promise<Extension> | null = null;
 let codeFenceLanguagesPromise: Promise<CodeFenceLanguageMap> | null = null;

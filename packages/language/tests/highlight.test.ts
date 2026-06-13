@@ -10,6 +10,7 @@ import {
   highlightTree,
   highlightingFor,
   styleTags,
+  syntaxHighlighters,
   syntaxHighlighting,
   syntaxTree,
   tagHighlighter,
@@ -69,6 +70,25 @@ function rawTextRanges(tree: Tree, parentName: string): DocRange[] {
 }
 
 describe("highlight tags", () => {
+  it("exposes the active syntax highlighters for nested renderers", () => {
+    let primary = tagHighlighter([{ tag: tags.keyword, class: "primary-keyword" }]);
+    let fallback = tagHighlighter([{ tag: tags.keyword, class: "fallback-keyword" }]);
+    let state = EditorState.create({
+      extensions: [syntaxHighlighting(fallback, { fallback: true }), syntaxHighlighting(primary)],
+    });
+
+    expect(syntaxHighlighters(state)).toEqual([primary]);
+  });
+
+  it("returns fallback syntax highlighters when no primary highlighter is active", () => {
+    let fallback = tagHighlighter([{ tag: tags.keyword, class: "fallback-keyword" }]);
+    let state = EditorState.create({
+      extensions: [syntaxHighlighting(fallback, { fallback: true })],
+    });
+
+    expect(syntaxHighlighters(state)).toEqual([fallback]);
+  });
+
   it("falls back from specialized tags to their parent tags", () => {
     let highlighter = tagHighlighter([
       { tag: tags.comment, class: "comment" },

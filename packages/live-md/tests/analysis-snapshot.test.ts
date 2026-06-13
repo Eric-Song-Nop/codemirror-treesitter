@@ -2,7 +2,13 @@
 
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { ensureSyntaxTree, HighlightStyle, tags as t, Tree } from "@codemirror-treesitter/language";
+import {
+  ensureSyntaxTree,
+  HighlightStyle,
+  syntaxHighlighting,
+  tags as t,
+  Tree,
+} from "@codemirror-treesitter/language";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   __testBuildLiveMdAnalysis,
@@ -140,10 +146,10 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("rebuilds code fence highlights when the highlighter changes", async () => {
+  it("reuses active syntax highlighters for code fence highlights", async () => {
     let highlighterCompartment = new Compartment();
     let view = await markdownAnalysisView("```ts\nlet answer = 1;\n```\n", "", [
-      highlighterCompartment.of(liveMdCodeFenceHighlighting(testLightCodeFenceHighlightStyle)),
+      highlighterCompartment.of(syntaxHighlighting(testLightCodeFenceHighlightStyle)),
     ]);
     view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
     let lightKeywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
@@ -155,10 +161,25 @@ describe("LiveMD analysis snapshot", () => {
 
     view.dispatch({
       effects: highlighterCompartment.reconfigure(
-        liveMdCodeFenceHighlighting(testDarkCodeFenceHighlightStyle),
+        syntaxHighlighting(testDarkCodeFenceHighlightStyle),
       ),
     });
 
+    expect(codeFenceClasses(view.state).has(darkKeywordClass!)).toBe(true);
+    expect(codeFenceClasses(view.state).has(lightKeywordClass!)).toBe(false);
+    view.destroy();
+  });
+
+  it("allows explicit code fence highlighter overrides", async () => {
+    let view = await markdownAnalysisView("```ts\nlet answer = 1;\n```\n", "", [
+      syntaxHighlighting(testLightCodeFenceHighlightStyle),
+      liveMdCodeFenceHighlighting(testDarkCodeFenceHighlightStyle),
+    ]);
+    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+    let lightKeywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
+    let darkKeywordClass = testDarkCodeFenceHighlightStyle.style([t.keyword]);
+
+    expect(darkKeywordClass).toBeTruthy();
     expect(codeFenceClasses(view.state).has(darkKeywordClass!)).toBe(true);
     expect(codeFenceClasses(view.state).has(lightKeywordClass!)).toBe(false);
     view.destroy();
