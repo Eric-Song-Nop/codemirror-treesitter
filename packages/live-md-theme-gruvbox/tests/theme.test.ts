@@ -4,12 +4,12 @@ import { gruvboxDarkLiveMdTheme, gruvboxLightLiveMdTheme } from "../src/index.js
 
 describe("Gruvbox LiveMD themes", () => {
   it("cover every reusable LiveMD color token", () => {
-    expect(Object.keys(gruvboxDarkLiveMdTheme.variables).sort()).toEqual([
-      ...liveMdThemeColorVariableNames,
-    ].sort());
-    expect(Object.keys(gruvboxLightLiveMdTheme.variables).sort()).toEqual([
-      ...liveMdThemeColorVariableNames,
-    ].sort());
+    expect(Object.keys(gruvboxDarkLiveMdTheme.variables).sort()).toEqual(
+      [...liveMdThemeColorVariableNames].sort(),
+    );
+    expect(Object.keys(gruvboxLightLiveMdTheme.variables).sort()).toEqual(
+      [...liveMdThemeColorVariableNames].sort(),
+    );
   });
 
   it("keeps light and dark themes distinct", () => {

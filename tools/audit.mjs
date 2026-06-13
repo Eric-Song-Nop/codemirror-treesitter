@@ -330,7 +330,8 @@ async function checkThemePackages() {
       "@codemirror-treesitter/theme-github",
       "@codemirror-treesitter/theme-catppuccin",
     ]) {
-      if (pkg.dependencies?.[forbidden] != null) fail(`${themePackage.dir} depends on ${forbidden}`);
+      if (pkg.dependencies?.[forbidden] != null)
+        fail(`${themePackage.dir} depends on ${forbidden}`);
     }
 
     let source = await readText(`packages/${themePackage.dir}/src/index.ts`);

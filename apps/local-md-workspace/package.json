@@ -14,11 +14,11 @@
   "dependencies": {
     "@codemirror-treesitter/language": "workspace:*",
     "@codemirror-treesitter/live-md": "workspace:*",
+    "@codemirror-treesitter/live-md-loro": "workspace:*",
     "@codemirror-treesitter/live-md-theme": "workspace:*",
     "@codemirror-treesitter/live-md-theme-catppuccin": "workspace:*",
     "@codemirror-treesitter/live-md-theme-github": "workspace:*",
     "@codemirror-treesitter/live-md-theme-gruvbox": "workspace:*",
-    "@codemirror-treesitter/live-md-loro": "workspace:*",
     "@codemirror-treesitter/opendal-wasm-browser": "workspace:*",
     "@codemirror-treesitter/theme-catppuccin": "workspace:*",
     "@codemirror-treesitter/theme-github": "workspace:*",

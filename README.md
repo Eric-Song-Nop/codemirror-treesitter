@@ -170,27 +170,27 @@ this repository replace the language-aware layers above those primitives.
 
 ## Packages
 
-| Directory                       | Package                                       | Role                                                                                                                            |
-| ------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/language`             | `@codemirror-treesitter/language`             | Tree-sitter parser integration and CodeMirror-compatible language infrastructure.                                               |
-| `packages/language-data`        | `@codemirror-treesitter/language-data`        | Lazy language metadata, Tree-sitter WASM loading, highlight-query loading, and mixed-language parser wiring.                    |
-| `packages/commands`             | `@codemirror-treesitter/commands`             | Cursor movement, selection, deletion, indentation, commenting, history, and keymaps.                                            |
-| `packages/autocomplete`         | `@codemirror-treesitter/autocomplete`         | Completion contexts, sources, results, tooltip UI, filtering, snippets, word completion, and close brackets.                    |
-| `packages/codemirror`           | `@codemirror-treesitter/basic-setup`          | `basicSetup` and `minimalSetup` assembled from the local Tree-sitter packages.                                                  |
-| `packages/theme-palettes`       | `@codemirror-treesitter/theme-palettes`       | Shared concrete color palettes reused by CodeMirror and LiveMD presentation theme packages.                                     |
-| `packages/theme`                | `@codemirror-treesitter/theme`                | Shared semantic theme token contracts and CodeMirror editor/highlight extension factories.                                      |
-| `packages/theme-gruvbox`        | `@codemirror-treesitter/theme-gruvbox`        | Gruvbox dark/light editor themes, highlight styles, combined extensions, and palettes.                                          |
-| `packages/theme-github`         | `@codemirror-treesitter/theme-github`         | GitHub Light editor theme, highlight style, combined extension, and palette export.                                             |
-| `packages/theme-catppuccin`     | `@codemirror-treesitter/theme-catppuccin`     | Catppuccin Latte/Macchiato editor themes, highlight styles, combined extensions, and palette exports.                           |
-| `packages/merge`                | `@codemirror-treesitter/merge`                | Diff, split merge view, unified merge view, chunks, and accept/reject commands.                                                 |
-| `packages/lsp-client`           | `@codemirror-treesitter/lsp-client`           | LSP client, workspace mapping, diagnostics, completions, hover, formatting, rename, definition, references, and signature help. |
-| `packages/live-md`              | `@codemirror-treesitter/live-md`              | Live Markdown editor runtime, web component, registration entry, fixtures, Markdown HTML renderer, and CSS exports.             |
-| `packages/live-md-theme`        | `@codemirror-treesitter/live-md-theme`        | Reusable LiveMD presentation token contract and helpers for applying `--live-md-*` variables.                                   |
-| `packages/live-md-theme-gruvbox` | `@codemirror-treesitter/live-md-theme-gruvbox` | Gruvbox dark/light LiveMD prose, widget, table, Mermaid, and code-block container presentation themes.                          |
-| `packages/live-md-theme-github` | `@codemirror-treesitter/live-md-theme-github` | GitHub Light LiveMD presentation theme.                                                                                         |
+| Directory                           | Package                                           | Role                                                                                                                            |
+| ----------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/language`                 | `@codemirror-treesitter/language`                 | Tree-sitter parser integration and CodeMirror-compatible language infrastructure.                                               |
+| `packages/language-data`            | `@codemirror-treesitter/language-data`            | Lazy language metadata, Tree-sitter WASM loading, highlight-query loading, and mixed-language parser wiring.                    |
+| `packages/commands`                 | `@codemirror-treesitter/commands`                 | Cursor movement, selection, deletion, indentation, commenting, history, and keymaps.                                            |
+| `packages/autocomplete`             | `@codemirror-treesitter/autocomplete`             | Completion contexts, sources, results, tooltip UI, filtering, snippets, word completion, and close brackets.                    |
+| `packages/codemirror`               | `@codemirror-treesitter/basic-setup`              | `basicSetup` and `minimalSetup` assembled from the local Tree-sitter packages.                                                  |
+| `packages/theme-palettes`           | `@codemirror-treesitter/theme-palettes`           | Shared concrete color palettes reused by CodeMirror and LiveMD presentation theme packages.                                     |
+| `packages/theme`                    | `@codemirror-treesitter/theme`                    | Shared semantic theme token contracts and CodeMirror editor/highlight extension factories.                                      |
+| `packages/theme-gruvbox`            | `@codemirror-treesitter/theme-gruvbox`            | Gruvbox dark/light editor themes, highlight styles, combined extensions, and palettes.                                          |
+| `packages/theme-github`             | `@codemirror-treesitter/theme-github`             | GitHub Light editor theme, highlight style, combined extension, and palette export.                                             |
+| `packages/theme-catppuccin`         | `@codemirror-treesitter/theme-catppuccin`         | Catppuccin Latte/Macchiato editor themes, highlight styles, combined extensions, and palette exports.                           |
+| `packages/merge`                    | `@codemirror-treesitter/merge`                    | Diff, split merge view, unified merge view, chunks, and accept/reject commands.                                                 |
+| `packages/lsp-client`               | `@codemirror-treesitter/lsp-client`               | LSP client, workspace mapping, diagnostics, completions, hover, formatting, rename, definition, references, and signature help. |
+| `packages/live-md`                  | `@codemirror-treesitter/live-md`                  | Live Markdown editor runtime, web component, registration entry, fixtures, Markdown HTML renderer, and CSS exports.             |
+| `packages/live-md-theme`            | `@codemirror-treesitter/live-md-theme`            | Reusable LiveMD presentation token contract and helpers for applying `--live-md-*` variables.                                   |
+| `packages/live-md-theme-gruvbox`    | `@codemirror-treesitter/live-md-theme-gruvbox`    | Gruvbox dark/light LiveMD prose, widget, table, Mermaid, and code-block container presentation themes.                          |
+| `packages/live-md-theme-github`     | `@codemirror-treesitter/live-md-theme-github`     | GitHub Light LiveMD presentation theme.                                                                                         |
 | `packages/live-md-theme-catppuccin` | `@codemirror-treesitter/live-md-theme-catppuccin` | Catppuccin Latte/Macchiato LiveMD presentation themes.                                                                          |
-| `packages/live-md-loro`         | `@codemirror-treesitter/live-md-loro`         | Optional Loro collaboration bindings for LiveMD documents, presence, custom text containers, and collaborative undo/redo.       |
-| `packages/opendal-wasm-browser` | `@codemirror-treesitter/opendal-wasm-browser` | Experimental browser WASM wrapper for OpenDAL-backed cloud workspace storage.                                                   |
+| `packages/live-md-loro`             | `@codemirror-treesitter/live-md-loro`             | Optional Loro collaboration bindings for LiveMD documents, presence, custom text containers, and collaborative undo/redo.       |
+| `packages/opendal-wasm-browser`     | `@codemirror-treesitter/opendal-wasm-browser`     | Experimental browser WASM wrapper for OpenDAL-backed cloud workspace storage.                                                   |
 
 Each package directory has its own README with local responsibilities, public
 entry points, dependency boundaries, source layout, and validation notes.

@@ -4,9 +4,9 @@ import { githubLightLiveMdTheme } from "../src/index.js";
 
 describe("GitHub LiveMD themes", () => {
   it("covers every reusable LiveMD color token", () => {
-    expect(Object.keys(githubLightLiveMdTheme.variables).sort()).toEqual([
-      ...liveMdThemeColorVariableNames,
-    ].sort());
+    expect(Object.keys(githubLightLiveMdTheme.variables).sort()).toEqual(
+      [...liveMdThemeColorVariableNames].sort(),
+    );
   });
 
   it("uses neutral GitHub Markdown presentation colors", () => {

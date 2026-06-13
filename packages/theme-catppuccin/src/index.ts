@@ -8,11 +8,11 @@ import {
 import {
   catppuccinLatteColors,
   catppuccinMacchiatoColors,
+  type CatppuccinColors,
 } from "@codemirror-treesitter/theme-palettes";
 
 export { catppuccinLatteColors, catppuccinMacchiatoColors };
-
-type CatppuccinColors = typeof catppuccinLatteColors;
+export type { CatppuccinColors } from "@codemirror-treesitter/theme-palettes";
 
 function createCatppuccinSpec(colors: CatppuccinColors, appearance: "dark" | "light") {
   let dark = appearance == "dark";

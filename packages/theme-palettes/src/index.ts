@@ -128,3 +128,15 @@ export const catppuccinMacchiatoColors = {
   mantle: "#1e2030",
   crust: "#181926",
 } as const;
+
+export type GruvboxColors = {
+  readonly [Key in keyof typeof gruvboxDarkColors]: string;
+};
+
+export type GitHubLightColors = {
+  readonly [Key in keyof typeof githubLightColors]: string;
+};
+
+export type CatppuccinColors = {
+  readonly [Key in keyof typeof catppuccinLatteColors]: string;
+};

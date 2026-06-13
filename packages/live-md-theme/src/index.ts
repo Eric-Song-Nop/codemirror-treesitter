@@ -108,10 +108,7 @@ export function createLiveMdTheme(spec: LiveMdThemeSpec): LiveMdThemeSpec {
   return spec;
 }
 
-export function setLiveMdThemeVariables(
-  target: LiveMdThemeVariableTarget,
-  theme: LiveMdThemeSpec,
-) {
+export function setLiveMdThemeVariables(target: LiveMdThemeVariableTarget, theme: LiveMdThemeSpec) {
   for (let name of liveMdThemeVariableNames) {
     let value = theme.variables[name];
     if (value == null) {

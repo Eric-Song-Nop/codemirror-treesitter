@@ -5,9 +5,8 @@ import {
 import {
   gruvboxDarkColors,
   gruvboxLightColors,
+  type GruvboxColors,
 } from "@codemirror-treesitter/theme-palettes";
-
-type GruvboxColors = typeof gruvboxDarkColors;
 
 function gruvboxLiveMdVariables(colors: GruvboxColors): LiveMdThemeColorVariables {
   return {

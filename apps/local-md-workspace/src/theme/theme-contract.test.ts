@@ -54,9 +54,9 @@ describe("workspace theme contract", () => {
   });
 
   it("requires reusable LiveMD themes to cover every color presentation token", () => {
-    expect(Object.keys(githubLightLiveMdTheme.variables).sort()).toEqual([
-      ...liveMdThemeColorVariableNames,
-    ].sort());
+    expect(Object.keys(githubLightLiveMdTheme.variables).sort()).toEqual(
+      [...liveMdThemeColorVariableNames].sort(),
+    );
   });
 
   it("keeps GitHub Light rendered Markdown neutral instead of inheriting Gruvbox headings", () => {
@@ -80,13 +80,6 @@ function cssThemeBlockIds(css: string) {
     ids.add(match[1]!);
   }
   return Array.from(ids);
-}
-
-function themeBlock(css: string, theme: string) {
-  if (theme == "gruvbox-light") {
-    return regexMatch(css, /:root,\s*:root\[data-theme="gruvbox-light"\]\s*\{([\s\S]*?)\n\}/);
-  }
-  return cssBlock(css, `:root[data-theme="${theme}"]`);
 }
 
 function liveMdThemeDefinitionMapBlock(source: string) {

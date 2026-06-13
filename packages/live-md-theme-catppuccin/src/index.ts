@@ -5,9 +5,8 @@ import {
 import {
   catppuccinLatteColors,
   catppuccinMacchiatoColors,
+  type CatppuccinColors,
 } from "@codemirror-treesitter/theme-palettes";
-
-type CatppuccinColors = typeof catppuccinLatteColors;
 
 function catppuccinLiveMdVariables(colors: CatppuccinColors): LiveMdThemeColorVariables {
   return {

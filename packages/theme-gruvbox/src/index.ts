@@ -8,11 +8,11 @@ import {
 import {
   gruvboxDarkColors,
   gruvboxLightColors,
+  type GruvboxColors,
 } from "@codemirror-treesitter/theme-palettes";
 
 export { gruvboxDarkColors, gruvboxLightColors };
-
-type GruvboxColors = typeof gruvboxDarkColors;
+export type { GruvboxColors } from "@codemirror-treesitter/theme-palettes";
 
 function gruvboxThemeSpec(
   colors: GruvboxColors,
