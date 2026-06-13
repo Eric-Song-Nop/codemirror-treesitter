@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vite-plus/test";
-import { createLocalWorkspaceBackend, type AccessDirectoryHandle } from "./file-system.ts";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  createLocalWorkspaceBackend,
+  readAccessFileHandle,
+  saveMarkdownFileAs,
+  supportsSaveFilePicker,
+  writeAccessFileHandle,
+  type AccessDirectoryHandle,
+} from "./file-system.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("local workspace backend", () => {
   it("creates empty folders from trailing-slash paths", async () => {
@@ -80,6 +91,30 @@ describe("local workspace backend", () => {
     });
   });
 
+  it("finds a visible Markdown file path from a browser file handle", async () => {
+    let root = new MemoryDirectoryHandle("Workspace");
+    let backend = createLocalWorkspaceBackend(root);
+
+    await backend.createFile("notes/today.md");
+    await backend.createFile("notes/other.md");
+    let notes = await root.getDirectoryHandle("notes");
+    let handle = await notes.getFileHandle("today.md");
+
+    await expect(backend.findFilePathForHandle!(handle)).resolves.toBe("notes/today.md");
+  });
+
+  it("does not match file handles outside the current workspace", async () => {
+    let root = new MemoryDirectoryHandle("Workspace");
+    let outside = new MemoryDirectoryHandle("Outside");
+    let backend = createLocalWorkspaceBackend(root);
+
+    await backend.createFile("today.md");
+    await outside.getFileHandle("today.md", { create: true });
+    let outsideHandle = await outside.getFileHandle("today.md");
+
+    await expect(backend.findFilePathForHandle!(outsideHandle)).resolves.toBeNull();
+  });
+
   it("deletes folders recursively", async () => {
     let root = new MemoryDirectoryHandle("Workspace");
     let backend = createLocalWorkspaceBackend(root);
@@ -128,6 +163,52 @@ describe("local workspace backend", () => {
   });
 });
 
+describe("single file access handles", () => {
+  it("detects Save As picker support", () => {
+    vi.stubGlobal("window", {});
+
+    expect(supportsSaveFilePicker()).toBe(false);
+
+    vi.stubGlobal("window", { showSaveFilePicker: vi.fn() });
+
+    expect(supportsSaveFilePicker()).toBe(true);
+  });
+
+  it("saves Markdown through the Save As picker", async () => {
+    let files = new Map<string, string>();
+    let handle = new MemoryFileHandle("draft.md", files);
+    let showSaveFilePicker = vi.fn(async () => handle);
+    vi.stubGlobal("window", { showSaveFilePicker });
+
+    await expect(saveMarkdownFileAs({ suggestedName: "draft", value: "# Draft\n" })).resolves.toBe(
+      handle,
+    );
+
+    expect(showSaveFilePicker).toHaveBeenCalledWith({
+      suggestedName: "draft.md",
+      types: [
+        {
+          accept: {
+            "text/markdown": [".md", ".markdown"],
+          },
+          description: "Markdown",
+        },
+      ],
+    });
+    await expect(readAccessFileHandle(handle)).resolves.toBe("# Draft\n");
+  });
+
+  it("reads and writes access file handles", async () => {
+    let files = new Map([["notes.md", "# Old\n"]]);
+    let handle = new MemoryFileHandle("notes.md", files);
+
+    await expect(readAccessFileHandle(handle)).resolves.toBe("# Old\n");
+    await writeAccessFileHandle(handle, "# New\n");
+
+    await expect(readAccessFileHandle(handle)).resolves.toBe("# New\n");
+  });
+});
+
 class MemoryFileHandle {
   kind = "file" as const;
 
@@ -161,6 +242,12 @@ class MemoryFileHandle {
     return new File([this.files.get(this.name) ?? ""], this.name, {
       type: this.name.endsWith(".md") ? "text/markdown" : "application/octet-stream",
     });
+  }
+
+  async isSameEntry(other: unknown) {
+    return (
+      other instanceof MemoryFileHandle && other.name == this.name && other.files == this.files
+    );
   }
 }
 

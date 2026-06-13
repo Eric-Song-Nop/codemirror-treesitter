@@ -2,11 +2,13 @@
 
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { ensureSyntaxTree, tags as t, Tree } from "@codemirror-treesitter/language";
 import {
-  gruvboxDarkHighlightStyle,
-  gruvboxLightHighlightStyle,
-} from "@codemirror-treesitter/theme-gruvbox";
+  ensureSyntaxTree,
+  HighlightStyle,
+  syntaxHighlighting,
+  tags as t,
+  Tree,
+} from "@codemirror-treesitter/language";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   __testBuildLiveMdAnalysis,
@@ -25,6 +27,14 @@ import {
 } from "../src/core/languages.js";
 
 let locationDescriptor: PropertyDescriptor | undefined;
+
+const testLightCodeFenceHighlightStyle = HighlightStyle.define([
+  { tag: t.keyword, color: "#0969da" },
+]);
+
+const testDarkCodeFenceHighlightStyle = HighlightStyle.define([
+  { tag: t.keyword, color: "#f5a97f" },
+]);
 
 beforeEach(() => {
   locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
@@ -136,14 +146,14 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("rebuilds code fence highlights when the highlighter changes", async () => {
+  it("reuses active syntax highlighters for code fence highlights", async () => {
     let highlighterCompartment = new Compartment();
     let view = await markdownAnalysisView("```ts\nlet answer = 1;\n```\n", "", [
-      highlighterCompartment.of(liveMdCodeFenceHighlighting(gruvboxLightHighlightStyle)),
+      highlighterCompartment.of(syntaxHighlighting(testLightCodeFenceHighlightStyle)),
     ]);
     view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
-    let lightKeywordClass = gruvboxLightHighlightStyle.style([t.keyword]);
-    let darkKeywordClass = gruvboxDarkHighlightStyle.style([t.keyword]);
+    let lightKeywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
+    let darkKeywordClass = testDarkCodeFenceHighlightStyle.style([t.keyword]);
 
     expect(lightKeywordClass).toBeTruthy();
     expect(darkKeywordClass).toBeTruthy();
@@ -151,10 +161,25 @@ describe("LiveMD analysis snapshot", () => {
 
     view.dispatch({
       effects: highlighterCompartment.reconfigure(
-        liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle),
+        syntaxHighlighting(testDarkCodeFenceHighlightStyle),
       ),
     });
 
+    expect(codeFenceClasses(view.state).has(darkKeywordClass!)).toBe(true);
+    expect(codeFenceClasses(view.state).has(lightKeywordClass!)).toBe(false);
+    view.destroy();
+  });
+
+  it("allows explicit code fence highlighter overrides", async () => {
+    let view = await markdownAnalysisView("```ts\nlet answer = 1;\n```\n", "", [
+      syntaxHighlighting(testLightCodeFenceHighlightStyle),
+      liveMdCodeFenceHighlighting(testDarkCodeFenceHighlightStyle),
+    ]);
+    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+    let lightKeywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
+    let darkKeywordClass = testDarkCodeFenceHighlightStyle.style([t.keyword]);
+
+    expect(darkKeywordClass).toBeTruthy();
     expect(codeFenceClasses(view.state).has(darkKeywordClass!)).toBe(true);
     expect(codeFenceClasses(view.state).has(lightKeywordClass!)).toBe(false);
     view.destroy();

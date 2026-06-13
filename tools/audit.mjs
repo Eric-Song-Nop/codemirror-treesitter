@@ -74,7 +74,7 @@ async function main() {
   await checkAutocompletePublicExports();
   await checkAutocompleteHasNoKnownStubs();
   await checkLanguageTreeSitterHighlightHelpers();
-  await checkGruvboxThemePackage();
+  await checkThemePackages();
   await checkMergePublicExports();
   await checkMergeUsesLocalHighlighting();
   await checkLspClientPublicExports();
@@ -184,36 +184,170 @@ async function checkLanguageTreeSitterHighlightHelpers() {
     await readText("packages/language/src/highlight.ts"),
     await readText("packages/language/src/tags.ts"),
   ]);
-  for (let name of ["highlightTree", "highlightCode", "styleTags", "getStyleTags"]) {
+  for (let name of [
+    "highlightTree",
+    "highlightCode",
+    "styleTags",
+    "getStyleTags",
+    "syntaxHighlighters",
+  ]) {
     if (!local.has(name)) fail(`language package is missing tree-sitter highlight helper ${name}`);
   }
   pass("language package exposes tree-sitter highlight compatibility helpers");
 }
 
-async function checkGruvboxThemePackage() {
-  let pkg = JSON.parse(await readText("packages/theme-gruvbox/package.json"));
-  if (pkg.dependencies?.["@codemirror-treesitter/language"] == null) {
-    fail("theme-gruvbox does not depend on the local tree-sitter language package");
+async function checkThemePackages() {
+  let palettesPkg = JSON.parse(await readText("packages/theme-palettes/package.json"));
+  if (palettesPkg.name != "@codemirror-treesitter/theme-palettes") {
+    fail("theme-palettes package has the wrong package name");
   }
-  for (let name of ["@codemirror/language", "@lezer/highlight"]) {
-    if (pkg.dependencies?.[name] != null) fail(`theme-gruvbox depends on ${name}`);
+  let palettesSource = await readText("packages/theme-palettes/src/index.ts");
+  for (let exportName of [
+    "gruvboxDarkColors",
+    "gruvboxLightColors",
+    "githubLightColors",
+    "catppuccinLatteColors",
+    "catppuccinMacchiatoColors",
+  ]) {
+    if (!palettesSource.includes(exportName)) fail(`theme-palettes is missing ${exportName}`);
   }
 
-  let source = await readText("packages/theme-gruvbox/src/index.ts");
-  for (let snippet of [
-    'from "@codemirror-treesitter/language"',
-    "gruvboxDarkColors",
-    "gruvboxDarkTheme",
-    "gruvboxDarkHighlightStyle",
-    "gruvboxDark",
-    "gruvboxLightColors",
-    "gruvboxLightTheme",
-    "gruvboxLightHighlightStyle",
-    "gruvboxLight",
-  ]) {
-    if (!source.includes(snippet)) fail(`theme-gruvbox source is missing ${snippet}`);
+  let codeMirrorThemePackages = [
+    {
+      dir: "theme-gruvbox",
+      exports: [
+        "gruvboxDarkColors",
+        "gruvboxDarkThemeSpec",
+        "gruvboxDarkTheme",
+        "gruvboxDarkHighlightStyle",
+        "gruvboxDark",
+        "gruvboxLightColors",
+        "gruvboxLightThemeSpec",
+        "gruvboxLightTheme",
+        "gruvboxLightHighlightStyle",
+        "gruvboxLight",
+      ],
+    },
+    {
+      dir: "theme-github",
+      exports: [
+        "githubLightColors",
+        "githubLightThemeSpec",
+        "githubLightTheme",
+        "githubLightHighlightStyle",
+        "githubLight",
+      ],
+    },
+    {
+      dir: "theme-catppuccin",
+      exports: [
+        "catppuccinLatteColors",
+        "catppuccinLatteThemeSpec",
+        "catppuccinLatteTheme",
+        "catppuccinLatteHighlightStyle",
+        "catppuccinLatte",
+        "catppuccinMacchiatoColors",
+        "catppuccinMacchiatoThemeSpec",
+        "catppuccinMacchiatoTheme",
+        "catppuccinMacchiatoHighlightStyle",
+        "catppuccinMacchiato",
+      ],
+    },
+  ];
+
+  for (let themePackage of codeMirrorThemePackages) {
+    let pkg = JSON.parse(await readText(`packages/${themePackage.dir}/package.json`));
+    if (pkg.dependencies?.["@codemirror-treesitter/theme"] == null) {
+      fail(`${themePackage.dir} does not depend on the shared semantic theme package`);
+    }
+    if (pkg.dependencies?.["@codemirror-treesitter/theme-palettes"] == null) {
+      fail(`${themePackage.dir} does not depend on the shared palette package`);
+    }
+    if (pkg.dependencies?.["@codemirror-treesitter/live-md"] != null) {
+      fail(`${themePackage.dir} should not depend on LiveMD`);
+    }
+    for (let name of ["@codemirror/language", "@lezer/highlight"]) {
+      if (pkg.dependencies?.[name] != null) fail(`${themePackage.dir} depends on ${name}`);
+    }
+
+    let source = await readText(`packages/${themePackage.dir}/src/index.ts`);
+    for (let snippet of [
+      'from "@codemirror-treesitter/theme"',
+      'from "@codemirror-treesitter/theme-palettes"',
+      ...themePackage.exports,
+    ]) {
+      if (!source.includes(snippet)) fail(`${themePackage.dir} source is missing ${snippet}`);
+    }
+    for (let forbidden of [
+      "@codemirror-treesitter/live-md",
+      "liveMdCodeFenceHighlighting",
+      "LiveMdExtensions",
+    ]) {
+      if (source.includes(forbidden)) fail(`${themePackage.dir} leaks LiveMD through ${forbidden}`);
+    }
+    for (let duplicateMapping of ["EditorView.theme(", "HighlightStyle.define("]) {
+      if (source.includes(duplicateMapping)) {
+        fail(`${themePackage.dir} duplicates shared theme mapping through ${duplicateMapping}`);
+      }
+    }
   }
-  pass("theme-gruvbox exposes local dark and light Gruvbox themes");
+
+  let liveMdThemeBase = await readText("packages/live-md-theme/src/index.ts");
+  for (let exportName of [
+    "liveMdThemeVariableNames",
+    "liveMdThemeColorVariableNames",
+    "createLiveMdTheme",
+    "setLiveMdThemeVariables",
+    "clearLiveMdThemeVariables",
+  ]) {
+    if (!liveMdThemeBase.includes(exportName)) fail(`live-md-theme is missing ${exportName}`);
+  }
+
+  let liveMdThemePackages = [
+    {
+      dir: "live-md-theme-gruvbox",
+      exports: ["gruvboxDarkLiveMdTheme", "gruvboxLightLiveMdTheme"],
+    },
+    { dir: "live-md-theme-github", exports: ["githubLightLiveMdTheme"] },
+    {
+      dir: "live-md-theme-catppuccin",
+      exports: ["catppuccinLatteLiveMdTheme", "catppuccinMacchiatoLiveMdTheme"],
+    },
+  ];
+
+  for (let themePackage of liveMdThemePackages) {
+    let pkg = JSON.parse(await readText(`packages/${themePackage.dir}/package.json`));
+    if (pkg.dependencies?.["@codemirror-treesitter/live-md-theme"] == null) {
+      fail(`${themePackage.dir} does not depend on the shared LiveMD theme package`);
+    }
+    if (pkg.dependencies?.["@codemirror-treesitter/theme-palettes"] == null) {
+      fail(`${themePackage.dir} does not depend on the shared palette package`);
+    }
+    for (let forbidden of [
+      "@codemirror-treesitter/live-md",
+      "@codemirror-treesitter/theme",
+      "@codemirror-treesitter/theme-gruvbox",
+      "@codemirror-treesitter/theme-github",
+      "@codemirror-treesitter/theme-catppuccin",
+    ]) {
+      if (pkg.dependencies?.[forbidden] != null)
+        fail(`${themePackage.dir} depends on ${forbidden}`);
+    }
+
+    let source = await readText(`packages/${themePackage.dir}/src/index.ts`);
+    for (let snippet of [
+      'from "@codemirror-treesitter/live-md-theme"',
+      'from "@codemirror-treesitter/theme-palettes"',
+      ...themePackage.exports,
+    ]) {
+      if (!source.includes(snippet)) fail(`${themePackage.dir} source is missing ${snippet}`);
+    }
+    for (let forbidden of ["syntaxHighlighting", "HighlightStyle", "EditorView.theme("]) {
+      if (source.includes(forbidden)) fail(`${themePackage.dir} owns CodeMirror styling`);
+    }
+  }
+
+  pass("theme packages keep CodeMirror, LiveMD presentation, and palettes separated");
 }
 
 async function checkMergePublicExports() {

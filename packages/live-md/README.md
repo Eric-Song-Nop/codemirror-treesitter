@@ -7,9 +7,8 @@ an HTML renderer, scoped document CSS helpers, and a CSS export.
 
 ## Stack and Boundaries
 
-- Depends on local `autocomplete`, `basic-setup`, `commands`, `language`,
-  `language-data`, and `theme-gruvbox` packages plus official CodeMirror
-  state/view packages.
+- Depends on local `autocomplete`, `basic-setup`, `commands`, `language`, and
+  `language-data` packages plus official CodeMirror state/view packages.
 - Uses KaTeX, Mermaid, and `beautiful-mermaid` for rich Markdown widgets.
 - Built as an ES module package with Vite+ `vp pack`.
 - Keeps collaboration optional. Loro-specific code belongs in
@@ -64,8 +63,8 @@ and benchmark content.
 ## Programmatic API
 
 ```ts
-import { createLiveMdEditor, liveMdCodeFenceHighlighting } from "@codemirror-treesitter/live-md";
-import { gruvboxDarkHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
+import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
+import { gruvboxDark } from "@codemirror-treesitter/theme-gruvbox";
 
 const imageAssetUrlMap = new Map<string, string>();
 const editor = createLiveMdEditor({
@@ -77,7 +76,7 @@ const editor = createLiveMdEditor({
   linkBaseUrl: "https://docs.example/notes/current.md",
   placeholder: "Start writing...",
   persistKey: "draft",
-  extensions: [liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle)],
+  extensions: [gruvboxDark],
   onChange({ value }) {
     console.log(value);
   },
@@ -93,9 +92,10 @@ editor.destroy();
 `imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`. `imageSource` maps
 normalized Markdown image destinations to preview URLs, which lets host apps
 serve local files through blob URLs. `linkBaseUrl` is used to resolve relative
-Markdown links for Shift-click link jumps. `liveMdCodeFenceHighlighting(...)`
-lets hosts override the default code-fence token highlighter so fenced code can
-match the surrounding editor theme. The controller exposes `view`, `value`,
+Markdown links for Shift-click link jumps. Fenced code token colors reuse the
+active CodeMirror syntax highlighters installed through `extensions`.
+`liveMdCodeFenceHighlighting(...)` is still available for advanced hosts that
+need to override fenced-code highlighting explicitly. The controller exposes `view`, `value`,
 `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`, `setPlaceholder()`,
 `setReadOnly()`, and `destroy()`.
 
@@ -132,9 +132,10 @@ The element reflects the runtime API through `value`, `defaultValue`,
 `setSelectionRange(...)`, and `select()`.
 
 JavaScript hosts can add `liveMdImageSource(...)` and
-`liveMdCodeFenceHighlighting(...)` to the `extensions` property when a web
+ordinary CodeMirror theme extensions to the `extensions` property when a web
 component needs custom image preview URL resolution or themed code-fence token
-highlighting.
+highlighting. `liveMdCodeFenceHighlighting(...)` can override the active syntax
+highlighters for specialized fenced-code rendering.
 
 The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 `select`. Styling is installed into Shadow DOM and can be themed with
@@ -165,10 +166,10 @@ The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 
 ## Relationship to Other Packages
 
-LiveMD composes `basic-setup`, `language`, `language-data`, `commands`,
-`autocomplete`, and `theme-gruvbox`. Optional collaboration is layered through
-`@codemirror-treesitter/live-md-loro` so this package stays independent of Loro
-and Cloudflare-specific code.
+LiveMD composes `basic-setup`, `language`, `language-data`, `commands`, and
+`autocomplete`. Optional collaboration is layered through
+`@codemirror-treesitter/live-md-loro` so this package stays independent of Loro,
+Cloudflare-specific code, and concrete theme packages.
 
 ## Current Implementation Notes
 

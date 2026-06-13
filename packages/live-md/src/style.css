@@ -6,6 +6,7 @@
   --live-md-muted: #66706c;
   --live-md-accent: #0f766e;
   --live-md-accent-2: #9f482c;
+  --live-md-list-marker: var(--live-md-accent);
   --live-md-border: #d5dcd8;
   --live-md-code-bg: #f4f1ea;
   --live-md-code-text: #2f3437;
@@ -74,6 +75,11 @@
   display: none;
 }
 
+:host(:focus),
+:host(:focus-visible) {
+  outline: none;
+}
+
 .live-md-editor-root {
   min-width: 0;
   min-height: 0;
@@ -114,6 +120,7 @@
   padding-block-end: var(--live-md-content-padding-block-end);
   padding-inline: var(--live-md-content-padding-inline);
   caret-color: var(--live-md-cursor);
+  outline: none;
 }
 
 .live-md-codemirror .cm-cursor,
@@ -345,7 +352,7 @@
 .live-md-codemirror .cm-md-list-marker {
   display: inline-block;
   width: 1.35em;
-  color: var(--live-md-accent);
+  color: var(--live-md-list-marker);
   font-family: var(--live-md-font-ui);
   font-weight: 800;
 }

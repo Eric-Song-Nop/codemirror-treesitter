@@ -265,23 +265,9 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
     sessionId,
   );
 
-  await client.waitForPredicate(
-    `document.body.innerText.includes("Smoke Workspace") && Array.from(document.querySelectorAll("button")).some((button) => button.textContent.trim() == "New file" && !button.disabled)`,
-    sessionId,
-  );
+  await waitForLocalWorkspaceReady(client, sessionId);
 
-  await client.evaluate(
-    `
-      (() => {
-        let button = Array.from(document.querySelectorAll("button")).find((item) =>
-          item.textContent.trim() == "New file" && !item.disabled
-        );
-        if (!button) throw new Error("New file button was not found.");
-        button.click();
-      })()
-    `,
-    sessionId,
-  );
+  await clickNewFileButton(client, sessionId);
   await client.waitForPredicate(
     `Boolean(document.querySelector("#markdown-file-name"))`,
     sessionId,
@@ -618,9 +604,22 @@ async function assertOwnerExternalConflictFlow(client) {
 }
 
 async function assertSavedDropboxConfigUi(client, sessionId) {
-  let body = await client.evaluate("document.body.innerText", sessionId);
-  if (!body.includes("Continue Dropbox")) {
-    throw new Error("Stored Dropbox config did not expose a reconnect action.");
+  await ensureSidebarOpen(client, sessionId);
+  let state = await client.evaluate(
+    `
+      (() => ({
+        body: document.body.innerText,
+        hasReconnectAction: Array.from(document.querySelectorAll("button")).some((button) =>
+          button.textContent.includes("Continue Dropbox") && !button.disabled
+        )
+      }))()
+    `,
+    sessionId,
+  );
+  if (!state.body.includes("Continue Dropbox") && !state.hasReconnectAction) {
+    throw new Error(
+      `Stored Dropbox config did not expose a reconnect action: ${JSON.stringify(state)}`,
+    );
   }
 }
 
@@ -879,6 +878,84 @@ async function createSharedFileLink(client, ownerSessionId) {
   return link;
 }
 
+async function waitForLocalWorkspaceReady(client, sessionId) {
+  try {
+    await client.waitForPredicate(
+      `Array.from(document.querySelectorAll("button")).some((button) => button.textContent.includes("New file") && !button.disabled)`,
+      sessionId,
+    );
+    await ensureSidebarOpen(client, sessionId);
+    await client.waitForPredicate(`document.body.innerText.includes("Smoke Workspace")`, sessionId);
+  } catch (error) {
+    let state = await workspaceSmokeState(client, sessionId);
+    throw new Error(
+      `${error.message}\n\nLocal workspace state:\n${JSON.stringify(state, null, 2)}`,
+    );
+  }
+}
+
+async function ensureSidebarOpen(client, sessionId) {
+  await client.evaluate(
+    `
+      (() => {
+        let buttons = Array.from(document.querySelectorAll("button"));
+        let newFileVisible = buttons.some((button) =>
+          button.textContent.includes("New file") &&
+          !button.disabled &&
+          button.getClientRects().length
+        );
+        if (newFileVisible) return;
+
+        let showSidebar = buttons.find((button) =>
+          button.textContent.trim() == "Show sidebar" &&
+          !button.disabled &&
+          button.getClientRects().length
+        );
+        showSidebar?.click();
+      })()
+    `,
+    sessionId,
+  );
+  await waitForSettledUi();
+}
+
+async function clickNewFileButton(client, sessionId) {
+  await ensureSidebarOpen(client, sessionId);
+  await client.evaluate(
+    `
+      (() => {
+        let buttons = Array.from(document.querySelectorAll("button"));
+        let button = buttons.find((item) =>
+          item.textContent.includes("New file") && !item.disabled && item.getClientRects().length
+        ) ?? buttons.find((item) =>
+          item.textContent.includes("New file") && !item.disabled
+        );
+        if (!button) throw new Error("New file button was not found.");
+        button.click();
+      })()
+    `,
+    sessionId,
+  );
+}
+
+async function workspaceSmokeState(client, sessionId) {
+  return client.evaluate(
+    `
+      (() => ({
+        body: document.body.innerText,
+        buttons: Array.from(document.querySelectorAll("button")).map((button) => ({
+          disabled: button.disabled,
+          text: button.textContent.trim(),
+          visible: Boolean(button.getClientRects().length)
+        })),
+        hasDirectoryPicker: typeof window.showDirectoryPicker == "function",
+        selectedEditorValue: document.querySelector("live-md-editor")?.value ?? null
+      }))()
+    `,
+    sessionId,
+  );
+}
+
 async function openMockLocalWorkspace(client, sessionId) {
   let hasWorkspace = await client.evaluate(
     `document.body.innerText.includes("Smoke Workspace")`,
@@ -898,23 +975,12 @@ async function openMockLocalWorkspace(client, sessionId) {
       sessionId,
     );
   }
-  await client.waitForPredicate(`document.body.innerText.includes("Smoke Workspace")`, sessionId);
+  await waitForLocalWorkspaceReady(client, sessionId);
 }
 
 async function createAndEditLocalFile(client, sessionId, fileBaseName, nextValue) {
   let fileName = fileBaseName.endsWith(".md") ? fileBaseName : `${fileBaseName}.md`;
-  await client.evaluate(
-    `
-      (() => {
-        let button = Array.from(document.querySelectorAll("button")).find((item) =>
-          item.textContent.trim() == "New file" && !item.disabled
-        );
-        if (!button) throw new Error("New file button was not found.");
-        button.click();
-      })()
-    `,
-    sessionId,
-  );
+  await clickNewFileButton(client, sessionId);
   await client.waitForPredicate(
     `Boolean(document.querySelector("#markdown-file-name"))`,
     sessionId,
@@ -1081,10 +1147,16 @@ async function localFileTreeState(client, sessionId) {
 }
 
 async function connectDropboxWorkspace(client, sessionId) {
+  await ensureSidebarOpen(client, sessionId);
   await client.evaluate(
     `
       (() => {
-        let button = Array.from(document.querySelectorAll("button")).find((item) =>
+        let buttons = Array.from(document.querySelectorAll("button"));
+        let button = buttons.find((item) =>
+          item.textContent.includes("Connect Dropbox") &&
+          !item.disabled &&
+          item.getClientRects().length
+        ) ?? buttons.find((item) =>
           item.textContent.includes("Connect Dropbox") && !item.disabled
         );
         if (!button) throw new Error("Connect Dropbox button was not found.");
@@ -1096,29 +1168,21 @@ async function connectDropboxWorkspace(client, sessionId) {
 
   try {
     await client.waitForPredicate(
-      `document.body.innerText.includes("Dropbox workspace connected") || document.body.innerText.includes("Dropbox workspace ·") || (document.body.innerText.includes("Dropbox workspace") && (document.body.innerText.includes("No markdown files") || document.body.innerText.includes("0 markdown files")) && Array.from(document.querySelectorAll("button")).some((button) => button.textContent.trim() == "New file" && !button.disabled))`,
+      `Array.from(document.querySelectorAll("button")).some((button) => button.textContent.includes("New file") && !button.disabled)`,
       sessionId,
       20_000,
     );
   } catch (error) {
-    let body = await client.evaluate("document.body.innerText", sessionId).catch(() => "");
-    throw new Error(`${error.message}\n\nCurrent body:\n${body}`);
+    let state = await workspaceSmokeState(client, sessionId);
+    throw new Error(
+      `${error.message}\n\nDropbox workspace state:\n${JSON.stringify(state, null, 2)}`,
+    );
   }
+  await ensureSidebarOpen(client, sessionId);
 }
 
 async function createAndEditDropboxFile(client, sessionId, fileName, nextValue) {
-  await client.evaluate(
-    `
-      (() => {
-        let button = Array.from(document.querySelectorAll("button")).find((item) =>
-          item.textContent.trim() == "New file" && !item.disabled
-        );
-        if (!button) throw new Error("New file button was not found.");
-        button.click();
-      })()
-    `,
-    sessionId,
-  );
+  await clickNewFileButton(client, sessionId);
   await client.waitForPredicate(
     `Boolean(document.querySelector("#markdown-file-name"))`,
     sessionId,

@@ -93,6 +93,10 @@ function getHighlighters(state: EditorState): readonly Highlighter[] | null {
   return main.length ? main : state.facet(fallbackHighlighter);
 }
 
+export function syntaxHighlighters(state: EditorState): readonly Highlighter[] | null {
+  return getHighlighters(state);
+}
+
 export function syntaxHighlighting(
   highlighter: Highlighter,
   options?: { fallback: boolean },
