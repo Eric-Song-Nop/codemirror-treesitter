@@ -3,10 +3,13 @@ import { Command as CommandPrimitive } from "cmdk";
 import {
   CheckIcon,
   CloudIcon,
+  DownloadIcon,
   FileTextIcon,
   FolderOpenIcon,
   ImagePlusIcon,
   MoonIcon,
+  PlusIcon,
+  SaveIcon,
   SearchIcon,
   SidebarCloseIcon,
   SidebarOpenIcon,
@@ -29,14 +32,20 @@ type WorkspaceCommandPaletteProps = {
   browserSupported: boolean;
   busy: boolean;
   canInsertImage: boolean;
+  canSaveAs: boolean;
+  canSaveAsLocal: boolean;
   disabled?: boolean;
   dropboxConnecting: boolean;
   files: MarkdownFileNode[];
   selectedPath: string | null;
   sidebarOpen: boolean;
   onConnectDropbox: () => void;
+  onDownloadCopy: () => void;
   onInsertImage: () => void;
+  onNewDraft: () => void;
   onOpenFolder: () => void;
+  onSaveAsDropbox: () => void;
+  onSaveAsLocal: () => void;
   onSelectFile: (file: MarkdownFileNode) => void;
   onToggleSidebar: () => void;
 };
@@ -56,14 +65,20 @@ export function WorkspaceCommandPalette({
   browserSupported,
   busy,
   canInsertImage,
+  canSaveAs,
+  canSaveAsLocal,
   disabled = false,
   dropboxConnecting,
   files,
   selectedPath,
   sidebarOpen,
   onConnectDropbox,
+  onDownloadCopy,
   onInsertImage,
+  onNewDraft,
   onOpenFolder,
+  onSaveAsDropbox,
+  onSaveAsLocal,
   onSelectFile,
   onToggleSidebar,
 }: WorkspaceCommandPaletteProps) {
@@ -87,6 +102,44 @@ export function WorkspaceCommandPalette({
 
   let actions = useMemo<PaletteAction[]>(
     () => [
+      {
+        detail: busy ? t("command.newDraft.detail.busy") : t("command.newDraft.detail.ready"),
+        disabled: busy,
+        icon: PlusIcon,
+        id: "new-draft",
+        keywords: t("command.newDraft.keywords").split(/\s+/),
+        title: t("actions.newDraft"),
+        onSelect: onNewDraft,
+      },
+      {
+        detail: canSaveAsLocal
+          ? t("command.saveAsLocal.detail.ready")
+          : t("command.saveAsLocal.detail.unavailable"),
+        disabled: busy || !canSaveAs || !canSaveAsLocal,
+        icon: SaveIcon,
+        id: "save-as-local",
+        keywords: t("command.saveAsLocal.keywords").split(/\s+/),
+        title: t("actions.saveAs"),
+        onSelect: onSaveAsLocal,
+      },
+      {
+        detail: dropboxConnecting ? t("command.saveAsDropbox.detail.connecting") : "Dropbox",
+        disabled: busy || dropboxConnecting || !canSaveAs,
+        icon: CloudIcon,
+        id: "save-as-dropbox",
+        keywords: t("command.saveAsDropbox.keywords").split(/\s+/),
+        title: t("actions.saveAsDropbox"),
+        onSelect: onSaveAsDropbox,
+      },
+      {
+        detail: t("command.downloadCopy.detail"),
+        disabled: busy || !canSaveAs,
+        icon: DownloadIcon,
+        id: "download-copy",
+        keywords: t("command.downloadCopy.keywords").split(/\s+/),
+        title: t("actions.downloadCopy"),
+        onSelect: onDownloadCopy,
+      },
       {
         detail: busy
           ? t("command.openFolder.detail.busy")
@@ -163,10 +216,16 @@ export function WorkspaceCommandPalette({
       browserSupported,
       busy,
       canInsertImage,
+      canSaveAs,
+      canSaveAsLocal,
       dropboxConnecting,
       onConnectDropbox,
+      onDownloadCopy,
       onInsertImage,
+      onNewDraft,
       onOpenFolder,
+      onSaveAsDropbox,
+      onSaveAsLocal,
       onToggleSidebar,
       sidebarOpen,
       setTheme,
