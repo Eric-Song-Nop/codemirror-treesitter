@@ -4,7 +4,8 @@
     "paths": {
       "@codemirror-treesitter/language": ["../language/src/index.ts"],
       "@codemirror-treesitter/live-md": ["../live-md/src/index.ts"],
-      "@codemirror-treesitter/theme": ["../theme/src/index.ts"]
+      "@codemirror-treesitter/theme": ["../theme/src/index.ts"],
+      "@codemirror-treesitter/theme-palettes": ["../theme-palettes/src/index.ts"]
     }
   },
   "include": ["src", "tests"]

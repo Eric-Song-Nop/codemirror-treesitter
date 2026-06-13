@@ -1,7 +1,7 @@
 {
-  "name": "@codemirror-treesitter/theme-catppuccin",
+  "name": "@codemirror-treesitter/theme-palettes",
   "version": "0.0.0",
-  "description": "Catppuccin Latte and Macchiato themes for the tree-sitter CodeMirror build",
+  "description": "Shared color palettes for CodeMirror and LiveMD theme packages",
   "license": "MIT",
   "files": [
     "dist"
@@ -18,15 +18,7 @@
     "test": "vp test",
     "check": "vp check"
   },
-  "dependencies": {
-    "@codemirror-treesitter/language": "workspace:*",
-    "@codemirror-treesitter/live-md": "workspace:*",
-    "@codemirror-treesitter/theme": "workspace:*",
-    "@codemirror-treesitter/theme-palettes": "workspace:*",
-    "@codemirror/state": "^6.6.0"
-  },
   "devDependencies": {
-    "@codemirror/view": "^6.43.0",
     "@typescript/native-preview": "7.0.0-dev.20260509.2",
     "typescript": "^6.0.3",
     "vite-plus": "catalog:"

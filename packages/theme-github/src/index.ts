@@ -6,31 +6,9 @@ import {
   createHighlightStyle,
   type SemanticThemeSpec,
 } from "@codemirror-treesitter/theme";
+import { githubLightColors } from "@codemirror-treesitter/theme-palettes";
 
-export const githubLightColors = {
-  accent: "#0969da",
-  accentMuted: "#0969da1f",
-  attention: "#9a6700",
-  attentionMuted: "#fff8c5",
-  background: "#ffffff",
-  border: "#d0d7de",
-  borderMuted: "#d8dee4",
-  comment: "#6e7781",
-  cursor: "#0969da",
-  danger: "#cf222e",
-  dangerMuted: "#cf222e26",
-  entity: "#8250df",
-  foreground: "#24292f",
-  foregroundMuted: "#6e7781",
-  foregroundSubtle: "#57606a",
-  inserted: "#116329",
-  number: "#0550ae",
-  property: "#953800",
-  searchSelected: "#ffd33d66",
-  selection: "#0969da26",
-  string: "#0a3069",
-  subtleBackground: "#f6f8fa",
-} as const;
+export { githubLightColors };
 
 export const githubLightThemeSpec: SemanticThemeSpec = {
   appearance: "light",

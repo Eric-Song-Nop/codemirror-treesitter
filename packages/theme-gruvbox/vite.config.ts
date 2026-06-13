@@ -11,6 +11,7 @@ export default defineConfig({
       "@codemirror-treesitter/language-data",
       "@codemirror-treesitter/live-md",
       "@codemirror-treesitter/theme",
+      "@codemirror-treesitter/theme-palettes",
     ]),
   },
   pack: {

@@ -22,6 +22,7 @@
     "@codemirror-treesitter/language": "workspace:*",
     "@codemirror-treesitter/live-md": "workspace:*",
     "@codemirror-treesitter/theme": "workspace:*",
+    "@codemirror-treesitter/theme-palettes": "workspace:*",
     "@codemirror/state": "^6.6.0"
   },
   "devDependencies": {

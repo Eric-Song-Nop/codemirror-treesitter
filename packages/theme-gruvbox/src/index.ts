@@ -6,54 +6,12 @@ import {
   createHighlightStyle,
   type SemanticThemeSpec,
 } from "@codemirror-treesitter/theme";
+import {
+  gruvboxDarkColors,
+  gruvboxLightColors,
+} from "@codemirror-treesitter/theme-palettes";
 
-export const gruvboxDarkColors = {
-  bg0: "#282828",
-  bg1: "#3c3836",
-  bg2: "#504945",
-  bg3: "#665c54",
-  bg4: "#7c6f64",
-  fg0: "#fbf1c7",
-  fg1: "#ebdbb2",
-  fg2: "#d5c4a1",
-  fg3: "#bdae93",
-  fg4: "#a89984",
-  red: "#fb4934",
-  green: "#b8bb26",
-  yellow: "#fabd2f",
-  blue: "#83a598",
-  purple: "#d3869b",
-  aqua: "#8ec07c",
-  orange: "#fe8019",
-  selection: "#504945",
-  cursor: "#fe8019",
-  search: "#fabd2f40",
-  searchSelected: "#fe801950",
-};
-
-export const gruvboxLightColors = {
-  bg0: "#fbf1c7",
-  bg1: "#ebdbb2",
-  bg2: "#d5c4a1",
-  bg3: "#bdae93",
-  bg4: "#a89984",
-  fg0: "#282828",
-  fg1: "#3c3836",
-  fg2: "#504945",
-  fg3: "#665c54",
-  fg4: "#7c6f64",
-  red: "#9d0006",
-  green: "#79740e",
-  yellow: "#b57614",
-  blue: "#076678",
-  purple: "#8f3f71",
-  aqua: "#427b58",
-  orange: "#af3a03",
-  selection: "#d5c4a1",
-  cursor: "#af3a03",
-  search: "#d7992140",
-  searchSelected: "#af3a0350",
-};
+export { gruvboxDarkColors, gruvboxLightColors };
 
 type GruvboxColors = typeof gruvboxDarkColors;
 

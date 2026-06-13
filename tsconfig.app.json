@@ -15,6 +15,7 @@
       "@codemirror-treesitter/live-md-loro": ["./packages/live-md-loro/src/index.ts"],
       "@codemirror-treesitter/lsp-client": ["./packages/lsp-client/src/index.ts"],
       "@codemirror-treesitter/merge": ["./packages/merge/src/index.ts"],
+      "@codemirror-treesitter/theme-palettes": ["./packages/theme-palettes/src/index.ts"],
       "@codemirror-treesitter/theme-gruvbox": ["./packages/theme-gruvbox/src/index.ts"],
       "loro-codemirror": ["./node_modules/loro-codemirror/src/index.ts"]
     },

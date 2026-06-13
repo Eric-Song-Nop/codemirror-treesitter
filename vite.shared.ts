@@ -21,6 +21,10 @@ export const workspaceAliases = {
     import.meta.url,
   ).pathname,
   "@codemirror-treesitter/theme": new URL("packages/theme/src/index.ts", import.meta.url).pathname,
+  "@codemirror-treesitter/theme-palettes": new URL(
+    "packages/theme-palettes/src/index.ts",
+    import.meta.url,
+  ).pathname,
   "@codemirror-treesitter/theme-catppuccin": new URL(
     "packages/theme-catppuccin/src/index.ts",
     import.meta.url,
