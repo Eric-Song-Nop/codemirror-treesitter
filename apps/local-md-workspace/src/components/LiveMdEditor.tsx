@@ -43,9 +43,11 @@ type LiveMdEditorProps = {
   onInput: (value: string) => void;
 };
 
+const emptyLiveMdEditorExtensions: Extension[] = [];
+
 export function LiveMdEditor({
   documentKey,
-  extensions: extraExtensions = [],
+  extensions: extraExtensions = emptyLiveMdEditorExtensions,
   imageSource,
   initialValue,
   placeholder,
