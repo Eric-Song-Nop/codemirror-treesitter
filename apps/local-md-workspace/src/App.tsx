@@ -1543,19 +1543,20 @@ function LocalWorkspaceApp() {
   let ensureSelectedCollabDocument = useCallback(
     async (backend: WorkspaceBackend, file: MarkdownFileNode) => {
       let current = collabDocumentRef.current;
-      if (current?.path == file.path) return current;
+      if (current?.path == file.path && selectedFileBackendRef.current === backend) return current;
 
       let document = await openMarkdownCollabDocument(backend, file.path);
 
       collabSyncCleanupRef.current();
       collabDocumentRef.current?.dispose();
+      invalidateActiveDocumentSave();
       collabDocumentRef.current = document;
       collabSyncCleanupRef.current = createCollabDocumentBroadcastSync({
         backend,
         doc: document.doc,
         docId: document.docId,
         onRemoteUpdate: () => {
-          if (selectedFileRef.current?.path != document.path) return;
+          if (collabDocumentRef.current !== document) return;
           void (async () => {
             try {
               editorValueRef.current = getCollabDocumentValue(document);
@@ -1588,7 +1589,7 @@ function LocalWorkspaceApp() {
       if (needsSourceWrite) scheduleAutoSave();
       return document;
     },
-    [scheduleAutoSave, setSaveStateSynced],
+    [invalidateActiveDocumentSave, scheduleAutoSave, setSaveStateSynced],
   );
 
   let openShareDialog = useCallback(() => {
