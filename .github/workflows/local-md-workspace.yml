@@ -18,6 +18,7 @@ on:
       - "apps/local-md-workspace/index.html"
       - "apps/local-md-workspace/package.json"
       - "apps/local-md-workspace/public/**"
+      - "apps/local-md-workspace/scripts/**"
       - "apps/local-md-workspace/src/**"
       - "apps/local-md-workspace/tsconfig.json"
       - "apps/local-md-workspace/vite.config.ts"
@@ -101,6 +102,7 @@ jobs:
                 return 0
                 ;;
               apps/local-md-workspace/src/* | \
+              apps/local-md-workspace/scripts/* | \
               apps/local-md-workspace/public/* | \
               apps/local-md-workspace/index.html | \
               apps/local-md-workspace/package.json | \
@@ -367,6 +369,9 @@ jobs:
 
       - name: Check
         run: vp check
+
+      - name: Check Grove i18n
+        run: vp run local-md-workspace#i18n:check
 
       - name: Test
         run: vp run -r test

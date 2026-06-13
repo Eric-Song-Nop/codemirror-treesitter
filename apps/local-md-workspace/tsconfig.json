@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.app.json",
   "compilerOptions": {
     "jsx": "react-jsx",
+    "resolveJsonModule": true,
     "paths": {
       "@codemirror-treesitter/autocomplete": ["../../packages/autocomplete/src/index.ts"],
       "@codemirror-treesitter/basic-setup": ["../../packages/codemirror/src/index.ts"],

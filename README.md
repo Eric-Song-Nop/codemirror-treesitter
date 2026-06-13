@@ -53,11 +53,11 @@ collaboration flows.
   KaTeX, Mermaid, and `beautiful-mermaid`.
 - **Collaboration and workspace layer**: Optional LiveMD Loro bindings use
   `loro-crdt` and `loro-codemirror`. Grove's local workspace app supports local
-  folders, Dropbox through the OpenDAL browser WASM wrapper, local image
-  assets, and shared-file hosting. Grove's relay runs as the `grove-relay`
-  Cloudflare Worker with Durable Object persistence, WebSocket sync, Wrangler,
-  and the Cloudflare Vite plugin. The `collab-editor` app remains a separate
-  Cloudflare collaboration demo.
+  folders, Dropbox through the OpenDAL browser WASM wrapper, i18next/react-i18next
+  UI localization, local image assets, and shared-file hosting. Grove's relay
+  runs as the `grove-relay` Cloudflare Worker with Durable Object persistence,
+  WebSocket sync, Wrangler, and the Cloudflare Vite plugin. The `collab-editor`
+  app remains a separate Cloudflare collaboration demo.
 
 ## Quickstart
 
@@ -446,6 +446,7 @@ vp run @codemirror-treesitter/live-md#build
 vp run @codemirror-treesitter/opendal-wasm-browser#auth:dropbox-token
 vp run @codemirror-treesitter/opendal-wasm-browser#validate:dropbox
 vp run local-md-workspace#dev
+vp run local-md-workspace#i18n:check
 vp run local-md-workspace#test
 vp run local-md-workspace#smoke:ui
 vp run grove-relay#dev
@@ -475,10 +476,12 @@ Production Grove deploys use the Cloudflare Pages project `grove` at
 origin, and the `grove-relay` Worker custom domain at
 `https://relay.grovemd.net`. The Grove CI/CD workflow enforces
 `VITE_DROPBOX_REDIRECT_URI=https://app.grovemd.net/` for Dropbox OAuth and
-builds the frontend against the relay custom domain. CI deploys the relay Worker
-with `apps/grove-relay/wrangler.worker.ci.jsonc`; the custom-domain route is kept
-in `apps/grove-relay/wrangler.worker.jsonc` for one-time provisioning by a token
-with zone route permissions.
+builds the frontend against the relay custom domain. It also runs
+`vp run local-md-workspace#i18n:check` to verify English/Chinese message keys and
+placeholders before tests. CI deploys the relay Worker with
+`apps/grove-relay/wrangler.worker.ci.jsonc`; the custom-domain route is kept in
+`apps/grove-relay/wrangler.worker.jsonc` for one-time provisioning by a token with
+zone route permissions.
 
 `vp run local-md-workspace#smoke:ui` expects the local Markdown workspace dev
 server to be running at `http://127.0.0.1:5173/` by default. Start that dev
