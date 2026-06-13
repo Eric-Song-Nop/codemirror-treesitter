@@ -3,6 +3,7 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { CheckIcon, MoonIcon, PaletteIcon, SunIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { themeDefinitions, useTheme, type ThemeDefinition } from "@/theme";
 
@@ -16,8 +17,9 @@ export function ThemeSelector({
   variant = "ghost",
   ...props
 }: ThemeSelectorProps) {
+  let { t } = useI18n();
   let { themeDefinition } = useTheme();
-  let label = `Theme: ${themeDefinition.label}`;
+  let label = t("theme.selector.label", { label: themeDefinition.label });
 
   return (
     <DropdownMenuPrimitive.Root>
@@ -38,7 +40,9 @@ export function ThemeSelector({
           className={themeDropdownContentClassName}
           sideOffset={8}
         >
-          <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Theme</div>
+          <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+            {t("theme.selector.group")}
+          </div>
           <ThemeMenuItems itemClassName={themeDropdownItemClassName} />
         </DropdownMenuPrimitive.Content>
       </DropdownMenuPrimitive.Portal>
@@ -51,13 +55,14 @@ type ThemeDropdownSubmenuProps = {
 };
 
 export function ThemeDropdownSubmenu({ itemClassName }: ThemeDropdownSubmenuProps) {
+  let { t } = useI18n();
   let { themeDefinition } = useTheme();
 
   return (
     <DropdownMenuPrimitive.Sub>
       <DropdownMenuPrimitive.SubTrigger className={itemClassName}>
         <PaletteIcon data-icon="inline-start" />
-        Theme
+        {t("theme.selector.group")}
         <span className="ml-auto truncate text-xs text-muted-foreground">
           {themeDefinition.label}
         </span>

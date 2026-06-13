@@ -10,7 +10,7 @@
   "type": "module",
   "scripts": {
     "audit": "node tools/audit.mjs",
-    "ready": "vp check && vp run -r test && vp run -r build && vp run audit"
+    "ready": "vp check && vp run local-md-workspace#i18n:check && vp run -r test && vp run -r build && vp run audit"
   },
   "dependencies": {},
   "devDependencies": {

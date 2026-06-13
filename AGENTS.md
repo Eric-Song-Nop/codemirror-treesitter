@@ -33,10 +33,10 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Product/runtime integrations: LiveMD uses KaTeX, Mermaid, and
   `beautiful-mermaid`; optional collaboration uses `loro-crdt` and
   `loro-codemirror`; `apps/local-md-workspace` uses React 19, shadcn/radix UI,
-  the browser File System Access API, Dropbox OAuth PKCE, the OpenDAL browser
-  WASM wrapper, and Grove shared-file relay clients; `apps/grove-relay` and
-  `apps/collab-editor` use Cloudflare Workers, Durable Objects, WebSockets,
-  Wrangler, and `@cloudflare/vite-plugin`.
+  i18next/react-i18next, the browser File System Access API, Dropbox OAuth
+  PKCE, the OpenDAL browser WASM wrapper, and Grove shared-file relay clients;
+  `apps/grove-relay` and `apps/collab-editor` use Cloudflare Workers, Durable
+  Objects, WebSockets, Wrangler, and `@cloudflare/vite-plugin`.
 
 ## Repository Layout
 
@@ -135,6 +135,7 @@ Useful task selectors:
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
 vp run local-md-workspace#dev
+vp run local-md-workspace#i18n:check
 vp run local-md-workspace#test
 vp run local-md-workspace#smoke:ui
 vp run grove-relay#dev
