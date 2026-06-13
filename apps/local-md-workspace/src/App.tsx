@@ -147,11 +147,12 @@ import {
   loadStoredDropboxWorkspaceConfig,
   loadStoredWorkspaceSelectedPath,
   loadStoredWorkspaceKind,
-  loadStoredWorkspaceHandle,
+  loadStoredLocalWorkspaceRecord,
+  rememberStoredLocalWorkspace,
   saveStoredDropboxWorkspaceConfig,
   saveStoredWorkspaceSelectedPath,
   saveStoredWorkspaceKind,
-  saveStoredWorkspaceHandle,
+  type StoredLocalWorkspaceRecord,
   type StoredDropboxWorkspaceConfig,
   type StoredWorkspaceSelectedPathContext,
   type StoredWorkspaceKind,
@@ -225,7 +226,7 @@ export function App() {
 
 function LocalWorkspaceApp() {
   let [workspaceBackend, setWorkspaceBackend] = useState<WorkspaceBackend | null>(null);
-  let [storedWorkspaceHandle, setStoredWorkspaceHandle] = useState<AccessDirectoryHandle | null>(
+  let [storedLocalWorkspace, setStoredLocalWorkspace] = useState<StoredLocalWorkspaceRecord | null>(
     null,
   );
   let [storedDropboxConfig, setStoredDropboxConfig] = useState<StoredDropboxWorkspaceConfig | null>(
@@ -332,7 +333,7 @@ function LocalWorkspaceApp() {
   }, []);
 
   let selectedPath = singleFileSource ? null : (selectedFile?.path ?? null);
-  let rootName = tree?.name ?? workspaceBackend?.name ?? storedWorkspaceHandle?.name ?? "Grove";
+  let rootName = tree?.name ?? workspaceBackend?.name ?? storedLocalWorkspace?.name ?? "Grove";
   let selectedPathLabel = selectedFile
     ? selectedFile.path == selectedFile.name
       ? ""
@@ -938,11 +939,13 @@ function LocalWorkspaceApp() {
     [clearActiveDocument, loadFile, replaceImageAssets],
   );
 
-  let rememberWorkspaceHandle = useCallback((handle: AccessDirectoryHandle) => {
-    setStoredWorkspaceHandle(handle);
+  let rememberWorkspaceHandle = useCallback(async (handle: AccessDirectoryHandle) => {
+    let record = await rememberStoredLocalWorkspace(handle);
+    let nextRecord = record ?? createEphemeralLocalWorkspaceRecord(handle);
+    setStoredLocalWorkspace(nextRecord);
     setStoredWorkspaceKind("local");
-    void saveStoredWorkspaceHandle(handle).catch(() => {});
     saveStoredWorkspaceKind("local");
+    return nextRecord;
   }, []);
 
   let findCurrentEditorWorkspacePath = useCallback(async (backend: WorkspaceBackend) => {
@@ -1085,11 +1088,11 @@ function LocalWorkspaceApp() {
         setRetryLoadPath(null);
         return;
       }
-      let backend = createLocalWorkspaceBackend(handle);
+      let record = await rememberWorkspaceHandle(handle);
+      let backend = createLocalWorkspaceBackend(handle, record.id);
       dropboxTokenRef.current = null;
       dropboxTokenAppKeyRef.current = "";
       setWorkspaceBackend(backend);
-      rememberWorkspaceHandle(handle);
       setSidebarOpen(defaultSidebarOpen());
       await loadTree(backend, loadWorkspaceSelectedPath(backend));
     } catch (error) {
@@ -1140,19 +1143,22 @@ function LocalWorkspaceApp() {
   );
 
   let restoreStoredWorkspace = useCallback(async () => {
-    if (!storedWorkspaceHandle) return;
+    if (!storedLocalWorkspace) return;
 
     setBusy(true);
     setErrorMessage("");
     setRetryLoadPath(null);
     try {
-      if (!(await ensureReadWritePermission(storedWorkspaceHandle))) {
+      if (!(await ensureReadWritePermission(storedLocalWorkspace.handle))) {
         setErrorMessage("Read-write folder permission was not granted.");
         setRetryLoadPath(null);
         return;
       }
 
-      let backend = createLocalWorkspaceBackend(storedWorkspaceHandle);
+      let backend = createLocalWorkspaceBackend(
+        storedLocalWorkspace.handle,
+        storedLocalWorkspace.id,
+      );
       dropboxTokenRef.current = null;
       dropboxTokenAppKeyRef.current = "";
       setWorkspaceBackend(backend);
@@ -1164,7 +1170,7 @@ function LocalWorkspaceApp() {
     } finally {
       setBusy(false);
     }
-  }, [loadTree, storedWorkspaceHandle]);
+  }, [loadTree, storedLocalWorkspace]);
 
   let restoreDropboxWorkspace = useCallback(async () => {
     if (!storedDropboxConfig) return;
@@ -1272,17 +1278,17 @@ function LocalWorkspaceApp() {
 
     void (async () => {
       try {
-        let handle = await loadStoredWorkspaceHandle();
-        if (canceled || !handle) return;
+        let record = await loadStoredLocalWorkspaceRecord();
+        if (canceled || !record) return;
 
-        setStoredWorkspaceHandle(handle);
+        setStoredLocalWorkspace(record);
 
-        if ((await queryReadWritePermission(handle)) != "granted") {
+        if ((await queryReadWritePermission(record.handle)) != "granted") {
           return;
         }
         if (canceled) return;
 
-        let backend = createLocalWorkspaceBackend(handle);
+        let backend = createLocalWorkspaceBackend(record.handle, record.id);
         dropboxTokenRef.current = null;
         dropboxTokenAppKeyRef.current = "";
         setWorkspaceBackend(backend);
@@ -1312,7 +1318,7 @@ function LocalWorkspaceApp() {
       workspaceBackend ||
       !storedDropboxConfig ||
       (storedWorkspaceKind && storedWorkspaceKind != "dropbox") ||
-      (!storedWorkspaceKind && storedWorkspaceHandle)
+      (!storedWorkspaceKind && storedLocalWorkspace)
     ) {
       setDropboxAutoRestoreChecked(true);
       return;
@@ -1331,7 +1337,7 @@ function LocalWorkspaceApp() {
     localRestoreChecked,
     openDropboxWorkspace,
     storedDropboxConfig,
-    storedWorkspaceHandle,
+    storedLocalWorkspace,
     storedWorkspaceKind,
     workspaceBackend,
   ]);
@@ -1963,7 +1969,7 @@ function LocalWorkspaceApp() {
     activeShareRecord.revokedAt == null
       ? activeShareRecord
       : null;
-  let restoreAvailable = Boolean(storedWorkspaceHandle);
+  let restoreAvailable = Boolean(storedLocalWorkspace);
   let dropboxRestoreAvailable = Boolean(storedDropboxConfig);
 
   return (
@@ -3243,6 +3249,24 @@ function saveStateLabel(
 function workspaceStorageLabel(backend: WorkspaceBackend | null) {
   if (!backend) return "";
   return backend.kind == "opendal-dropbox" ? "Dropbox" : "Local";
+}
+
+function createEphemeralLocalWorkspaceRecord(
+  handle: AccessDirectoryHandle,
+): StoredLocalWorkspaceRecord {
+  return {
+    handle,
+    id: createEphemeralLocalWorkspaceId(),
+    lastOpenedAt: Date.now(),
+    name: handle.name || "Workspace",
+  };
+}
+
+function createEphemeralLocalWorkspaceId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID == "function") {
+    return `local:${globalThis.crypto.randomUUID()}`;
+  }
+  return `local:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function workspaceSelectedPathContext(

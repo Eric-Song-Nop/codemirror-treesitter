@@ -133,9 +133,12 @@ export async function queryReadWritePermission(handle: AccessDirectoryHandle) {
   return handle.queryPermission({ mode: "readwrite" });
 }
 
-export function createLocalWorkspaceBackend(handle: AccessDirectoryHandle): WorkspaceBackend {
+export function createLocalWorkspaceBackend(
+  handle: AccessDirectoryHandle,
+  workspaceId = `local:${handle.name || "workspace"}`,
+): WorkspaceBackend {
   return {
-    id: `local:${handle.name || "workspace"}`,
+    id: workspaceId,
     kind: "local",
     name: handle.name || "Workspace",
     createDirectory: (path) => createWorkspaceDirectory(handle, path),

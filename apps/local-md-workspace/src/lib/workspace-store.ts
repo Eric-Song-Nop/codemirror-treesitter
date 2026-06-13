@@ -4,6 +4,7 @@ const DB_NAME = "local-md-workspace";
 const DB_VERSION = 1;
 const STORE_NAME = "workspace";
 const HANDLE_KEY = "directory-handle";
+const LOCAL_WORKSPACE_RECORDS_KEY = "local-workspaces";
 const DROPBOX_CONFIG_KEY = "local-md-workspace:dropbox-config";
 const WORKSPACE_KIND_KEY = "local-md-workspace:workspace-kind";
 const SELECTED_PATH_KEY_PREFIX = "local-md-workspace:selected-path";
@@ -20,13 +21,21 @@ export type StoredWorkspaceSelectedPathContext = {
   workspaceId: string;
 };
 
-export async function loadStoredWorkspaceHandle() {
+export type StoredLocalWorkspaceRecord = {
+  handle: AccessDirectoryHandle;
+  id: string;
+  lastOpenedAt: number;
+  name: string;
+};
+
+export async function loadStoredLocalWorkspaceRecord() {
   if (!canUseIndexedDb()) return null;
 
   try {
     let db = await openWorkspaceDatabase();
     try {
-      return await getValue<AccessDirectoryHandle>(db, HANDLE_KEY);
+      let records = await loadLocalWorkspaceRecordsWithLegacyMigration(db);
+      return records.toSorted((left, right) => right.lastOpenedAt - left.lastOpenedAt)[0] ?? null;
     } finally {
       db.close();
     }
@@ -35,15 +44,43 @@ export async function loadStoredWorkspaceHandle() {
   }
 }
 
-export async function saveStoredWorkspaceHandle(handle: AccessDirectoryHandle) {
-  if (!canUseIndexedDb()) return;
+export async function rememberStoredLocalWorkspace(
+  handle: AccessDirectoryHandle,
+  options: { now?: number } = {},
+) {
+  if (!canUseIndexedDb()) return null;
 
-  let db = await openWorkspaceDatabase();
   try {
-    await putValue(db, HANDLE_KEY, handle);
-  } finally {
-    db.close();
+    let db = await openWorkspaceDatabase();
+    try {
+      let now = options.now ?? Date.now();
+      let records = await loadLocalWorkspaceRecordsWithLegacyMigration(db, now);
+      let existing = await findMatchingLocalWorkspaceRecord(records, handle);
+      let record: StoredLocalWorkspaceRecord = {
+        handle,
+        id: existing?.id ?? createLocalWorkspaceRecordId(),
+        lastOpenedAt: now,
+        name: handle.name || "Workspace",
+      };
+      let nextRecords = [record, ...records.filter((candidate) => candidate.id != record.id)];
+
+      await putValue(db, LOCAL_WORKSPACE_RECORDS_KEY, nextRecords);
+      await putValue(db, HANDLE_KEY, handle);
+      return record;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
   }
+}
+
+export async function loadStoredWorkspaceHandle() {
+  return (await loadStoredLocalWorkspaceRecord())?.handle ?? null;
+}
+
+export async function saveStoredWorkspaceHandle(handle: AccessDirectoryHandle) {
+  await rememberStoredLocalWorkspace(handle);
 }
 
 export function loadStoredDropboxWorkspaceConfig() {
@@ -186,6 +223,124 @@ function openWorkspaceDatabase() {
     request.onerror = () => reject(request.error ?? new Error("IndexedDB open failed."));
     request.onblocked = () => reject(new Error("IndexedDB open was blocked."));
   });
+}
+
+async function loadLocalWorkspaceRecordsWithLegacyMigration(db: IDBDatabase, now = Date.now()) {
+  let records = parseLocalWorkspaceRecords(
+    await getValue<unknown>(db, LOCAL_WORKSPACE_RECORDS_KEY),
+  );
+  if (records.length) return records;
+
+  let legacyHandle = await getValue<unknown>(db, HANDLE_KEY);
+  if (!isAccessDirectoryHandle(legacyHandle)) return records;
+
+  let record: StoredLocalWorkspaceRecord = {
+    handle: legacyHandle,
+    id: createLocalWorkspaceRecordId(),
+    lastOpenedAt: now,
+    name: legacyHandle.name || "Workspace",
+  };
+
+  await putValue(db, LOCAL_WORKSPACE_RECORDS_KEY, [record]);
+  migrateStoredWorkspaceSelectedPath(
+    { kind: "local", workspaceId: legacyLocalWorkspaceId(legacyHandle) },
+    { kind: "local", workspaceId: record.id },
+  );
+  return [record];
+}
+
+async function findMatchingLocalWorkspaceRecord(
+  records: StoredLocalWorkspaceRecord[],
+  handle: AccessDirectoryHandle,
+) {
+  for (let record of records) {
+    if (await areSameDirectoryHandle(record.handle, handle)) return record;
+  }
+  return null;
+}
+
+async function areSameDirectoryHandle(left: AccessDirectoryHandle, right: AccessDirectoryHandle) {
+  if (left === right) return true;
+  if (left.isSameEntry) {
+    try {
+      if (await left.isSameEntry(right)) return true;
+    } catch {}
+  }
+  if (right.isSameEntry) {
+    try {
+      if (await right.isSameEntry(left)) return true;
+    } catch {}
+  }
+  return false;
+}
+
+function migrateStoredWorkspaceSelectedPath(
+  from: StoredWorkspaceSelectedPathContext,
+  to: StoredWorkspaceSelectedPathContext,
+) {
+  if (!canUseLocalStorage()) return;
+
+  let fromKey = selectedPathStorageKey(from);
+  let toKey = selectedPathStorageKey(to);
+  if (!fromKey || !toKey) return;
+
+  try {
+    if (normalizeWorkspacePath(window.localStorage.getItem(toKey))) return;
+    let oldPath = normalizeWorkspacePath(window.localStorage.getItem(fromKey));
+    if (oldPath) window.localStorage.setItem(toKey, oldPath);
+  } catch {}
+}
+
+function parseLocalWorkspaceRecords(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  let records: StoredLocalWorkspaceRecord[] = [];
+  for (let item of value) {
+    if (!item || typeof item != "object") continue;
+    let record = item as Record<string, unknown>;
+    if (typeof record.id != "string" || !record.id.trim()) continue;
+    if (!isAccessDirectoryHandle(record.handle)) continue;
+
+    let name =
+      typeof record.name == "string" && record.name.trim()
+        ? record.name.trim()
+        : record.handle.name || "Workspace";
+    let lastOpenedAt =
+      typeof record.lastOpenedAt == "number" && Number.isFinite(record.lastOpenedAt)
+        ? record.lastOpenedAt
+        : 0;
+
+    records.push({
+      handle: record.handle,
+      id: record.id.trim(),
+      lastOpenedAt,
+      name,
+    });
+  }
+  return records;
+}
+
+function isAccessDirectoryHandle(value: unknown): value is AccessDirectoryHandle {
+  return (
+    Boolean(value) &&
+    typeof value == "object" &&
+    (value as AccessDirectoryHandle).kind == "directory" &&
+    typeof (value as AccessDirectoryHandle).name == "string" &&
+    typeof (value as AccessDirectoryHandle).getDirectoryHandle == "function" &&
+    typeof (value as AccessDirectoryHandle).getFileHandle == "function" &&
+    typeof (value as AccessDirectoryHandle).values == "function"
+  );
+}
+
+function createLocalWorkspaceRecordId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID == "function") {
+    return `local:${globalThis.crypto.randomUUID()}`;
+  }
+  return `local:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function legacyLocalWorkspaceId(handle: AccessDirectoryHandle) {
+  return `local:${handle.name || "workspace"}`;
 }
 
 async function getValue<T>(db: IDBDatabase, key: IDBValidKey) {
