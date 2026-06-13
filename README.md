@@ -205,8 +205,9 @@ entry points, dependency boundaries, source layout, and validation notes.
   files with LiveMD, supports Dropbox storage through OpenDAL WASM and OAuth
   PKCE, supports image insert/paste/drop through sibling `assets/` directories,
   supports file/folder create, rename, delete, tree browsing, and autosave, can
-  export standalone HTML with scoped LiveMD document styling, and can host or
-  join Grove shared-file sessions through `apps/grove-relay`.
+  export standalone HTML or open a browser print view for saving as PDF with
+  scoped LiveMD document styling, and can host or join Grove shared-file
+  sessions through `apps/grove-relay`.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, share create/session/rotate/revoke APIs, WebSocket Loro sync,
   bounded relay queues, share expiration cleanup, and Wrangler deploy/types
