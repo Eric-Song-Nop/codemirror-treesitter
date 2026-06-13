@@ -18,6 +18,7 @@ on:
       - "apps/local-md-workspace/index.html"
       - "apps/local-md-workspace/package.json"
       - "apps/local-md-workspace/public/**"
+      - "apps/local-md-workspace/scripts/**"
       - "apps/local-md-workspace/src/**"
       - "apps/local-md-workspace/tsconfig.json"
       - "apps/local-md-workspace/vite.config.ts"
@@ -29,9 +30,17 @@ on:
       - "packages/language/**"
       - "packages/language-data/**"
       - "packages/live-md/**"
+      - "packages/live-md-theme/**"
+      - "packages/live-md-theme-catppuccin/**"
+      - "packages/live-md-theme-github/**"
+      - "packages/live-md-theme-gruvbox/**"
       - "packages/live-md-loro/**"
       - "packages/opendal-wasm-browser/**"
+      - "packages/theme/**"
+      - "packages/theme-catppuccin/**"
+      - "packages/theme-github/**"
       - "packages/theme-gruvbox/**"
+      - "packages/theme-palettes/**"
       - "tsconfig*.json"
       - "vite.config.ts"
       - "vite.shared.ts"
@@ -101,6 +110,7 @@ jobs:
                 return 0
                 ;;
               apps/local-md-workspace/src/* | \
+              apps/local-md-workspace/scripts/* | \
               apps/local-md-workspace/public/* | \
               apps/local-md-workspace/index.html | \
               apps/local-md-workspace/package.json | \
@@ -129,10 +139,18 @@ jobs:
               packages/language-data/src/* | \
               packages/live-md/src/* | \
               packages/live-md/vite-plugin.ts | \
+              packages/live-md-theme/src/* | \
+              packages/live-md-theme-catppuccin/src/* | \
+              packages/live-md-theme-github/src/* | \
+              packages/live-md-theme-gruvbox/src/* | \
               packages/live-md-loro/src/* | \
               packages/opendal-wasm-browser/src/* | \
               packages/opendal-wasm-browser/pkg/* | \
-              packages/theme-gruvbox/src/*)
+              packages/theme/src/* | \
+              packages/theme-catppuccin/src/* | \
+              packages/theme-github/src/* | \
+              packages/theme-gruvbox/src/* | \
+              packages/theme-palettes/src/*)
                 return 0
                 ;;
               packages/autocomplete/package.json | \
@@ -153,6 +171,18 @@ jobs:
               packages/live-md/package.json | \
               packages/live-md/tsconfig.json | \
               packages/live-md/vite.config.ts | \
+              packages/live-md-theme/package.json | \
+              packages/live-md-theme/tsconfig.json | \
+              packages/live-md-theme/vite.config.ts | \
+              packages/live-md-theme-catppuccin/package.json | \
+              packages/live-md-theme-catppuccin/tsconfig.json | \
+              packages/live-md-theme-catppuccin/vite.config.ts | \
+              packages/live-md-theme-github/package.json | \
+              packages/live-md-theme-github/tsconfig.json | \
+              packages/live-md-theme-github/vite.config.ts | \
+              packages/live-md-theme-gruvbox/package.json | \
+              packages/live-md-theme-gruvbox/tsconfig.json | \
+              packages/live-md-theme-gruvbox/vite.config.ts | \
               packages/live-md-loro/package.json | \
               packages/live-md-loro/tsconfig.json | \
               packages/live-md-loro/vite.config.ts | \
@@ -161,9 +191,21 @@ jobs:
               packages/opendal-wasm-browser/package.json | \
               packages/opendal-wasm-browser/tsconfig.json | \
               packages/opendal-wasm-browser/vite.config.ts | \
+              packages/theme/package.json | \
+              packages/theme/tsconfig.json | \
+              packages/theme/vite.config.ts | \
+              packages/theme-catppuccin/package.json | \
+              packages/theme-catppuccin/tsconfig.json | \
+              packages/theme-catppuccin/vite.config.ts | \
+              packages/theme-github/package.json | \
+              packages/theme-github/tsconfig.json | \
+              packages/theme-github/vite.config.ts | \
               packages/theme-gruvbox/package.json | \
               packages/theme-gruvbox/tsconfig.json | \
-              packages/theme-gruvbox/vite.config.ts)
+              packages/theme-gruvbox/vite.config.ts | \
+              packages/theme-palettes/package.json | \
+              packages/theme-palettes/tsconfig.json | \
+              packages/theme-palettes/vite.config.ts)
                 return 0
                 ;;
             esac
@@ -367,6 +409,9 @@ jobs:
 
       - name: Check
         run: vp check
+
+      - name: Check Grove i18n
+        run: vp run local-md-workspace#i18n:check
 
       - name: Test
         run: vp run -r test

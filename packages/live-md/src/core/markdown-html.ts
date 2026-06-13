@@ -1,6 +1,7 @@
 import { Text } from "@codemirror/state";
 import type { SyntaxNode, TreeSitterParser } from "@codemirror-treesitter/language";
 import { languages } from "@codemirror-treesitter/language-data";
+import { liveMdThemeVariableNames } from "@codemirror-treesitter/live-md-theme";
 
 export type MarkdownHtmlImage = {
   alt: string;
@@ -18,46 +19,7 @@ export type MarkdownHtmlRenderOptions = {
 
 export const liveMdMarkdownDocumentClass = "live-md-document";
 
-export const liveMdMarkdownDocumentCssVariables = [
-  "--live-md-bg",
-  "--live-md-text",
-  "--live-md-muted",
-  "--live-md-accent",
-  "--live-md-border",
-  "--live-md-code-bg",
-  "--live-md-code-text",
-  "--live-md-code-muted",
-  "--live-md-code-border",
-  "--live-md-heading-1",
-  "--live-md-heading-2",
-  "--live-md-heading-3",
-  "--live-md-heading-rest",
-  "--live-md-inline-code-bg",
-  "--live-md-inline-code-text",
-  "--live-md-inline-code-border",
-  "--live-md-link",
-  "--live-md-link-underline",
-  "--live-md-blockquote",
-  "--live-md-blockquote-border",
-  "--live-md-ordered-marker",
-  "--live-md-task-border",
-  "--live-md-task-bg",
-  "--live-md-task-check",
-  "--live-md-task-checked",
-  "--live-md-task-checked-strong",
-  "--live-md-rule",
-  "--live-md-table-bg",
-  "--live-md-table-border",
-  "--live-md-table-header-bg",
-  "--live-md-table-header-text",
-  "--live-md-content-width",
-  "--live-md-content-padding-block-start",
-  "--live-md-content-padding-inline",
-  "--live-md-content-padding-block-end",
-  "--live-md-font-body",
-  "--live-md-font-ui",
-  "--live-md-font-code",
-] as const;
+export const liveMdMarkdownDocumentCssVariables = liveMdThemeVariableNames;
 
 type MarkdownHtmlParsers = {
   block: MarkdownHtmlBlockParser;
@@ -194,7 +156,7 @@ export function liveMdMarkdownDocumentCss() {
 }
 
 .${liveMdMarkdownDocumentClass} ul > li::marker {
-  color: var(--live-md-accent, #0f766e);
+  color: var(--live-md-list-marker, #0f766e);
 }
 
 .${liveMdMarkdownDocumentClass} a {

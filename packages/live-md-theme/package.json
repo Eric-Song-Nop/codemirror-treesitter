@@ -1,0 +1,26 @@
+{
+  "name": "@codemirror-treesitter/live-md-theme",
+  "version": "0.0.0",
+  "description": "Reusable LiveMD presentation theme token contract",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "test": "vp test",
+    "check": "vp check"
+  },
+  "devDependencies": {
+    "@typescript/native-preview": "7.0.0-dev.20260509.2",
+    "typescript": "^6.0.3",
+    "vite-plus": "catalog:"
+  }
+}

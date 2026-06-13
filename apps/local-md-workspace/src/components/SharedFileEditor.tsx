@@ -5,8 +5,10 @@ import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { GroveMark } from "@/components/GroveMark";
 import { LiveMdEditor } from "@/components/LiveMdEditor";
+import { ThemeSelector } from "@/components/ThemeSelector";
 import {
   ShareRelayConnection,
   type ShareRelayConnectionState,
@@ -17,6 +19,7 @@ import {
   createRelayShareSession,
 } from "@/lib/collaboration/share-relay-client";
 import { parseShareLink, type ShareLinkParts } from "@/lib/collaboration/share-identity";
+import { translateKnownMessage, useI18n, type TFunction, type Locale } from "@/lib/i18n";
 
 type SharedFileRoute =
   | {
@@ -33,6 +36,7 @@ type SharedFileEditorProps = {
 };
 
 export function SharedFileEditor({ href = window.location.href }: SharedFileEditorProps) {
+  let { locale, t } = useI18n();
   let route = useMemo(() => sharedFileRouteFromHref(href), [href]);
   let relayOrigin = useMemo(() => configuredShareRelayOrigin(), []);
   let [doc] = useState(() => new LoroDoc());
@@ -148,91 +152,100 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
     };
   }, []);
 
-  let statusLabel = connectionStatusLabel(connectionState);
+  let statusLabel = connectionStatusLabel(connectionState, t);
   let expiresAt = shareStatus?.expiresAt ?? null;
   let saveStatus = guestSaveStatus({
     hostSavedVersion,
     latestLocalVersion,
+    t,
   });
   let saveStatusTitle =
-    saveStatus == "Saved to host" && lastHostSavedAt
-      ? `Host saved ${formatTimestamp(lastHostSavedAt)}`
+    saveStatus == t("shared.savedToHost") && lastHostSavedAt
+      ? t("shared.hostSavedAt", { time: formatTimestamp(lastHostSavedAt, locale) })
       : undefined;
+  let displayNameLabel = displayName == "Shared file" ? t("shared.title") : displayName;
 
   return (
-    <main className="flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <GroveMark className="size-7" decorative />
-          <div className="min-w-0 truncate text-sm font-medium">{displayName}</div>
-        </div>
-        <Badge variant="secondary">
-          {connectionState == "connected" ? (
-            <WifiIcon data-icon="inline-start" />
-          ) : connectionState == "connecting" ? (
-            <RefreshCwIcon data-icon="inline-start" />
-          ) : (
-            <WifiOffIcon data-icon="inline-start" />
-          )}
-          {statusLabel}
-        </Badge>
-        {shareStatus?.hostOnline ? (
+    <TooltipProvider>
+      <main className="flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+        <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <GroveMark className="size-7" decorative />
+            <div className="min-w-0 truncate text-sm font-medium">{displayNameLabel}</div>
+          </div>
           <Badge variant="secondary">
-            <CloudIcon data-icon="inline-start" />
-            Host online
-          </Badge>
-        ) : (
-          <Badge variant="outline">Host offline</Badge>
-        )}
-        {shareStatus && shareStatus.peerCount > 0 && (
-          <Badge variant="outline">{shareStatus.peerCount} peers</Badge>
-        )}
-        {saveStatus && (
-          <Badge title={saveStatusTitle} variant="secondary">
-            {saveStatus}
-          </Badge>
-        )}
-      </header>
-
-      {errorMessage && (
-        <div className="flex shrink-0 items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <AlertCircleIcon className="size-4 shrink-0" />
-          <div className="min-w-0 flex-1">{errorMessage}</div>
-          {route.kind == "share" && (
-            <Button size="sm" variant="outline" onClick={() => connectionRef.current?.connect()}>
+            {connectionState == "connected" ? (
+              <WifiIcon data-icon="inline-start" />
+            ) : connectionState == "connecting" ? (
               <RefreshCwIcon data-icon="inline-start" />
-              Retry
-            </Button>
+            ) : (
+              <WifiOffIcon data-icon="inline-start" />
+            )}
+            {statusLabel}
+          </Badge>
+          {shareStatus?.hostOnline ? (
+            <Badge variant="secondary">
+              <CloudIcon data-icon="inline-start" />
+              {t("shared.hostOnline")}
+            </Badge>
+          ) : (
+            <Badge variant="outline">{t("shared.hostOffline")}</Badge>
           )}
-        </div>
-      )}
+          {shareStatus && shareStatus.peerCount > 0 && (
+            <Badge variant="outline">{formatPeerCount(shareStatus.peerCount, t)}</Badge>
+          )}
+          {saveStatus && (
+            <Badge title={saveStatusTitle} variant="secondary">
+              {saveStatus}
+            </Badge>
+          )}
+          <ThemeSelector className="shrink-0" />
+        </header>
 
-      {sessionReady ? (
-        <section className="min-h-0 flex-1 overflow-hidden">
-          <LiveMdEditor
-            documentKey={route.kind == "share" ? route.parts.shareId : "shared-file"}
-            extensions={extensions}
-            initialValue=""
-            placeholder="Start writing..."
-            onInput={() => {}}
-          />
-        </section>
-      ) : (
-        <div className="grid min-h-0 flex-1 place-items-center p-6">
-          <Empty className="max-w-md">
-            <EmptyHeader>
-              <EmptyMedia>
-                <GroveMark className="size-14" />
-              </EmptyMedia>
-              <EmptyTitle>
-                {route.kind == "invalid" ? "Invalid shared file" : "Joining shared file"}
-              </EmptyTitle>
-            </EmptyHeader>
-            {expiresAt && <EmptyContent>Expires {formatTimestamp(expiresAt)}</EmptyContent>}
-          </Empty>
-        </div>
-      )}
-    </main>
+        {errorMessage && (
+          <div className="flex shrink-0 items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <AlertCircleIcon className="size-4 shrink-0" />
+            <div className="min-w-0 flex-1">{translateKnownMessage(errorMessage, t)}</div>
+            {route.kind == "share" && (
+              <Button size="sm" variant="outline" onClick={() => connectionRef.current?.connect()}>
+                <RefreshCwIcon data-icon="inline-start" />
+                {t("actions.retry")}
+              </Button>
+            )}
+          </div>
+        )}
+
+        {sessionReady ? (
+          <section className="min-h-0 flex-1 overflow-hidden">
+            <LiveMdEditor
+              documentKey={route.kind == "share" ? route.parts.shareId : "shared-file"}
+              extensions={extensions}
+              initialValue=""
+              placeholder={t("workspace.placeholder")}
+              onInput={() => {}}
+            />
+          </section>
+        ) : (
+          <div className="grid min-h-0 flex-1 place-items-center p-6">
+            <Empty className="max-w-md">
+              <EmptyHeader>
+                <EmptyMedia>
+                  <GroveMark className="size-14" />
+                </EmptyMedia>
+                <EmptyTitle>
+                  {route.kind == "invalid" ? t("shared.invalid") : t("shared.joining")}
+                </EmptyTitle>
+              </EmptyHeader>
+              {expiresAt && (
+                <EmptyContent>
+                  {t("shared.expiresAt", { time: formatTimestamp(expiresAt, locale) })}
+                </EmptyContent>
+              )}
+            </Empty>
+          </div>
+        )}
+      </main>
+    </TooltipProvider>
   );
 }
 
@@ -249,36 +262,46 @@ function sharedFileRouteFromHref(href: string): SharedFileRoute {
   };
 }
 
-function connectionStatusLabel(state: ShareRelayConnectionState) {
-  if (state == "connected") return "Connected";
-  if (state == "connecting") return "Connecting";
-  if (state == "resync-required") return "Reconnect required";
-  return "Offline";
+function connectionStatusLabel(state: ShareRelayConnectionState, t: TFunction) {
+  if (state == "connected") return t("shared.connection.connected");
+  if (state == "connecting") return t("shared.connection.connecting");
+  if (state == "resync-required") return t("shared.connection.resyncRequired");
+  return t("shared.connection.offline");
 }
 
 function guestSaveStatus({
   hostSavedVersion,
   latestLocalVersion,
+  t,
 }: {
   hostSavedVersion: VersionVector | null;
   latestLocalVersion: VersionVector | null;
+  t: TFunction;
 }) {
   if (!latestLocalVersion) return "";
   if (hostSavedVersion && versionCovers(hostSavedVersion, latestLocalVersion)) {
-    return "Saved to host";
+    return t("shared.savedToHost");
   }
-  return "Waiting for host";
+  return t("shared.waitingForHost");
 }
 
 function errorToMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function formatTimestamp(value: number) {
-  return new Intl.DateTimeFormat(undefined, {
+function formatTimestamp(value: number, locale: Locale) {
+  return new Intl.DateTimeFormat(locale, {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function formatPeerCount(count: number, t: TFunction) {
+  return count == 1
+    ? t("shared.peerCount_one")
+    : t("shared.peerCount_other", {
+        count,
+      });
 }
 
 function parseHostSaveAck(payload: Uint8Array) {

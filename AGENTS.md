@@ -33,10 +33,10 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Product/runtime integrations: LiveMD uses KaTeX, Mermaid, and
   `beautiful-mermaid`; optional collaboration uses `loro-crdt` and
   `loro-codemirror`; `apps/local-md-workspace` uses React 19, shadcn/radix UI,
-  the browser File System Access API, Dropbox OAuth PKCE, the OpenDAL browser
-  WASM wrapper, and Grove shared-file relay clients; `apps/grove-relay` and
-  `apps/collab-editor` use Cloudflare Workers, Durable Objects, WebSockets,
-  Wrangler, and `@cloudflare/vite-plugin`.
+  i18next/react-i18next, the browser File System Access API, Dropbox OAuth
+  PKCE, the OpenDAL browser WASM wrapper, and Grove shared-file relay clients;
+  `apps/grove-relay` and `apps/collab-editor` use Cloudflare Workers, Durable
+  Objects, WebSockets, Wrangler, and `@cloudflare/vite-plugin`.
 
 ## Repository Layout
 
@@ -52,7 +52,14 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   snippets, word completion, and close brackets.
 - `packages/codemirror`: `@codemirror-treesitter/basic-setup`, including
   `basicSetup`, `minimalSetup`, and the compatibility `EditorView` export.
+- `packages/theme-palettes`: Shared concrete palettes reused by CodeMirror
+  editor themes and LiveMD presentation themes.
+- `packages/theme`: Shared semantic theme token contracts and CodeMirror
+  editor/highlight extension factories for concrete theme packages.
 - `packages/theme-gruvbox`: Local Gruvbox editor themes and highlight styles.
+- `packages/theme-github`: Local GitHub editor themes and highlight styles.
+- `packages/theme-catppuccin`: Local Catppuccin editor themes and highlight
+  styles.
 - `packages/merge`: Diff, split merge view, unified merge view, chunk helpers,
   and local highlighting for deletion widgets.
 - `packages/lsp-client`: LSP transport, plugin, workspace mapping,
@@ -60,6 +67,11 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   and signature help.
 - `packages/live-md`: Live Markdown editor runtime, web component, registration
   entry, CSS export, and fixtures.
+- `packages/live-md-theme`: Shared LiveMD presentation token contract and host
+  variable helpers.
+- `packages/live-md-theme-gruvbox`: Gruvbox LiveMD presentation themes.
+- `packages/live-md-theme-github`: GitHub Light LiveMD presentation theme.
+- `packages/live-md-theme-catppuccin`: Catppuccin LiveMD presentation themes.
 - `packages/live-md-loro`: Optional Loro collaboration bindings for LiveMD.
 - `packages/opendal-wasm-browser`: Experimental browser WASM wrapper for
   OpenDAL-backed cloud workspace storage.
@@ -89,6 +101,9 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Prefer imports through workspace package names and the aliases in
   `vite.shared.ts` instead of reaching across package internals from another
   package.
+- CodeMirror theme packages must not import LiveMD. LiveMD presentation themes
+  live in `packages/live-md-theme*`; both theme families may reuse
+  `packages/theme-palettes`.
 - Keep Loro collaboration optional. Do not import `loro-crdt` or
   `loro-codemirror` from `packages/live-md`.
 - Grove shared-file relay APIs belong in `apps/grove-relay`; the
@@ -120,6 +135,7 @@ Useful task selectors:
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
 vp run local-md-workspace#dev
+vp run local-md-workspace#i18n:check
 vp run local-md-workspace#test
 vp run local-md-workspace#smoke:ui
 vp run grove-relay#dev

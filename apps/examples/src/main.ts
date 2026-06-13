@@ -43,6 +43,7 @@ import {
   gruvboxLightColors,
   gruvboxLightHighlightStyle,
   gruvboxLightTheme,
+  type GruvboxColors,
 } from "@codemirror-treesitter/theme-gruvbox";
 import {
   CompletionContext as LezerCompletionContext,
@@ -164,8 +165,6 @@ type EngineState<Support> = {
   editor: HTMLElement;
   statusList: HTMLElement;
 };
-
-type GruvboxColors = typeof gruvboxDarkColors;
 
 const treeLanguageCache = new Map<string, Promise<TreeLanguageSupport>>();
 const lezerLanguageCache = new Map<string, Promise<LezerLanguageSupport>>();

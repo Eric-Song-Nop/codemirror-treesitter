@@ -17,6 +17,7 @@ import {
   FileTextIcon,
   FolderOpenIcon,
   ImagePlusIcon,
+  LanguagesIcon,
   LinkIcon,
   MenuIcon,
   PlusIcon,
@@ -67,6 +68,7 @@ import {
 import { GroveMark } from "@/components/GroveMark";
 import { LiveMdEditor, type LiveMdImageFilesInput } from "@/components/LiveMdEditor";
 import { isSharedFilePath, SharedFileEditor } from "@/components/SharedFileEditor";
+import { ThemeDropdownSubmenu, ThemeSelector } from "@/components/ThemeSelector";
 import { WorkspaceCommandPalette } from "@/components/WorkspaceCommandPalette";
 import {
   authorizeDropboxWithPkce,
@@ -104,7 +106,7 @@ import {
   type CreatedOwnerShare,
   type OwnerShareRecord,
 } from "@/lib/collaboration/share-storage";
-import { localFolderAccessUnavailableMessage } from "@/lib/browser-support";
+import { isMobileBrowser } from "@/lib/browser-support";
 import {
   ShareRelayConnection,
   type ShareRelayStatus,
@@ -136,6 +138,13 @@ import {
   type WorkspaceImageNode,
 } from "@/lib/workspace-backend";
 import { workspaceErrorMessage } from "@/lib/workspace-errors";
+import {
+  I18nProvider,
+  translateKnownMessage,
+  useI18n,
+  type Locale,
+  type TFunction,
+} from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   createStandaloneMarkdownHtml,
@@ -217,6 +226,14 @@ type ActiveOwnerShareRecord = OwnerShareRecord & {
 };
 
 export function App() {
+  return (
+    <I18nProvider>
+      <AppRoutes />
+    </I18nProvider>
+  );
+}
+
+function AppRoutes() {
   if (isSharedFilePath(window.location.pathname)) {
     return <SharedFileEditor />;
   }
@@ -225,6 +242,7 @@ export function App() {
 }
 
 function LocalWorkspaceApp() {
+  let { locale, t, toggleLocale } = useI18n();
   let [workspaceBackend, setWorkspaceBackend] = useState<WorkspaceBackend | null>(null);
   let [storedLocalWorkspace, setStoredLocalWorkspace] = useState<StoredLocalWorkspaceRecord | null>(
     null,
@@ -341,13 +359,13 @@ function LocalWorkspaceApp() {
     : "";
   let headerTitle = singleFileSource?.name ?? selectedFile?.name ?? rootName;
   let headerSubtitle = singleFileSource
-    ? singleFileSourceLabel(singleFileSource)
+    ? singleFileSourceLabel(singleFileSource, t)
     : selectedFile
       ? selectedPathLabel
       : workspaceBackend
         ? files.length == 1
-          ? "1 markdown file"
-          : `${files.length} markdown files`
+          ? t("workspace.markdownFileCount_one")
+          : t("workspace.markdownFileCount_other", { count: files.length })
         : "";
   let browserSupported = supportsDirectoryPicker();
   let canShareFile = Boolean(!singleFileSource && workspaceBackend && selectedFile);
@@ -355,6 +373,11 @@ function LocalWorkspaceApp() {
     !singleFileSource && workspaceBackend?.createImageAsset && selectedFile,
   );
   let canRefreshWorkspace = Boolean(workspaceBackend);
+  let folderAccessUnavailableMessage = browserSupported
+    ? ""
+    : isMobileBrowser()
+      ? t("errors.fileSystemAccessUnavailableMobile")
+      : t("errors.fileSystemAccessUnavailableDesktop");
 
   let setSaveStateSynced = useCallback((nextState: SaveState) => {
     if (saveStateRef.current == nextState) return;
@@ -1027,7 +1050,7 @@ function LocalWorkspaceApp() {
       let { createDropboxWorkspaceBackend } = await import("@/lib/dropbox-workspace-backend");
       let backend = createDropboxWorkspaceBackend({
         getAccessToken,
-        name: "Dropbox workspace",
+        name: t("workspace.dropboxWorkspace"),
         refreshAccessToken,
         root,
       });
@@ -1038,7 +1061,7 @@ function LocalWorkspaceApp() {
       saveStoredWorkspaceKind("dropbox");
       return backend;
     },
-    [authorizeDropboxAccess],
+    [authorizeDropboxAccess, t],
   );
 
   let restoreDropboxRedirectEditorDraft = useCallback(
@@ -1076,7 +1099,7 @@ function LocalWorkspaceApp() {
     setRetryLoadPath(null);
     if (!(await saveCurrentFile())) return;
     if (!supportsDirectoryPicker()) {
-      setErrorMessage(localFolderAccessUnavailableMessage());
+      setErrorMessage(folderAccessUnavailableMessage);
       return;
     }
 
@@ -1100,7 +1123,7 @@ function LocalWorkspaceApp() {
     } finally {
       setBusy(false);
     }
-  }, [loadTree, rememberWorkspaceHandle, saveCurrentFile]);
+  }, [folderAccessUnavailableMessage, loadTree, rememberWorkspaceHandle, saveCurrentFile]);
 
   let openDropboxWorkspace = useCallback(
     async (
@@ -1385,12 +1408,12 @@ function LocalWorkspaceApp() {
       setFileDialogTarget(null);
       setFileDialogValue(
         kind == "directory"
-          ? defaultNewFolderPath(tree, target)
-          : defaultNewFilePath(files, target),
+          ? defaultNewFolderPath(tree, target, t)
+          : defaultNewFilePath(files, target, t),
       );
       setFileDialogMode("create");
     },
-    [files, tree, treeSelection],
+    [files, t, tree, treeSelection],
   );
 
   let openRenameDialog = useCallback(
@@ -1755,19 +1778,19 @@ function LocalWorkspaceApp() {
         markdown,
         resolveAsset,
         theme: snapshotMarkdownHtmlExportTheme(editorElementRef.current),
-        title: htmlExportTitle(file.name),
+        title: htmlExportTitle(file.name, t),
       });
 
-      downloadTextFile(htmlExportFileName(file.name), result.html, "text/html;charset=utf-8");
+      downloadTextFile(htmlExportFileName(file.name, t), result.html, "text/html;charset=utf-8");
       if (result.warnings.length) {
-        setErrorMessage(markdownHtmlExportWarningMessage(result.warnings.length));
+        setErrorMessage(markdownHtmlExportWarningMessage(result.warnings.length, t));
       }
     } catch (error) {
       setErrorMessage(errorToMessage(error));
     } finally {
       setBusy(false);
     }
-  }, [saveCurrentFile]);
+  }, [saveCurrentFile, t]);
 
   let resolveImageSource = useMemo<LiveMdImageSourceResolver>(() => {
     return (source) => {
@@ -1958,10 +1981,15 @@ function LocalWorkspaceApp() {
   );
 
   let saveLabel = useMemo(
-    () => saveStateLabel(saveState, selectedFile, singleFileSource),
-    [saveState, selectedFile, singleFileSource],
+    () => saveStateLabel(saveState, selectedFile, singleFileSource, t),
+    [saveState, selectedFile, singleFileSource, t],
   );
-  let storageLabel = useMemo(() => workspaceStorageLabel(workspaceBackend), [workspaceBackend]);
+  let storageLabel = useMemo(
+    () => workspaceStorageLabel(workspaceBackend, t),
+    [workspaceBackend, t],
+  );
+  let languageToggleLabel =
+    locale == "en" ? t("actions.switchToChinese") : t("actions.switchToEnglish");
   let activeShareForSelectedFile =
     !singleFileSource &&
     activeShareRecord &&
@@ -1974,7 +2002,7 @@ function LocalWorkspaceApp() {
 
   return (
     <TooltipProvider>
-      <div className="dark flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
+      <div className="flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
         <aside
           className={cn(
             "flex w-[19rem] shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:w-[min(21rem,88vw)]",
@@ -1987,12 +2015,14 @@ function LocalWorkspaceApp() {
               <div className="truncate text-sm font-medium">{rootName}</div>
               {workspaceBackend && (
                 <div className="truncate text-xs text-sidebar-foreground/55">
-                  {files.length == 1 ? "1 markdown file" : `${files.length} markdown files`}
+                  {files.length == 1
+                    ? t("workspace.markdownFileCount_one")
+                    : t("workspace.markdownFileCount_other", { count: files.length })}
                 </div>
               )}
             </div>
             <TooltipIconButton
-              label="Open folder"
+              label={t("actions.openFolder")}
               size="icon-sm"
               variant="ghost"
               onClick={() => void openWorkspace()}
@@ -2001,7 +2031,7 @@ function LocalWorkspaceApp() {
               <FolderOpenIcon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
-              label="Connect Dropbox"
+              label={t("actions.connectDropbox")}
               size="icon-sm"
               variant="ghost"
               onClick={connectDropbox}
@@ -2010,7 +2040,7 @@ function LocalWorkspaceApp() {
               <CloudIcon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
-              label="New file"
+              label={t("actions.newFile")}
               size="icon-sm"
               variant="ghost"
               onClick={() => openCreateDialog()}
@@ -2048,7 +2078,7 @@ function LocalWorkspaceApp() {
         {sidebarOpen && (
           <button
             type="button"
-            aria-label="Close sidebar"
+            aria-label={t("actions.closeSidebar")}
             className="fixed inset-0 z-20 bg-background/70 md:hidden"
             onClick={() => setSidebarOpen(false)}
           />
@@ -2057,7 +2087,7 @@ function LocalWorkspaceApp() {
         <main className="flex min-w-0 flex-1 flex-col">
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
             <TooltipIconButton
-              label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+              label={sidebarOpen ? t("actions.hideSidebar") : t("actions.showSidebar")}
               size="icon-sm"
               variant="ghost"
               onClick={toggleSidebar}
@@ -2083,7 +2113,7 @@ function LocalWorkspaceApp() {
                 ) : (
                   <FileTextIcon data-icon="inline-start" />
                 )}
-                {singleFileBadgeLabel(singleFileSource)}
+                {singleFileBadgeLabel(singleFileSource, t)}
               </Badge>
             )}
             {workspaceBackend && storageLabel && (
@@ -2099,9 +2129,10 @@ function LocalWorkspaceApp() {
             {activeShareForSelectedFile && (
               <Badge className="max-md:hidden" variant="secondary">
                 <Share2Icon data-icon="inline-start" />
-                Shared file
+                {t("workspace.sharedFileBadge")}
               </Badge>
             )}
+            <ThemeSelector className="max-md:hidden" />
             <input
               ref={imageInputRef}
               className="sr-only"
@@ -2121,7 +2152,7 @@ function LocalWorkspaceApp() {
             )}
             <TooltipIconButton
               className="max-md:hidden"
-              label="Share file"
+              label={t("actions.shareFile")}
               size="icon-sm"
               variant="ghost"
               disabled={!canShareFile || busy}
@@ -2131,7 +2162,7 @@ function LocalWorkspaceApp() {
             </TooltipIconButton>
             <TooltipIconButton
               className="max-md:hidden"
-              label="Insert image"
+              label={t("actions.insertImage")}
               size="icon-sm"
               variant="ghost"
               disabled={!canInsertImage || busy}
@@ -2141,7 +2172,7 @@ function LocalWorkspaceApp() {
             </TooltipIconButton>
             <TooltipIconButton
               className="max-md:hidden"
-              label="Export HTML"
+              label={t("actions.exportHtml")}
               size="icon-sm"
               variant="ghost"
               disabled={!selectedFile || busy}
@@ -2151,7 +2182,7 @@ function LocalWorkspaceApp() {
             </TooltipIconButton>
             <TooltipIconButton
               className="max-md:hidden"
-              label="Refresh"
+              label={t("actions.refresh")}
               size="icon-sm"
               variant="ghost"
               disabled={!canRefreshWorkspace || busy}
@@ -2168,34 +2199,45 @@ function LocalWorkspaceApp() {
               canShare={canShareFile}
               storageKind={singleFileSource ? null : (workspaceBackend?.kind ?? null)}
               storageLabel={
-                singleFileSource ? singleFileBadgeLabel(singleFileSource) : storageLabel
+                singleFileSource ? singleFileBadgeLabel(singleFileSource, t) : storageLabel
               }
+              languageToggleLabel={languageToggleLabel}
               onExportHtml={() => void exportCurrentFileAsHtml()}
               onInsertImage={() => imageInputRef.current?.click()}
+              onToggleLanguage={toggleLocale}
               onRefresh={() => void refreshWorkspace()}
               onShareFile={openShareDialog}
             />
+            <TooltipIconButton
+              className="max-md:hidden"
+              label={languageToggleLabel}
+              size="icon-sm"
+              variant="ghost"
+              onClick={toggleLocale}
+            >
+              <LanguagesIcon data-icon="inline-start" />
+            </TooltipIconButton>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button asChild className="max-md:hidden" size="icon-sm" variant="ghost">
                   <a
-                    aria-label="Open GitHub repository"
+                    aria-label={t("actions.gitHubRepository")}
                     href={githubRepositoryUrl}
                     rel="noreferrer"
                     target="_blank"
                   >
                     <GitHubIcon data-icon="inline-start" />
-                    <span className="sr-only">GitHub repository</span>
+                    <span className="sr-only">{t("actions.gitHubRepository")}</span>
                   </a>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>GitHub repository</TooltipContent>
+              <TooltipContent>{t("actions.gitHubRepository")}</TooltipContent>
             </Tooltip>
           </header>
 
           {errorMessage && (
             <div className="flex items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              <div className="min-w-0 flex-1">{errorMessage}</div>
+              <div className="min-w-0 flex-1">{translateKnownMessage(errorMessage, t)}</div>
               {retryLoadPath && (
                 <Button
                   size="sm"
@@ -2204,7 +2246,7 @@ function LocalWorkspaceApp() {
                   onClick={() => void retryUnavailableCollabFile()}
                 >
                   <RefreshCwIcon data-icon="inline-start" />
-                  Retry
+                  {t("actions.retry")}
                 </Button>
               )}
             </div>
@@ -2217,7 +2259,7 @@ function LocalWorkspaceApp() {
                 extensions={collabDocument?.extensions ?? emptyEditorExtensions}
                 imageSource={resolveImageSource}
                 initialValue={editorDocument.value}
-                placeholder="Start writing..."
+                placeholder={t("workspace.placeholder")}
                 onEditorReady={handleEditorReady}
                 onImageFiles={handleEditorImageFiles}
                 onInput={handleEditorInput}
@@ -2301,18 +2343,20 @@ function LocalWorkspaceApp() {
                 <Trash2Icon />
               </AlertDialogMedia>
               <AlertDialogTitle>
-                {deleteTarget?.kind == "directory" ? "Delete folder?" : "Delete file?"}
+                {deleteTarget?.kind == "directory"
+                  ? t("delete.title.folder")
+                  : t("delete.title.file")}
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {deleteTarget
                   ? deleteTarget.kind == "directory"
-                    ? `${deleteTarget.path} and all files inside it will be deleted.`
-                    : deleteTarget.path
+                    ? t("delete.description.folder", { path: deleteTarget.path })
+                    : t("delete.description.file", { path: deleteTarget.path })
                   : ""}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+              <AlertDialogCancel disabled={busy}>{t("common.cancel")}</AlertDialogCancel>
               <AlertDialogAction
                 variant="destructive"
                 disabled={busy}
@@ -2321,7 +2365,7 @@ function LocalWorkspaceApp() {
                   void deleteWorkspaceEntry();
                 }}
               >
-                Delete
+                {t("actions.delete")}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -2364,12 +2408,14 @@ function SaveAsMenu({
   onSaveToDevice,
   onSaveToDropbox,
 }: SaveAsMenuProps) {
+  let { t } = useI18n();
+
   return (
     <DropdownMenuPrimitive.Root>
       <DropdownMenuPrimitive.Trigger asChild>
         <Button disabled={busy} size="sm">
           <SaveIcon data-icon="inline-start" />
-          Save As
+          {t("actions.saveAs")}
         </Button>
       </DropdownMenuPrimitive.Trigger>
       <DropdownMenuPrimitive.Portal>
@@ -2380,7 +2426,7 @@ function SaveAsMenu({
         >
           <MobileDropdownItem disabled={!canSaveToDevice || busy} onSelect={onSaveToDevice}>
             <FolderOpenIcon />
-            This device
+            {t("storage.thisDevice")}
           </MobileDropdownItem>
           <MobileDropdownItem disabled={busy} onSelect={onSaveToDropbox}>
             <CloudIcon />
@@ -2389,7 +2435,7 @@ function SaveAsMenu({
           <DropdownMenuPrimitive.Separator className="-mx-1 h-px bg-border" />
           <MobileDropdownItem disabled={busy} onSelect={onDownloadCopy}>
             <DownloadIcon />
-            Download copy
+            {t("actions.downloadCopy")}
           </MobileDropdownItem>
         </DropdownMenuPrimitive.Content>
       </DropdownMenuPrimitive.Portal>
@@ -2404,12 +2450,14 @@ type MobileWorkspaceActionsProps = {
   canInsertImage: boolean;
   canRefresh: boolean;
   canShare: boolean;
+  languageToggleLabel: string;
   storageKind: WorkspaceBackend["kind"] | null;
   storageLabel: string;
   onExportHtml: () => void;
   onInsertImage: () => void;
   onRefresh: () => void;
   onShareFile: () => void;
+  onToggleLanguage: () => void;
 };
 
 function MobileWorkspaceActions({
@@ -2419,19 +2467,27 @@ function MobileWorkspaceActions({
   canInsertImage,
   canRefresh,
   canShare,
+  languageToggleLabel,
   storageKind,
   storageLabel,
   onExportHtml,
   onInsertImage,
   onRefresh,
   onShareFile,
+  onToggleLanguage,
 }: MobileWorkspaceActionsProps) {
+  let { t } = useI18n();
   return (
     <DropdownMenuPrimitive.Root>
       <DropdownMenuPrimitive.Trigger asChild>
-        <Button aria-label="More actions" className="md:hidden" size="icon-sm" variant="ghost">
+        <Button
+          aria-label={t("actions.moreActions")}
+          className="md:hidden"
+          size="icon-sm"
+          variant="ghost"
+        >
           <EllipsisIcon data-icon="inline-start" />
-          <span className="sr-only">More actions</span>
+          <span className="sr-only">{t("actions.moreActions")}</span>
         </Button>
       </DropdownMenuPrimitive.Trigger>
       <DropdownMenuPrimitive.Portal>
@@ -2458,7 +2514,7 @@ function MobileWorkspaceActions({
                 {activeShare && (
                   <div className="flex min-w-0 items-center gap-2">
                     <Share2Icon className="size-3.5 shrink-0" />
-                    <span className="truncate">Shared file</span>
+                    <span className="truncate">{t("workspace.sharedFileBadge")}</span>
                   </div>
                 )}
               </div>
@@ -2467,31 +2523,36 @@ function MobileWorkspaceActions({
           )}
           <MobileDropdownItem disabled={!canShare || busy} onSelect={onShareFile}>
             <Share2Icon />
-            Share file
+            {t("actions.shareFile")}
           </MobileDropdownItem>
           <MobileDropdownItem disabled={!canInsertImage || busy} onSelect={onInsertImage}>
             <ImagePlusIcon />
-            Insert image
+            {t("actions.insertImage")}
           </MobileDropdownItem>
           <MobileDropdownItem disabled={!canExport || busy} onSelect={onExportHtml}>
             <DownloadIcon />
-            Export HTML
+            {t("actions.exportHtml")}
           </MobileDropdownItem>
           <MobileDropdownItem disabled={!canRefresh || busy} onSelect={onRefresh}>
             <RefreshCwIcon />
-            Refresh
+            {t("actions.refresh")}
           </MobileDropdownItem>
+          <MobileDropdownItem onSelect={onToggleLanguage}>
+            <LanguagesIcon />
+            {languageToggleLabel}
+          </MobileDropdownItem>
+          <ThemeDropdownSubmenu itemClassName={mobileDropdownItemClassName} />
           <DropdownMenuPrimitive.Separator className="-mx-1 h-px bg-border" />
           <DropdownMenuPrimitive.Item asChild>
             <a
-              aria-label="Open GitHub repository"
+              aria-label={t("actions.gitHubRepository")}
               className={mobileDropdownItemClassName}
               href={githubRepositoryUrl}
               rel="noreferrer"
               target="_blank"
             >
               <GitHubIcon data-icon="inline-start" />
-              GitHub repository
+              {t("actions.gitHubRepository")}
             </a>
           </DropdownMenuPrimitive.Item>
         </DropdownMenuPrimitive.Content>
@@ -2548,6 +2609,7 @@ function WorkspaceLauncher({
   onRestoreDropbox,
   onRestoreFolder,
 }: WorkspaceLauncherProps) {
+  let { t } = useI18n();
   let hasPrimaryRestore = restoreAvailable || dropboxRestoreAvailable;
 
   return (
@@ -2559,7 +2621,7 @@ function WorkspaceLauncher({
           onClick={onRestoreFolder}
         >
           <FolderOpenIcon data-icon="inline-start" />
-          Continue previous folder
+          {t("actions.continuePreviousFolder")}
         </Button>
       )}
       {dropboxRestoreAvailable && (
@@ -2570,7 +2632,7 @@ function WorkspaceLauncher({
           onClick={onRestoreDropbox}
         >
           <CloudIcon data-icon="inline-start" />
-          Continue Dropbox
+          {t("actions.continueDropbox")}
         </Button>
       )}
       <Button
@@ -2580,7 +2642,7 @@ function WorkspaceLauncher({
         onClick={onOpenFolder}
       >
         <FolderOpenIcon data-icon="inline-start" />
-        Open folder
+        {t("actions.openFolder")}
       </Button>
       <Button
         className="justify-start"
@@ -2589,7 +2651,7 @@ function WorkspaceLauncher({
         onClick={onOpenDropbox}
       >
         <CloudIcon data-icon="inline-start" />
-        Connect Dropbox
+        {t("actions.connectDropbox")}
       </Button>
     </div>
   );
@@ -2616,6 +2678,7 @@ function FileNameDialog({
   onSubmit,
   onValueChange,
 }: FileNameDialogProps) {
+  let { t } = useI18n();
   let inputId = "markdown-file-name";
   let createMode = mode == "create";
 
@@ -2630,25 +2693,29 @@ function FileNameDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>{createMode ? "New file or folder" : "Rename"}</DialogTitle>
+            <DialogTitle>
+              {createMode ? t("dialog.file.title.create") : t("dialog.file.title.rename")}
+            </DialogTitle>
             <DialogDescription className="sr-only">
               {createMode
-                ? "Create a Markdown file or folder path."
-                : "Rename the selected file or folder."}
+                ? t("dialog.file.description.create")
+                : t("dialog.file.description.rename")}
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
             <Field data-invalid={Boolean(error)}>
-              <FieldLabel htmlFor={inputId}>{createMode ? "Path" : "Name"}</FieldLabel>
+              <FieldLabel htmlFor={inputId}>
+                {createMode ? t("dialog.file.label.path") : t("dialog.file.label.name")}
+              </FieldLabel>
               <Input
                 id={inputId}
                 aria-invalid={Boolean(error)}
                 autoFocus
-                placeholder={createMode ? "file.md, dir/, or dir/file.md" : undefined}
+                placeholder={createMode ? t("dialog.file.placeholder.create") : undefined}
                 value={value}
                 onChange={(event) => onValueChange(event.target.value)}
               />
-              <FieldError>{error}</FieldError>
+              <FieldError>{translateKnownMessage(error, t)}</FieldError>
             </Field>
           </FieldGroup>
           <DialogFooter>
@@ -2658,10 +2725,10 @@ function FileNameDialog({
               disabled={busy}
               onClick={() => onOpenChange(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={busy}>
-              {createMode ? "Create" : "Rename"}
+              {createMode ? t("common.create") : t("actions.rename")}
             </Button>
           </DialogFooter>
         </form>
@@ -2689,6 +2756,7 @@ function SaveAsDropboxDialog({
   onSubmit,
   onValueChange,
 }: SaveAsDropboxDialogProps) {
+  let { t } = useI18n();
   let inputId = "dropbox-save-as-path";
 
   return (
@@ -2702,23 +2770,23 @@ function SaveAsDropboxDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Save As Dropbox</DialogTitle>
+            <DialogTitle>{t("dialog.saveAsDropbox.title")}</DialogTitle>
             <DialogDescription className="sr-only">
-              Choose a Dropbox Markdown path.
+              {t("dialog.saveAsDropbox.description")}
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
             <Field data-invalid={Boolean(error)}>
-              <FieldLabel htmlFor={inputId}>Path</FieldLabel>
+              <FieldLabel htmlFor={inputId}>{t("dialog.file.label.path")}</FieldLabel>
               <Input
                 id={inputId}
                 aria-invalid={Boolean(error)}
                 autoFocus
-                placeholder="Notes/Untitled.md"
+                placeholder={t("dialog.saveAsDropbox.placeholder")}
                 value={value}
                 onChange={(event) => onValueChange(event.target.value)}
               />
-              <FieldError>{error}</FieldError>
+              <FieldError>{translateKnownMessage(error, t)}</FieldError>
             </Field>
           </FieldGroup>
           <DialogFooter>
@@ -2728,10 +2796,10 @@ function SaveAsDropboxDialog({
               disabled={busy}
               onClick={() => onOpenChange(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={busy}>
-              Save
+              {t("actions.save")}
             </Button>
           </DialogFooter>
         </form>
@@ -2775,9 +2843,10 @@ function ShareFileDialog({
   onRotateLink,
   onStopSharing,
 }: ShareFileDialogProps) {
+  let { locale, t } = useI18n();
   let expirationId = "shared-file-expiration";
   let linkId = "shared-file-link";
-  let filePath = file?.path ?? "No file selected";
+  let filePath = file?.path ?? t("share.noFileSelected");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -2789,7 +2858,7 @@ function ShareFileDialog({
                 <Share2Icon className="size-5" />
               </div>
               <div className="min-w-0 flex-1">
-                <DialogTitle className="text-lg">Share file</DialogTitle>
+                <DialogTitle className="text-lg">{t("actions.shareFile")}</DialogTitle>
                 <DialogDescription className="mt-1 flex min-w-0 items-center gap-1.5">
                   <FileTextIcon className="size-3.5 shrink-0" />
                   <span className="truncate">{filePath}</span>
@@ -2805,7 +2874,7 @@ function ShareFileDialog({
                 className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
               >
                 <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
-                <span>{error}</span>
+                <span>{translateKnownMessage(error, t)}</span>
               </div>
             )}
 
@@ -2813,10 +2882,10 @@ function ShareFileDialog({
               <div className="rounded-lg border bg-card/60 p-3">
                 <div className="mb-2 flex min-w-0 items-center gap-2">
                   <LinkIcon className="size-4 shrink-0 text-primary" />
-                  <div className="text-sm font-medium">Edit link</div>
+                  <div className="text-sm font-medium">{t("share.editLinkTitle")}</div>
                 </div>
                 <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
-                  Anyone with this link can edit this file.
+                  {t("share.linkCanEdit")}
                 </p>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Input
@@ -2827,7 +2896,7 @@ function ShareFileDialog({
                   />
                   <Button type="button" disabled={busy} onClick={onCopyLink}>
                     <CopyIcon data-icon="inline-start" />
-                    {copied ? "Copied" : "Copy link"}
+                    {copied ? t("actions.copied") : t("actions.copyLink")}
                   </Button>
                 </div>
               </div>
@@ -2835,17 +2904,16 @@ function ShareFileDialog({
               <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
                 <LinkIcon className="mt-0.5 size-4 shrink-0 text-primary" />
                 <p className="text-sm leading-relaxed text-muted-foreground">
-                  Anyone with this link can edit this file. Rotate the link to copy a fresh guest
-                  URL.
+                  {t("share.copyFreshGuestUrl")}
                 </p>
               </div>
             ) : (
               <div className="flex items-start gap-3 rounded-lg border border-primary/20 bg-primary/10 p-3">
                 <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
                 <div className="min-w-0">
-                  <div className="text-sm font-medium">Create an edit link</div>
+                  <div className="text-sm font-medium">{t("share.createEditLinkTitle")}</div>
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    Anyone with this link can edit this file. Guests only see this file.
+                    {t("share.createEditLinkDescription")}
                   </p>
                 </div>
               </div>
@@ -2855,11 +2923,11 @@ function ShareFileDialog({
               <div className="flex flex-col gap-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:gap-4">
                 <div className="flex items-center gap-2">
                   <UserRoundIcon className="size-4 shrink-0" />
-                  <span>{formatGuestCount(activeShare?.guestCount)}</span>
+                  <span>{formatGuestCount(activeShare?.guestCount, t)}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Clock3Icon className="size-4 shrink-0" />
-                  <span>{formatCurrentShareExpiration(activeShare?.expiresAt)}</span>
+                  <span>{formatCurrentShareExpiration(activeShare?.expiresAt, t, locale)}</span>
                 </div>
               </div>
             )}
@@ -2868,10 +2936,10 @@ function ShareFileDialog({
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <FieldLabel htmlFor={expirationId}>
-                    {shared ? "Rotate expires" : "Expires"}
+                    {shared ? t("share.rotateExpires") : t("share.expires")}
                   </FieldLabel>
                   <p className="text-xs text-muted-foreground">
-                    {shared ? "New guest links" : formatExpirationHint(expiration)}
+                    {shared ? t("share.newGuestLinks") : formatExpirationHint(expiration, t)}
                   </p>
                 </div>
                 <select
@@ -2883,9 +2951,9 @@ function ShareFileDialog({
                     onExpirationChange(event.currentTarget.value as ShareExpirationOption)
                   }
                 >
-                  <option value="24h">24h</option>
-                  <option value="7d">7 days</option>
-                  <option value="30d">30 days</option>
+                  <option value="24h">{t("share.expiration.24h")}</option>
+                  <option value="7d">{t("share.expiration.7d")}</option>
+                  <option value="30d">{t("share.expiration.30d")}</option>
                 </select>
               </div>
             </Field>
@@ -2898,22 +2966,22 @@ function ShareFileDialog({
               disabled={busy}
               onClick={() => onOpenChange(false)}
             >
-              Close
+              {t("common.close")}
             </Button>
             {shared ? (
               <>
                 <Button type="button" variant="destructive" disabled={busy} onClick={onStopSharing}>
-                  Stop sharing
+                  {t("actions.stopSharing")}
                 </Button>
                 <Button type="button" variant="outline" disabled={busy} onClick={onRotateLink}>
                   <RefreshCwIcon data-icon="inline-start" />
-                  Rotate link
+                  {t("actions.rotateLink")}
                 </Button>
               </>
             ) : (
               <Button type="button" disabled={busy || !file} onClick={onCreateLink}>
                 <Share2Icon data-icon="inline-start" />
-                Create link
+                {t("actions.createLink")}
               </Button>
             )}
           </DialogFooter>
@@ -2923,30 +2991,35 @@ function ShareFileDialog({
   );
 }
 
-function formatGuestCount(count: number | undefined) {
-  if (count == null) return "Unknown";
-  return count == 1 ? "1 guest" : `${count} guests`;
+function formatGuestCount(count: number | undefined, t: TFunction) {
+  if (count == null) return t("common.unknown");
+  return count == 1 ? t("share.guestCount_one") : t("share.guestCount_other", { count });
 }
 
-function formatCurrentShareExpiration(expiresAt: number | null | undefined) {
-  if (expiresAt == null) return "Current link expiration unknown";
-  let prefix = expiresAt <= Date.now() ? "Current link expired" : "Current link expires";
-  return `${prefix} ${formatTimestamp(expiresAt)}`;
+function formatCurrentShareExpiration(
+  expiresAt: number | null | undefined,
+  t: TFunction,
+  locale: Locale,
+) {
+  if (expiresAt == null) return t("share.currentLinkExpirationUnknown");
+  return expiresAt <= Date.now()
+    ? t("share.currentLinkExpired", { time: formatTimestamp(expiresAt, locale) })
+    : t("share.currentLinkExpires", { time: formatTimestamp(expiresAt, locale) });
 }
 
-function formatExpirationHint(expiration: ShareExpirationOption) {
+function formatExpirationHint(expiration: ShareExpirationOption, t: TFunction) {
   switch (expiration) {
     case "24h":
-      return "Short review";
+      return t("share.expirationHint.24h");
     case "7d":
-      return "Default";
+      return t("share.expirationHint.7d");
     case "30d":
-      return "Long-running";
+      return t("share.expirationHint.30d");
   }
 }
 
-function formatTimestamp(value: number) {
-  return new Intl.DateTimeFormat(undefined, {
+function formatTimestamp(value: number, locale: Locale) {
+  return new Intl.DateTimeFormat(locale, {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
@@ -3099,16 +3172,19 @@ function blockInsertText(
   return `${prefix}${markdown}${suffix}`;
 }
 
-function htmlExportTitle(fileName: string) {
-  return fileName.replace(/\.md$/i, "").replace(/[-_]+/g, " ").trim() || "Markdown export";
+function htmlExportTitle(fileName: string, t: TFunction) {
+  return (
+    fileName.replace(/\.md$/i, "").replace(/[-_]+/g, " ").trim() ||
+    t("defaults.markdownExportTitle")
+  );
 }
 
-function htmlExportFileName(fileName: string) {
-  let baseName = fileName.replace(/\.md$/i, "").trim() || "markdown-export";
-  return `${sanitizeExportFileName(baseName)}.html`;
+function htmlExportFileName(fileName: string, t: TFunction) {
+  let baseName = fileName.replace(/\.md$/i, "").trim() || t("defaults.markdownExportFileName");
+  return `${sanitizeExportFileName(baseName, t)}.html`;
 }
 
-function sanitizeExportFileName(value: string) {
+function sanitizeExportFileName(value: string, t: TFunction) {
   let sanitized = "";
   for (let character of value) {
     sanitized +=
@@ -3116,15 +3192,15 @@ function sanitizeExportFileName(value: string) {
         ? "-"
         : character;
   }
-  return sanitized.replace(/-+/g, "-").replace(/^-+|-+$/g, "") || "export";
+  return sanitized.replace(/-+/g, "-").replace(/^-+|-+$/g, "") || t("export.fallbackFileName");
 }
 
 const invalidExportFileNameCharacters = new Set(["<", ">", ":", '"', "/", "\\", "|", "?", "*"]);
 
-function markdownHtmlExportWarningMessage(count: number) {
+function markdownHtmlExportWarningMessage(count: number, t: TFunction) {
   return count == 1
-    ? "Exported HTML, but 1 image could not be embedded."
-    : `Exported HTML, but ${count} images could not be embedded.`;
+    ? t("errors.markdownHtmlExportWarning_one")
+    : t("errors.markdownHtmlExportWarning_other", { count });
 }
 
 function downloadTextFile(fileName: string, value: string, type: string) {
@@ -3173,7 +3249,11 @@ function isImageFile(file: File) {
   );
 }
 
-function defaultNewFilePath(files: MarkdownFileNode[], selection: FileTreeDeleteTarget | null) {
+function defaultNewFilePath(
+  files: MarkdownFileNode[],
+  selection: FileTreeDeleteTarget | null,
+  t: TFunction,
+) {
   let today = new Date().toISOString().slice(0, 10);
   let parentPath =
     selection?.kind == "directory"
@@ -3190,12 +3270,13 @@ function defaultNewFilePath(files: MarkdownFileNode[], selection: FileTreeDelete
     if (!files.some((file) => file.path == path)) return path;
   }
 
-  return joinWorkspacePath(parentPath, "Untitled.md");
+  return joinWorkspacePath(parentPath, t("defaults.untitledFile"));
 }
 
 function defaultNewFolderPath(
   tree: MarkdownDirectoryNode | null,
   selection: FileTreeDeleteTarget | null,
+  t: TFunction,
 ) {
   let parentPath =
     selection?.kind == "directory"
@@ -3204,15 +3285,15 @@ function defaultNewFolderPath(
         ? directoryPath(selection.path)
         : "";
   let directoryPaths = tree ? collectDirectoryPaths(tree) : new Set<string>();
-  let basePath = joinWorkspacePath(parentPath, "New folder");
+  let basePath = joinWorkspacePath(parentPath, t("defaults.newFolder"));
   if (!directoryPaths.has(basePath)) return `${basePath}/`;
 
   for (let index = 2; index < 1000; index += 1) {
-    let path = joinWorkspacePath(parentPath, `New folder ${index}`);
+    let path = joinWorkspacePath(parentPath, `${t("defaults.newFolder")} ${index}`);
     if (!directoryPaths.has(path)) return `${path}/`;
   }
 
-  return joinWorkspacePath(parentPath, "Untitled folder/");
+  return joinWorkspacePath(parentPath, t("defaults.untitledFolder"));
 }
 
 function collectDirectoryPaths(root: MarkdownDirectoryNode) {
@@ -3231,24 +3312,25 @@ function saveStateLabel(
   saveState: SaveState,
   selectedFile: MarkdownFileNode | null,
   singleFileSource: SingleFileSource | null,
+  t: TFunction,
 ) {
-  if (!selectedFile) return "No file";
+  if (!selectedFile) return t("save.noFile");
   switch (saveState) {
     case "pending":
-      return "Unsaved";
+      return t("save.pending");
     case "saving":
-      return "Saving";
+      return t("save.saving");
     case "error":
-      return "Error";
+      return t("save.error");
     case "idle":
     case "saved":
-      return singleFileSource?.kind == "draft" ? "Draft" : "Saved";
+      return singleFileSource?.kind == "draft" ? t("save.draft") : t("save.saved");
   }
 }
 
-function workspaceStorageLabel(backend: WorkspaceBackend | null) {
+function workspaceStorageLabel(backend: WorkspaceBackend | null, t: TFunction) {
   if (!backend) return "";
-  return backend.kind == "opendal-dropbox" ? "Dropbox" : "Local";
+  return backend.kind == "opendal-dropbox" ? "Dropbox" : t("common.local");
 }
 
 function createEphemeralLocalWorkspaceRecord(
@@ -3282,15 +3364,15 @@ function loadWorkspaceSelectedPath(backend: WorkspaceBackend) {
   return context ? loadStoredWorkspaceSelectedPath(context) : null;
 }
 
-function singleFileSourceLabel(source: SingleFileSource) {
-  if (source.kind == "draft") return "Draft";
-  if (source.kind == "local-file") return "Local";
+function singleFileSourceLabel(source: SingleFileSource, t: TFunction) {
+  if (source.kind == "draft") return t("save.draft");
+  if (source.kind == "local-file") return t("common.local");
   return `Dropbox / ${source.path}`;
 }
 
-function singleFileBadgeLabel(source: SingleFileSource) {
-  if (source.kind == "draft") return "Draft";
-  if (source.kind == "local-file") return "Local";
+function singleFileBadgeLabel(source: SingleFileSource, t: TFunction) {
+  if (source.kind == "draft") return t("save.draft");
+  if (source.kind == "local-file") return t("common.local");
   return "Dropbox";
 }
 

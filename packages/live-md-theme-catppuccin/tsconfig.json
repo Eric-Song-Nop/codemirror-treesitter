@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.package.json",
+  "compilerOptions": {
+    "paths": {
+      "@codemirror-treesitter/live-md-theme": ["../live-md-theme/src/index.ts"],
+      "@codemirror-treesitter/theme-palettes": ["../theme-palettes/src/index.ts"]
+    }
+  },
+  "include": ["src", "tests"]
+}

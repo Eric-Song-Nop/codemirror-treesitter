@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   liveMdMarkdownDocumentClass,
@@ -113,11 +114,24 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     expect(liveMdMarkdownDocumentClass).toBe("live-md-document");
     expect(liveMdMarkdownDocumentCssVariables).toContain("--live-md-bg");
     expect(liveMdMarkdownDocumentCssVariables).toContain("--live-md-font-body");
+    expect(liveMdMarkdownDocumentCssVariables).toContain("--live-md-list-marker");
     expect(css).toContain(".live-md-document h1");
     expect(css).toContain(".live-md-document .live-md-task-item.is-checked");
     expect(css).toContain("var(--live-md-bg, #fffdfa)");
+    expect(css).toContain("var(--live-md-list-marker, #0f766e)");
     expect(css).not.toMatch(/(^|\n)h1\s*\{/);
     expect(css).not.toContain(":has(");
     expect(css).not.toContain(":root");
+  });
+
+  it("keeps exported theme variables aligned with the public LiveMD host token contract", () => {
+    let style = readFileSync(new URL("../src/style.css", import.meta.url), "utf8");
+    let hostBlock = /:host\s*\{(?<body>[\s\S]*?)\n\}/.exec(style)?.groups?.body ?? "";
+    let publicVariables = Array.from(
+      new Set(hostBlock.match(/--live-md-[a-z0-9-]+(?=\s*:)/g) ?? []),
+    );
+
+    expect(publicVariables).toHaveLength(62);
+    expect(liveMdMarkdownDocumentCssVariables).toEqual(publicVariables);
   });
 });
