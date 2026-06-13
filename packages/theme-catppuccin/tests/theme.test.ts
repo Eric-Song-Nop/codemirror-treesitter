@@ -6,11 +6,9 @@ import {
   catppuccinLatte,
   catppuccinLatteColors,
   catppuccinLatteHighlightStyle,
-  catppuccinLatteLiveMdExtensions,
   catppuccinMacchiato,
   catppuccinMacchiatoColors,
   catppuccinMacchiatoHighlightStyle,
-  catppuccinMacchiatoLiveMdExtensions,
 } from "../src/index.js";
 
 describe("catppuccin theme", () => {
@@ -60,15 +58,5 @@ describe("catppuccin theme", () => {
     expect(catppuccinMacchiatoColors.base).toBe("#24273a");
     expect(catppuccinMacchiatoColors.mauve).toBe("#c6a0f6");
     expect(catppuccinLatteColors.text).not.toBe(catppuccinMacchiatoColors.text);
-  });
-
-  it("exports LiveMD-ready extensions usable by EditorState", () => {
-    let latte = EditorState.create({ extensions: [catppuccinLatteLiveMdExtensions] });
-    let macchiato = EditorState.create({
-      extensions: [catppuccinMacchiatoLiveMdExtensions],
-    });
-
-    expect(latte.facet(EditorView.darkTheme)).toBe(false);
-    expect(macchiato.facet(EditorView.darkTheme)).toBe(true);
   });
 });

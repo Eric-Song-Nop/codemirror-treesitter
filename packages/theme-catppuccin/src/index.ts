@@ -1,6 +1,5 @@
 import type { Extension } from "@codemirror/state";
 import { syntaxHighlighting } from "@codemirror-treesitter/language";
-import { liveMdCodeFenceHighlighting } from "@codemirror-treesitter/live-md";
 import {
   createEditorTheme,
   createHighlightStyle,
@@ -95,10 +94,6 @@ export const catppuccinLatte: Extension = [
   catppuccinLatteTheme,
   syntaxHighlighting(catppuccinLatteHighlightStyle),
 ];
-export const catppuccinLatteLiveMdExtensions: Extension = [
-  catppuccinLatte,
-  liveMdCodeFenceHighlighting(catppuccinLatteHighlightStyle),
-];
 
 export const catppuccinMacchiatoThemeSpec = createCatppuccinSpec(catppuccinMacchiatoColors, "dark");
 export const catppuccinMacchiatoTheme = createEditorTheme(catppuccinMacchiatoThemeSpec);
@@ -108,8 +103,4 @@ export const catppuccinMacchiatoHighlightStyle = createHighlightStyle(
 export const catppuccinMacchiato: Extension = [
   catppuccinMacchiatoTheme,
   syntaxHighlighting(catppuccinMacchiatoHighlightStyle),
-];
-export const catppuccinMacchiatoLiveMdExtensions: Extension = [
-  catppuccinMacchiato,
-  liveMdCodeFenceHighlighting(catppuccinMacchiatoHighlightStyle),
 ];

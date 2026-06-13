@@ -7,14 +7,12 @@ import {
   gruvboxDark,
   gruvboxDarkColors,
   gruvboxDarkHighlightStyle,
-  gruvboxDarkLiveMdExtensions,
   gruvboxDarkSpec,
   gruvboxDarkTheme,
   gruvboxDarkThemeSpec,
   gruvboxLight,
   gruvboxLightColors,
   gruvboxLightHighlightStyle,
-  gruvboxLightLiveMdExtensions,
   gruvboxLightSpec,
   gruvboxLightTheme,
   gruvboxLightThemeSpec,
@@ -55,14 +53,6 @@ describe("gruvbox theme", () => {
     expect(gruvboxLightThemeSpec.syntax.string).toBe(gruvboxLightColors.green);
     expect(gruvboxDarkSpec).toBe(gruvboxDarkThemeSpec);
     expect(gruvboxLightSpec).toBe(gruvboxLightThemeSpec);
-  });
-
-  it("exports LiveMD-ready extension bundles", () => {
-    let dark = EditorState.create({ extensions: [gruvboxDarkLiveMdExtensions] });
-    let light = EditorState.create({ extensions: [gruvboxLightLiveMdExtensions] });
-
-    expect(dark.facet(EditorView.darkTheme)).toBe(true);
-    expect(light.facet(EditorView.darkTheme)).toBe(false);
   });
 
   it("exports distinct dark and light palettes", () => {

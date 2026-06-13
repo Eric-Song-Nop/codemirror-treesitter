@@ -1,6 +1,5 @@
 import type { Extension } from "@codemirror/state";
 import { syntaxHighlighting } from "@codemirror-treesitter/language";
-import { liveMdCodeFenceHighlighting } from "@codemirror-treesitter/live-md";
 import {
   createEditorTheme,
   createHighlightStyle,
@@ -102,18 +101,10 @@ export const gruvboxDark: Extension = [
   gruvboxDarkTheme,
   syntaxHighlighting(gruvboxDarkHighlightStyle),
 ];
-export const gruvboxDarkLiveMdExtensions: Extension = [
-  gruvboxDark,
-  liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle),
-];
 
 export const gruvboxLightTheme = createEditorTheme(gruvboxLightThemeSpec);
 export const gruvboxLightHighlightStyle = createHighlightStyle(gruvboxLightThemeSpec.syntax);
 export const gruvboxLight: Extension = [
   gruvboxLightTheme,
   syntaxHighlighting(gruvboxLightHighlightStyle),
-];
-export const gruvboxLightLiveMdExtensions: Extension = [
-  gruvboxLight,
-  liveMdCodeFenceHighlighting(gruvboxLightHighlightStyle),
 ];

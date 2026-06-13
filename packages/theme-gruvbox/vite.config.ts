@@ -9,7 +9,6 @@ export default defineConfig({
       "@codemirror-treesitter/commands",
       "@codemirror-treesitter/language",
       "@codemirror-treesitter/language-data",
-      "@codemirror-treesitter/live-md",
       "@codemirror-treesitter/theme",
       "@codemirror-treesitter/theme-palettes",
     ]),

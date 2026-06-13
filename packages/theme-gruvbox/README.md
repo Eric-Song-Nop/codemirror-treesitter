@@ -8,8 +8,8 @@ the Gruvbox palettes and maps them into the shared semantic theme contract from
 
 - Depends on `@codemirror-treesitter/theme` for CodeMirror editor chrome and
   syntax mapping helpers.
-- Depends on `@codemirror-treesitter/live-md` for LiveMD-ready code fence
-  highlighting bundles.
+- Depends on `@codemirror-treesitter/theme-palettes` for shared Gruvbox color
+  values.
 - Uses `@codemirror-treesitter/language` only to compose exported
   `HighlightStyle` instances into the compatibility `gruvboxDark` and
   `gruvboxLight` extensions.
@@ -25,8 +25,6 @@ the Gruvbox palettes and maps them into the shared semantic theme contract from
   the shared semantic helper package.
 - Export combined dark and light theme extensions that include both editor
   chrome and syntax highlighting.
-- Export LiveMD-ready dark and light extension bundles that also apply the same
-  highlighter to nested code fences.
 
 ## Public Entry
 
@@ -34,7 +32,6 @@ the Gruvbox palettes and maps them into the shared semantic theme contract from
 import {
   gruvboxDark,
   gruvboxDarkColors,
-  gruvboxDarkLiveMdExtensions,
   gruvboxLight,
   gruvboxLightHighlightStyle,
 } from "@codemirror-treesitter/theme-gruvbox";
@@ -45,18 +42,18 @@ The root entry point is `src/index.ts`.
 ## Source Layout
 
 - `src/index.ts`: color palettes, semantic theme specs, editor themes,
-  highlight styles, combined dark/light theme extensions, and LiveMD extension
-  bundles.
-- `tests/theme.test.ts`: export, semantic helper, LiveMD extension, and local
-  highlighting coverage.
+  highlight styles, and combined dark/light theme extensions.
+- `tests/theme.test.ts`: export, semantic helper, and local highlighting
+  coverage.
 
 ## Relationship to Other Packages
 
 This package depends on `@codemirror-treesitter/theme` so concrete Gruvbox
 colors do not duplicate CodeMirror selector or highlight-tag mapping. LiveMD
-does not depend on this package at runtime; hosts can import
-`gruvboxDarkLiveMdExtensions` or `gruvboxLightLiveMdExtensions` when they want
-the editor and nested code fences to share Gruvbox syntax colors.
+does not depend on this package at runtime; its fenced code blocks reuse the
+active CodeMirror syntax highlighters installed by hosts. Use
+`@codemirror-treesitter/live-md-theme-gruvbox` for Gruvbox LiveMD prose and
+widget presentation variables.
 
 ## Current Implementation Notes
 
@@ -68,8 +65,6 @@ the editor and nested code fences to share Gruvbox syntax colors.
   `createHighlightStyle(...)`, not local tag mapping.
 - `gruvboxDark` and `gruvboxLight` combine editor chrome and syntax
   highlighting for direct use as CodeMirror extensions.
-- `gruvboxDarkLiveMdExtensions` and `gruvboxLightLiveMdExtensions` include the
-  matching CodeMirror theme plus `liveMdCodeFenceHighlighting(...)`.
 
 ## Validation
 
@@ -80,5 +75,5 @@ vp run @codemirror-treesitter/theme-gruvbox#check
 vp run @codemirror-treesitter/theme-gruvbox#test
 ```
 
-The package tests check existing public exports, shared semantic helper output,
-and that the LiveMD-ready bundles are valid CodeMirror extensions.
+The package tests check existing public exports and shared semantic helper
+output.

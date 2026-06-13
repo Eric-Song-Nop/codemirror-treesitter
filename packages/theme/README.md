@@ -46,9 +46,9 @@ The root entry point is `src/index.ts`.
 ## Relationship to Other Packages
 
 Theme packages depend on this helper package to avoid duplicating CodeMirror
-chrome and syntax mapping. LiveMD remains independent of concrete theme
-packages and accepts code-fence highlighting through extensions provided by the
-host or a theme package.
+chrome and syntax mapping. LiveMD presentation themes live in separate
+`@codemirror-treesitter/live-md-theme-*` packages, while LiveMD code fences
+reuse the active CodeMirror syntax highlighters installed by the host.
 
 ## Validation
 

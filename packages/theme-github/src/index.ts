@@ -1,5 +1,4 @@
 import type { Extension } from "@codemirror/state";
-import { liveMdCodeFenceHighlighting } from "@codemirror-treesitter/live-md";
 import {
   createCodeMirrorTheme,
   createEditorTheme,
@@ -82,7 +81,3 @@ export const githubLightThemeSpec: SemanticThemeSpec = {
 export const githubLightTheme = createEditorTheme(githubLightThemeSpec);
 export const githubLightHighlightStyle = createHighlightStyle(githubLightThemeSpec.syntax);
 export const githubLight: Extension = createCodeMirrorTheme(githubLightThemeSpec);
-export const githubLightLiveMdExtensions: Extension = [
-  githubLight,
-  liveMdCodeFenceHighlighting(githubLightHighlightStyle),
-];

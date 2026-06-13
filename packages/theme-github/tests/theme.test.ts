@@ -6,7 +6,6 @@ import {
   githubLight,
   githubLightColors,
   githubLightHighlightStyle,
-  githubLightLiveMdExtensions,
   githubLightThemeSpec,
 } from "../src/index.js";
 
@@ -40,11 +39,5 @@ describe("GitHub Light theme", () => {
     expect(githubLightColors.subtleBackground).toBe("#f6f8fa");
     expect(githubLightThemeSpec.syntax.keyword).toBe("#cf222e");
     expect(githubLightThemeSpec.syntax.string).toBe("#0a3069");
-  });
-
-  it("installs LiveMD-ready code fence highlighting extensions", () => {
-    let state = EditorState.create({ extensions: [githubLightLiveMdExtensions] });
-
-    expect(state.facet(EditorView.darkTheme)).toBe(false);
   });
 });
