@@ -7,7 +7,6 @@ export type BrowserPrintWindow = {
 };
 
 export type BrowserPrintEnvironment = {
-  clearTimeout?: typeof clearTimeout;
   openWindow?: (url: string, target: string, features: string) => BrowserPrintWindow | null;
   setTimeout?: typeof setTimeout;
   window?: Window;
