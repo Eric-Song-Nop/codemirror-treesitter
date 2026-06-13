@@ -5,8 +5,10 @@ import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { GroveMark } from "@/components/GroveMark";
 import { LiveMdEditor } from "@/components/LiveMdEditor";
+import { ThemeSelector } from "@/components/ThemeSelector";
 import {
   ShareRelayConnection,
   type ShareRelayConnectionState,
@@ -164,83 +166,86 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
   let displayNameLabel = displayName == "Shared file" ? t("shared.title") : displayName;
 
   return (
-    <main className="flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <GroveMark className="size-7" decorative />
-          <div className="min-w-0 truncate text-sm font-medium">{displayNameLabel}</div>
-        </div>
-        <Badge variant="secondary">
-          {connectionState == "connected" ? (
-            <WifiIcon data-icon="inline-start" />
-          ) : connectionState == "connecting" ? (
-            <RefreshCwIcon data-icon="inline-start" />
-          ) : (
-            <WifiOffIcon data-icon="inline-start" />
-          )}
-          {statusLabel}
-        </Badge>
-        {shareStatus?.hostOnline ? (
+    <TooltipProvider>
+      <main className="flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+        <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <GroveMark className="size-7" decorative />
+            <div className="min-w-0 truncate text-sm font-medium">{displayNameLabel}</div>
+          </div>
           <Badge variant="secondary">
-            <CloudIcon data-icon="inline-start" />
-            {t("shared.hostOnline")}
-          </Badge>
-        ) : (
-          <Badge variant="outline">{t("shared.hostOffline")}</Badge>
-        )}
-        {shareStatus && shareStatus.peerCount > 0 && (
-          <Badge variant="outline">{formatPeerCount(shareStatus.peerCount, t)}</Badge>
-        )}
-        {saveStatus && (
-          <Badge title={saveStatusTitle} variant="secondary">
-            {saveStatus}
-          </Badge>
-        )}
-      </header>
-
-      {errorMessage && (
-        <div className="flex shrink-0 items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <AlertCircleIcon className="size-4 shrink-0" />
-          <div className="min-w-0 flex-1">{translateKnownMessage(errorMessage, t)}</div>
-          {route.kind == "share" && (
-            <Button size="sm" variant="outline" onClick={() => connectionRef.current?.connect()}>
+            {connectionState == "connected" ? (
+              <WifiIcon data-icon="inline-start" />
+            ) : connectionState == "connecting" ? (
               <RefreshCwIcon data-icon="inline-start" />
-              {t("actions.retry")}
-            </Button>
-          )}
-        </div>
-      )}
-
-      {sessionReady ? (
-        <section className="min-h-0 flex-1 overflow-hidden">
-          <LiveMdEditor
-            documentKey={route.kind == "share" ? route.parts.shareId : "shared-file"}
-            extensions={extensions}
-            initialValue=""
-            placeholder={t("workspace.placeholder")}
-            onInput={() => {}}
-          />
-        </section>
-      ) : (
-        <div className="grid min-h-0 flex-1 place-items-center p-6">
-          <Empty className="max-w-md">
-            <EmptyHeader>
-              <EmptyMedia>
-                <GroveMark className="size-14" />
-              </EmptyMedia>
-              <EmptyTitle>
-                {route.kind == "invalid" ? t("shared.invalid") : t("shared.joining")}
-              </EmptyTitle>
-            </EmptyHeader>
-            {expiresAt && (
-              <EmptyContent>
-                {t("shared.expiresAt", { time: formatTimestamp(expiresAt, locale) })}
-              </EmptyContent>
+            ) : (
+              <WifiOffIcon data-icon="inline-start" />
             )}
-          </Empty>
-        </div>
-      )}
-    </main>
+            {statusLabel}
+          </Badge>
+          {shareStatus?.hostOnline ? (
+            <Badge variant="secondary">
+              <CloudIcon data-icon="inline-start" />
+              {t("shared.hostOnline")}
+            </Badge>
+          ) : (
+            <Badge variant="outline">{t("shared.hostOffline")}</Badge>
+          )}
+          {shareStatus && shareStatus.peerCount > 0 && (
+            <Badge variant="outline">{formatPeerCount(shareStatus.peerCount, t)}</Badge>
+          )}
+          {saveStatus && (
+            <Badge title={saveStatusTitle} variant="secondary">
+              {saveStatus}
+            </Badge>
+          )}
+          <ThemeSelector className="shrink-0" />
+        </header>
+
+        {errorMessage && (
+          <div className="flex shrink-0 items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <AlertCircleIcon className="size-4 shrink-0" />
+            <div className="min-w-0 flex-1">{translateKnownMessage(errorMessage, t)}</div>
+            {route.kind == "share" && (
+              <Button size="sm" variant="outline" onClick={() => connectionRef.current?.connect()}>
+                <RefreshCwIcon data-icon="inline-start" />
+                {t("actions.retry")}
+              </Button>
+            )}
+          </div>
+        )}
+
+        {sessionReady ? (
+          <section className="min-h-0 flex-1 overflow-hidden">
+            <LiveMdEditor
+              documentKey={route.kind == "share" ? route.parts.shareId : "shared-file"}
+              extensions={extensions}
+              initialValue=""
+              placeholder={t("workspace.placeholder")}
+              onInput={() => {}}
+            />
+          </section>
+        ) : (
+          <div className="grid min-h-0 flex-1 place-items-center p-6">
+            <Empty className="max-w-md">
+              <EmptyHeader>
+                <EmptyMedia>
+                  <GroveMark className="size-14" />
+                </EmptyMedia>
+                <EmptyTitle>
+                  {route.kind == "invalid" ? t("shared.invalid") : t("shared.joining")}
+                </EmptyTitle>
+              </EmptyHeader>
+              {expiresAt && (
+                <EmptyContent>
+                  {t("shared.expiresAt", { time: formatTimestamp(expiresAt, locale) })}
+                </EmptyContent>
+              )}
+            </Empty>
+          </div>
+        )}
+      </main>
+    </TooltipProvider>
   );
 }
 

@@ -75,6 +75,7 @@ import {
 import { GroveMark } from "@/components/GroveMark";
 import { LiveMdEditor, type LiveMdImageFilesInput } from "@/components/LiveMdEditor";
 import { isSharedFilePath, SharedFileEditor } from "@/components/SharedFileEditor";
+import { ThemeDropdownSubmenu, ThemeSelector } from "@/components/ThemeSelector";
 import { WorkspaceCommandPalette } from "@/components/WorkspaceCommandPalette";
 import {
   authorizeDropboxWithPkce,
@@ -1628,7 +1629,7 @@ function LocalWorkspaceApp() {
 
   return (
     <TooltipProvider>
-      <div className="dark flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
+      <div className="flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
         <aside
           className={cn(
             "flex w-[19rem] shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:w-[min(21rem,88vw)]",
@@ -1735,6 +1736,7 @@ function LocalWorkspaceApp() {
                 {t("workspace.sharedFileBadge")}
               </Badge>
             )}
+            <ThemeSelector className="max-md:hidden" />
             <input
               ref={imageInputRef}
               className="sr-only"
@@ -2070,6 +2072,7 @@ function MobileWorkspaceActions({
             <LanguagesIcon />
             {languageToggleLabel}
           </MobileDropdownItem>
+          <ThemeDropdownSubmenu itemClassName={mobileDropdownItemClassName} />
           <DropdownMenuPrimitive.Separator className="-mx-1 h-px bg-border" />
           <DropdownMenuPrimitive.Item asChild>
             <a

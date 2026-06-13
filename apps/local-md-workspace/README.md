@@ -26,6 +26,9 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
 - Create, rotate, revoke, and host shared-file links through the Grove relay.
 - Open guest shared-file routes and sync through the relay without requiring
   access to the owner's local or Dropbox workspace.
+- Switch the full workspace, shared-file route, LiveMD editor chrome, nested
+  code highlighting, and file tree between named Gruvbox, GitHub Light, and
+  Catppuccin themes.
 - Install as a PWA with an app manifest and production service worker for the
   app shell, icons, and same-origin static assets.
 
@@ -43,6 +46,8 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
 - `src/i18n/*.json` and `src/lib/i18n.tsx`: English/Chinese i18next resources,
   react-i18next hooks, locale persistence, and known error-message
   localization.
+- `src/theme/*`: shared named-theme contract, document/storage adapters, and
+  CSS token ownership for the local and shared workspace routes.
 - `src/lib/file-system.ts`: File System Access API backend.
 - `src/lib/dropbox-oauth.ts` and `src/lib/dropbox-workspace-backend.ts`:
   Dropbox OAuth PKCE and OpenDAL-backed workspace backend.

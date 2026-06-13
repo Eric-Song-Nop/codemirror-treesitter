@@ -90,6 +90,7 @@ export {
   highlightCode,
   highlightTree,
   highlightingFor,
+  syntaxHighlighters,
   syntaxHighlighting,
   type TagStyle,
 } from "./highlight.js";

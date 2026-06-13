@@ -13,8 +13,19 @@
       "@codemirror-treesitter/live-md/fixtures": ["./packages/live-md/src/fixtures/index.ts"],
       "@codemirror-treesitter/live-md/register": ["./packages/live-md/src/register.ts"],
       "@codemirror-treesitter/live-md-loro": ["./packages/live-md-loro/src/index.ts"],
+      "@codemirror-treesitter/live-md-theme": ["./packages/live-md-theme/src/index.ts"],
+      "@codemirror-treesitter/live-md-theme-catppuccin": [
+        "./packages/live-md-theme-catppuccin/src/index.ts"
+      ],
+      "@codemirror-treesitter/live-md-theme-github": [
+        "./packages/live-md-theme-github/src/index.ts"
+      ],
+      "@codemirror-treesitter/live-md-theme-gruvbox": [
+        "./packages/live-md-theme-gruvbox/src/index.ts"
+      ],
       "@codemirror-treesitter/lsp-client": ["./packages/lsp-client/src/index.ts"],
       "@codemirror-treesitter/merge": ["./packages/merge/src/index.ts"],
+      "@codemirror-treesitter/theme-palettes": ["./packages/theme-palettes/src/index.ts"],
       "@codemirror-treesitter/theme-gruvbox": ["./packages/theme-gruvbox/src/index.ts"],
       "loro-codemirror": ["./node_modules/loro-codemirror/src/index.ts"]
     },

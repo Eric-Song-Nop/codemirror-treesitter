@@ -1,0 +1,83 @@
+import type { Extension } from "@codemirror/state";
+import {
+  createCodeMirrorTheme,
+  createEditorTheme,
+  createHighlightStyle,
+  type SemanticThemeSpec,
+} from "@codemirror-treesitter/theme";
+import { githubLightColors } from "@codemirror-treesitter/theme-palettes";
+
+export { githubLightColors };
+
+export const githubLightThemeSpec: SemanticThemeSpec = {
+  appearance: "light",
+  chrome: {
+    activeLine: githubLightColors.subtleBackground,
+    background: githubLightColors.background,
+    border: githubLightColors.border,
+    cursor: githubLightColors.cursor,
+    foldPlaceholderBorder: githubLightColors.border,
+    foldPlaceholderText: githubLightColors.foregroundMuted,
+    foreground: githubLightColors.foreground,
+    gutterActiveBackground: githubLightColors.subtleBackground,
+    gutterActiveForeground: githubLightColors.foregroundSubtle,
+    gutterBackground: githubLightColors.background,
+    gutterBorder: githubLightColors.borderMuted,
+    gutterForeground: githubLightColors.foregroundMuted,
+    matchingBracketBackground: githubLightColors.accentMuted,
+    matchingBracketBorder: githubLightColors.accent,
+    nonmatchingBracketBackground: githubLightColors.dangerMuted,
+    nonmatchingBracketBorder: githubLightColors.danger,
+    panelBackground: githubLightColors.subtleBackground,
+    panelBorder: githubLightColors.border,
+    panelForeground: githubLightColors.foreground,
+    searchMatch: githubLightColors.attentionMuted,
+    searchMatchBorder: githubLightColors.attention,
+    searchMatchSelected: githubLightColors.searchSelected,
+    selection: githubLightColors.selection,
+    selectionMatch: githubLightColors.accentMuted,
+    tooltipBackground: githubLightColors.background,
+    tooltipBorder: githubLightColors.border,
+    tooltipForeground: githubLightColors.foreground,
+    tooltipSelectedBackground: githubLightColors.subtleBackground,
+    tooltipSelectedForeground: githubLightColors.foreground,
+  },
+  syntax: {
+    atom: githubLightColors.number,
+    bool: githubLightColors.number,
+    character: githubLightColors.inserted,
+    className: githubLightColors.property,
+    comment: githubLightColors.comment,
+    constant: githubLightColors.number,
+    definition: githubLightColors.foreground,
+    deleted: githubLightColors.danger,
+    escape: githubLightColors.inserted,
+    functionName: githubLightColors.entity,
+    heading: githubLightColors.foreground,
+    inserted: githubLightColors.inserted,
+    invalid: githubLightColors.danger,
+    keyword: githubLightColors.danger,
+    labelName: githubLightColors.entity,
+    link: githubLightColors.accent,
+    macroName: githubLightColors.entity,
+    meta: githubLightColors.comment,
+    modifier: githubLightColors.danger,
+    namespace: githubLightColors.foreground,
+    number: githubLightColors.number,
+    operator: githubLightColors.foreground,
+    propertyName: githubLightColors.property,
+    regexp: githubLightColors.inserted,
+    separator: githubLightColors.foreground,
+    specialString: githubLightColors.inserted,
+    specialVariable: githubLightColors.number,
+    standardName: githubLightColors.foreground,
+    string: githubLightColors.string,
+    typeName: githubLightColors.property,
+    url: githubLightColors.accent,
+    variableName: githubLightColors.foreground,
+  },
+};
+
+export const githubLightTheme = createEditorTheme(githubLightThemeSpec);
+export const githubLightHighlightStyle = createHighlightStyle(githubLightThemeSpec.syntax);
+export const githubLight: Extension = createCodeMirrorTheme(githubLightThemeSpec);

@@ -6,9 +6,11 @@ import {
   FileTextIcon,
   FolderOpenIcon,
   ImagePlusIcon,
+  MoonIcon,
   SearchIcon,
   SidebarCloseIcon,
   SidebarOpenIcon,
+  SunIcon,
   type LucideProps,
 } from "lucide-react";
 import {
@@ -21,6 +23,7 @@ import {
 import type { MarkdownFileNode } from "@/lib/workspace-backend";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { themeDefinitions, useTheme } from "@/theme";
 
 type WorkspaceCommandPaletteProps = {
   browserSupported: boolean;
@@ -39,6 +42,7 @@ type WorkspaceCommandPaletteProps = {
 };
 
 type PaletteAction = {
+  active?: boolean;
   detail: string;
   disabled?: boolean;
   icon: ComponentType<LucideProps>;
@@ -65,6 +69,7 @@ export function WorkspaceCommandPalette({
 }: WorkspaceCommandPaletteProps) {
   let { t } = useI18n();
   let [open, setOpen] = useState(false);
+  let { setTheme, theme } = useTheme();
 
   useEffect(() => {
     let handleKeyDown = (event: KeyboardEvent) => {
@@ -131,6 +136,28 @@ export function WorkspaceCommandPalette({
         title: t("actions.insertImage"),
         onSelect: onInsertImage,
       },
+      ...themeDefinitions.map((definition) => {
+        let active = definition.id == theme;
+        let appearanceDetail =
+          definition.appearance == "dark"
+            ? t("command.theme.detail.dark")
+            : t("command.theme.detail.light");
+        return {
+          active,
+          detail: active ? t("command.theme.detail.current") : appearanceDetail,
+          icon: definition.appearance == "dark" ? MoonIcon : SunIcon,
+          id: `theme-${definition.id}`,
+          keywords: [
+            ...t("command.theme.keywords").split(/\s+/),
+            definition.appearance,
+            definition.label,
+          ],
+          title: active
+            ? t("command.theme.title.current", { label: definition.label })
+            : t("command.theme.title.use", { label: definition.label }),
+          onSelect: () => setTheme(definition.id),
+        };
+      }),
     ],
     [
       browserSupported,
@@ -142,7 +169,9 @@ export function WorkspaceCommandPalette({
       onOpenFolder,
       onToggleSidebar,
       sidebarOpen,
+      setTheme,
       t,
+      theme,
     ],
   );
 
@@ -206,6 +235,7 @@ export function WorkspaceCommandPalette({
               {actions.map((action) => (
                 <CommandItem
                   key={action.id}
+                  active={action.active}
                   detail={action.detail}
                   disabled={action.disabled}
                   icon={action.icon}

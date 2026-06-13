@@ -1,0 +1,87 @@
+import {
+  createLiveMdTheme,
+  type LiveMdThemeColorVariables,
+} from "@codemirror-treesitter/live-md-theme";
+import {
+  catppuccinLatteColors,
+  catppuccinMacchiatoColors,
+  type CatppuccinColors,
+} from "@codemirror-treesitter/theme-palettes";
+
+function catppuccinLiveMdVariables(colors: CatppuccinColors): LiveMdThemeColorVariables {
+  return {
+    "--live-md-active-line": `${colors.surface0}66`,
+    "--live-md-accent": colors.blue,
+    "--live-md-accent-2": colors.mauve,
+    "--live-md-bg": colors.base,
+    "--live-md-blockquote": colors.subtext0,
+    "--live-md-blockquote-border": colors.surface1,
+    "--live-md-border": colors.surface0,
+    "--live-md-code-bg": colors.mantle,
+    "--live-md-code-border": colors.surface1,
+    "--live-md-code-muted": colors.overlay2,
+    "--live-md-code-text": colors.text,
+    "--live-md-cursor": colors.rosewater,
+    "--live-md-error": colors.red,
+    "--live-md-error-border": colors.red,
+    "--live-md-heading-1": colors.mauve,
+    "--live-md-heading-2": colors.blue,
+    "--live-md-heading-3": colors.teal,
+    "--live-md-heading-rest": colors.subtext1,
+    "--live-md-inline-code-bg": colors.mantle,
+    "--live-md-inline-code-border": colors.surface1,
+    "--live-md-inline-code-text": colors.red,
+    "--live-md-latex": colors.teal,
+    "--live-md-link": colors.blue,
+    "--live-md-link-underline": `${colors.blue}66`,
+    "--live-md-list-marker": colors.blue,
+    "--live-md-mermaid-accent": colors.blue,
+    "--live-md-mermaid-bg": colors.base,
+    "--live-md-mermaid-border": colors.surface0,
+    "--live-md-mermaid-line": colors.overlay2,
+    "--live-md-mermaid-muted": colors.overlay2,
+    "--live-md-mermaid-surface": colors.base,
+    "--live-md-mermaid-text": colors.text,
+    "--live-md-muted": colors.overlay2,
+    "--live-md-ordered-marker": colors.mauve,
+    "--live-md-rule": colors.surface1,
+    "--live-md-selection": `${colors.surface1}80`,
+    "--live-md-surface": colors.mantle,
+    "--live-md-surface-error": `${colors.red}14`,
+    "--live-md-surface-error-border": colors.red,
+    "--live-md-syntax": colors.overlay1,
+    "--live-md-table-bg": colors.base,
+    "--live-md-table-border": colors.surface1,
+    "--live-md-table-divider": colors.surface2,
+    "--live-md-table-header-bg": colors.mantle,
+    "--live-md-table-header-text": colors.text,
+    "--live-md-table-line-bg": colors.mantle,
+    "--live-md-table-pipe": colors.surface1,
+    "--live-md-task-bg": colors.base,
+    "--live-md-task-border": colors.surface2,
+    "--live-md-task-check": colors.base,
+    "--live-md-task-checked": colors.overlay1,
+    "--live-md-task-checked-strong": colors.overlay2,
+    "--live-md-text": colors.text,
+  };
+}
+
+export const catppuccinLatteLiveMdTheme = createLiveMdTheme({
+  appearance: "light",
+  id: "catppuccin-latte",
+  variables: catppuccinLiveMdVariables(catppuccinLatteColors),
+});
+
+export const catppuccinMacchiatoLiveMdTheme = createLiveMdTheme({
+  appearance: "dark",
+  id: "catppuccin-macchiato",
+  variables: {
+    ...catppuccinLiveMdVariables(catppuccinMacchiatoColors),
+    "--live-md-active-line": `${catppuccinMacchiatoColors.surface0}66`,
+    "--live-md-heading-rest": catppuccinMacchiatoColors.text,
+    "--live-md-inline-code-bg": catppuccinMacchiatoColors.surface0,
+    "--live-md-inline-code-text": catppuccinMacchiatoColors.peach,
+    "--live-md-selection": catppuccinMacchiatoColors.surface1,
+    "--live-md-surface-error": `${catppuccinMacchiatoColors.red}1a`,
+  },
+});

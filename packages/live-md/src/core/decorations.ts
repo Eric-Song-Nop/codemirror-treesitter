@@ -13,6 +13,7 @@ import {
 import {
   highlightTree,
   queryTreeMatches,
+  syntaxHighlighters,
   syntaxTree,
   type Highlighter,
   type SyntaxNode,
@@ -33,6 +34,7 @@ import {
   codeFenceHighlighterFacet,
   codeFenceLanguagesField,
   emptyCodeFenceLanguages,
+  liveMdDefaultCodeFenceHighlighter,
   type CodeFenceLanguageMap,
 } from "./languages.js";
 import {
@@ -60,7 +62,7 @@ type LiveMdBuild = {
   activeLines: Set<number>;
   atomicRanges: Array<{ from: number; to: number }>;
   codeFenceHighlightTrees: CodeFenceHighlightTree[];
-  codeFenceHighlighter: Highlighter;
+  codeFenceHighlighters: readonly Highlighter[];
   codeFenceLanguages: CodeFenceLanguageMap;
   decorations: Array<Range<Decoration>>;
   imageSourceResolver: LiveMdImageSourceResolver | null;
@@ -88,6 +90,7 @@ type CodeFenceHighlightTree = {
 
 const visibleSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-active" });
 const hiddenSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-hidden" });
+const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
 const strongMark = Decoration.mark({ class: "cm-md-strong" });
 const emphasisMark = Decoration.mark({ class: "cm-md-emphasis" });
 const strikeMark = Decoration.mark({ class: "cm-md-strike" });
@@ -128,8 +131,7 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
       tree == value.tree &&
       !transaction.docChanged &&
       !transaction.selection &&
-      transaction.startState.facet(codeFenceHighlighterFacet) ==
-        transaction.state.facet(codeFenceHighlighterFacet) &&
+      !codeFenceHighlightersChanged(transaction.startState, transaction.state) &&
       !codeFenceLanguagesChanged(transaction.startState, transaction.state) &&
       transaction.startState.facet(liveMdImageSourceResolver) ==
         transaction.state.facet(liveMdImageSourceResolver) &&
@@ -206,7 +208,7 @@ function createLiveMdBuild(
     activeLines,
     atomicRanges: [],
     codeFenceHighlightTrees: [],
-    codeFenceHighlighter: state.facet(codeFenceHighlighterFacet),
+    codeFenceHighlighters: codeFenceHighlighters(state),
     codeFenceLanguages,
     decorations: [],
     imageSourceResolver: state.facet(liveMdImageSourceResolver),
@@ -641,6 +643,18 @@ function blockContainerBreakFrom(
 function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) {
   return (
     startState.field(codeFenceLanguagesField, false) != state.field(codeFenceLanguagesField, false)
+  );
+}
+
+function codeFenceHighlightersChanged(startState: EditorState, state: EditorState) {
+  return codeFenceHighlighters(startState) != codeFenceHighlighters(state);
+}
+
+function codeFenceHighlighters(state: EditorState) {
+  return (
+    state.facet(codeFenceHighlighterFacet) ??
+    syntaxHighlighters(state) ??
+    defaultCodeFenceHighlighters
   );
 }
 
@@ -1099,7 +1113,7 @@ function addCodeFenceHighlights(
 
   highlightTree(
     tree,
-    build.codeFenceHighlighter,
+    build.codeFenceHighlighters,
     (from, to, className) => {
       let decoration = Decoration.mark({ class: className });
       splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {
