@@ -8,14 +8,22 @@ import {
 } from "@codemirror-treesitter/live-md";
 import "@codemirror-treesitter/live-md/register";
 import {
-  gruvboxDarkLiveMdExtensions,
-  gruvboxLightLiveMdExtensions,
-} from "@codemirror-treesitter/theme-gruvbox";
+  clearLiveMdThemeVariables,
+  setLiveMdThemeVariables,
+  type LiveMdThemeSpec,
+} from "@codemirror-treesitter/live-md-theme";
+import { gruvboxDark, gruvboxLight } from "@codemirror-treesitter/theme-gruvbox";
+import { catppuccinLatte, catppuccinMacchiato } from "@codemirror-treesitter/theme-catppuccin";
+import { githubLight } from "@codemirror-treesitter/theme-github";
 import {
-  catppuccinLatteLiveMdExtensions,
-  catppuccinMacchiatoLiveMdExtensions,
-} from "@codemirror-treesitter/theme-catppuccin";
-import { githubLightLiveMdExtensions } from "@codemirror-treesitter/theme-github";
+  gruvboxDarkLiveMdTheme,
+  gruvboxLightLiveMdTheme,
+} from "@codemirror-treesitter/live-md-theme-gruvbox";
+import {
+  catppuccinLatteLiveMdTheme,
+  catppuccinMacchiatoLiveMdTheme,
+} from "@codemirror-treesitter/live-md-theme-catppuccin";
+import { githubLightLiveMdTheme } from "@codemirror-treesitter/live-md-theme-github";
 import { useTheme, type Theme } from "@/theme";
 
 export type LiveMdImageFilesInput = {
@@ -69,8 +77,11 @@ export function LiveMdEditor({
     let editor = editorRef.current;
     if (!editor) return;
 
+    let themeDefinition = liveMdThemeDefinition(theme);
+    setLiveMdThemeVariables(editor, themeDefinition.liveMdTheme);
+
     let extensions: Extension[] = [
-      liveMdThemeExtensions(theme),
+      themeDefinition.codeMirrorTheme,
       liveMdImageSource(imageSource),
       ...extraExtensions,
     ];
@@ -84,6 +95,7 @@ export function LiveMdEditor({
       editor.removeEventListener("input", handleInput);
       onEditorReady?.(null);
       editor.extensions = [];
+      clearLiveMdThemeVariables(editor);
     };
   }, [extraExtensions, imageSource, onEditorReady, onImageFiles, theme]);
 
@@ -97,16 +109,36 @@ export function LiveMdEditor({
   );
 }
 
-const liveMdThemeExtensionMap = {
-  "catppuccin-latte": catppuccinLatteLiveMdExtensions,
-  "catppuccin-macchiato": catppuccinMacchiatoLiveMdExtensions,
-  "github-light": githubLightLiveMdExtensions,
-  "gruvbox-dark": gruvboxDarkLiveMdExtensions,
-  "gruvbox-light": gruvboxLightLiveMdExtensions,
-} satisfies Record<Theme, Extension>;
+type LiveMdThemeDefinition = {
+  codeMirrorTheme: Extension;
+  liveMdTheme: LiveMdThemeSpec;
+};
 
-function liveMdThemeExtensions(theme: Theme) {
-  return liveMdThemeExtensionMap[theme];
+const liveMdThemeDefinitionMap = {
+  "catppuccin-latte": {
+    codeMirrorTheme: catppuccinLatte,
+    liveMdTheme: catppuccinLatteLiveMdTheme,
+  },
+  "catppuccin-macchiato": {
+    codeMirrorTheme: catppuccinMacchiato,
+    liveMdTheme: catppuccinMacchiatoLiveMdTheme,
+  },
+  "github-light": {
+    codeMirrorTheme: githubLight,
+    liveMdTheme: githubLightLiveMdTheme,
+  },
+  "gruvbox-dark": {
+    codeMirrorTheme: gruvboxDark,
+    liveMdTheme: gruvboxDarkLiveMdTheme,
+  },
+  "gruvbox-light": {
+    codeMirrorTheme: gruvboxLight,
+    liveMdTheme: gruvboxLightLiveMdTheme,
+  },
+} satisfies Record<Theme, LiveMdThemeDefinition>;
+
+function liveMdThemeDefinition(theme: Theme) {
+  return liveMdThemeDefinitionMap[theme];
 }
 
 function imageInputExtension(onImageFilesRef: RefObject<LiveMdEditorProps["onImageFiles"]>) {

@@ -47,6 +47,22 @@ export const workspaceAliases = {
   ).pathname,
   "@codemirror-treesitter/live-md": new URL("packages/live-md/src/index.ts", import.meta.url)
     .pathname,
+  "@codemirror-treesitter/live-md-theme": new URL(
+    "packages/live-md-theme/src/index.ts",
+    import.meta.url,
+  ).pathname,
+  "@codemirror-treesitter/live-md-theme-catppuccin": new URL(
+    "packages/live-md-theme-catppuccin/src/index.ts",
+    import.meta.url,
+  ).pathname,
+  "@codemirror-treesitter/live-md-theme-github": new URL(
+    "packages/live-md-theme-github/src/index.ts",
+    import.meta.url,
+  ).pathname,
+  "@codemirror-treesitter/live-md-theme-gruvbox": new URL(
+    "packages/live-md-theme-gruvbox/src/index.ts",
+    import.meta.url,
+  ).pathname,
   "@codemirror-treesitter/live-md-loro": new URL(
     "packages/live-md-loro/src/index.ts",
     import.meta.url,

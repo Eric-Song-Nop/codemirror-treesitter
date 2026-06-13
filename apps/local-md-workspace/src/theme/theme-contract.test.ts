@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
+import { liveMdThemeColorVariableNames } from "@codemirror-treesitter/live-md-theme";
+import { githubLightLiveMdTheme } from "@codemirror-treesitter/live-md-theme-github";
 import { themeDefinitions } from "./theme";
 
 const workspaceCss = readText("../index.css");
 const liveMdEditorSource = readText("../components/LiveMdEditor.tsx");
-const liveMdStyle = readText("../../../../packages/live-md/src/style.css");
 
 describe("workspace theme contract", () => {
   it("keeps every named theme wired through CSS tokens and the LiveMD adapter", () => {
@@ -13,7 +14,7 @@ describe("workspace theme contract", () => {
     let liveMdAdapterThemeIds = Array.from(
       new Set(
         Array.from(
-          liveMdThemeExtensionMapBlock(liveMdEditorSource).matchAll(/"([^"]+)":/g),
+          liveMdThemeDefinitionMapBlock(liveMdEditorSource).matchAll(/"([^"]+)":/g),
           (match) => match[1]!,
         ),
       ),
@@ -23,38 +24,48 @@ describe("workspace theme contract", () => {
     expect(liveMdAdapterThemeIds).toEqual(themeIds);
   });
 
-  it("maps the full public LiveMD token contract into the local workspace", () => {
-    let publicLiveMdTokens = cssDeclarationNames(hostBlock(liveMdStyle), "--live-md-");
-    let mappedLiveMdTokens = cssDeclarationNames(
+  it("keeps LiveMD presentation colors in theme packages instead of app CSS", () => {
+    let localLiveMdBlock = cssBlock(workspaceCss, ".local-md-live-editor");
+
+    expect(localLiveMdBlock).not.toContain("--theme-live-md-");
+    expect(liveMdEditorSource).toContain("@codemirror-treesitter/live-md-theme-github");
+    expect(liveMdEditorSource).toContain("@codemirror-treesitter/live-md-theme-gruvbox");
+    expect(liveMdEditorSource).toContain("@codemirror-treesitter/live-md-theme-catppuccin");
+    expect(liveMdEditorSource).not.toContain("LiveMdExtensions");
+  });
+
+  it("keeps only product layout and typography LiveMD tokens in local CSS", () => {
+    let localLiveMdTokens = cssDeclarationNames(
       cssBlock(workspaceCss, ".local-md-live-editor"),
       "--live-md-",
     );
 
-    expect(mappedLiveMdTokens).toEqual(publicLiveMdTokens);
+    expect(localLiveMdTokens).toEqual([
+      "--live-md-content-padding-block-end",
+      "--live-md-content-padding-block-start",
+      "--live-md-content-padding-inline",
+      "--live-md-content-width",
+      "--live-md-font-body",
+      "--live-md-font-code",
+      "--live-md-font-ui",
+      "--live-md-mermaid-font",
+      "--live-md-mermaid-mono-font",
+    ]);
   });
 
-  it("defines the same LiveMD presentation tokens for every named theme", () => {
-    let themeSpecificTokens = Array.from(
-      cssBlock(workspaceCss, ".local-md-live-editor").matchAll(/var\((--theme-live-md-[^)]+)\)/g),
-      (match) => match[1]!,
-    ).sort();
-
-    for (let theme of themeDefinitions) {
-      expect(cssDeclarationNames(themeBlock(workspaceCss, theme.id), "--theme-live-md-")).toEqual(
-        themeSpecificTokens,
-      );
-    }
+  it("requires reusable LiveMD themes to cover every color presentation token", () => {
+    expect(Object.keys(githubLightLiveMdTheme.variables).sort()).toEqual([
+      ...liveMdThemeColorVariableNames,
+    ].sort());
   });
 
   it("keeps GitHub Light rendered Markdown neutral instead of inheriting Gruvbox headings", () => {
-    let githubLight = themeBlock(workspaceCss, "github-light");
-
-    expect(cssDeclarationValue(githubLight, "--theme-live-md-heading-1")).toBe("#24292f");
-    expect(cssDeclarationValue(githubLight, "--theme-live-md-heading-2")).toBe("#24292f");
-    expect(cssDeclarationValue(githubLight, "--theme-live-md-heading-3")).toBe("#24292f");
-    expect(cssDeclarationValue(githubLight, "--theme-live-md-heading-rest")).toBe("#24292f");
-    expect(cssDeclarationValue(githubLight, "--theme-live-md-link")).toBe("#0969da");
-    expect(cssDeclarationValue(githubLight, "--theme-live-md-code-bg")).toBe("#f6f8fa");
+    expect(githubLightLiveMdTheme.variables["--live-md-heading-1"]).toBe("#24292f");
+    expect(githubLightLiveMdTheme.variables["--live-md-heading-2"]).toBe("#24292f");
+    expect(githubLightLiveMdTheme.variables["--live-md-heading-3"]).toBe("#24292f");
+    expect(githubLightLiveMdTheme.variables["--live-md-heading-rest"]).toBe("#24292f");
+    expect(githubLightLiveMdTheme.variables["--live-md-link"]).toBe("#0969da");
+    expect(githubLightLiveMdTheme.variables["--live-md-code-bg"]).toBe("#f6f8fa");
   });
 });
 
@@ -78,14 +89,10 @@ function themeBlock(css: string, theme: string) {
   return cssBlock(css, `:root[data-theme="${theme}"]`);
 }
 
-function hostBlock(css: string) {
-  return cssBlock(css, ":host");
-}
-
-function liveMdThemeExtensionMapBlock(source: string) {
+function liveMdThemeDefinitionMapBlock(source: string) {
   return regexMatch(
     source,
-    /const liveMdThemeExtensionMap = \{([\s\S]*?)\n\} satisfies Record<Theme, Extension>/,
+    /const liveMdThemeDefinitionMap = \{([\s\S]*?)\n\} satisfies Record<Theme, LiveMdThemeDefinition>/,
   );
 }
 
@@ -103,12 +110,6 @@ function cssDeclarationNames(block: string, prefix: string) {
   return Array.from(
     new Set(block.match(new RegExp(`${escapeRegExp(prefix)}[a-z0-9-]+(?=\\s*:)`, "g")) ?? []),
   ).sort();
-}
-
-function cssDeclarationValue(block: string, property: string) {
-  let match = new RegExp(`${escapeRegExp(property)}\\s*:\\s*([^;]+);`).exec(block);
-  expect(match, `Expected ${property} declaration`).toBeTruthy();
-  return match?.[1].trim() ?? "";
 }
 
 function escapeRegExp(value: string) {
