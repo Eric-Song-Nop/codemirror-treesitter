@@ -370,7 +370,7 @@ function LocalWorkspaceApp() {
     : "";
   let headerTitle = singleFileSource?.name ?? selectedFile?.name ?? rootName;
   let headerSubtitle = singleFileSource
-    ? singleFileSourceLabel(singleFileSource, t)
+    ? ""
     : selectedFile
       ? selectedPathLabel
       : workspaceBackend
@@ -2060,10 +2060,6 @@ function LocalWorkspaceApp() {
     () => saveStateLabel(saveState, selectedFile, singleFileSource, t),
     [saveState, selectedFile, singleFileSource, t],
   );
-  let storageLabel = useMemo(
-    () => workspaceStorageLabel(workspaceBackend, t),
-    [workspaceBackend, t],
-  );
   let languageToggleLabel =
     locale == "en" ? t("actions.switchToChinese") : t("actions.switchToEnglish");
   let activeShareForSelectedFile =
@@ -2180,28 +2176,6 @@ function LocalWorkspaceApp() {
               <SaveIcon data-icon="inline-start" />
               {saveLabel}
             </Badge>
-            {singleFileSource && (
-              <Badge className="max-md:hidden" variant="secondary">
-                {singleFileSource.kind == "dropbox-file" ? (
-                  <CloudIcon data-icon="inline-start" />
-                ) : singleFileSource.kind == "local-file" ? (
-                  <FolderOpenIcon data-icon="inline-start" />
-                ) : (
-                  <FileTextIcon data-icon="inline-start" />
-                )}
-                {singleFileBadgeLabel(singleFileSource, t)}
-              </Badge>
-            )}
-            {workspaceBackend && storageLabel && (
-              <Badge className="max-md:hidden" variant="secondary">
-                {workspaceBackend.kind == "opendal-dropbox" ? (
-                  <CloudIcon data-icon="inline-start" />
-                ) : (
-                  <FolderOpenIcon data-icon="inline-start" />
-                )}
-                {storageLabel}
-              </Badge>
-            )}
             {activeShareForSelectedFile && (
               <Badge className="max-md:hidden" variant="secondary">
                 <Share2Icon data-icon="inline-start" />
@@ -2283,10 +2257,6 @@ function LocalWorkspaceApp() {
               canRefresh={canRefreshWorkspace}
               canExport={Boolean(selectedFile)}
               canShare={canShareFile}
-              storageKind={singleFileSource ? null : (workspaceBackend?.kind ?? null)}
-              storageLabel={
-                singleFileSource ? singleFileBadgeLabel(singleFileSource, t) : storageLabel
-              }
               languageToggleLabel={languageToggleLabel}
               onExportHtml={() => void exportCurrentFileAsHtml()}
               onPrintPdf={() => void printCurrentFileAsPdf()}
@@ -2538,8 +2508,6 @@ type MobileWorkspaceActionsProps = {
   canRefresh: boolean;
   canShare: boolean;
   languageToggleLabel: string;
-  storageKind: WorkspaceBackend["kind"] | null;
-  storageLabel: string;
   onExportHtml: () => void;
   onPrintPdf: () => void;
   onInsertImage: () => void;
@@ -2556,8 +2524,6 @@ function MobileWorkspaceActions({
   canRefresh,
   canShare,
   languageToggleLabel,
-  storageKind,
-  storageLabel,
   onExportHtml,
   onPrintPdf,
   onInsertImage,
@@ -2585,27 +2551,13 @@ function MobileWorkspaceActions({
           sideOffset={8}
           className="z-50 flex min-w-56 max-w-[calc(100vw-1rem)] flex-col gap-1 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
         >
-          {(storageLabel || activeShare) && (
+          {activeShare && (
             <>
               <div className="flex flex-col gap-1 px-2 py-1.5 text-xs text-muted-foreground">
-                {storageLabel && (
-                  <div className="flex min-w-0 items-center gap-2">
-                    {storageKind == "opendal-dropbox" ? (
-                      <CloudIcon className="size-3.5 shrink-0" />
-                    ) : storageKind == "local" ? (
-                      <FolderOpenIcon className="size-3.5 shrink-0" />
-                    ) : (
-                      <FileTextIcon className="size-3.5 shrink-0" />
-                    )}
-                    <span className="truncate">{storageLabel}</span>
-                  </div>
-                )}
-                {activeShare && (
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Share2Icon className="size-3.5 shrink-0" />
-                    <span className="truncate">{t("workspace.sharedFileBadge")}</span>
-                  </div>
-                )}
+                <div className="flex min-w-0 items-center gap-2">
+                  <Share2Icon className="size-3.5 shrink-0" />
+                  <span className="truncate">{t("workspace.sharedFileBadge")}</span>
+                </div>
               </div>
               <DropdownMenuPrimitive.Separator className="-mx-1 h-px bg-border" />
             </>
@@ -3427,11 +3379,6 @@ function saveStateLabel(
   }
 }
 
-function workspaceStorageLabel(backend: WorkspaceBackend | null, t: TFunction) {
-  if (!backend) return "";
-  return backend.kind == "opendal-dropbox" ? "Dropbox" : t("common.local");
-}
-
 function createEphemeralLocalWorkspaceRecord(
   handle: AccessDirectoryHandle,
 ): StoredLocalWorkspaceRecord {
@@ -3461,18 +3408,6 @@ function workspaceSelectedPathContext(
 function loadWorkspaceSelectedPath(backend: WorkspaceBackend) {
   let context = workspaceSelectedPathContext(backend);
   return context ? loadStoredWorkspaceSelectedPath(context) : null;
-}
-
-function singleFileSourceLabel(source: SingleFileSource, t: TFunction) {
-  if (source.kind == "draft") return t("save.draft");
-  if (source.kind == "local-file") return t("common.local");
-  return `Dropbox / ${source.path}`;
-}
-
-function singleFileBadgeLabel(source: SingleFileSource, t: TFunction) {
-  if (source.kind == "draft") return t("save.draft");
-  if (source.kind == "local-file") return t("common.local");
-  return "Dropbox";
 }
 
 function mergeOwnerShareStatus(
