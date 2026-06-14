@@ -10,6 +10,7 @@
   "actions.downloadCopy": "Download copy",
   "actions.exportHtml": "Export HTML",
   "actions.gitHubRepository": "GitHub repository",
+  "actions.openGitHubRepository": "Open GitHub repository",
   "actions.hideSidebar": "Hide sidebar",
   "actions.insertImage": "Insert image",
   "actions.moreActions": "More actions",

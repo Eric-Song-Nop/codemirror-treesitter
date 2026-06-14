@@ -3,6 +3,8 @@ const dbVersion = 1;
 const documentStoreName = "documents";
 const updateStoreName = "updates";
 const updateDocIdIndexName = "docId";
+const localDocumentStoragePrefix = "local-md-workspace:collab-document:";
+const localUpdatesStoragePrefix = "local-md-workspace:collab-updates:";
 
 export type BrowserCollabDocumentMetadata = {
   docId: string;
@@ -39,6 +41,14 @@ type StoredUpdateRecord = {
   update: Uint8Array;
 };
 
+type SerializedDocumentRecord = Partial<BrowserCollabDocumentMetadata> & {
+  snapshot?: string;
+};
+
+type SerializedUpdateRecord = Omit<StoredUpdateRecord, "update"> & {
+  update: string;
+};
+
 let memoryDocuments = new Map<string, StoredDocumentRecord>();
 let memoryUpdates = new Map<string, StoredUpdateRecord[]>();
 
@@ -46,7 +56,7 @@ export async function loadBrowserCollabDocument(
   docId: string,
 ): Promise<BrowserCollabDocumentState> {
   let db = await openBrowserCollabDatabase();
-  if (!db) return loadMemoryDocument(docId);
+  if (!db) return loadFallbackDocument(docId);
 
   try {
     let transaction = db.transaction([documentStoreName, updateStoreName], "readonly");
@@ -85,7 +95,7 @@ export async function writeBrowserCollabSnapshot(
   };
   let db = await openBrowserCollabDatabase();
   if (!db) {
-    memoryDocuments.set(metadata.docId, record);
+    writeFallbackDocument(metadata.docId, record);
     return;
   }
 
@@ -106,7 +116,7 @@ export async function appendBrowserCollabUpdates(docId: string, updates: Uint8Ar
 
   let db = await openBrowserCollabDatabase();
   if (!db) {
-    let records = memoryUpdates.get(docId) ?? [];
+    let records = loadFallbackUpdates(docId);
     let sequence = records.reduce((max, record) => Math.max(max, record.sequence), 0);
     for (let update of updates) {
       sequence += 1;
@@ -117,8 +127,8 @@ export async function appendBrowserCollabUpdates(docId: string, updates: Uint8Ar
         update: new Uint8Array(update),
       });
     }
-    memoryUpdates.set(docId, records);
-    return browserCollabUpdateLogByteLength(docId);
+    writeFallbackUpdates(docId, records);
+    return records.reduce((total, record) => total + record.update.byteLength, 0);
   }
 
   try {
@@ -153,7 +163,7 @@ export async function appendBrowserCollabUpdates(docId: string, updates: Uint8Ar
 export async function clearBrowserCollabUpdates(docId: string) {
   let db = await openBrowserCollabDatabase();
   if (!db) {
-    memoryUpdates.delete(docId);
+    clearFallbackUpdates(docId);
     return;
   }
 
@@ -276,6 +286,157 @@ function loadMemoryDocument(docId: string): BrowserCollabDocumentState {
   };
 }
 
+function loadFallbackDocument(docId: string) {
+  return loadLocalStorageDocument(docId) ?? loadMemoryDocument(docId);
+}
+
+function writeFallbackDocument(docId: string, record: StoredDocumentRecord) {
+  if (writeLocalStorageDocument(docId, record)) return;
+  memoryDocuments.set(docId, record);
+}
+
+function loadFallbackUpdates(docId: string) {
+  return loadLocalStorageUpdates(docId) ?? [...(memoryUpdates.get(docId) ?? [])];
+}
+
+function writeFallbackUpdates(docId: string, records: StoredUpdateRecord[]) {
+  if (writeLocalStorageUpdates(docId, records)) return;
+  memoryUpdates.set(docId, records);
+}
+
+function clearFallbackUpdates(docId: string) {
+  if (clearLocalStorageUpdates(docId)) return;
+  memoryUpdates.delete(docId);
+}
+
+function loadLocalStorageDocument(docId: string): BrowserCollabDocumentState | null {
+  let storage = browserLocalStorage();
+  if (!storage) return null;
+
+  try {
+    let rawRecord = storage.getItem(localDocumentStorageKey(docId));
+    if (!rawRecord) return emptyBrowserCollabDocumentState();
+
+    let record = deserializeDocumentRecord(JSON.parse(rawRecord));
+    let metadata = metadataFromRecord(record);
+    if (!metadata) return emptyBrowserCollabDocumentState();
+
+    let updates = loadLocalStorageUpdates(docId) ?? [];
+    return {
+      metadata,
+      snapshot: record.snapshot ? new Uint8Array(record.snapshot) : null,
+      updates: updates
+        .sort((left, right) => left.sequence - right.sequence)
+        .map((update) => new Uint8Array(update.update)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalStorageDocument(docId: string, record: StoredDocumentRecord) {
+  let storage = browserLocalStorage();
+  if (!storage) return false;
+
+  try {
+    storage.setItem(
+      localDocumentStorageKey(docId),
+      JSON.stringify(serializeDocumentRecord(record)),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function loadLocalStorageUpdates(docId: string) {
+  let storage = browserLocalStorage();
+  if (!storage) return null;
+
+  try {
+    let raw = storage.getItem(localUpdatesStorageKey(docId));
+    if (!raw) return [];
+    let value = JSON.parse(raw);
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((item): StoredUpdateRecord[] => {
+      let record = item as Partial<SerializedUpdateRecord>;
+      if (
+        typeof record.docId != "string" ||
+        typeof record.key != "string" ||
+        typeof record.sequence != "number" ||
+        !Number.isSafeInteger(record.sequence) ||
+        record.sequence < 0 ||
+        typeof record.update != "string"
+      ) {
+        return [];
+      }
+      return [
+        {
+          docId: record.docId,
+          key: record.key,
+          sequence: record.sequence,
+          update: bytesFromBase64(record.update),
+        },
+      ];
+    });
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalStorageUpdates(docId: string, records: StoredUpdateRecord[]) {
+  let storage = browserLocalStorage();
+  if (!storage) return false;
+
+  try {
+    storage.setItem(
+      localUpdatesStorageKey(docId),
+      JSON.stringify(records.map(serializeUpdateRecord)),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearLocalStorageUpdates(docId: string) {
+  let storage = browserLocalStorage();
+  if (!storage) return false;
+
+  try {
+    storage.removeItem(localUpdatesStorageKey(docId));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function serializeDocumentRecord(record: StoredDocumentRecord): SerializedDocumentRecord {
+  let { snapshot, ...metadata } = record;
+  return {
+    ...metadata,
+    ...(snapshot ? { snapshot: base64FromBytes(toUint8Array(snapshot)) } : {}),
+  };
+}
+
+function deserializeDocumentRecord(value: unknown): StoredDocumentRecord {
+  let record = value && typeof value == "object" ? (value as SerializedDocumentRecord) : {};
+  let { snapshot, ...metadata } = record;
+  return {
+    ...metadata,
+    ...(typeof snapshot == "string" ? { snapshot: bytesFromBase64(snapshot) } : {}),
+  };
+}
+
+function serializeUpdateRecord(record: StoredUpdateRecord): SerializedUpdateRecord {
+  return {
+    docId: record.docId,
+    key: record.key,
+    sequence: record.sequence,
+    update: base64FromBytes(record.update),
+  };
+}
+
 function emptyBrowserCollabDocumentState(): BrowserCollabDocumentState {
   return {
     metadata: null,
@@ -288,8 +449,39 @@ function updateKey(docId: string, sequence: number) {
   return `${docId}:${String(sequence).padStart(12, "0")}`;
 }
 
+function localDocumentStorageKey(docId: string) {
+  return `${localDocumentStoragePrefix}${docId}`;
+}
+
+function localUpdatesStorageKey(docId: string) {
+  return `${localUpdatesStoragePrefix}${docId}`;
+}
+
 function toUint8Array(value: Uint8Array | ArrayBuffer) {
   return value instanceof Uint8Array ? new Uint8Array(value) : new Uint8Array(value);
+}
+
+function browserLocalStorage() {
+  try {
+    return typeof window != "undefined" ? window.localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+function base64FromBytes(bytes: Uint8Array) {
+  let binary = "";
+  for (let byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function bytesFromBase64(value: string) {
+  let binary = atob(value);
+  let bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
 }
 
 function requestResult<T>(request: IDBRequest<T>) {

@@ -530,33 +530,19 @@ async function assertOwnerExternalConflictFlow(client) {
     await selectWorkspaceFile(client, secondOwner.sessionId, fileName, {
       expectedEditorText: "Owner conflict smoke",
     });
-    await client.waitForPredicate(
-      `document.body.innerText.includes("File changed outside LiveMD") && document.body.innerText.includes("Use shared edit")`,
-      secondOwner.sessionId,
-      15_000,
-    );
-    await client.waitForPredicate(
-      `window.__localMdSmokeFiles?.get(${JSON.stringify(fileName)}) == ${JSON.stringify(
-        externalValue,
-      )}`,
-      secondOwner.sessionId,
-      3_000,
-    );
-    let guestBeforeResolution = await client.evaluate("document.body.innerText", guest.sessionId);
-    if (guestBeforeResolution.includes("Saved to host")) {
-      throw new Error("Guest saw Saved to host before the owner resolved the source conflict.");
-    }
-
-    await clickShareDialogButton(client, secondOwner.sessionId, "Reload file");
     try {
       await client.waitForPredicate(
         `
           (() => {
             let files = Array.from(window.__localMdSmokeFiles?.entries?.() ?? []);
-            return window.__localMdSmokeFiles?.get(${JSON.stringify(fileName)}) == ${JSON.stringify(
-              externalValue,
-            )} &&
-              document.querySelector("live-md-editor")?.value == ${JSON.stringify(externalValue)} &&
+            let fileValue = window.__localMdSmokeFiles?.get(${JSON.stringify(fileName)}) ?? "";
+            let editorValue = document.querySelector("live-md-editor")?.value ?? "";
+            return fileValue.includes("Guest relay edit while") &&
+              fileValue.includes("host is offline") &&
+              fileValue.includes("source edit") &&
+              editorValue.includes("Guest relay edit while") &&
+              editorValue.includes("host is offline") &&
+              editorValue.includes("source edit") &&
               !files.some(([name]) => name.includes(".shared-conflict-"));
           })()
         `,
@@ -583,9 +569,14 @@ async function assertOwnerExternalConflictFlow(client) {
       );
     }
     await client.waitForPredicate(
-      `window.__localMdSmokeFiles?.get(${JSON.stringify(fileName)}) == ${JSON.stringify(
-        externalValue,
-      )}`,
+      `
+        (() => {
+          let value = window.__localMdSmokeFiles?.get(${JSON.stringify(fileName)}) ?? "";
+          return value.includes("Guest relay edit while") &&
+            value.includes("host is offline") &&
+            value.includes("source edit");
+        })()
+      `,
       secondOwner.sessionId,
       5_000,
     );

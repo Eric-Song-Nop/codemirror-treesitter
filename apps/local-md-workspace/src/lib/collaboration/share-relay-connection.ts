@@ -134,7 +134,7 @@ export class ShareRelayConnection {
       this.socket = null;
       this.stopHeartbeat();
       if (event.code == 1008 || event.code == clientCloseCodePolicy) {
-        this.options.onError?.(event.reason || "Shared file access was rejected.");
+        this.options.onError?.(policyCloseMessage(event.reason));
         this.options.onConnectionState?.("offline");
         return;
       }
@@ -515,6 +515,13 @@ function parseVersionVector(value: unknown) {
     version.set(peer as `${number}`, counter);
   }
   return new VersionVector(version);
+}
+
+function policyCloseMessage(reason: string) {
+  if (!reason || reason == "Share session is no longer valid") {
+    return "Shared file access was rejected.";
+  }
+  return reason;
 }
 
 function errorToMessage(error: unknown) {
