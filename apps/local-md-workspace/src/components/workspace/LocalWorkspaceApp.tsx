@@ -34,6 +34,7 @@ import {
   type WorkspaceBackend,
 } from "@/lib/workspace-backend";
 import { useI18n } from "@/lib/i18n";
+import { useLiveMdPreloadError } from "@/lib/live-md-preload";
 import { defaultSidebarOpen, isMobileSidebarViewport } from "@/lib/workspace/constants";
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
 import { createEphemeralLocalWorkspaceRecord, saveStateLabel } from "@/lib/workspace/state";
@@ -52,6 +53,7 @@ const emptyEditorExtensions: Extension[] = [];
 
 export function LocalWorkspaceApp() {
   let { locale, t, toggleLocale } = useI18n();
+  let liveMdPreloadError = useLiveMdPreloadError();
   let [workspaceBackend, setWorkspaceBackend] = useState<WorkspaceBackend | null>(null);
   let [storedLocalWorkspace, setStoredLocalWorkspace] = useState<StoredLocalWorkspaceRecord | null>(
     null,
@@ -175,6 +177,7 @@ export function LocalWorkspaceApp() {
     : isMobileBrowser()
       ? t("errors.fileSystemAccessUnavailableMobile")
       : t("errors.fileSystemAccessUnavailableDesktop");
+  let visibleErrorMessage = errorMessage || liveMdPreloadError;
   let {
     canInsertImage,
     handleEditorImageFiles,
@@ -569,8 +572,8 @@ export function LocalWorkspaceApp() {
 
           <WorkspaceErrorBanner
             busy={busy}
-            message={errorMessage}
-            retryPath={retryLoadPath}
+            message={visibleErrorMessage}
+            retryPath={errorMessage ? retryLoadPath : null}
             onRetry={() => void retryUnavailableCollabFile()}
           />
 

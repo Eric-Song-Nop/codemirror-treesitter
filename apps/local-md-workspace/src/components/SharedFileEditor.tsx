@@ -20,6 +20,7 @@ import {
 } from "@/lib/collaboration/share-relay-client";
 import { parseShareLink, type ShareLinkParts } from "@/lib/collaboration/share-identity";
 import { translateKnownMessage, useI18n, type TFunction, type Locale } from "@/lib/i18n";
+import { useLiveMdPreloadError } from "@/lib/live-md-preload";
 
 type SharedFileRoute =
   | {
@@ -37,6 +38,7 @@ type SharedFileEditorProps = {
 
 export function SharedFileEditor({ href = window.location.href }: SharedFileEditorProps) {
   let { locale, t } = useI18n();
+  let liveMdPreloadError = useLiveMdPreloadError();
   let route = useMemo(() => sharedFileRouteFromHref(href), [href]);
   let relayOrigin = useMemo(() => configuredShareRelayOrigin(), []);
   let [doc] = useState(() => new LoroDoc());
@@ -164,6 +166,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
       ? t("shared.hostSavedAt", { time: formatTimestamp(lastHostSavedAt, locale) })
       : undefined;
   let displayNameLabel = displayName == "Shared file" ? t("shared.title") : displayName;
+  let visibleErrorMessage = errorMessage || liveMdPreloadError;
 
   return (
     <TooltipProvider>
@@ -202,11 +205,11 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
           <ThemeSelector className="shrink-0" />
         </header>
 
-        {errorMessage && (
+        {visibleErrorMessage && (
           <div className="flex shrink-0 items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
             <AlertCircleIcon className="size-4 shrink-0" />
-            <div className="min-w-0 flex-1">{translateKnownMessage(errorMessage, t)}</div>
-            {route.kind == "share" && (
+            <div className="min-w-0 flex-1">{translateKnownMessage(visibleErrorMessage, t)}</div>
+            {errorMessage && route.kind == "share" && (
               <Button size="sm" variant="outline" onClick={() => connectionRef.current?.connect()}>
                 <RefreshCwIcon data-icon="inline-start" />
                 {t("actions.retry")}

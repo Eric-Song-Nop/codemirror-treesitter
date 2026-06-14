@@ -132,8 +132,11 @@ HTML exports without leaking workspace, reset, or component-library CSS.
 <script type="module">
   import { defineLiveMdEditor, prepareLiveMd } from "@codemirror-treesitter/live-md";
 
-  await prepareLiveMd();
   defineLiveMdEditor();
+  void prepareLiveMd().catch((error) => {
+    // Surface the preload failure in app-specific UI while the element still mounts.
+    console.error(error);
+  });
 </script>
 ```
 
@@ -153,8 +156,9 @@ The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 `--live-md-*` CSS custom properties on the host.
 
 The side-effect `@codemirror-treesitter/live-md/register` entry remains
-available for simple hosts. It awaits `prepareLiveMd()` before defining the
-default custom element.
+available for simple hosts. It defines the default custom element immediately,
+starts `prepareLiveMd()` in the background, and dispatches a global
+`live-md-error` event if preload fails.
 
 ## Source Layout
 
