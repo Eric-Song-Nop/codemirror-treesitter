@@ -6,7 +6,6 @@ import {
   type LiveMdEditorElement,
   type LiveMdImageSourceResolver,
 } from "@codemirror-treesitter/live-md";
-import "@codemirror-treesitter/live-md/register";
 import {
   clearLiveMdThemeVariables,
   setLiveMdThemeVariables,

@@ -48,6 +48,7 @@ import {
   liveMdMarkdownDocumentCssVariables,
   liveMdImageSource,
   liveMarkdown,
+  prepareLiveMd,
   renderMarkdownToHtml,
 } from "@codemirror-treesitter/live-md";
 ```
@@ -63,8 +64,10 @@ and benchmark content.
 ## Programmatic API
 
 ```ts
-import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
+import { createLiveMdEditor, prepareLiveMd } from "@codemirror-treesitter/live-md";
 import { gruvboxDark } from "@codemirror-treesitter/theme-gruvbox";
+
+await prepareLiveMd();
 
 const imageAssetUrlMap = new Map<string, string>();
 const editor = createLiveMdEditor({
@@ -99,6 +102,11 @@ need to override fenced-code highlighting explicitly. The controller exposes `vi
 `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`, `setPlaceholder()`,
 `setReadOnly()`, and `destroy()`.
 
+`prepareLiveMd(options?)` preloads Markdown language support and warms the
+LiveMD Markdown decoration queries before the first editor render. Pass
+`{ codeFences: true }` when a host also wants to preload the bundled
+code-fence language parsers during startup.
+
 `renderMarkdownToHtml(markdown, options?)` converts Markdown source to escaped
 HTML with the package Tree-sitter Markdown parser. Hosts can pass
 `resolveImageSource` to rewrite image destinations during export:
@@ -122,7 +130,10 @@ HTML exports without leaking workspace, reset, or component-library CSS.
 ```html
 <live-md-editor autofocus persist-key="draft" placeholder="Start writing..."></live-md-editor>
 <script type="module">
-  import "@codemirror-treesitter/live-md/register";
+  import { defineLiveMdEditor, prepareLiveMd } from "@codemirror-treesitter/live-md";
+
+  await prepareLiveMd();
+  defineLiveMdEditor();
 </script>
 ```
 
@@ -140,6 +151,10 @@ highlighters for specialized fenced-code rendering.
 The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 `select`. Styling is installed into Shadow DOM and can be themed with
 `--live-md-*` CSS custom properties on the host.
+
+The side-effect `@codemirror-treesitter/live-md/register` entry remains
+available for simple hosts. It awaits `prepareLiveMd()` before defining the
+default custom element.
 
 ## Source Layout
 
@@ -174,9 +189,10 @@ Cloudflare-specific code, and concrete theme packages.
 ## Current Implementation Notes
 
 - Public exports are limited to the editor controller, live Markdown extension,
-  image source helpers, code-fence highlighting, Markdown HTML rendering,
-  scoped document CSS helpers, and custom element definition.
-- `./register` only defines the custom element and re-exports the element API.
+  image source helpers, startup preparation, code-fence highlighting, Markdown
+  HTML rendering, scoped document CSS helpers, and custom element definition.
+- `./register` prepares LiveMD, defines the custom element, and re-exports the
+  element API.
 - `./fixtures` currently exposes benchmark/example Markdown content such as
   `createInitialMarkdown(...)`.
 - The custom element installs package CSS into Shadow DOM; hosts can also import

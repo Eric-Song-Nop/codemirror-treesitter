@@ -1,7 +1,11 @@
 import "./style.css";
 import { EditorSelection } from "@codemirror/state";
 import { ensureSyntaxTree } from "@codemirror-treesitter/language";
-import { defineLiveMdEditor, type LiveMdEditorElement } from "@codemirror-treesitter/live-md";
+import {
+  defineLiveMdEditor,
+  prepareLiveMd,
+  type LiveMdEditorElement,
+} from "@codemirror-treesitter/live-md";
 import { createInitialMarkdown } from "@codemirror-treesitter/live-md/fixtures";
 import type { EditorView } from "@codemirror/view";
 
@@ -230,6 +234,7 @@ let lastBenchmarkResult: LiveMdBenchmarkResult | null = null;
 let layoutProbe = 0;
 let clipboardBuffer = "";
 
+await prepareLiveMd();
 defineLiveMdEditor();
 
 export function installLiveMdBenchmark() {

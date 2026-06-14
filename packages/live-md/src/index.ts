@@ -11,7 +11,11 @@ export {
   normalizeMarkdownImageSource,
   type LiveMdImageSourceResolver,
 } from "./core/images.js";
-export { liveMdCodeFenceHighlighting } from "./core/languages.js";
+export {
+  liveMdCodeFenceHighlighting,
+  prepareLiveMd,
+  type PrepareLiveMdOptions,
+} from "./core/languages.js";
 export {
   liveMdMarkdownDocumentClass,
   liveMdMarkdownDocumentCss,

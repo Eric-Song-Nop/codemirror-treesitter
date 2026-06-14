@@ -1,5 +1,9 @@
 import "./style.css";
-import { defineLiveMdEditor, type LiveMdEditorElement } from "@codemirror-treesitter/live-md";
+import {
+  defineLiveMdEditor,
+  prepareLiveMd,
+  type LiveMdEditorElement,
+} from "@codemirror-treesitter/live-md";
 import { liveMdLoroCollaboration } from "@codemirror-treesitter/live-md-loro";
 import { LoroDoc, UndoManager } from "loro-crdt";
 import { WireKind, decodeWireFrame, encodeWireBatch, type WireMessage } from "./protocol.ts";
@@ -236,6 +240,7 @@ function collaborationWorkerOrigin(): string {
   }
 }
 
+await prepareLiveMd();
 defineLiveMdEditor();
 
 let editor = document.createElement("live-md-editor") as LiveMdEditorElement;

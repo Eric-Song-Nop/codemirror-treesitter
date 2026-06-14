@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { defineLiveMdEditor, prepareLiveMd } from "@codemirror-treesitter/live-md";
 import { App } from "./App";
 import "./index.css";
 import { registerAppServiceWorker } from "./lib/pwa";
@@ -14,6 +15,9 @@ import {
 
 let initialTheme = loadStoredTheme() ?? defaultTheme;
 applyThemeToDocument(initialTheme);
+
+await prepareLiveMd();
+defineLiveMdEditor();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
