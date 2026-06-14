@@ -10,6 +10,7 @@
   "actions.downloadCopy": "下载副本",
   "actions.exportHtml": "导出 HTML",
   "actions.gitHubRepository": "GitHub 仓库",
+  "actions.openGitHubRepository": "打开 GitHub 仓库",
   "actions.hideSidebar": "隐藏侧边栏",
   "actions.insertImage": "插入图片",
   "actions.moreActions": "更多操作",

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
@@ -57,8 +57,18 @@ export function LiveMdEditor({
 }: LiveMdEditorProps) {
   let { theme } = useTheme();
   let editorRef = useRef<LiveMdEditorElement | null>(null);
+  let initialValueRef = useRef(initialValue);
   let onImageFilesRef = useRef(onImageFiles);
   let onInputRef = useRef(onInput);
+
+  initialValueRef.current = initialValue;
+
+  let setEditorRef = useCallback((editor: LiveMdEditorElement | null) => {
+    editorRef.current = editor;
+    if (!editor) return;
+    editor.value = initialValueRef.current;
+    editor.markClean();
+  }, []);
 
   useEffect(() => {
     onInputRef.current = onInput;
@@ -68,14 +78,14 @@ export function LiveMdEditor({
     onImageFilesRef.current = onImageFiles;
   }, [onImageFiles]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     let editor = editorRef.current;
-    if (!editor || editor.value == initialValue) return;
-    editor.value = initialValue;
+    if (!editor) return;
+    if (editor.value != initialValue) editor.value = initialValue;
     editor.markClean();
   }, [documentKey, initialValue]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     let editor = editorRef.current;
     if (!editor) return;
 
@@ -103,7 +113,7 @@ export function LiveMdEditor({
 
   return (
     <live-md-editor
-      ref={editorRef}
+      ref={setEditorRef}
       className="local-md-live-editor block size-full min-h-0"
       data-theme={theme}
       placeholder={placeholder}
