@@ -31,6 +31,7 @@ type AccessWritableFileStream = {
 type AccessHandleBase = {
   kind: "directory" | "file";
   name: string;
+  isSameEntry?: (other: unknown) => Promise<boolean>;
   queryPermission?: (descriptor?: AccessPermissionDescriptor) => Promise<PermissionState>;
   requestPermission?: (descriptor?: AccessPermissionDescriptor) => Promise<PermissionState>;
 };
@@ -57,10 +58,34 @@ type PickerWindow = Window &
     showDirectoryPicker?: (options?: {
       mode?: AccessPermissionMode;
     }) => Promise<AccessDirectoryHandle>;
+    showSaveFilePicker?: (options?: SaveFilePickerOptions) => Promise<AccessFileHandle>;
   };
+
+type SaveFilePickerOptions = {
+  suggestedName?: string;
+  types?: Array<{
+    accept: Record<string, string[]>;
+    description?: string;
+  }>;
+};
+
+const markdownFilePickerTypes = [
+  {
+    accept: {
+      "text/markdown": [".md", ".markdown"],
+    },
+    description: "Markdown",
+  },
+];
 
 export function supportsDirectoryPicker() {
   return typeof (window as PickerWindow).showDirectoryPicker == "function";
+}
+
+export function supportsSaveFilePicker() {
+  return (
+    typeof window != "undefined" && typeof (window as PickerWindow).showSaveFilePicker == "function"
+  );
 }
 
 export async function pickWorkspaceDirectory() {
@@ -69,6 +94,32 @@ export async function pickWorkspaceDirectory() {
     throw new Error("File System Access API is not available in this browser.");
   }
   return picker({ mode: "readwrite" });
+}
+
+export async function saveMarkdownFileAs(input: {
+  suggestedName: string;
+  value: string;
+}): Promise<AccessFileHandle> {
+  let picker =
+    typeof window == "undefined" ? undefined : (window as PickerWindow).showSaveFilePicker;
+  if (!picker) {
+    throw new Error("File System Access API is not available in this browser.");
+  }
+
+  let handle = await picker({
+    suggestedName: normalizeMarkdownFileName(input.suggestedName.trim() || "Untitled.md"),
+    types: markdownFilePickerTypes,
+  });
+  await writeAccessFileHandle(handle, input.value);
+  return handle;
+}
+
+export async function readAccessFileHandle(handle: AccessFileHandle) {
+  return handle.getFile().then((file) => file.text());
+}
+
+export async function writeAccessFileHandle(handle: AccessFileHandle, value: string) {
+  await writeFileData(handle, value);
 }
 
 export async function ensureReadWritePermission(handle: AccessDirectoryHandle) {
@@ -82,9 +133,12 @@ export async function queryReadWritePermission(handle: AccessDirectoryHandle) {
   return handle.queryPermission({ mode: "readwrite" });
 }
 
-export function createLocalWorkspaceBackend(handle: AccessDirectoryHandle): WorkspaceBackend {
+export function createLocalWorkspaceBackend(
+  handle: AccessDirectoryHandle,
+  workspaceId = `local:${handle.name || "workspace"}`,
+): WorkspaceBackend {
   return {
-    id: `local:${handle.name || "workspace"}`,
+    id: workspaceId,
     kind: "local",
     name: handle.name || "Workspace",
     createDirectory: (path) => createWorkspaceDirectory(handle, path),
@@ -100,6 +154,7 @@ export function createLocalWorkspaceBackend(handle: AccessDirectoryHandle): Work
     readImages: () => readWorkspaceImages(handle),
     readTextFile: (path) => readMarkdownPath(handle, path),
     readTree: () => readWorkspaceTree(handle),
+    findFilePathForHandle: (fileHandle) => findWorkspacePathForFileHandle(handle, fileHandle),
     renameEntry: (from, to) => renameWorkspaceEntry(handle, from, to),
     renameDirectory: (path, rawName) => renameMarkdownDirectory(handle, path, rawName),
     renameFile: (path, rawName) => renameMarkdownFile(handle, path, rawName),
@@ -117,6 +172,14 @@ async function readWorkspaceTree(handle: AccessDirectoryHandle): Promise<Markdow
     name: handle.name || "Workspace",
     path: "",
   };
+}
+
+async function findWorkspacePathForFileHandle(
+  rootHandle: AccessDirectoryHandle,
+  fileHandle: unknown,
+) {
+  if (!isAccessFileHandle(fileHandle)) return null;
+  return findMarkdownFilePathForHandle(rootHandle, "", fileHandle);
 }
 
 async function readWorkspaceImages(handle: AccessDirectoryHandle) {
@@ -411,6 +474,24 @@ async function readDirectoryChildren(handle: AccessDirectoryHandle, path: string
   return sortMarkdownTreeNodes(children);
 }
 
+async function findMarkdownFilePathForHandle(
+  handle: AccessDirectoryHandle,
+  path: string,
+  target: AccessFileHandle,
+): Promise<string | null> {
+  for await (let entry of handle.values()) {
+    if (isLiveMdEntry(path, entry.name)) continue;
+    let entryPath = joinWorkspacePath(path, entry.name);
+    if (entry.kind == "directory") {
+      let match = await findMarkdownFilePathForHandle(entry, entryPath, target);
+      if (match) return match;
+    } else if (/\.md$/i.test(entry.name) && (await isSameAccessEntry(entry, target))) {
+      return entryPath;
+    }
+  }
+  return null;
+}
+
 async function collectWorkspaceImages(
   handle: AccessDirectoryHandle,
   path: string,
@@ -444,6 +525,35 @@ function normalizeEntryPath(path: string) {
 
 function isLiveMdEntry(parentPath: string, name: string) {
   return !parentPath && name == ".livemd";
+}
+
+async function isSameAccessEntry(left: AccessFileHandle, right: AccessFileHandle) {
+  if (left === right) return true;
+  if (left.isSameEntry) {
+    try {
+      if (await left.isSameEntry(right)) return true;
+    } catch {
+      // Try the reverse comparison below when a handle rejects unknown shapes.
+    }
+  }
+
+  if (!right.isSameEntry) return false;
+
+  try {
+    return await right.isSameEntry(left);
+  } catch {
+    return false;
+  }
+}
+
+function isAccessFileHandle(value: unknown): value is AccessFileHandle {
+  return (
+    typeof value == "object" &&
+    value != null &&
+    (value as { kind?: unknown }).kind == "file" &&
+    typeof (value as { getFile?: unknown }).getFile == "function" &&
+    typeof (value as { createWritable?: unknown }).createWritable == "function"
+  );
 }
 
 function isImageFile(file: File) {

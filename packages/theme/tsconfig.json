@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.package.json",
+  "compilerOptions": {
+    "paths": {
+      "@codemirror-treesitter/language": ["../language/src/index.ts"]
+    }
+  },
+  "include": ["src", "tests"]
+}

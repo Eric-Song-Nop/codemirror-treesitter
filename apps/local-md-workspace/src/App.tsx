@@ -17,9 +17,11 @@ import {
   FileTextIcon,
   FolderOpenIcon,
   ImagePlusIcon,
+  LanguagesIcon,
   LinkIcon,
   MenuIcon,
   PlusIcon,
+  PrinterIcon,
   RefreshCwIcon,
   SaveIcon,
   Share2Icon,
@@ -56,13 +58,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -74,6 +69,7 @@ import {
 import { GroveMark } from "@/components/GroveMark";
 import { LiveMdEditor, type LiveMdImageFilesInput } from "@/components/LiveMdEditor";
 import { isSharedFilePath, SharedFileEditor } from "@/components/SharedFileEditor";
+import { ThemeDropdownSubmenu, ThemeSelector } from "@/components/ThemeSelector";
 import { WorkspaceCommandPalette } from "@/components/WorkspaceCommandPalette";
 import {
   authorizeDropboxWithPkce,
@@ -111,7 +107,7 @@ import {
   type CreatedOwnerShare,
   type OwnerShareRecord,
 } from "@/lib/collaboration/share-storage";
-import { localFolderAccessUnavailableMessage } from "@/lib/browser-support";
+import { isMobileBrowser } from "@/lib/browser-support";
 import {
   ShareRelayConnection,
   type ShareRelayStatus,
@@ -126,41 +122,95 @@ import {
   ensureReadWritePermission,
   pickWorkspaceDirectory,
   queryReadWritePermission,
+  readAccessFileHandle,
+  saveMarkdownFileAs,
   supportsDirectoryPicker,
+  supportsSaveFilePicker,
+  writeAccessFileHandle,
   type AccessDirectoryHandle,
+  type AccessFileHandle,
 } from "@/lib/file-system";
 import {
   flattenMarkdownFiles,
+  normalizeMarkdownPath,
   type MarkdownDirectoryNode,
   type MarkdownFileNode,
   type WorkspaceBackend,
   type WorkspaceImageNode,
 } from "@/lib/workspace-backend";
 import { workspaceErrorMessage } from "@/lib/workspace-errors";
+import {
+  I18nProvider,
+  translateKnownMessage,
+  useI18n,
+  type Locale,
+  type TFunction,
+} from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   createStandaloneMarkdownHtml,
   resolveMarkdownImagePath,
   snapshotMarkdownHtmlExportTheme,
 } from "@/lib/export/markdown-html";
+import { openStandaloneHtmlPrintView } from "@/lib/export/browser-print";
 import {
+  clearStoredWorkspaceSelectedPath,
   loadStoredDropboxWorkspaceConfig,
+  loadStoredWorkspaceSelectedPath,
   loadStoredWorkspaceKind,
-  loadStoredWorkspaceHandle,
+  loadStoredLocalWorkspaceRecord,
+  rememberStoredLocalWorkspace,
   saveStoredDropboxWorkspaceConfig,
+  saveStoredWorkspaceSelectedPath,
   saveStoredWorkspaceKind,
-  saveStoredWorkspaceHandle,
+  type StoredLocalWorkspaceRecord,
   type StoredDropboxWorkspaceConfig,
+  type StoredWorkspaceSelectedPathContext,
   type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
+import {
+  clearLastSingleFileDraft,
+  createSingleFileDraft,
+  deleteSingleFileDraft,
+  loadLastSingleFileDraft,
+  loadSingleFileDraft,
+  rememberLastSingleFileDraft,
+  saveSingleFileDraft,
+  type SingleFileDraft,
+} from "@/lib/single-file-draft-store";
 
 type SaveState = "idle" | "pending" | "saving" | "saved" | "error";
 type FileDialogMode = "create" | "rename";
+
+type SingleFileSource =
+  | {
+      draftId: string;
+      kind: "draft";
+      name: string;
+    }
+  | {
+      kind: "local-file";
+      name: string;
+    }
+  | {
+      kind: "dropbox-file";
+      name: string;
+      path: string;
+    };
 
 type EditorDocument = {
   path: string;
   value: string;
   version: number;
+};
+
+type MarkdownHtmlExportInput = {
+  documentPath: string;
+  fileName: string;
+  markdown: string;
+  resolveAsset: (path: string) => File | null;
+  theme: ReturnType<typeof snapshotMarkdownHtmlExportTheme>;
+  title: string;
 };
 
 const emptyEditorExtensions: Extension[] = [];
@@ -187,6 +237,14 @@ type ActiveOwnerShareRecord = OwnerShareRecord & {
 };
 
 export function App() {
+  return (
+    <I18nProvider>
+      <AppRoutes />
+    </I18nProvider>
+  );
+}
+
+function AppRoutes() {
   if (isSharedFilePath(window.location.pathname)) {
     return <SharedFileEditor />;
   }
@@ -195,8 +253,9 @@ export function App() {
 }
 
 function LocalWorkspaceApp() {
+  let { locale, t, toggleLocale } = useI18n();
   let [workspaceBackend, setWorkspaceBackend] = useState<WorkspaceBackend | null>(null);
-  let [storedWorkspaceHandle, setStoredWorkspaceHandle] = useState<AccessDirectoryHandle | null>(
+  let [storedLocalWorkspace, setStoredLocalWorkspace] = useState<StoredLocalWorkspaceRecord | null>(
     null,
   );
   let [storedDropboxConfig, setStoredDropboxConfig] = useState<StoredDropboxWorkspaceConfig | null>(
@@ -209,6 +268,7 @@ function LocalWorkspaceApp() {
   let [files, setFiles] = useState<MarkdownFileNode[]>([]);
   let [selectedFile, setSelectedFile] = useState<MarkdownFileNode | null>(null);
   let [treeSelection, setTreeSelection] = useState<FileTreeDeleteTarget | null>(null);
+  let [singleFileSource, setSingleFileSource] = useState<SingleFileSource | null>(null);
   let [editorDocument, setEditorDocument] = useState<EditorDocument>({
     path: "",
     value: "",
@@ -226,6 +286,9 @@ function LocalWorkspaceApp() {
   let [fileDialogTarget, setFileDialogTarget] = useState<FileTreeDeleteTarget | null>(null);
   let [fileDialogValue, setFileDialogValue] = useState("");
   let [fileDialogError, setFileDialogError] = useState("");
+  let [saveAsDropboxDialogOpen, setSaveAsDropboxDialogOpen] = useState(false);
+  let [saveAsDropboxPath, setSaveAsDropboxPath] = useState("");
+  let [saveAsDropboxError, setSaveAsDropboxError] = useState("");
   let [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
   let [shareDialogOpen, setShareDialogOpen] = useState(false);
   let [shareExpiration, setShareExpiration] = useState<ShareExpirationOption>("7d");
@@ -240,6 +303,8 @@ function LocalWorkspaceApp() {
   let workspaceBackendRef = useRef<WorkspaceBackend | null>(null);
   let selectedFileBackendRef = useRef<WorkspaceBackend | null>(null);
   let selectedFileRef = useRef<MarkdownFileNode | null>(null);
+  let singleFileSourceRef = useRef<SingleFileSource | null>(null);
+  let localFileHandleRef = useRef<AccessFileHandle | null>(null);
   let collabDocumentRef = useRef<CollabDocumentState | null>(null);
   let collabSyncCleanupRef = useRef<() => void>(() => {});
   let shareHostConnectionRef = useRef<ShareRelayConnection | null>(null);
@@ -252,6 +317,7 @@ function LocalWorkspaceApp() {
   let saveStateRef = useRef<SaveState>("idle");
   let saveTimerRef = useRef<number | null>(null);
   let saveOperationRef = useRef(0);
+  let activeDocumentGenerationRef = useRef(0);
   let loadFileRequestRef = useRef(0);
   let dropboxTokenRef = useRef<DropboxAccessToken | null>(null);
   let dropboxTokenAppKeyRef = useRef("");
@@ -261,6 +327,7 @@ function LocalWorkspaceApp() {
   let imageAssetsRef = useRef(new Map<string, WorkspaceImageAsset>());
   let imageInputRef = useRef<HTMLInputElement | null>(null);
   let [localRestoreChecked, setLocalRestoreChecked] = useState(false);
+  let [dropboxAutoRestoreChecked, setDropboxAutoRestoreChecked] = useState(false);
 
   useEffect(() => {
     workspaceBackendRef.current = workspaceBackend;
@@ -269,6 +336,10 @@ function LocalWorkspaceApp() {
   useEffect(() => {
     selectedFileRef.current = selectedFile;
   }, [selectedFile]);
+
+  useEffect(() => {
+    singleFileSourceRef.current = singleFileSource;
+  }, [singleFileSource]);
 
   useEffect(() => {
     collabDocumentRef.current = collabDocument;
@@ -290,25 +361,34 @@ function LocalWorkspaceApp() {
     completeDropboxPopupOAuthIfPresent();
   }, []);
 
-  let selectedPath = selectedFile?.path ?? null;
-  let rootName = tree?.name ?? workspaceBackend?.name ?? storedWorkspaceHandle?.name ?? "Grove";
+  let selectedPath = singleFileSource ? null : (selectedFile?.path ?? null);
+  let rootName = tree?.name ?? workspaceBackend?.name ?? storedLocalWorkspace?.name ?? "Grove";
   let selectedPathLabel = selectedFile
     ? selectedFile.path == selectedFile.name
       ? ""
       : selectedFile.path
     : "";
-  let headerTitle = selectedFile?.name ?? rootName;
-  let headerSubtitle = selectedFile
-    ? selectedPathLabel
-    : workspaceBackend
-      ? files.length == 1
-        ? "1 markdown file"
-        : `${files.length} markdown files`
-      : "";
+  let headerTitle = singleFileSource?.name ?? selectedFile?.name ?? rootName;
+  let headerSubtitle = singleFileSource
+    ? ""
+    : selectedFile
+      ? selectedPathLabel
+      : workspaceBackend
+        ? files.length == 1
+          ? t("workspace.markdownFileCount_one")
+          : t("workspace.markdownFileCount_other", { count: files.length })
+        : "";
   let browserSupported = supportsDirectoryPicker();
+  let canShareFile = Boolean(!singleFileSource && workspaceBackend && selectedFile);
+  let canInsertImage = Boolean(
+    !singleFileSource && workspaceBackend?.createImageAsset && selectedFile,
+  );
+  let canRefreshWorkspace = Boolean(workspaceBackend);
   let folderAccessUnavailableMessage = browserSupported
     ? ""
-    : localFolderAccessUnavailableMessage();
+    : isMobileBrowser()
+      ? t("errors.fileSystemAccessUnavailableMobile")
+      : t("errors.fileSystemAccessUnavailableDesktop");
 
   let setSaveStateSynced = useCallback((nextState: SaveState) => {
     if (saveStateRef.current == nextState) return;
@@ -339,6 +419,95 @@ function LocalWorkspaceApp() {
     shareHostConnectionRef.current?.close();
     shareHostConnectionRef.current = null;
     shareHostRecordRef.current = null;
+  }, []);
+
+  let invalidateActiveDocumentSave = useCallback(() => {
+    activeDocumentGenerationRef.current += 1;
+    saveOperationRef.current += 1;
+  }, []);
+
+  let clearActiveDocument = useCallback(() => {
+    loadFileRequestRef.current += 1;
+    invalidateActiveDocumentSave();
+    if (saveTimerRef.current != null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    stopOwnerShareHost();
+    collabSyncCleanupRef.current();
+    collabSyncCleanupRef.current = () => {};
+    collabDocumentRef.current?.dispose();
+    collabDocumentRef.current = null;
+    selectedFileRef.current = null;
+    selectedFileBackendRef.current = null;
+    singleFileSourceRef.current = null;
+    localFileHandleRef.current = null;
+    editorValueRef.current = "";
+    cleanValueRef.current = "";
+    dirtyRef.current = false;
+    editVersionRef.current = 0;
+    setSingleFileSource(null);
+    setSelectedFile(null);
+    setCollabDocument(null);
+    setTreeSelection(null);
+    setActiveShareRecord(null);
+    setCreatedShare(null);
+    setEditorDocument((current) => ({
+      path: "",
+      value: "",
+      version: current.version + 1,
+    }));
+    setSaveStateSynced("idle");
+  }, [invalidateActiveDocumentSave, setSaveStateSynced, stopOwnerShareHost]);
+
+  let activateSingleFileDocument = useCallback(
+    (
+      source: SingleFileSource,
+      backend: WorkspaceBackend,
+      file: MarkdownFileNode,
+      value: string,
+    ) => {
+      loadFileRequestRef.current += 1;
+      invalidateActiveDocumentSave();
+      if (saveTimerRef.current != null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      stopOwnerShareHost();
+      collabSyncCleanupRef.current();
+      collabSyncCleanupRef.current = () => {};
+      collabDocumentRef.current?.dispose();
+      collabDocumentRef.current = null;
+      selectedFileBackendRef.current = backend;
+      selectedFileRef.current = file;
+      editorValueRef.current = value;
+      cleanValueRef.current = value;
+      dirtyRef.current = false;
+      editVersionRef.current = 0;
+      localFileHandleRef.current = source.kind == "local-file" ? localFileHandleRef.current : null;
+
+      setSingleFileSource(source);
+      setSelectedFile(file);
+      setCollabDocument(null);
+      setTreeSelection(null);
+      setActiveShareRecord(null);
+      setCreatedShare(null);
+      setEditorDocument((current) => ({
+        path: file.path,
+        value,
+        version: current.version + 1,
+      }));
+      setSaveStateSynced("saved");
+      setErrorMessage("");
+      setRetryLoadPath(null);
+    },
+    [invalidateActiveDocumentSave, setSaveStateSynced, stopOwnerShareHost],
+  );
+
+  let discardMaterializedDraft = useCallback((source: SingleFileSource | null) => {
+    if (source?.kind != "draft") return;
+    void deleteSingleFileDraft(source.draftId).catch(() => {});
+    void clearLastSingleFileDraft(source.draftId).catch(() => {});
   }, []);
 
   let sendHostSaveAck = useCallback((path: string, value: string, savedVersion: VersionVector) => {
@@ -374,7 +543,7 @@ function LocalWorkspaceApp() {
 
   let applyCollabDocumentValue = useCallback(
     (document: CollabDocumentState, value = getCollabDocumentValue(document)) => {
-      if (selectedFileRef.current?.path != document.path) return value;
+      if (collabDocumentRef.current !== document) return value;
       editorValueRef.current = value;
       editVersionRef.current += 1;
       setEditorDocument((current) => ({
@@ -391,6 +560,7 @@ function LocalWorkspaceApp() {
     let backend = selectedFileBackendRef.current;
     let file = selectedFileRef.current;
     if (!backend || !file) return true;
+    let documentGeneration = activeDocumentGenerationRef.current;
 
     let selectedDocument = collabDocumentRef.current;
     let document = selectedDocument?.path == file.path ? selectedDocument : null;
@@ -410,6 +580,11 @@ function LocalWorkspaceApp() {
     }
 
     let operation = ++saveOperationRef.current;
+    let isCurrentSaveTarget = () =>
+      operation == saveOperationRef.current &&
+      documentGeneration == activeDocumentGenerationRef.current &&
+      selectedFileBackendRef.current === backend &&
+      selectedFileRef.current === file;
     setSaveStateSynced("saving");
 
     try {
@@ -430,7 +605,7 @@ function LocalWorkspaceApp() {
           !dirtyRef.current &&
           value == cleanValueRef.current
         ) {
-          setSaveStateSynced("saved");
+          if (isCurrentSaveTarget()) setSaveStateSynced("saved");
           return true;
         }
       }
@@ -449,7 +624,7 @@ function LocalWorkspaceApp() {
       } else {
         await backend.writeFile(file.path, value);
       }
-      if (operation == saveOperationRef.current && selectedFileRef.current?.path == file.path) {
+      if (isCurrentSaveTarget()) {
         cleanValueRef.current = value;
         if (editVersion == editVersionRef.current) {
           dirtyRef.current = false;
@@ -481,10 +656,7 @@ function LocalWorkspaceApp() {
               versionVector: materialization.versionVector,
             });
             sendHostSaveAck(file.path, materialization.value, materialization.version);
-            if (
-              operation == saveOperationRef.current &&
-              selectedFileRef.current?.path == file.path
-            ) {
+            if (isCurrentSaveTarget()) {
               cleanValueRef.current = value;
               if (editVersion == editVersionRef.current) {
                 dirtyRef.current = false;
@@ -495,10 +667,7 @@ function LocalWorkspaceApp() {
           }
 
           if (externalValue == value) {
-            if (
-              operation == saveOperationRef.current &&
-              selectedFileRef.current?.path == file.path
-            ) {
+            if (isCurrentSaveTarget()) {
               cleanValueRef.current = value;
               if (editVersion == editVersionRef.current) {
                 dirtyRef.current = false;
@@ -512,6 +681,7 @@ function LocalWorkspaceApp() {
         }
       }
 
+      if (!isCurrentSaveTarget()) return true;
       setSaveStateSynced("error");
       setRetryLoadPath(null);
       setErrorMessage(errorToMessage(error));
@@ -528,6 +698,44 @@ function LocalWorkspaceApp() {
       void saveCurrentFile();
     }, delay);
   }, [saveCurrentFile]);
+
+  let openSingleFileDraft = useCallback(
+    async (
+      options: {
+        reuseLast?: boolean;
+        saveCurrent?: boolean;
+        shouldContinue?: () => boolean;
+      } = {},
+    ) => {
+      if (options.shouldContinue && !options.shouldContinue()) return;
+      if ((options.saveCurrent ?? true) && !(await saveCurrentFile())) return;
+      if (options.shouldContinue && !options.shouldContinue()) return;
+
+      setBusy(true);
+      setErrorMessage("");
+      setRetryLoadPath(null);
+      try {
+        let draft =
+          options.reuseLast === true ? await loadLastSingleFileDraft().catch(() => null) : null;
+        draft ??= await createSingleFileDraft({ name: "Untitled.md" });
+        await rememberLastSingleFileDraft(draft.id).catch(() => {});
+        if (options.shouldContinue && !options.shouldContinue()) return;
+
+        let backend = createSingleFileDraftBackend(draft);
+        activateSingleFileDocument(
+          { draftId: draft.id, kind: "draft", name: draft.name },
+          backend,
+          singleFileMarkdownNode(draft.name),
+          draft.value,
+        );
+      } catch (error) {
+        setErrorMessage(errorToMessage(error));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [activateSingleFileDocument, saveCurrentFile],
+  );
 
   let startOwnerShareHost = useCallback(
     async (
@@ -652,12 +860,13 @@ function LocalWorkspaceApp() {
         collabSyncCleanupRef.current();
         collabDocumentRef.current?.dispose();
         collabSyncCleanupRef.current = () => {};
+        invalidateActiveDocumentSave();
         selectedFileRef.current = file;
         selectedFileBackendRef.current = backend;
         collabDocumentRef.current = document;
         if (document) {
           let handleRemoteDocumentUpdate = () => {
-            if (selectedFileRef.current?.path != document.path) return;
+            if (collabDocumentRef.current !== document) return;
             void (async () => {
               try {
                 editorValueRef.current = getCollabDocumentValue(document);
@@ -684,6 +893,10 @@ function LocalWorkspaceApp() {
         cleanValueRef.current = value;
         dirtyRef.current = needsSourceWrite;
         editVersionRef.current = 0;
+        setSingleFileSource(null);
+        localFileHandleRef.current = null;
+        let selectedPathContext = workspaceSelectedPathContext(backend);
+        if (selectedPathContext) saveStoredWorkspaceSelectedPath(selectedPathContext, file.path);
         setSelectedFile(file);
         setCollabDocument(document);
         setTreeSelection({ kind: "file", name: file.name, path: file.path });
@@ -743,40 +956,52 @@ function LocalWorkspaceApp() {
           saveCurrent: options.saveBeforeSelect ?? true,
         });
       } else {
-        loadFileRequestRef.current += 1;
-        stopOwnerShareHost();
-        collabSyncCleanupRef.current();
-        collabSyncCleanupRef.current = () => {};
-        collabDocumentRef.current?.dispose();
-        selectedFileRef.current = null;
-        selectedFileBackendRef.current = null;
-        collabDocumentRef.current = null;
-        editorValueRef.current = "";
-        cleanValueRef.current = "";
-        dirtyRef.current = false;
-        editVersionRef.current = 0;
-        setActiveShareRecord(null);
-        setCreatedShare(null);
-        setSelectedFile(null);
-        setCollabDocument(null);
+        if (nextSelectedPath) {
+          let selectedPathContext = workspaceSelectedPathContext(backend);
+          if (selectedPathContext) clearStoredWorkspaceSelectedPath(selectedPathContext);
+          if (
+            !singleFileSourceRef.current &&
+            selectedFileBackendRef.current?.id == backend.id &&
+            selectedFileRef.current?.path == nextSelectedPath
+          ) {
+            clearActiveDocument();
+          }
+        }
         setTreeSelection(null);
-        setEditorDocument((current) => ({
-          path: "",
-          value: "",
-          version: current.version + 1,
-        }));
-        setSaveStateSynced("idle");
       }
     },
-    [loadFile, replaceImageAssets, setSaveStateSynced, stopOwnerShareHost],
+    [clearActiveDocument, loadFile, replaceImageAssets],
   );
 
-  let rememberWorkspaceHandle = useCallback((handle: AccessDirectoryHandle) => {
-    setStoredWorkspaceHandle(handle);
+  let rememberWorkspaceHandle = useCallback(async (handle: AccessDirectoryHandle) => {
+    let record = await rememberStoredLocalWorkspace(handle);
+    let nextRecord = record ?? createEphemeralLocalWorkspaceRecord(handle);
+    setStoredLocalWorkspace(nextRecord);
     setStoredWorkspaceKind("local");
-    void saveStoredWorkspaceHandle(handle).catch(() => {});
     saveStoredWorkspaceKind("local");
+    return nextRecord;
   }, []);
+
+  let findCurrentEditorWorkspacePath = useCallback(async (backend: WorkspaceBackend) => {
+    let source = singleFileSourceRef.current;
+    let file = selectedFileRef.current;
+    if (!source && file && selectedFileBackendRef.current?.id == backend.id) return file.path;
+
+    if (source?.kind == "local-file" && localFileHandleRef.current) {
+      return (await backend.findFilePathForHandle?.(localFileHandleRef.current)) ?? null;
+    }
+
+    if (source?.kind == "dropbox-file" && backend.kind == "opendal-dropbox") return source.path;
+    return null;
+  }, []);
+
+  let refreshWorkspaceForCurrentEditor = useCallback(
+    async (backend: WorkspaceBackend) => {
+      let nextSelectedPath = await findCurrentEditorWorkspacePath(backend).catch(() => null);
+      await loadTree(backend, nextSelectedPath, { saveBeforeSelect: false });
+    },
+    [findCurrentEditorWorkspacePath, loadTree],
+  );
 
   let authorizeDropboxAccess = useCallback(async (appKey: string, root?: string) => {
     let normalizedAppKey = appKey.trim();
@@ -813,6 +1038,43 @@ function LocalWorkspaceApp() {
     }
   }, []);
 
+  let createDropboxBackend = useCallback(
+    async (config: StoredDropboxWorkspaceConfig) => {
+      let appKey = config.appKey.trim();
+      if (!appKey) throw new Error("Dropbox app key is required.");
+
+      let root = normalizeDropboxRootInput(config.root);
+      let refreshAccessToken = () => authorizeDropboxAccess(appKey, root);
+      let getAccessToken = async () => {
+        let token = dropboxTokenRef.current;
+        if (
+          token &&
+          dropboxTokenAppKeyRef.current == appKey &&
+          token.expiresAt > Date.now() + 5 * 60 * 1000
+        ) {
+          return token;
+        }
+        return refreshAccessToken();
+      };
+
+      await getAccessToken();
+      let { createDropboxWorkspaceBackend } = await import("@/lib/dropbox-workspace-backend");
+      let backend = createDropboxWorkspaceBackend({
+        getAccessToken,
+        name: t("workspace.dropboxWorkspace"),
+        refreshAccessToken,
+        root,
+      });
+      let storedConfig = root ? { appKey, root } : { appKey };
+      setStoredDropboxConfig(storedConfig);
+      setStoredWorkspaceKind("dropbox");
+      saveStoredDropboxWorkspaceConfig(storedConfig);
+      saveStoredWorkspaceKind("dropbox");
+      return backend;
+    },
+    [authorizeDropboxAccess, t],
+  );
+
   let restoreDropboxRedirectEditorDraft = useCallback(
     (backend: WorkspaceBackend, draft: DropboxRedirectDraft) => {
       if (!draft.selectedPath || draft.dirtyValue == null) return false;
@@ -846,8 +1108,9 @@ function LocalWorkspaceApp() {
   let openWorkspace = useCallback(async () => {
     setErrorMessage("");
     setRetryLoadPath(null);
+    if (!(await saveCurrentFile())) return;
     if (!supportsDirectoryPicker()) {
-      setErrorMessage(localFolderAccessUnavailableMessage());
+      setErrorMessage(folderAccessUnavailableMessage);
       return;
     }
 
@@ -859,19 +1122,19 @@ function LocalWorkspaceApp() {
         setRetryLoadPath(null);
         return;
       }
-      let backend = createLocalWorkspaceBackend(handle);
+      let record = await rememberWorkspaceHandle(handle);
+      let backend = createLocalWorkspaceBackend(handle, record.id);
       dropboxTokenRef.current = null;
       dropboxTokenAppKeyRef.current = "";
       setWorkspaceBackend(backend);
-      rememberWorkspaceHandle(handle);
       setSidebarOpen(defaultSidebarOpen());
-      await loadTree(backend, null);
+      await loadTree(backend, loadWorkspaceSelectedPath(backend));
     } catch (error) {
       if (!isAbortError(error)) setErrorMessage(errorToMessage(error));
     } finally {
       setBusy(false);
     }
-  }, [loadTree, rememberWorkspaceHandle]);
+  }, [folderAccessUnavailableMessage, loadTree, rememberWorkspaceHandle, saveCurrentFile]);
 
   let openDropboxWorkspace = useCallback(
     async (
@@ -885,49 +1148,20 @@ function LocalWorkspaceApp() {
       setRetryLoadPath(null);
       if (!options.skipSaveCurrent && !(await saveCurrentFile())) return false;
 
-      let appKey = config.appKey.trim();
-      if (!appKey) {
-        setErrorMessage("Dropbox app key is required.");
-        setRetryLoadPath(null);
-        return false;
-      }
-      let root = normalizeDropboxRootInput(config.root);
-
       setBusy(true);
       setDropboxConnecting(true);
 
       try {
-        let refreshAccessToken = () => authorizeDropboxAccess(appKey, root);
-        let getAccessToken = async () => {
-          let token = dropboxTokenRef.current;
-          if (
-            token &&
-            dropboxTokenAppKeyRef.current == appKey &&
-            token.expiresAt > Date.now() + 5 * 60 * 1000
-          ) {
-            return token;
-          }
-          return refreshAccessToken();
-        };
-
-        await getAccessToken();
-        let { createDropboxWorkspaceBackend } = await import("@/lib/dropbox-workspace-backend");
-        let backend = createDropboxWorkspaceBackend({
-          getAccessToken,
-          name: "Dropbox workspace",
-          refreshAccessToken,
-          root,
-        });
+        let backend = await createDropboxBackend(config);
         setWorkspaceBackend(backend);
-        let storedConfig = root ? { appKey, root } : { appKey };
-        setStoredDropboxConfig(storedConfig);
-        setStoredWorkspaceKind("dropbox");
-        saveStoredDropboxWorkspaceConfig(storedConfig);
-        saveStoredWorkspaceKind("dropbox");
         setSidebarOpen(defaultSidebarOpen());
-        await loadTree(backend, options.restoreDraft?.selectedPath ?? null, {
-          saveBeforeSelect: false,
-        });
+        await loadTree(
+          backend,
+          options.restoreDraft?.selectedPath ?? loadWorkspaceSelectedPath(backend),
+          {
+            saveBeforeSelect: false,
+          },
+        );
         if (options.restoreDraft) restoreDropboxRedirectEditorDraft(backend, options.restoreDraft);
         return true;
       } catch (error) {
@@ -939,35 +1173,38 @@ function LocalWorkspaceApp() {
         setBusy(false);
       }
     },
-    [authorizeDropboxAccess, loadTree, restoreDropboxRedirectEditorDraft, saveCurrentFile],
+    [createDropboxBackend, loadTree, restoreDropboxRedirectEditorDraft, saveCurrentFile],
   );
 
   let restoreStoredWorkspace = useCallback(async () => {
-    if (!storedWorkspaceHandle) return;
+    if (!storedLocalWorkspace) return;
 
     setBusy(true);
     setErrorMessage("");
     setRetryLoadPath(null);
     try {
-      if (!(await ensureReadWritePermission(storedWorkspaceHandle))) {
+      if (!(await ensureReadWritePermission(storedLocalWorkspace.handle))) {
         setErrorMessage("Read-write folder permission was not granted.");
         setRetryLoadPath(null);
         return;
       }
 
-      let backend = createLocalWorkspaceBackend(storedWorkspaceHandle);
+      let backend = createLocalWorkspaceBackend(
+        storedLocalWorkspace.handle,
+        storedLocalWorkspace.id,
+      );
       dropboxTokenRef.current = null;
       dropboxTokenAppKeyRef.current = "";
       setWorkspaceBackend(backend);
       setSidebarOpen(defaultSidebarOpen());
-      await loadTree(backend, null, { saveBeforeSelect: false });
+      await loadTree(backend, loadWorkspaceSelectedPath(backend), { saveBeforeSelect: false });
     } catch (error) {
       setErrorMessage(errorToMessage(error));
       setRetryLoadPath(null);
     } finally {
       setBusy(false);
     }
-  }, [loadTree, storedWorkspaceHandle]);
+  }, [loadTree, storedLocalWorkspace]);
 
   let restoreDropboxWorkspace = useCallback(async () => {
     if (!storedDropboxConfig) return;
@@ -992,14 +1229,14 @@ function LocalWorkspaceApp() {
     setErrorMessage("");
     setRetryLoadPath(null);
     try {
-      await loadTree(workspaceBackend, selectedFileRef.current?.path ?? null);
+      await refreshWorkspaceForCurrentEditor(workspaceBackend);
     } catch (error) {
       setErrorMessage(errorToMessage(error));
       setRetryLoadPath(null);
     } finally {
       setBusy(false);
     }
-  }, [loadTree, saveCurrentFile, workspaceBackend]);
+  }, [refreshWorkspaceForCurrentEditor, saveCurrentFile, workspaceBackend]);
 
   useEffect(() => {
     if (!dropboxRedirectPendingRef.current) return;
@@ -1040,6 +1277,7 @@ function LocalWorkspaceApp() {
       } finally {
         dropboxRedirectPendingRef.current = false;
         if (!canceled) {
+          setDropboxAutoRestoreChecked(true);
           setDropboxConnecting(false);
           setBusy(false);
         }
@@ -1074,22 +1312,22 @@ function LocalWorkspaceApp() {
 
     void (async () => {
       try {
-        let handle = await loadStoredWorkspaceHandle();
-        if (canceled || !handle) return;
+        let record = await loadStoredLocalWorkspaceRecord();
+        if (canceled || !record) return;
 
-        setStoredWorkspaceHandle(handle);
+        setStoredLocalWorkspace(record);
 
-        if ((await queryReadWritePermission(handle)) != "granted") {
+        if ((await queryReadWritePermission(record.handle)) != "granted") {
           return;
         }
         if (canceled) return;
 
-        let backend = createLocalWorkspaceBackend(handle);
+        let backend = createLocalWorkspaceBackend(record.handle, record.id);
         dropboxTokenRef.current = null;
         dropboxTokenAppKeyRef.current = "";
         setWorkspaceBackend(backend);
         setSidebarOpen(defaultSidebarOpen());
-        await loadTree(backend, null, { saveBeforeSelect: false });
+        await loadTree(backend, loadWorkspaceSelectedPath(backend), { saveBeforeSelect: false });
       } catch (error) {
         if (!canceled) setErrorMessage(errorToMessage(error));
       } finally {
@@ -1106,28 +1344,54 @@ function LocalWorkspaceApp() {
   }, [browserSupported, loadTree, storedDropboxConfig, storedWorkspaceKind, workspaceBackend]);
 
   useEffect(() => {
-    if (
-      !localRestoreChecked ||
-      dropboxRedirectPendingRef.current ||
-      workspaceBackend ||
-      !storedDropboxConfig ||
-      dropboxAutoRestoreAttemptedRef.current
-    ) {
+    if (!localRestoreChecked || dropboxRedirectPendingRef.current) {
       return;
     }
-    if (storedWorkspaceKind && storedWorkspaceKind != "dropbox") return;
-    if (!storedWorkspaceKind && storedWorkspaceHandle) return;
+    if (dropboxAutoRestoreAttemptedRef.current) return;
+    if (
+      workspaceBackend ||
+      !storedDropboxConfig ||
+      (storedWorkspaceKind && storedWorkspaceKind != "dropbox") ||
+      (!storedWorkspaceKind && storedLocalWorkspace)
+    ) {
+      setDropboxAutoRestoreChecked(true);
+      return;
+    }
 
     dropboxAutoRestoreAttemptedRef.current = true;
-    void openDropboxWorkspace(storedDropboxConfig, { skipSaveCurrent: true });
+    setDropboxAutoRestoreChecked(false);
+    void (async () => {
+      try {
+        await openDropboxWorkspace(storedDropboxConfig, { skipSaveCurrent: true });
+      } finally {
+        setDropboxAutoRestoreChecked(true);
+      }
+    })();
   }, [
     localRestoreChecked,
     openDropboxWorkspace,
     storedDropboxConfig,
-    storedWorkspaceHandle,
+    storedLocalWorkspace,
     storedWorkspaceKind,
     workspaceBackend,
   ]);
+
+  useEffect(() => {
+    if (
+      !localRestoreChecked ||
+      !dropboxAutoRestoreChecked ||
+      dropboxRedirectPendingRef.current ||
+      selectedFile
+    ) {
+      return;
+    }
+
+    void openSingleFileDraft({
+      reuseLast: true,
+      saveCurrent: false,
+      shouldContinue: () => !selectedFileRef.current,
+    });
+  }, [dropboxAutoRestoreChecked, localRestoreChecked, openSingleFileDraft, selectedFile]);
 
   useEffect(
     () => () => {
@@ -1155,12 +1419,12 @@ function LocalWorkspaceApp() {
       setFileDialogTarget(null);
       setFileDialogValue(
         kind == "directory"
-          ? defaultNewFolderPath(tree, target)
-          : defaultNewFilePath(files, target),
+          ? defaultNewFolderPath(tree, target, t)
+          : defaultNewFilePath(files, target, t),
       );
       setFileDialogMode("create");
     },
-    [files, tree, treeSelection],
+    [files, t, tree, treeSelection],
   );
 
   let openRenameDialog = useCallback(
@@ -1235,7 +1499,10 @@ function LocalWorkspaceApp() {
 
       setFileDialogMode(null);
       setFileDialogTarget(null);
-      await loadTree(workspaceBackend, nextSelectedPath ?? selectedFileRef.current?.path ?? null, {
+      let currentWorkspacePath = singleFileSourceRef.current
+        ? null
+        : (selectedFileRef.current?.path ?? null);
+      await loadTree(workspaceBackend, nextSelectedPath ?? currentWorkspacePath, {
         saveBeforeSelect: false,
       });
     } catch (error) {
@@ -1269,19 +1536,31 @@ function LocalWorkspaceApp() {
     }
     saveOperationRef.current += 1;
     try {
-      let nextSelectedPath = selectedFileRef.current?.path ?? null;
+      let nextSelectedPath = singleFileSourceRef.current
+        ? null
+        : (selectedFileRef.current?.path ?? null);
+      let deletedActiveWorkspaceDocument = false;
       if (target.kind == "directory") {
         if (!backend.deleteDirectory) throw new Error("This workspace cannot delete folders.");
         await backend.deleteDirectory(target.path);
         if (nextSelectedPath && isPathInsideDirectory(nextSelectedPath, target.path)) {
           nextSelectedPath = null;
+          deletedActiveWorkspaceDocument = !singleFileSourceRef.current;
         }
       } else {
         await backend.deleteFile(target.path);
-        if (nextSelectedPath == target.path) nextSelectedPath = null;
+        if (nextSelectedPath == target.path) {
+          nextSelectedPath = null;
+          deletedActiveWorkspaceDocument = !singleFileSourceRef.current;
+        }
       }
 
       setDeleteTarget(null);
+      if (deletedActiveWorkspaceDocument) {
+        let selectedPathContext = workspaceSelectedPathContext(backend);
+        if (selectedPathContext) clearStoredWorkspaceSelectedPath(selectedPathContext);
+        clearActiveDocument();
+      }
       await loadTree(backend, nextSelectedPath, { saveBeforeSelect: false });
     } catch (error) {
       setErrorMessage(errorToMessage(error));
@@ -1308,19 +1587,20 @@ function LocalWorkspaceApp() {
   let ensureSelectedCollabDocument = useCallback(
     async (backend: WorkspaceBackend, file: MarkdownFileNode) => {
       let current = collabDocumentRef.current;
-      if (current?.path == file.path) return current;
+      if (current?.path == file.path && selectedFileBackendRef.current === backend) return current;
 
       let document = await openMarkdownCollabDocument(backend, file.path);
 
       collabSyncCleanupRef.current();
       collabDocumentRef.current?.dispose();
+      invalidateActiveDocumentSave();
       collabDocumentRef.current = document;
       collabSyncCleanupRef.current = createCollabDocumentBroadcastSync({
         backend,
         doc: document.doc,
         docId: document.docId,
         onRemoteUpdate: () => {
-          if (selectedFileRef.current?.path != document.path) return;
+          if (collabDocumentRef.current !== document) return;
           void (async () => {
             try {
               editorValueRef.current = getCollabDocumentValue(document);
@@ -1353,7 +1633,7 @@ function LocalWorkspaceApp() {
       if (needsSourceWrite) scheduleAutoSave();
       return document;
     },
-    [scheduleAutoSave, setSaveStateSynced],
+    [invalidateActiveDocumentSave, scheduleAutoSave, setSaveStateSynced],
   );
 
   let openShareDialog = useCallback(() => {
@@ -1490,46 +1770,112 @@ function LocalWorkspaceApp() {
     }
   }, [createdShare]);
 
+  let snapshotCurrentFileHtmlExport = useCallback(
+    (file: MarkdownFileNode) => {
+      if (selectedFileRef.current?.path != file.path) return null;
+
+      let activeDocument =
+        collabDocumentRef.current?.path == file.path ? collabDocumentRef.current : null;
+      let markdown = activeDocument
+        ? getCollabDocumentValue(activeDocument)
+        : editorValueRef.current;
+      let resolveAsset = (path: string) =>
+        singleFileSourceRef.current ? null : (imageAssetsRef.current.get(path)?.file ?? null);
+
+      return {
+        documentPath: file.path,
+        fileName: file.name,
+        markdown,
+        resolveAsset,
+        theme: snapshotMarkdownHtmlExportTheme(editorElementRef.current),
+        title: htmlExportTitle(file.name, t),
+      };
+    },
+    [t],
+  );
+
+  let createCurrentFileHtmlExport = useCallback(async (input: MarkdownHtmlExportInput) => {
+    return createStandaloneMarkdownHtml({
+      documentPath: input.documentPath,
+      markdown: input.markdown,
+      resolveAsset: input.resolveAsset,
+      theme: input.theme,
+      title: input.title,
+    });
+  }, []);
+
   let exportCurrentFileAsHtml = useCallback(async () => {
     let file = selectedFileRef.current;
     if (!file) return;
     if (!(await saveCurrentFile())) return;
-
-    let activeDocument =
-      collabDocumentRef.current?.path == file.path ? collabDocumentRef.current : null;
-    let markdown = activeDocument ? getCollabDocumentValue(activeDocument) : editorValueRef.current;
+    let exportInput = snapshotCurrentFileHtmlExport(file);
+    if (!exportInput) return;
 
     setBusy(true);
     setErrorMessage("");
     try {
-      let result = await createStandaloneMarkdownHtml({
-        documentPath: file.path,
-        markdown,
-        resolveAsset(path) {
-          return imageAssetsRef.current.get(path)?.file ?? null;
-        },
-        theme: snapshotMarkdownHtmlExportTheme(editorElementRef.current),
-        title: htmlExportTitle(file.name),
-      });
-
-      downloadTextFile(htmlExportFileName(file.name), result.html, "text/html;charset=utf-8");
+      let result = await createCurrentFileHtmlExport(exportInput);
+      downloadTextFile(
+        htmlExportFileName(exportInput.fileName, t),
+        result.html,
+        "text/html;charset=utf-8",
+      );
       if (result.warnings.length) {
-        setErrorMessage(markdownHtmlExportWarningMessage(result.warnings.length));
+        setErrorMessage(markdownHtmlExportWarningMessage(result.warnings.length, t));
       }
     } catch (error) {
       setErrorMessage(errorToMessage(error));
     } finally {
       setBusy(false);
     }
-  }, [saveCurrentFile]);
+  }, [createCurrentFileHtmlExport, saveCurrentFile, snapshotCurrentFileHtmlExport, t]);
+
+  let printCurrentFileAsPdf = useCallback(async () => {
+    let file = selectedFileRef.current;
+    if (!file) return;
+
+    let printView: ReturnType<typeof openStandaloneHtmlPrintView>;
+    try {
+      printView = openStandaloneHtmlPrintView({ title: htmlExportTitle(file.name, t) });
+    } catch (error) {
+      setErrorMessage(errorToMessage(error));
+      return;
+    }
+
+    if (!(await saveCurrentFile())) {
+      printView.close();
+      return;
+    }
+    let exportInput = snapshotCurrentFileHtmlExport(file);
+    if (!exportInput) {
+      printView.close();
+      return;
+    }
+
+    setBusy(true);
+    setErrorMessage("");
+    try {
+      let result = await createCurrentFileHtmlExport(exportInput);
+      await printView.printHtml(result.html);
+      if (result.warnings.length) {
+        setErrorMessage(markdownPrintWarningMessage(result.warnings.length, t));
+      }
+    } catch (error) {
+      printView.close();
+      setErrorMessage(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [createCurrentFileHtmlExport, saveCurrentFile, snapshotCurrentFileHtmlExport, t]);
 
   let resolveImageSource = useMemo<LiveMdImageSourceResolver>(() => {
     return (source) => {
+      if (singleFileSource) return source;
       let imagePath = resolveMarkdownImagePath(source, editorDocument.path);
       if (!imagePath) return source;
       return imageAssetsRef.current.get(imagePath)?.url ?? source;
     };
-  }, [editorDocument.path, imageAssetVersion]);
+  }, [editorDocument.path, imageAssetVersion, singleFileSource]);
 
   let handleEditorReady = useCallback((editor: LiveMdEditorElement | null) => {
     editorElementRef.current = editor;
@@ -1537,6 +1883,8 @@ function LocalWorkspaceApp() {
 
   let insertImageFiles = useCallback(
     async (files: File[], options: { position?: number; view?: EditorView } = {}) => {
+      if (singleFileSourceRef.current) return;
+
       let file = selectedFileRef.current;
       let backend = workspaceBackendRef.current;
       if (!backend?.createImageAsset || !file) return;
@@ -1588,19 +1936,145 @@ function LocalWorkspaceApp() {
     [insertImageFiles],
   );
 
-  let saveLabel = useMemo(() => saveStateLabel(saveState, selectedFile), [saveState, selectedFile]);
+  let currentMarkdownValue = useCallback(() => {
+    let activeDocument = collabDocumentRef.current;
+    return activeDocument && selectedFileRef.current?.path == activeDocument.path
+      ? getCollabDocumentValue(activeDocument)
+      : editorValueRef.current;
+  }, []);
+
+  let downloadCurrentMarkdownCopy = useCallback(() => {
+    let fileName =
+      singleFileSourceRef.current?.name ?? selectedFileRef.current?.name ?? "Untitled.md";
+    downloadTextFile(
+      markdownDownloadFileName(fileName),
+      currentMarkdownValue(),
+      "text/markdown;charset=utf-8",
+    );
+  }, [currentMarkdownValue]);
+
+  let saveSingleFileAsLocal = useCallback(async () => {
+    let file = selectedFileRef.current;
+    if (!file) return;
+    if (!supportsSaveFilePicker()) {
+      downloadCurrentMarkdownCopy();
+      return;
+    }
+
+    let source = singleFileSourceRef.current;
+    let value = currentMarkdownValue();
+    setBusy(true);
+    setErrorMessage("");
+    setRetryLoadPath(null);
+    try {
+      let handle = await saveMarkdownFileAs({
+        suggestedName: markdownDownloadFileName(source?.name ?? file.name),
+        value,
+      });
+      let nextName = handle.name || markdownDownloadFileName(source?.name ?? file.name);
+      let nextFile = singleFileMarkdownNode(nextName);
+      localFileHandleRef.current = handle;
+      activateSingleFileDocument(
+        { kind: "local-file", name: nextName },
+        createLocalFileBackend(handle),
+        nextFile,
+        value,
+      );
+      discardMaterializedDraft(source);
+      let backend = workspaceBackendRef.current;
+      if (backend) await refreshWorkspaceForCurrentEditor(backend);
+    } catch (error) {
+      if (!isAbortError(error)) setErrorMessage(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    activateSingleFileDocument,
+    currentMarkdownValue,
+    discardMaterializedDraft,
+    downloadCurrentMarkdownCopy,
+    refreshWorkspaceForCurrentEditor,
+  ]);
+
+  let openSaveAsDropboxDialog = useCallback(() => {
+    let fileName =
+      singleFileSourceRef.current?.name ?? selectedFileRef.current?.name ?? "Untitled.md";
+    setSaveAsDropboxPath(markdownDownloadFileName(fileName));
+    setSaveAsDropboxError("");
+    setSaveAsDropboxDialogOpen(true);
+  }, []);
+
+  let closeSaveAsDropboxDialog = useCallback((open: boolean) => {
+    setSaveAsDropboxDialogOpen(open);
+    if (!open) setSaveAsDropboxError("");
+  }, []);
+
+  let submitSaveAsDropbox = useCallback(
+    async (rawPath: string) => {
+      let source = singleFileSourceRef.current;
+      let value = currentMarkdownValue();
+      let appKey = defaultDropboxAppKey();
+      if (!appKey) {
+        setSaveAsDropboxError(
+          "Dropbox workspace is not configured. Set VITE_DROPBOX_APP_KEY for this app.",
+        );
+        return;
+      }
+
+      setBusy(true);
+      setDropboxConnecting(true);
+      setSaveAsDropboxError("");
+      setErrorMessage("");
+      setRetryLoadPath(null);
+      try {
+        let path = normalizeMarkdownPath(rawPath);
+        let backend =
+          workspaceBackendRef.current?.kind == "opendal-dropbox"
+            ? workspaceBackendRef.current
+            : await createDropboxBackend({
+                appKey,
+                root: storedDropboxConfig?.root ?? defaultDropboxRoot(),
+              });
+        await backend.writeFile(path, value);
+        setWorkspaceBackend(backend);
+        await loadTree(backend, path, { saveBeforeSelect: false });
+        discardMaterializedDraft(source);
+        setSaveAsDropboxDialogOpen(false);
+      } catch (error) {
+        setSaveAsDropboxError(errorToMessage(error));
+      } finally {
+        setDropboxConnecting(false);
+        setBusy(false);
+      }
+    },
+    [
+      createDropboxBackend,
+      currentMarkdownValue,
+      discardMaterializedDraft,
+      loadTree,
+      storedDropboxConfig,
+    ],
+  );
+
+  let saveLabel = useMemo(
+    () => saveStateLabel(saveState, selectedFile, singleFileSource, t),
+    [saveState, selectedFile, singleFileSource, t],
+  );
+  let languageToggleLabel =
+    locale == "en" ? t("actions.switchToChinese") : t("actions.switchToEnglish");
   let activeShareForSelectedFile =
+    !singleFileSource &&
     activeShareRecord &&
     activeShareRecord.path == selectedFile?.path &&
     activeShareRecord.revokedAt == null
       ? activeShareRecord
       : null;
-  let restoreAvailable = Boolean(storedWorkspaceHandle);
+  let restoreAvailable = Boolean(storedLocalWorkspace);
   let dropboxRestoreAvailable = Boolean(storedDropboxConfig);
 
   return (
     <TooltipProvider>
-      <div className="dark flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
+      <div className="flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
         <aside
           className={cn(
             "flex w-[19rem] shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:w-[min(21rem,88vw)]",
@@ -1613,12 +2087,14 @@ function LocalWorkspaceApp() {
               <div className="truncate text-sm font-medium">{rootName}</div>
               {workspaceBackend && (
                 <div className="truncate text-xs text-sidebar-foreground/55">
-                  {files.length == 1 ? "1 markdown file" : `${files.length} markdown files`}
+                  {files.length == 1
+                    ? t("workspace.markdownFileCount_one")
+                    : t("workspace.markdownFileCount_other", { count: files.length })}
                 </div>
               )}
             </div>
             <TooltipIconButton
-              label="Open folder"
+              label={t("actions.openFolder")}
               size="icon-sm"
               variant="ghost"
               onClick={() => void openWorkspace()}
@@ -1627,7 +2103,7 @@ function LocalWorkspaceApp() {
               <FolderOpenIcon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
-              label="Connect Dropbox"
+              label={t("actions.connectDropbox")}
               size="icon-sm"
               variant="ghost"
               onClick={connectDropbox}
@@ -1636,7 +2112,7 @@ function LocalWorkspaceApp() {
               <CloudIcon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
-              label="New file"
+              label={t("actions.newFile")}
               size="icon-sm"
               variant="ghost"
               onClick={() => openCreateDialog()}
@@ -1656,14 +2132,25 @@ function LocalWorkspaceApp() {
               onSelectFile={selectFile}
             />
           ) : (
-            <div className="min-h-0 flex-1" />
+            <WorkspaceLauncher
+              browserSupported={browserSupported}
+              busy={busy}
+              dropboxConnecting={dropboxConnecting}
+              dropboxRestoreAvailable={dropboxRestoreAvailable}
+              restoreAvailable={restoreAvailable}
+              restoreChecking={restoreChecking}
+              onOpenDropbox={connectDropbox}
+              onOpenFolder={() => void openWorkspace()}
+              onRestoreDropbox={() => void restoreDropboxWorkspace()}
+              onRestoreFolder={() => void restoreStoredWorkspace()}
+            />
           )}
         </aside>
 
         {sidebarOpen && (
           <button
             type="button"
-            aria-label="Close sidebar"
+            aria-label={t("actions.closeSidebar")}
             className="fixed inset-0 z-20 bg-background/70 md:hidden"
             onClick={() => setSidebarOpen(false)}
           />
@@ -1672,7 +2159,7 @@ function LocalWorkspaceApp() {
         <main className="flex min-w-0 flex-1 flex-col">
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
             <TooltipIconButton
-              label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+              label={sidebarOpen ? t("actions.hideSidebar") : t("actions.showSidebar")}
               size="icon-sm"
               variant="ghost"
               onClick={toggleSidebar}
@@ -1692,9 +2179,10 @@ function LocalWorkspaceApp() {
             {activeShareForSelectedFile && (
               <Badge className="max-md:hidden" variant="secondary">
                 <Share2Icon data-icon="inline-start" />
-                Shared file
+                {t("workspace.sharedFileBadge")}
               </Badge>
             )}
+            <ThemeSelector className="max-md:hidden" />
             <input
               ref={imageInputRef}
               className="sr-only"
@@ -1703,29 +2191,38 @@ function LocalWorkspaceApp() {
               multiple
               onChange={handleImageInputChange}
             />
+            {selectedFile && (
+              <SaveAsMenu
+                busy={busy || dropboxConnecting}
+                canSaveToDevice={supportsSaveFilePicker()}
+                onDownloadCopy={downloadCurrentMarkdownCopy}
+                onSaveToDevice={() => void saveSingleFileAsLocal()}
+                onSaveToDropbox={openSaveAsDropboxDialog}
+              />
+            )}
             <TooltipIconButton
               className="max-md:hidden"
-              label="Share file"
+              label={t("actions.shareFile")}
               size="icon-sm"
               variant="ghost"
-              disabled={!selectedFile || busy}
+              disabled={!canShareFile || busy}
               onClick={openShareDialog}
             >
               <Share2Icon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
               className="max-md:hidden"
-              label="Insert image"
+              label={t("actions.insertImage")}
               size="icon-sm"
               variant="ghost"
-              disabled={!workspaceBackend?.createImageAsset || !selectedFile || busy}
+              disabled={!canInsertImage || busy}
               onClick={() => imageInputRef.current?.click()}
             >
               <ImagePlusIcon data-icon="inline-start" />
             </TooltipIconButton>
             <TooltipIconButton
               className="max-md:hidden"
-              label="Export HTML"
+              label={t("actions.exportHtml")}
               size="icon-sm"
               variant="ghost"
               disabled={!selectedFile || busy}
@@ -1735,10 +2232,20 @@ function LocalWorkspaceApp() {
             </TooltipIconButton>
             <TooltipIconButton
               className="max-md:hidden"
-              label="Refresh"
+              label={t("actions.printPdf")}
               size="icon-sm"
               variant="ghost"
-              disabled={!workspaceBackend || busy}
+              disabled={!selectedFile || busy}
+              onClick={() => void printCurrentFileAsPdf()}
+            >
+              <PrinterIcon data-icon="inline-start" />
+            </TooltipIconButton>
+            <TooltipIconButton
+              className="max-md:hidden"
+              label={t("actions.refresh")}
+              size="icon-sm"
+              variant="ghost"
+              disabled={!canRefreshWorkspace || busy}
               onClick={() => void refreshWorkspace()}
             >
               <RefreshCwIcon data-icon="inline-start" />
@@ -1746,35 +2253,48 @@ function LocalWorkspaceApp() {
             <MobileWorkspaceActions
               activeShare={Boolean(activeShareForSelectedFile)}
               busy={busy}
-              canInsertImage={Boolean(workspaceBackend?.createImageAsset && selectedFile)}
-              canRefresh={Boolean(workspaceBackend)}
-              selectedFile={Boolean(selectedFile)}
+              canInsertImage={canInsertImage}
+              canRefresh={canRefreshWorkspace}
+              canExport={Boolean(selectedFile)}
+              canShare={canShareFile}
+              languageToggleLabel={languageToggleLabel}
               onExportHtml={() => void exportCurrentFileAsHtml()}
+              onPrintPdf={() => void printCurrentFileAsPdf()}
               onInsertImage={() => imageInputRef.current?.click()}
+              onToggleLanguage={toggleLocale}
               onRefresh={() => void refreshWorkspace()}
               onShareFile={openShareDialog}
             />
+            <TooltipIconButton
+              className="max-md:hidden"
+              label={languageToggleLabel}
+              size="icon-sm"
+              variant="ghost"
+              onClick={toggleLocale}
+            >
+              <LanguagesIcon data-icon="inline-start" />
+            </TooltipIconButton>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button asChild className="max-md:hidden" size="icon-sm" variant="ghost">
                   <a
-                    aria-label="Open GitHub repository"
+                    aria-label={t("actions.gitHubRepository")}
                     href={githubRepositoryUrl}
                     rel="noreferrer"
                     target="_blank"
                   >
                     <GitHubIcon data-icon="inline-start" />
-                    <span className="sr-only">GitHub repository</span>
+                    <span className="sr-only">{t("actions.gitHubRepository")}</span>
                   </a>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>GitHub repository</TooltipContent>
+              <TooltipContent>{t("actions.gitHubRepository")}</TooltipContent>
             </Tooltip>
           </header>
 
           {errorMessage && (
             <div className="flex items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              <div className="min-w-0 flex-1">{errorMessage}</div>
+              <div className="min-w-0 flex-1">{translateKnownMessage(errorMessage, t)}</div>
               {retryLoadPath && (
                 <Button
                   size="sm"
@@ -1783,7 +2303,7 @@ function LocalWorkspaceApp() {
                   onClick={() => void retryUnavailableCollabFile()}
                 >
                   <RefreshCwIcon data-icon="inline-start" />
-                  Retry
+                  {t("actions.retry")}
                 </Button>
               )}
             </div>
@@ -1796,27 +2316,13 @@ function LocalWorkspaceApp() {
                 extensions={collabDocument?.extensions ?? emptyEditorExtensions}
                 imageSource={resolveImageSource}
                 initialValue={editorDocument.value}
-                placeholder="Start writing..."
+                placeholder={t("workspace.placeholder")}
                 onEditorReady={handleEditorReady}
                 onImageFiles={handleEditorImageFiles}
                 onInput={handleEditorInput}
               />
             ) : (
-              <WorkspaceEmpty
-                browserSupported={browserSupported}
-                busy={busy}
-                folderAccessUnavailableMessage={folderAccessUnavailableMessage}
-                hasWorkspace={Boolean(workspaceBackend)}
-                dropboxConnecting={dropboxConnecting}
-                dropboxRestoreAvailable={dropboxRestoreAvailable}
-                restoreAvailable={restoreAvailable}
-                restoreChecking={restoreChecking}
-                onCreateFile={() => openCreateDialog()}
-                onOpenDropbox={connectDropbox}
-                onOpenFolder={() => void openWorkspace()}
-                onRestoreDropbox={() => void restoreDropboxWorkspace()}
-                onRestoreFolder={() => void restoreStoredWorkspace()}
-              />
+              <div className="size-full bg-background" />
             )}
           </section>
         </main>
@@ -1850,18 +2356,39 @@ function LocalWorkspaceApp() {
           onStopSharing={stopSharingFile}
         />
 
+        <SaveAsDropboxDialog
+          busy={busy || dropboxConnecting}
+          error={saveAsDropboxError}
+          open={saveAsDropboxDialogOpen}
+          value={saveAsDropboxPath}
+          onOpenChange={closeSaveAsDropboxDialog}
+          onSubmit={submitSaveAsDropbox}
+          onValueChange={setSaveAsDropboxPath}
+        />
+
         <WorkspaceCommandPalette
           browserSupported={browserSupported}
           busy={busy}
-          canInsertImage={Boolean(workspaceBackend?.createImageAsset && selectedFile)}
-          disabled={fileDialogMode != null || shareDialogOpen || deleteTarget != null}
+          canInsertImage={canInsertImage}
+          canSaveAs={Boolean(selectedFile)}
+          canSaveAsLocal={supportsSaveFilePicker()}
+          disabled={
+            fileDialogMode != null ||
+            shareDialogOpen ||
+            saveAsDropboxDialogOpen ||
+            deleteTarget != null
+          }
           dropboxConnecting={dropboxConnecting}
           files={files}
           selectedPath={selectedPath}
           sidebarOpen={sidebarOpen}
           onConnectDropbox={connectDropbox}
+          onDownloadCopy={downloadCurrentMarkdownCopy}
           onInsertImage={() => imageInputRef.current?.click()}
+          onNewDraft={() => void openSingleFileDraft()}
           onOpenFolder={() => void openWorkspace()}
+          onSaveAsDropbox={openSaveAsDropboxDialog}
+          onSaveAsLocal={() => void saveSingleFileAsLocal()}
           onSelectFile={selectFile}
           onToggleSidebar={toggleSidebar}
         />
@@ -1873,18 +2400,20 @@ function LocalWorkspaceApp() {
                 <Trash2Icon />
               </AlertDialogMedia>
               <AlertDialogTitle>
-                {deleteTarget?.kind == "directory" ? "Delete folder?" : "Delete file?"}
+                {deleteTarget?.kind == "directory"
+                  ? t("delete.title.folder")
+                  : t("delete.title.file")}
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {deleteTarget
                   ? deleteTarget.kind == "directory"
-                    ? `${deleteTarget.path} and all files inside it will be deleted.`
-                    : deleteTarget.path
+                    ? t("delete.description.folder", { path: deleteTarget.path })
+                    : t("delete.description.file", { path: deleteTarget.path })
                   : ""}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+              <AlertDialogCancel disabled={busy}>{t("common.cancel")}</AlertDialogCancel>
               <AlertDialogAction
                 variant="destructive"
                 disabled={busy}
@@ -1893,7 +2422,7 @@ function LocalWorkspaceApp() {
                   void deleteWorkspaceEntry();
                 }}
               >
-                Delete
+                {t("actions.delete")}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -1921,35 +2450,99 @@ function TooltipIconButton({ children, label, ...props }: TooltipIconButtonProps
   );
 }
 
+type SaveAsMenuProps = {
+  busy: boolean;
+  canSaveToDevice: boolean;
+  onDownloadCopy: () => void;
+  onSaveToDevice: () => void;
+  onSaveToDropbox: () => void;
+};
+
+function SaveAsMenu({
+  busy,
+  canSaveToDevice,
+  onDownloadCopy,
+  onSaveToDevice,
+  onSaveToDropbox,
+}: SaveAsMenuProps) {
+  let { t } = useI18n();
+
+  return (
+    <DropdownMenuPrimitive.Root>
+      <DropdownMenuPrimitive.Trigger asChild>
+        <Button disabled={busy} size="sm">
+          <SaveIcon data-icon="inline-start" />
+          {t("actions.saveAs")}
+        </Button>
+      </DropdownMenuPrimitive.Trigger>
+      <DropdownMenuPrimitive.Portal>
+        <DropdownMenuPrimitive.Content
+          align="end"
+          sideOffset={8}
+          className="z-50 flex min-w-48 max-w-[calc(100vw-1rem)] flex-col gap-1 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-in-95"
+        >
+          <MobileDropdownItem disabled={!canSaveToDevice || busy} onSelect={onSaveToDevice}>
+            <FolderOpenIcon />
+            {t("storage.thisDevice")}
+          </MobileDropdownItem>
+          <MobileDropdownItem disabled={busy} onSelect={onSaveToDropbox}>
+            <CloudIcon />
+            Dropbox
+          </MobileDropdownItem>
+          <DropdownMenuPrimitive.Separator className="-mx-1 h-px bg-border" />
+          <MobileDropdownItem disabled={busy} onSelect={onDownloadCopy}>
+            <DownloadIcon />
+            {t("actions.downloadCopy")}
+          </MobileDropdownItem>
+        </DropdownMenuPrimitive.Content>
+      </DropdownMenuPrimitive.Portal>
+    </DropdownMenuPrimitive.Root>
+  );
+}
+
 type MobileWorkspaceActionsProps = {
   activeShare: boolean;
   busy: boolean;
+  canExport: boolean;
   canInsertImage: boolean;
   canRefresh: boolean;
-  selectedFile: boolean;
+  canShare: boolean;
+  languageToggleLabel: string;
   onExportHtml: () => void;
+  onPrintPdf: () => void;
   onInsertImage: () => void;
   onRefresh: () => void;
   onShareFile: () => void;
+  onToggleLanguage: () => void;
 };
 
 function MobileWorkspaceActions({
   activeShare,
   busy,
+  canExport,
   canInsertImage,
   canRefresh,
-  selectedFile,
+  canShare,
+  languageToggleLabel,
   onExportHtml,
+  onPrintPdf,
   onInsertImage,
   onRefresh,
   onShareFile,
+  onToggleLanguage,
 }: MobileWorkspaceActionsProps) {
+  let { t } = useI18n();
   return (
     <DropdownMenuPrimitive.Root>
       <DropdownMenuPrimitive.Trigger asChild>
-        <Button aria-label="More actions" className="md:hidden" size="icon-sm" variant="ghost">
+        <Button
+          aria-label={t("actions.moreActions")}
+          className="md:hidden"
+          size="icon-sm"
+          variant="ghost"
+        >
           <EllipsisIcon data-icon="inline-start" />
-          <span className="sr-only">More actions</span>
+          <span className="sr-only">{t("actions.moreActions")}</span>
         </Button>
       </DropdownMenuPrimitive.Trigger>
       <DropdownMenuPrimitive.Portal>
@@ -1963,39 +2556,48 @@ function MobileWorkspaceActions({
               <div className="flex flex-col gap-1 px-2 py-1.5 text-xs text-muted-foreground">
                 <div className="flex min-w-0 items-center gap-2">
                   <Share2Icon className="size-3.5 shrink-0" />
-                  <span className="truncate">Shared file</span>
+                  <span className="truncate">{t("workspace.sharedFileBadge")}</span>
                 </div>
               </div>
               <DropdownMenuPrimitive.Separator className="-mx-1 h-px bg-border" />
             </>
           )}
-          <MobileDropdownItem disabled={!selectedFile || busy} onSelect={onShareFile}>
+          <MobileDropdownItem disabled={!canShare || busy} onSelect={onShareFile}>
             <Share2Icon />
-            Share file
+            {t("actions.shareFile")}
           </MobileDropdownItem>
           <MobileDropdownItem disabled={!canInsertImage || busy} onSelect={onInsertImage}>
             <ImagePlusIcon />
-            Insert image
+            {t("actions.insertImage")}
           </MobileDropdownItem>
-          <MobileDropdownItem disabled={!selectedFile || busy} onSelect={onExportHtml}>
+          <MobileDropdownItem disabled={!canExport || busy} onSelect={onExportHtml}>
             <DownloadIcon />
-            Export HTML
+            {t("actions.exportHtml")}
+          </MobileDropdownItem>
+          <MobileDropdownItem disabled={!canExport || busy} onSelect={onPrintPdf}>
+            <PrinterIcon />
+            {t("actions.printPdf")}
           </MobileDropdownItem>
           <MobileDropdownItem disabled={!canRefresh || busy} onSelect={onRefresh}>
             <RefreshCwIcon />
-            Refresh
+            {t("actions.refresh")}
           </MobileDropdownItem>
+          <MobileDropdownItem onSelect={onToggleLanguage}>
+            <LanguagesIcon />
+            {languageToggleLabel}
+          </MobileDropdownItem>
+          <ThemeDropdownSubmenu itemClassName={mobileDropdownItemClassName} />
           <DropdownMenuPrimitive.Separator className="-mx-1 h-px bg-border" />
           <DropdownMenuPrimitive.Item asChild>
             <a
-              aria-label="Open GitHub repository"
+              aria-label={t("actions.gitHubRepository")}
               className={mobileDropdownItemClassName}
               href={githubRepositoryUrl}
               rel="noreferrer"
               target="_blank"
             >
               <GitHubIcon data-icon="inline-start" />
-              GitHub repository
+              {t("actions.gitHubRepository")}
             </a>
           </DropdownMenuPrimitive.Item>
         </DropdownMenuPrimitive.Content>
@@ -2027,108 +2629,76 @@ function GitHubIcon(props: ComponentProps<"svg">) {
   );
 }
 
-type WorkspaceEmptyProps = {
+type WorkspaceLauncherProps = {
   browserSupported: boolean;
   busy: boolean;
   dropboxConnecting: boolean;
   dropboxRestoreAvailable: boolean;
-  folderAccessUnavailableMessage: string;
-  hasWorkspace: boolean;
   restoreAvailable: boolean;
   restoreChecking: boolean;
-  onCreateFile: () => void;
   onOpenDropbox: () => void;
   onOpenFolder: () => void;
   onRestoreDropbox: () => void;
   onRestoreFolder: () => void;
 };
 
-function WorkspaceEmpty({
+function WorkspaceLauncher({
   browserSupported,
   busy,
   dropboxConnecting,
   dropboxRestoreAvailable,
-  folderAccessUnavailableMessage,
-  hasWorkspace,
   restoreAvailable,
   restoreChecking,
-  onCreateFile,
   onOpenDropbox,
   onOpenFolder,
   onRestoreDropbox,
   onRestoreFolder,
-}: WorkspaceEmptyProps) {
+}: WorkspaceLauncherProps) {
+  let { t } = useI18n();
+  let hasPrimaryRestore = restoreAvailable || dropboxRestoreAvailable;
+
   return (
-    <Empty className="h-full rounded-none border-0">
-      {!browserSupported && (
-        <EmptyHeader>
-          <EmptyTitle>Local folder access unavailable</EmptyTitle>
-          <EmptyDescription>{folderAccessUnavailableMessage}</EmptyDescription>
-        </EmptyHeader>
+    <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+      {restoreAvailable && (
+        <Button
+          className="justify-start"
+          disabled={!browserSupported || busy || restoreChecking}
+          onClick={onRestoreFolder}
+        >
+          <FolderOpenIcon data-icon="inline-start" />
+          {t("actions.continuePreviousFolder")}
+        </Button>
       )}
-      <EmptyContent>
-        {hasWorkspace ? (
-          <Button onClick={onCreateFile} disabled={busy}>
-            <PlusIcon data-icon="inline-start" />
-            New file
-          </Button>
-        ) : restoreAvailable ? (
-          <div className="flex flex-col gap-2">
-            <Button
-              onClick={onRestoreFolder}
-              disabled={!browserSupported || busy || restoreChecking}
-            >
-              <FolderOpenIcon data-icon="inline-start" />
-              Continue previous folder
-            </Button>
-            {dropboxRestoreAvailable && (
-              <Button
-                variant="outline"
-                onClick={onRestoreDropbox}
-                disabled={busy || dropboxConnecting}
-              >
-                <CloudIcon data-icon="inline-start" />
-                Continue Dropbox
-              </Button>
-            )}
-            <Button variant="outline" onClick={onOpenFolder} disabled={!browserSupported || busy}>
-              <FolderOpenIcon data-icon="inline-start" />
-              Open folder
-            </Button>
-            <Button variant="outline" onClick={onOpenDropbox} disabled={busy || dropboxConnecting}>
-              <CloudIcon data-icon="inline-start" />
-              Connect Dropbox
-            </Button>
-          </div>
-        ) : dropboxRestoreAvailable ? (
-          <div className="flex flex-col gap-2">
-            <Button onClick={onRestoreDropbox} disabled={busy || dropboxConnecting}>
-              <CloudIcon data-icon="inline-start" />
-              Continue Dropbox
-            </Button>
-            <Button variant="outline" onClick={onOpenFolder} disabled={!browserSupported || busy}>
-              <FolderOpenIcon data-icon="inline-start" />
-              Open folder
-            </Button>
-            <Button variant="outline" onClick={onOpenDropbox} disabled={busy || dropboxConnecting}>
-              <CloudIcon data-icon="inline-start" />
-              Connect Dropbox
-            </Button>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <Button onClick={onOpenFolder} disabled={!browserSupported || busy}>
-              <FolderOpenIcon data-icon="inline-start" />
-              Open folder
-            </Button>
-            <Button variant="outline" onClick={onOpenDropbox} disabled={busy || dropboxConnecting}>
-              <CloudIcon data-icon="inline-start" />
-              Connect Dropbox
-            </Button>
-          </div>
-        )}
-      </EmptyContent>
-    </Empty>
+      {dropboxRestoreAvailable && (
+        <Button
+          className="justify-start"
+          disabled={busy || dropboxConnecting}
+          variant={restoreAvailable ? "outline" : "default"}
+          onClick={onRestoreDropbox}
+        >
+          <CloudIcon data-icon="inline-start" />
+          {t("actions.continueDropbox")}
+        </Button>
+      )}
+      <Button
+        className="justify-start"
+        disabled={!browserSupported || busy}
+        variant={hasPrimaryRestore ? "outline" : "default"}
+        onClick={onOpenFolder}
+      >
+        <FolderOpenIcon data-icon="inline-start" />
+        {t("actions.openFolder")}
+      </Button>
+      <Button
+        className="justify-start"
+        disabled={busy || dropboxConnecting}
+        variant="outline"
+        onClick={onOpenDropbox}
+      >
+        <CloudIcon data-icon="inline-start" />
+        {t("actions.connectDropbox")}
+      </Button>
+    </div>
   );
 }
 
@@ -2153,6 +2723,7 @@ function FileNameDialog({
   onSubmit,
   onValueChange,
 }: FileNameDialogProps) {
+  let { t } = useI18n();
   let inputId = "markdown-file-name";
   let createMode = mode == "create";
 
@@ -2167,25 +2738,29 @@ function FileNameDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>{createMode ? "New file or folder" : "Rename"}</DialogTitle>
+            <DialogTitle>
+              {createMode ? t("dialog.file.title.create") : t("dialog.file.title.rename")}
+            </DialogTitle>
             <DialogDescription className="sr-only">
               {createMode
-                ? "Create a Markdown file or folder path."
-                : "Rename the selected file or folder."}
+                ? t("dialog.file.description.create")
+                : t("dialog.file.description.rename")}
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
             <Field data-invalid={Boolean(error)}>
-              <FieldLabel htmlFor={inputId}>{createMode ? "Path" : "Name"}</FieldLabel>
+              <FieldLabel htmlFor={inputId}>
+                {createMode ? t("dialog.file.label.path") : t("dialog.file.label.name")}
+              </FieldLabel>
               <Input
                 id={inputId}
                 aria-invalid={Boolean(error)}
                 autoFocus
-                placeholder={createMode ? "file.md, dir/, or dir/file.md" : undefined}
+                placeholder={createMode ? t("dialog.file.placeholder.create") : undefined}
                 value={value}
                 onChange={(event) => onValueChange(event.target.value)}
               />
-              <FieldError>{error}</FieldError>
+              <FieldError>{translateKnownMessage(error, t)}</FieldError>
             </Field>
           </FieldGroup>
           <DialogFooter>
@@ -2195,10 +2770,81 @@ function FileNameDialog({
               disabled={busy}
               onClick={() => onOpenChange(false)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={busy}>
-              {createMode ? "Create" : "Rename"}
+              {createMode ? t("common.create") : t("actions.rename")}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+type SaveAsDropboxDialogProps = {
+  busy: boolean;
+  error: string;
+  open: boolean;
+  value: string;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (value: string) => Promise<void>;
+  onValueChange: (value: string) => void;
+};
+
+function SaveAsDropboxDialog({
+  busy,
+  error,
+  open,
+  value,
+  onOpenChange,
+  onSubmit,
+  onValueChange,
+}: SaveAsDropboxDialogProps) {
+  let { t } = useI18n();
+  let inputId = "dropbox-save-as-path";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onSubmit(value);
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>{t("dialog.saveAsDropbox.title")}</DialogTitle>
+            <DialogDescription className="sr-only">
+              {t("dialog.saveAsDropbox.description")}
+            </DialogDescription>
+          </DialogHeader>
+          <FieldGroup>
+            <Field data-invalid={Boolean(error)}>
+              <FieldLabel htmlFor={inputId}>{t("dialog.file.label.path")}</FieldLabel>
+              <Input
+                id={inputId}
+                aria-invalid={Boolean(error)}
+                autoFocus
+                placeholder={t("dialog.saveAsDropbox.placeholder")}
+                value={value}
+                onChange={(event) => onValueChange(event.target.value)}
+              />
+              <FieldError>{translateKnownMessage(error, t)}</FieldError>
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => onOpenChange(false)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button type="submit" disabled={busy}>
+              {t("actions.save")}
             </Button>
           </DialogFooter>
         </form>
@@ -2242,9 +2888,10 @@ function ShareFileDialog({
   onRotateLink,
   onStopSharing,
 }: ShareFileDialogProps) {
+  let { locale, t } = useI18n();
   let expirationId = "shared-file-expiration";
   let linkId = "shared-file-link";
-  let filePath = file?.path ?? "No file selected";
+  let filePath = file?.path ?? t("share.noFileSelected");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -2256,7 +2903,7 @@ function ShareFileDialog({
                 <Share2Icon className="size-5" />
               </div>
               <div className="min-w-0 flex-1">
-                <DialogTitle className="text-lg">Share file</DialogTitle>
+                <DialogTitle className="text-lg">{t("actions.shareFile")}</DialogTitle>
                 <DialogDescription className="mt-1 flex min-w-0 items-center gap-1.5">
                   <FileTextIcon className="size-3.5 shrink-0" />
                   <span className="truncate">{filePath}</span>
@@ -2272,7 +2919,7 @@ function ShareFileDialog({
                 className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
               >
                 <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
-                <span>{error}</span>
+                <span>{translateKnownMessage(error, t)}</span>
               </div>
             )}
 
@@ -2280,10 +2927,10 @@ function ShareFileDialog({
               <div className="rounded-lg border bg-card/60 p-3">
                 <div className="mb-2 flex min-w-0 items-center gap-2">
                   <LinkIcon className="size-4 shrink-0 text-primary" />
-                  <div className="text-sm font-medium">Edit link</div>
+                  <div className="text-sm font-medium">{t("share.editLinkTitle")}</div>
                 </div>
                 <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
-                  Anyone with this link can edit this file.
+                  {t("share.linkCanEdit")}
                 </p>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Input
@@ -2294,7 +2941,7 @@ function ShareFileDialog({
                   />
                   <Button type="button" disabled={busy} onClick={onCopyLink}>
                     <CopyIcon data-icon="inline-start" />
-                    {copied ? "Copied" : "Copy link"}
+                    {copied ? t("actions.copied") : t("actions.copyLink")}
                   </Button>
                 </div>
               </div>
@@ -2302,17 +2949,16 @@ function ShareFileDialog({
               <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
                 <LinkIcon className="mt-0.5 size-4 shrink-0 text-primary" />
                 <p className="text-sm leading-relaxed text-muted-foreground">
-                  Anyone with this link can edit this file. Rotate the link to copy a fresh guest
-                  URL.
+                  {t("share.copyFreshGuestUrl")}
                 </p>
               </div>
             ) : (
               <div className="flex items-start gap-3 rounded-lg border border-primary/20 bg-primary/10 p-3">
                 <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
                 <div className="min-w-0">
-                  <div className="text-sm font-medium">Create an edit link</div>
+                  <div className="text-sm font-medium">{t("share.createEditLinkTitle")}</div>
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    Anyone with this link can edit this file. Guests only see this file.
+                    {t("share.createEditLinkDescription")}
                   </p>
                 </div>
               </div>
@@ -2322,11 +2968,11 @@ function ShareFileDialog({
               <div className="flex flex-col gap-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:gap-4">
                 <div className="flex items-center gap-2">
                   <UserRoundIcon className="size-4 shrink-0" />
-                  <span>{formatGuestCount(activeShare?.guestCount)}</span>
+                  <span>{formatGuestCount(activeShare?.guestCount, t)}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Clock3Icon className="size-4 shrink-0" />
-                  <span>{formatCurrentShareExpiration(activeShare?.expiresAt)}</span>
+                  <span>{formatCurrentShareExpiration(activeShare?.expiresAt, t, locale)}</span>
                 </div>
               </div>
             )}
@@ -2335,10 +2981,10 @@ function ShareFileDialog({
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <FieldLabel htmlFor={expirationId}>
-                    {shared ? "Rotate expires" : "Expires"}
+                    {shared ? t("share.rotateExpires") : t("share.expires")}
                   </FieldLabel>
                   <p className="text-xs text-muted-foreground">
-                    {shared ? "New guest links" : formatExpirationHint(expiration)}
+                    {shared ? t("share.newGuestLinks") : formatExpirationHint(expiration, t)}
                   </p>
                 </div>
                 <select
@@ -2350,9 +2996,9 @@ function ShareFileDialog({
                     onExpirationChange(event.currentTarget.value as ShareExpirationOption)
                   }
                 >
-                  <option value="24h">24h</option>
-                  <option value="7d">7 days</option>
-                  <option value="30d">30 days</option>
+                  <option value="24h">{t("share.expiration.24h")}</option>
+                  <option value="7d">{t("share.expiration.7d")}</option>
+                  <option value="30d">{t("share.expiration.30d")}</option>
                 </select>
               </div>
             </Field>
@@ -2365,22 +3011,22 @@ function ShareFileDialog({
               disabled={busy}
               onClick={() => onOpenChange(false)}
             >
-              Close
+              {t("common.close")}
             </Button>
             {shared ? (
               <>
                 <Button type="button" variant="destructive" disabled={busy} onClick={onStopSharing}>
-                  Stop sharing
+                  {t("actions.stopSharing")}
                 </Button>
                 <Button type="button" variant="outline" disabled={busy} onClick={onRotateLink}>
                   <RefreshCwIcon data-icon="inline-start" />
-                  Rotate link
+                  {t("actions.rotateLink")}
                 </Button>
               </>
             ) : (
               <Button type="button" disabled={busy || !file} onClick={onCreateLink}>
                 <Share2Icon data-icon="inline-start" />
-                Create link
+                {t("actions.createLink")}
               </Button>
             )}
           </DialogFooter>
@@ -2390,30 +3036,35 @@ function ShareFileDialog({
   );
 }
 
-function formatGuestCount(count: number | undefined) {
-  if (count == null) return "Unknown";
-  return count == 1 ? "1 guest" : `${count} guests`;
+function formatGuestCount(count: number | undefined, t: TFunction) {
+  if (count == null) return t("common.unknown");
+  return count == 1 ? t("share.guestCount_one") : t("share.guestCount_other", { count });
 }
 
-function formatCurrentShareExpiration(expiresAt: number | null | undefined) {
-  if (expiresAt == null) return "Current link expiration unknown";
-  let prefix = expiresAt <= Date.now() ? "Current link expired" : "Current link expires";
-  return `${prefix} ${formatTimestamp(expiresAt)}`;
+function formatCurrentShareExpiration(
+  expiresAt: number | null | undefined,
+  t: TFunction,
+  locale: Locale,
+) {
+  if (expiresAt == null) return t("share.currentLinkExpirationUnknown");
+  return expiresAt <= Date.now()
+    ? t("share.currentLinkExpired", { time: formatTimestamp(expiresAt, locale) })
+    : t("share.currentLinkExpires", { time: formatTimestamp(expiresAt, locale) });
 }
 
-function formatExpirationHint(expiration: ShareExpirationOption) {
+function formatExpirationHint(expiration: ShareExpirationOption, t: TFunction) {
   switch (expiration) {
     case "24h":
-      return "Short review";
+      return t("share.expirationHint.24h");
     case "7d":
-      return "Default";
+      return t("share.expirationHint.7d");
     case "30d":
-      return "Long-running";
+      return t("share.expirationHint.30d");
   }
 }
 
-function formatTimestamp(value: number) {
-  return new Intl.DateTimeFormat(undefined, {
+function formatTimestamp(value: number, locale: Locale) {
+  return new Intl.DateTimeFormat(locale, {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
@@ -2428,6 +3079,89 @@ async function createWorkspaceImageAssets(nodes: WorkspaceImageNode[]) {
     });
   }
   return assets;
+}
+
+function createSingleFileDraftBackend(draft: SingleFileDraft): WorkspaceBackend {
+  let file = singleFileMarkdownNode(draft.name);
+  return {
+    id: `draft:${draft.id}`,
+    kind: "local",
+    name: "Draft",
+    createFile: unsupportedSingleFileOperation,
+    deleteFile: unsupportedSingleFileVoidOperation,
+    async readFile() {
+      return (await loadSingleFileDraft(draft.id))?.value ?? draft.value;
+    },
+    async readTree() {
+      return {
+        children: [file],
+        kind: "directory",
+        name: "Draft",
+        path: "",
+      };
+    },
+    renameFile: unsupportedSingleFileRenameOperation,
+    async writeFile(_path, value) {
+      let current = await loadSingleFileDraft(draft.id);
+      let now = Date.now();
+      await saveSingleFileDraft({
+        createdAt: current?.createdAt ?? draft.createdAt,
+        id: draft.id,
+        name: current?.name ?? draft.name,
+        updatedAt: now,
+        value,
+      });
+      await rememberLastSingleFileDraft(draft.id);
+    },
+  };
+}
+
+function createLocalFileBackend(handle: AccessFileHandle): WorkspaceBackend {
+  let file = singleFileMarkdownNode(handle.name || "Untitled.md");
+  return {
+    id: `local-file:${file.name}`,
+    kind: "local",
+    name: "Local file",
+    createFile: unsupportedSingleFileOperation,
+    deleteFile: unsupportedSingleFileVoidOperation,
+    readFile: () => readAccessFileHandle(handle),
+    async readTree() {
+      return {
+        children: [file],
+        kind: "directory",
+        name: "Local file",
+        path: "",
+      };
+    },
+    renameFile: unsupportedSingleFileRenameOperation,
+    writeFile: (_path, value) => writeAccessFileHandle(handle, value),
+  };
+}
+
+async function unsupportedSingleFileOperation(): Promise<string | null> {
+  throw new Error("This document is not a workspace.");
+}
+
+async function unsupportedSingleFileRenameOperation(): Promise<string> {
+  throw new Error("This document is not a workspace.");
+}
+
+async function unsupportedSingleFileVoidOperation(): Promise<void> {
+  throw new Error("This document is not a workspace.");
+}
+
+function singleFileMarkdownNode(pathOrName: string): MarkdownFileNode {
+  let path = markdownDownloadFileName(pathOrName);
+  return {
+    kind: "file",
+    name: path.split("/").at(-1) ?? path,
+    path,
+  };
+}
+
+function markdownDownloadFileName(fileName: string) {
+  let trimmed = fileName.trim() || "Untitled.md";
+  return /\.md$/i.test(trimmed) || /\.markdown$/i.test(trimmed) ? trimmed : `${trimmed}.md`;
 }
 
 function revokeImageAssetUrls(assets: ReadonlyMap<string, WorkspaceImageAsset>) {
@@ -2483,16 +3217,19 @@ function blockInsertText(
   return `${prefix}${markdown}${suffix}`;
 }
 
-function htmlExportTitle(fileName: string) {
-  return fileName.replace(/\.md$/i, "").replace(/[-_]+/g, " ").trim() || "Markdown export";
+function htmlExportTitle(fileName: string, t: TFunction) {
+  return (
+    fileName.replace(/\.md$/i, "").replace(/[-_]+/g, " ").trim() ||
+    t("defaults.markdownExportTitle")
+  );
 }
 
-function htmlExportFileName(fileName: string) {
-  let baseName = fileName.replace(/\.md$/i, "").trim() || "markdown-export";
-  return `${sanitizeExportFileName(baseName)}.html`;
+function htmlExportFileName(fileName: string, t: TFunction) {
+  let baseName = fileName.replace(/\.md$/i, "").trim() || t("defaults.markdownExportFileName");
+  return `${sanitizeExportFileName(baseName, t)}.html`;
 }
 
-function sanitizeExportFileName(value: string) {
+function sanitizeExportFileName(value: string, t: TFunction) {
   let sanitized = "";
   for (let character of value) {
     sanitized +=
@@ -2500,15 +3237,21 @@ function sanitizeExportFileName(value: string) {
         ? "-"
         : character;
   }
-  return sanitized.replace(/-+/g, "-").replace(/^-+|-+$/g, "") || "export";
+  return sanitized.replace(/-+/g, "-").replace(/^-+|-+$/g, "") || t("export.fallbackFileName");
 }
 
 const invalidExportFileNameCharacters = new Set(["<", ">", ":", '"', "/", "\\", "|", "?", "*"]);
 
-function markdownHtmlExportWarningMessage(count: number) {
+function markdownHtmlExportWarningMessage(count: number, t: TFunction) {
   return count == 1
-    ? "Exported HTML, but 1 image could not be embedded."
-    : `Exported HTML, but ${count} images could not be embedded.`;
+    ? t("errors.markdownHtmlExportWarning_one")
+    : t("errors.markdownHtmlExportWarning_other", { count });
+}
+
+function markdownPrintWarningMessage(count: number, t: TFunction) {
+  return count == 1
+    ? t("errors.markdownPrintWarning_one")
+    : t("errors.markdownPrintWarning_other", { count });
 }
 
 function downloadTextFile(fileName: string, value: string, type: string) {
@@ -2557,7 +3300,11 @@ function isImageFile(file: File) {
   );
 }
 
-function defaultNewFilePath(files: MarkdownFileNode[], selection: FileTreeDeleteTarget | null) {
+function defaultNewFilePath(
+  files: MarkdownFileNode[],
+  selection: FileTreeDeleteTarget | null,
+  t: TFunction,
+) {
   let today = new Date().toISOString().slice(0, 10);
   let parentPath =
     selection?.kind == "directory"
@@ -2574,12 +3321,13 @@ function defaultNewFilePath(files: MarkdownFileNode[], selection: FileTreeDelete
     if (!files.some((file) => file.path == path)) return path;
   }
 
-  return joinWorkspacePath(parentPath, "Untitled.md");
+  return joinWorkspacePath(parentPath, t("defaults.untitledFile"));
 }
 
 function defaultNewFolderPath(
   tree: MarkdownDirectoryNode | null,
   selection: FileTreeDeleteTarget | null,
+  t: TFunction,
 ) {
   let parentPath =
     selection?.kind == "directory"
@@ -2588,15 +3336,15 @@ function defaultNewFolderPath(
         ? directoryPath(selection.path)
         : "";
   let directoryPaths = tree ? collectDirectoryPaths(tree) : new Set<string>();
-  let basePath = joinWorkspacePath(parentPath, "New folder");
+  let basePath = joinWorkspacePath(parentPath, t("defaults.newFolder"));
   if (!directoryPaths.has(basePath)) return `${basePath}/`;
 
   for (let index = 2; index < 1000; index += 1) {
-    let path = joinWorkspacePath(parentPath, `New folder ${index}`);
+    let path = joinWorkspacePath(parentPath, `${t("defaults.newFolder")} ${index}`);
     if (!directoryPaths.has(path)) return `${path}/`;
   }
 
-  return joinWorkspacePath(parentPath, "Untitled folder/");
+  return joinWorkspacePath(parentPath, t("defaults.untitledFolder"));
 }
 
 function collectDirectoryPaths(root: MarkdownDirectoryNode) {
@@ -2611,19 +3359,55 @@ function collectDirectoryPaths(root: MarkdownDirectoryNode) {
   return paths;
 }
 
-function saveStateLabel(saveState: SaveState, selectedFile: MarkdownFileNode | null) {
-  if (!selectedFile) return "No file";
+function saveStateLabel(
+  saveState: SaveState,
+  selectedFile: MarkdownFileNode | null,
+  singleFileSource: SingleFileSource | null,
+  t: TFunction,
+) {
+  if (!selectedFile) return t("save.noFile");
   switch (saveState) {
     case "pending":
-      return "Unsaved";
+      return t("save.pending");
     case "saving":
-      return "Saving";
+      return t("save.saving");
     case "error":
-      return "Error";
+      return t("save.error");
     case "idle":
     case "saved":
-      return "Saved";
+      return singleFileSource?.kind == "draft" ? t("save.draft") : t("save.saved");
   }
+}
+
+function createEphemeralLocalWorkspaceRecord(
+  handle: AccessDirectoryHandle,
+): StoredLocalWorkspaceRecord {
+  return {
+    handle,
+    id: createEphemeralLocalWorkspaceId(),
+    lastOpenedAt: Date.now(),
+    name: handle.name || "Workspace",
+  };
+}
+
+function createEphemeralLocalWorkspaceId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID == "function") {
+    return `local:${globalThis.crypto.randomUUID()}`;
+  }
+  return `local:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function workspaceSelectedPathContext(
+  backend: WorkspaceBackend,
+): StoredWorkspaceSelectedPathContext | null {
+  if (backend.kind == "local") return { kind: "local", workspaceId: backend.id };
+  if (backend.kind == "opendal-dropbox") return { kind: "dropbox", workspaceId: backend.id };
+  return null;
+}
+
+function loadWorkspaceSelectedPath(backend: WorkspaceBackend) {
+  let context = workspaceSelectedPathContext(backend);
+  return context ? loadStoredWorkspaceSelectedPath(context) : null;
 }
 
 function mergeOwnerShareStatus(

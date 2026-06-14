@@ -7,6 +7,7 @@ import type {
   MarkdownTreeNode,
 } from "@/lib/workspace-backend";
 import { flattenMarkdownFiles } from "@/lib/workspace-backend";
+import { useI18n, type TFunction } from "@/lib/i18n";
 
 type FileTreeProps = {
   onCreateEntry: (target: FileTreeDeleteTarget, kind: FileTreeCreateKind) => void;
@@ -35,6 +36,7 @@ export const FileTree = memo(function FileTree({
   selectedPath,
   onSelectFile,
 }: FileTreeProps) {
+  let { t } = useI18n();
   let paths = useMemo(() => (root ? collectTreePaths(root.children) : []), [root]);
   let filesByPath = useMemo(
     () => new Map(root ? flattenMarkdownFiles(root).map((file) => [file.path, file]) : []),
@@ -48,6 +50,7 @@ export const FileTree = memo(function FileTree({
     onSelectEntry,
     onSelectFile,
     selectedPath,
+    t,
   };
   let containerRef = useRef<HTMLDivElement | null>(null);
   let initialExpandedDirectoryPathRef = useRef(treeDirectoryPathForFile(selectedPath));
@@ -69,17 +72,22 @@ export const FileTree = memo(function FileTree({
           buttonVisibility: "when-needed",
           enabled: true,
           render(item, context) {
-            return renderFileTreeContextMenu(item, context, {
-              create(target, kind) {
-                latestSelectionRef.current.onCreateEntry(normalizeDeleteTarget(target), kind);
+            return renderFileTreeContextMenu(
+              item,
+              context,
+              {
+                create(target, kind) {
+                  latestSelectionRef.current.onCreateEntry(normalizeDeleteTarget(target), kind);
+                },
+                delete(target) {
+                  latestSelectionRef.current.onDeleteEntry(normalizeDeleteTarget(target));
+                },
+                rename(target) {
+                  latestSelectionRef.current.onRenameEntry(normalizeDeleteTarget(target));
+                },
               },
-              delete(target) {
-                latestSelectionRef.current.onDeleteEntry(normalizeDeleteTarget(target));
-              },
-              rename(target) {
-                latestSelectionRef.current.onRenameEntry(normalizeDeleteTarget(target));
-              },
-            });
+              latestSelectionRef.current.t,
+            );
           },
           triggerMode: "button",
         },
@@ -165,6 +173,7 @@ function renderFileTreeContextMenu(
     delete: (target: FileTreeDeleteTarget) => void;
     rename: (target: FileTreeDeleteTarget) => void;
   },
+  t: TFunction,
 ) {
   let menu = document.createElement("div");
   menu.className = "local-md-file-tree-context-menu";
@@ -190,11 +199,11 @@ function renderFileTreeContextMenu(
   separator.setAttribute("role", "separator");
 
   menu.append(
-    item("New file", () => actions.create(target, "file")),
-    item("New folder", () => actions.create(target, "directory")),
-    item("Rename", () => actions.rename(target)),
+    item(t("fileTree.newFile"), () => actions.create(target, "file")),
+    item(t("fileTree.newFolder"), () => actions.create(target, "directory")),
+    item(t("fileTree.rename"), () => actions.rename(target)),
     separator,
-    item("Delete", () => actions.delete(target), true),
+    item(t("fileTree.delete"), () => actions.delete(target), true),
   );
   return menu;
 }

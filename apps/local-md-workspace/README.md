@@ -21,11 +21,16 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
 - Export Markdown files to standalone HTML through LiveMD's Tree-sitter
   Markdown renderer, embedding workspace image assets when available and
   snapshotting the current LiveMD theme variables for scoped document styling.
+- Open a browser print view for Markdown documents so users can print or save
+  the rendered document as PDF through the browser.
 - Maintain optional Loro-backed document state for a selected file so local
   edits can become a shared Grove file.
 - Create, rotate, revoke, and host shared-file links through the Grove relay.
 - Open guest shared-file routes and sync through the relay without requiring
   access to the owner's local or Dropbox workspace.
+- Switch the full workspace, shared-file route, LiveMD editor chrome, nested
+  code highlighting, and file tree between named Gruvbox, GitHub Light, and
+  Catppuccin themes.
 - Install as a PWA with an app manifest and production service worker for the
   app shell, icons, and same-origin static assets.
 
@@ -40,6 +45,11 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
   actions.
 - `src/components/SharedFileEditor.tsx`: guest shared-file route and relay
   connection UI.
+- `src/i18n/*.json` and `src/lib/i18n.tsx`: English/Chinese i18next resources,
+  react-i18next hooks, locale persistence, and known error-message
+  localization.
+- `src/theme/*`: shared named-theme contract, document/storage adapters, and
+  CSS token ownership for the local and shared workspace routes.
 - `src/lib/file-system.ts`: File System Access API backend.
 - `src/lib/dropbox-oauth.ts` and `src/lib/dropbox-workspace-backend.ts`:
   Dropbox OAuth PKCE and OpenDAL-backed workspace backend.
@@ -47,6 +57,8 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
   backend contracts.
 - `src/lib/export/markdown-html.ts`: standalone HTML export wrapper, LiveMD
   theme snapshotting, and workspace image embedding.
+- `src/lib/export/browser-print.ts`: browser print-view helper for standalone
+  Markdown HTML.
 - `src/lib/collaboration/*`: local Loro document persistence, share identity,
   relay protocol/client/connection, share storage, and document sync helpers.
 - `src/components/ui/*`: local shadcn/radix UI primitives.
@@ -93,6 +105,7 @@ Run from the workspace root:
 vp run local-md-workspace#dev
 vp run local-md-workspace#dev:frontend
 vp run local-md-workspace#build
+vp run local-md-workspace#i18n:check
 vp run local-md-workspace#test
 vp run local-md-workspace#preview
 vp run local-md-workspace#smoke:ui

@@ -50,6 +50,7 @@ export type WorkspaceBackend = {
   deleteEntry?: (path: string, options?: { recursive?: boolean }) => Promise<void>;
   deleteDirectory?: (path: string) => Promise<void>;
   deleteFile(path: string): Promise<void>;
+  findFilePathForHandle?: (handle: unknown) => Promise<string | null>;
   listEntries?: (path: string) => Promise<WorkspaceEntry[]>;
   readBytes?: (path: string) => Promise<Uint8Array>;
   readFile(path: string): Promise<string>;

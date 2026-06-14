@@ -49,15 +49,16 @@ collaboration flows.
   WASM assets, highlight queries, incremental reparsing, and included ranges
   for nested languages.
 - **Markdown product layer**: LiveMD composes the local language, commands,
-  autocomplete, basic setup, language-data, and Gruvbox theme packages with
-  KaTeX, Mermaid, and `beautiful-mermaid`.
+  autocomplete, basic setup, and language-data packages with KaTeX, Mermaid,
+  and `beautiful-mermaid`. Host apps or theme packages provide concrete editor
+  and code-fence highlighting themes.
 - **Collaboration and workspace layer**: Optional LiveMD Loro bindings use
   `loro-crdt` and `loro-codemirror`. Grove's local workspace app supports local
-  folders, Dropbox through the OpenDAL browser WASM wrapper, local image
-  assets, and shared-file hosting. Grove's relay runs as the `grove-relay`
-  Cloudflare Worker with Durable Object persistence, WebSocket sync, Wrangler,
-  and the Cloudflare Vite plugin. The `collab-editor` app remains a separate
-  Cloudflare collaboration demo.
+  folders, Dropbox through the OpenDAL browser WASM wrapper, i18next/react-i18next
+  UI localization, local image assets, and shared-file hosting. Grove's relay
+  runs as the `grove-relay` Cloudflare Worker with Durable Object persistence,
+  WebSocket sync, Wrangler, and the Cloudflare Vite plugin. The `collab-editor`
+  app remains a separate Cloudflare collaboration demo.
 
 ## Quickstart
 
@@ -72,7 +73,7 @@ collaboration flows.
 
 A single import registers the `<live-md-editor>` web component with
 Tree-sitter-powered Markdown parsing, syntax highlighting, live Markdown
-decorations, Shadow DOM styling, and Gruvbox theming. See
+decorations, Shadow DOM styling, and host-provided theming. See
 [Web Component](#web-component) for the full API.
 
 The programmatic API exposes the same runtime without custom elements:
@@ -98,7 +99,8 @@ await editor.ready;
 - A language-data registry that mirrors CodeMirror language metadata while
   lazily loading Tree-sitter WASM grammars and highlight queries.
 - Lezer-free implementations of CodeMirror commands, autocompletion, close
-  brackets, basic setup, merge views, LSP integration, and Gruvbox themes.
+  brackets, basic setup, merge views, LSP integration, and semantic editor
+  themes.
 - LiveMD, a Markdown editor runtime built from the local Tree-sitter packages,
   exposed through `createLiveMdEditor()`, `liveMarkdown()`,
   `liveMdCodeFenceHighlighting()`, `renderMarkdownToHtml()`,
@@ -138,9 +140,9 @@ this repository replace the language-aware layers above those primitives.
    CodeMirror feature packages that need syntax information. They depend on the
    local language runtime instead of `@codemirror/language` or Lezer.
 4. **Assembly and styling**:
-   `basic-setup` assembles a CodeMirror setup from local feature packages, and
-   `theme-gruvbox` provides editor themes and highlight styles using local
-   highlight tags.
+   `basic-setup` assembles a CodeMirror setup from local feature packages,
+   `theme` defines shared semantic theme helpers, and concrete theme packages
+   provide editor themes and highlight styles using local highlight tags.
 5. **Product surface**:
    `live-md` composes the local packages into a Markdown editor with live block
    widgets, code-fence highlighting, KaTeX and Mermaid rendering, Shadow DOM
@@ -168,19 +170,27 @@ this repository replace the language-aware layers above those primitives.
 
 ## Packages
 
-| Directory                       | Package                                       | Role                                                                                                                            |
-| ------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/language`             | `@codemirror-treesitter/language`             | Tree-sitter parser integration and CodeMirror-compatible language infrastructure.                                               |
-| `packages/language-data`        | `@codemirror-treesitter/language-data`        | Lazy language metadata, Tree-sitter WASM loading, highlight-query loading, and mixed-language parser wiring.                    |
-| `packages/commands`             | `@codemirror-treesitter/commands`             | Cursor movement, selection, deletion, indentation, commenting, history, and keymaps.                                            |
-| `packages/autocomplete`         | `@codemirror-treesitter/autocomplete`         | Completion contexts, sources, results, tooltip UI, filtering, snippets, word completion, and close brackets.                    |
-| `packages/codemirror`           | `@codemirror-treesitter/basic-setup`          | `basicSetup` and `minimalSetup` assembled from the local Tree-sitter packages.                                                  |
-| `packages/theme-gruvbox`        | `@codemirror-treesitter/theme-gruvbox`        | Gruvbox dark/light editor themes, highlight styles, combined extensions, and palettes.                                          |
-| `packages/merge`                | `@codemirror-treesitter/merge`                | Diff, split merge view, unified merge view, chunks, and accept/reject commands.                                                 |
-| `packages/lsp-client`           | `@codemirror-treesitter/lsp-client`           | LSP client, workspace mapping, diagnostics, completions, hover, formatting, rename, definition, references, and signature help. |
-| `packages/live-md`              | `@codemirror-treesitter/live-md`              | Live Markdown editor runtime, web component, registration entry, fixtures, Markdown HTML renderer, and CSS exports.             |
-| `packages/live-md-loro`         | `@codemirror-treesitter/live-md-loro`         | Optional Loro collaboration bindings for LiveMD documents, presence, custom text containers, and collaborative undo/redo.       |
-| `packages/opendal-wasm-browser` | `@codemirror-treesitter/opendal-wasm-browser` | Experimental browser WASM wrapper for OpenDAL-backed cloud workspace storage.                                                   |
+| Directory                           | Package                                           | Role                                                                                                                            |
+| ----------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/language`                 | `@codemirror-treesitter/language`                 | Tree-sitter parser integration and CodeMirror-compatible language infrastructure.                                               |
+| `packages/language-data`            | `@codemirror-treesitter/language-data`            | Lazy language metadata, Tree-sitter WASM loading, highlight-query loading, and mixed-language parser wiring.                    |
+| `packages/commands`                 | `@codemirror-treesitter/commands`                 | Cursor movement, selection, deletion, indentation, commenting, history, and keymaps.                                            |
+| `packages/autocomplete`             | `@codemirror-treesitter/autocomplete`             | Completion contexts, sources, results, tooltip UI, filtering, snippets, word completion, and close brackets.                    |
+| `packages/codemirror`               | `@codemirror-treesitter/basic-setup`              | `basicSetup` and `minimalSetup` assembled from the local Tree-sitter packages.                                                  |
+| `packages/theme-palettes`           | `@codemirror-treesitter/theme-palettes`           | Shared concrete color palettes reused by CodeMirror and LiveMD presentation theme packages.                                     |
+| `packages/theme`                    | `@codemirror-treesitter/theme`                    | Shared semantic theme token contracts and CodeMirror editor/highlight extension factories.                                      |
+| `packages/theme-gruvbox`            | `@codemirror-treesitter/theme-gruvbox`            | Gruvbox dark/light editor themes, highlight styles, combined extensions, and palettes.                                          |
+| `packages/theme-github`             | `@codemirror-treesitter/theme-github`             | GitHub Light editor theme, highlight style, combined extension, and palette export.                                             |
+| `packages/theme-catppuccin`         | `@codemirror-treesitter/theme-catppuccin`         | Catppuccin Latte/Macchiato editor themes, highlight styles, combined extensions, and palette exports.                           |
+| `packages/merge`                    | `@codemirror-treesitter/merge`                    | Diff, split merge view, unified merge view, chunks, and accept/reject commands.                                                 |
+| `packages/lsp-client`               | `@codemirror-treesitter/lsp-client`               | LSP client, workspace mapping, diagnostics, completions, hover, formatting, rename, definition, references, and signature help. |
+| `packages/live-md`                  | `@codemirror-treesitter/live-md`                  | Live Markdown editor runtime, web component, registration entry, fixtures, Markdown HTML renderer, and CSS exports.             |
+| `packages/live-md-theme`            | `@codemirror-treesitter/live-md-theme`            | Reusable LiveMD presentation token contract and helpers for applying `--live-md-*` variables.                                   |
+| `packages/live-md-theme-gruvbox`    | `@codemirror-treesitter/live-md-theme-gruvbox`    | Gruvbox dark/light LiveMD prose, widget, table, Mermaid, and code-block container presentation themes.                          |
+| `packages/live-md-theme-github`     | `@codemirror-treesitter/live-md-theme-github`     | GitHub Light LiveMD presentation theme.                                                                                         |
+| `packages/live-md-theme-catppuccin` | `@codemirror-treesitter/live-md-theme-catppuccin` | Catppuccin Latte/Macchiato LiveMD presentation themes.                                                                          |
+| `packages/live-md-loro`             | `@codemirror-treesitter/live-md-loro`             | Optional Loro collaboration bindings for LiveMD documents, presence, custom text containers, and collaborative undo/redo.       |
+| `packages/opendal-wasm-browser`     | `@codemirror-treesitter/opendal-wasm-browser`     | Experimental browser WASM wrapper for OpenDAL-backed cloud workspace storage.                                                   |
 
 Each package directory has its own README with local responsibilities, public
 entry points, dependency boundaries, source layout, and validation notes.
@@ -195,8 +205,9 @@ entry points, dependency boundaries, source layout, and validation notes.
   files with LiveMD, supports Dropbox storage through OpenDAL WASM and OAuth
   PKCE, supports image insert/paste/drop through sibling `assets/` directories,
   supports file/folder create, rename, delete, tree browsing, and autosave, can
-  export standalone HTML with scoped LiveMD document styling, and can host or
-  join Grove shared-file sessions through `apps/grove-relay`.
+  export standalone HTML or open a browser print view for saving as PDF with
+  scoped LiveMD document styling, and can host or join Grove shared-file
+  sessions through `apps/grove-relay`.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, share create/session/rotate/revoke APIs, WebSocket Loro sync,
   bounded relay queues, share expiration cleanup, and Wrangler deploy/types
@@ -298,8 +309,8 @@ custom properties on the host element.
 ## Programmatic API
 
 ```ts
-import { createLiveMdEditor, liveMdCodeFenceHighlighting } from "@codemirror-treesitter/live-md";
-import { gruvboxDarkHighlightStyle } from "@codemirror-treesitter/theme-gruvbox";
+import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
+import { gruvboxDark } from "@codemirror-treesitter/theme-gruvbox";
 
 const imageAssetUrlMap = new Map<string, string>();
 const controller = createLiveMdEditor({
@@ -311,7 +322,7 @@ const controller = createLiveMdEditor({
   linkBaseUrl: "https://docs.example/notes/current.md",
   placeholder: "Start writing...",
   persistKey: "draft",
-  extensions: [liveMdCodeFenceHighlighting(gruvboxDarkHighlightStyle)],
+  extensions: [gruvboxDark],
   onChange({ value }) {
     console.log(value);
   },
@@ -331,8 +342,9 @@ for local blob URLs or uploaded assets. `linkBaseUrl` is used to resolve
 relative Markdown links for Shift-click link jumps. The controller exposes
 `view`, `value`, `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`,
 `setPlaceholder()`, `setReadOnly()`, and `destroy()`.
-`liveMdCodeFenceHighlighting(...)` can be passed through `extensions` to align
-fenced code token colors with a host theme.
+Fenced code token colors reuse the active CodeMirror syntax highlighters from
+`extensions`. `liveMdCodeFenceHighlighting(...)` remains available for hosts
+that need an explicit fenced-code override.
 
 ## Optional Loro Collaboration
 
@@ -411,9 +423,11 @@ main contract:
   `minimalSetup`, and basic keymap ordering.
 - `@codemirror-treesitter/language-data` mirrors upstream language metadata and
   all built language entries load a parser.
-- `@codemirror-treesitter/theme-gruvbox` exports both dark and light Gruvbox
-  themes and imports syntax highlighting from the local Tree-sitter language
-  package.
+- `@codemirror-treesitter/theme` exports shared semantic theme helpers built on
+  the local Tree-sitter highlight tags.
+- Concrete theme packages such as `theme-gruvbox`, `theme-github`, and
+  `theme-catppuccin` export CodeMirror themes and LiveMD-ready nested
+  code-fence bundles without duplicating the shared selector or tag mapping.
 - `@codemirror-treesitter/merge` and
   `@codemirror-treesitter/lsp-client` expose upstream-compatible public
   surfaces and use the local Tree-sitter language/highlighting packages.
@@ -446,6 +460,7 @@ vp run @codemirror-treesitter/live-md#build
 vp run @codemirror-treesitter/opendal-wasm-browser#auth:dropbox-token
 vp run @codemirror-treesitter/opendal-wasm-browser#validate:dropbox
 vp run local-md-workspace#dev
+vp run local-md-workspace#i18n:check
 vp run local-md-workspace#test
 vp run local-md-workspace#smoke:ui
 vp run grove-relay#dev
@@ -475,10 +490,12 @@ Production Grove deploys use the Cloudflare Pages project `grove` at
 origin, and the `grove-relay` Worker custom domain at
 `https://relay.grovemd.net`. The Grove CI/CD workflow enforces
 `VITE_DROPBOX_REDIRECT_URI=https://app.grovemd.net/` for Dropbox OAuth and
-builds the frontend against the relay custom domain. CI deploys the relay Worker
-with `apps/grove-relay/wrangler.worker.ci.jsonc`; the custom-domain route is kept
-in `apps/grove-relay/wrangler.worker.jsonc` for one-time provisioning by a token
-with zone route permissions.
+builds the frontend against the relay custom domain. It also runs
+`vp run local-md-workspace#i18n:check` to verify English/Chinese message keys and
+placeholders before tests. CI deploys the relay Worker with
+`apps/grove-relay/wrangler.worker.ci.jsonc`; the custom-domain route is kept in
+`apps/grove-relay/wrangler.worker.jsonc` for one-time provisioning by a token with
+zone route permissions.
 
 `vp run local-md-workspace#smoke:ui` expects the local Markdown workspace dev
 server to be running at `http://127.0.0.1:5173/` by default. Start that dev

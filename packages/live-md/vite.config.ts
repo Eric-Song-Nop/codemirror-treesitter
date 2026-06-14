@@ -11,7 +11,7 @@ export default defineConfig({
       "@codemirror-treesitter/commands",
       "@codemirror-treesitter/language",
       "@codemirror-treesitter/language-data",
-      "@codemirror-treesitter/theme-gruvbox",
+      "@codemirror-treesitter/live-md-theme",
     ]),
   },
   pack: {
