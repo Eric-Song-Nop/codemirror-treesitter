@@ -1589,7 +1589,6 @@ function LocalWorkspaceApp() {
   );
 
   let saveLabel = useMemo(() => saveStateLabel(saveState, selectedFile), [saveState, selectedFile]);
-  let storageLabel = useMemo(() => workspaceStorageLabel(workspaceBackend), [workspaceBackend]);
   let activeShareForSelectedFile =
     activeShareRecord &&
     activeShareRecord.path == selectedFile?.path &&
@@ -1690,16 +1689,6 @@ function LocalWorkspaceApp() {
               <SaveIcon data-icon="inline-start" />
               {saveLabel}
             </Badge>
-            {workspaceBackend && storageLabel && (
-              <Badge className="max-md:hidden" variant="secondary">
-                {workspaceBackend.kind == "opendal-dropbox" ? (
-                  <CloudIcon data-icon="inline-start" />
-                ) : (
-                  <FolderOpenIcon data-icon="inline-start" />
-                )}
-                {storageLabel}
-              </Badge>
-            )}
             {activeShareForSelectedFile && (
               <Badge className="max-md:hidden" variant="secondary">
                 <Share2Icon data-icon="inline-start" />
@@ -1760,8 +1749,6 @@ function LocalWorkspaceApp() {
               canInsertImage={Boolean(workspaceBackend?.createImageAsset && selectedFile)}
               canRefresh={Boolean(workspaceBackend)}
               selectedFile={Boolean(selectedFile)}
-              storageKind={workspaceBackend?.kind ?? null}
-              storageLabel={storageLabel}
               onExportHtml={() => void exportCurrentFileAsHtml()}
               onInsertImage={() => imageInputRef.current?.click()}
               onRefresh={() => void refreshWorkspace()}
@@ -1940,8 +1927,6 @@ type MobileWorkspaceActionsProps = {
   canInsertImage: boolean;
   canRefresh: boolean;
   selectedFile: boolean;
-  storageKind: WorkspaceBackend["kind"] | null;
-  storageLabel: string;
   onExportHtml: () => void;
   onInsertImage: () => void;
   onRefresh: () => void;
@@ -1954,8 +1939,6 @@ function MobileWorkspaceActions({
   canInsertImage,
   canRefresh,
   selectedFile,
-  storageKind,
-  storageLabel,
   onExportHtml,
   onInsertImage,
   onRefresh,
@@ -1975,25 +1958,13 @@ function MobileWorkspaceActions({
           sideOffset={8}
           className="z-50 flex min-w-56 max-w-[calc(100vw-1rem)] flex-col gap-1 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
         >
-          {(storageLabel || activeShare) && (
+          {activeShare && (
             <>
               <div className="flex flex-col gap-1 px-2 py-1.5 text-xs text-muted-foreground">
-                {storageLabel && (
-                  <div className="flex min-w-0 items-center gap-2">
-                    {storageKind == "opendal-dropbox" ? (
-                      <CloudIcon className="size-3.5 shrink-0" />
-                    ) : (
-                      <FolderOpenIcon className="size-3.5 shrink-0" />
-                    )}
-                    <span className="truncate">{storageLabel}</span>
-                  </div>
-                )}
-                {activeShare && (
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Share2Icon className="size-3.5 shrink-0" />
-                    <span className="truncate">Shared file</span>
-                  </div>
-                )}
+                <div className="flex min-w-0 items-center gap-2">
+                  <Share2Icon className="size-3.5 shrink-0" />
+                  <span className="truncate">Shared file</span>
+                </div>
               </div>
               <DropdownMenuPrimitive.Separator className="-mx-1 h-px bg-border" />
             </>
@@ -2653,11 +2624,6 @@ function saveStateLabel(saveState: SaveState, selectedFile: MarkdownFileNode | n
     case "saved":
       return "Saved";
   }
-}
-
-function workspaceStorageLabel(backend: WorkspaceBackend | null) {
-  if (!backend) return "";
-  return backend.kind == "opendal-dropbox" ? "Dropbox" : "Local";
 }
 
 function mergeOwnerShareStatus(
