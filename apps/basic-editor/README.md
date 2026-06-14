@@ -1,12 +1,14 @@
 # basic-editor
 
 Minimal browser smoke app for the LiveMD web component. It keeps the app surface
-small on purpose: `index.html` imports `@codemirror-treesitter/live-md/register`
-and mounts one `<live-md-editor>` with representative Markdown content.
+small on purpose: `index.html` warms LiveMD with `prepareLiveMd()`, defines the
+custom element, and mounts one `<live-md-editor>` with representative Markdown
+content.
 
 ## Responsibilities
 
-- Verify that the packaged LiveMD register entry works without framework code.
+- Verify that LiveMD warmup and custom element registration work without
+  framework code.
 - Exercise Shadow DOM styling, autofocus, Markdown widgets, task lists, links,
   inline formatting, and fenced TypeScript highlighting in a plain Vite page.
 - Provide a quick manual target when debugging custom element registration or
@@ -14,7 +16,8 @@ and mounts one `<live-md-editor>` with representative Markdown content.
 
 ## Source Layout
 
-- `index.html`: static page, sample Markdown, and the side-effect LiveMD import.
+- `index.html`: static page, sample Markdown, LiveMD warmup, and custom element
+  registration.
 - `src/style.css`: page shell and host sizing for the editor element.
 - `public/*`: favicon and icon assets copied by Vite.
 

@@ -1,13 +1,18 @@
-import { Facet, StateEffect, StateField, type Extension } from "@codemirror/state";
+import { Facet, StateEffect, StateField, Text, type Extension } from "@codemirror/state";
 import {
   HighlightStyle,
   TreeSitterLanguage,
+  queryTreeMatches,
   tags as t,
   type Highlighter,
+  type LanguageSupport,
+  type Tree,
   type TreeSitterParser,
 } from "@codemirror-treesitter/language";
 import { languages } from "@codemirror-treesitter/language-data";
 import { EditorView } from "@codemirror/view";
+import liveMdMarkdownInlineQuerySource from "./queries/decorations-markdown-inline.scm?raw";
+import liveMdMarkdownQuerySource from "./queries/decorations-markdown.scm?raw";
 
 export type CodeFenceLanguageMap = ReadonlyMap<string, TreeSitterParser>;
 
@@ -72,6 +77,17 @@ export const liveMdDefaultCodeFenceHighlighting: Extension = neutralCodeFenceHig
 let markdownExtensionPromise: Promise<Extension> | null = null;
 let codeFenceLanguagesPromise: Promise<CodeFenceLanguageMap> | null = null;
 
+export type PrepareLiveMdOptions = {
+  codeFences?: boolean;
+};
+
+export async function prepareLiveMd(options: PrepareLiveMdOptions = {}) {
+  await Promise.all([
+    loadMarkdownExtension(),
+    ...(options.codeFences ? [loadCodeFenceLanguages()] : []),
+  ]);
+}
+
 export function loadMarkdownExtension() {
   markdownExtensionPromise ??= loadMarkdownExtensionOnce();
   return markdownExtensionPromise;
@@ -86,7 +102,26 @@ async function loadMarkdownExtensionOnce() {
   let markdownDescription = languages.find((language) => language.name == "Markdown");
   if (!markdownDescription) throw new Error("Markdown language support is unavailable");
   let support = await markdownDescription.load();
+  warmLiveMdMarkdownQueries(support);
   return support.extension;
+}
+
+const liveMdMarkdownQueryWarmupDoc = Text.of([
+  "# LiveMD query warmup",
+  "",
+  "Paragraph with **strong**, _emphasis_, ~~strike~~, `code`, [link](https://example.com), and ![image](image.png).",
+]);
+
+function warmLiveMdMarkdownQueries(support: LanguageSupport) {
+  if (!(support.language instanceof TreeSitterLanguage)) return;
+  let tree = support.language.parser.parse(liveMdMarkdownQueryWarmupDoc);
+  queryTreeMatches(tree, liveMdQuerySource);
+}
+
+function liveMdQuerySource(_parser: TreeSitterParser, tree: Tree) {
+  if (tree.topNode.name == "document") return liveMdMarkdownQuerySource;
+  if (tree.topNode.name == "inline") return liveMdMarkdownInlineQuerySource;
+  return null;
 }
 
 async function loadCodeFenceLanguagesOnce() {

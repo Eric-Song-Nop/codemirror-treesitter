@@ -1,6 +1,10 @@
 import "./style.css";
 import { EditorView } from "@codemirror/view";
-import { defineLiveMdEditor, type LiveMdEditorElement } from "@codemirror-treesitter/live-md";
+import {
+  defineLiveMdEditor,
+  prepareLiveMd,
+  type LiveMdEditorElement,
+} from "@codemirror-treesitter/live-md";
 import {
   liveMdLoroCollaboration,
   liveMdLoroRedo,
@@ -67,6 +71,7 @@ const collabTheme = EditorView.baseTheme({
   ".loro-selection.user-linus": { backgroundColor: "rgba(47, 121, 114, 0.24)" },
 });
 
+await prepareLiveMd();
 defineLiveMdEditor();
 
 document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
