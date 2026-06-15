@@ -1,18 +1,30 @@
 import type { ComponentProps } from "react";
-import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { CheckIcon, MoonIcon, PaletteIcon, SunIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useI18n } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
 import { themeDefinitions, useTheme, type ThemeDefinition } from "@/theme";
 
 type ThemeSelectorProps = Omit<
   ComponentProps<typeof Button>,
   "aria-label" | "children" | "onClick"
->;
+> & {
+  menuAlign?: "start" | "center" | "end";
+};
 
 export function ThemeSelector({
+  menuAlign = "end",
   size = "icon-sm",
   variant = "ghost",
   ...props
@@ -22,31 +34,25 @@ export function ThemeSelector({
   let label = t("theme.selector.label", { label: themeDefinition.label });
 
   return (
-    <DropdownMenuPrimitive.Root>
+    <DropdownMenu>
       <Tooltip>
         <TooltipTrigger asChild>
-          <DropdownMenuPrimitive.Trigger asChild>
+          <DropdownMenuTrigger asChild>
             <Button aria-label={label} size={size} variant={variant} {...props}>
               <PaletteIcon data-icon="inline-start" />
               <span className="sr-only">{label}</span>
             </Button>
-          </DropdownMenuPrimitive.Trigger>
+          </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent>{label}</TooltipContent>
       </Tooltip>
-      <DropdownMenuPrimitive.Portal>
-        <DropdownMenuPrimitive.Content
-          align="end"
-          className={themeDropdownContentClassName}
-          sideOffset={8}
-        >
-          <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-            {t("theme.selector.group")}
-          </div>
+      <DropdownMenuContent align={menuAlign} className="min-w-56" sideOffset={8}>
+        <DropdownMenuLabel>{t("theme.selector.group")}</DropdownMenuLabel>
+        <DropdownMenuGroup>
           <ThemeMenuItems itemClassName={themeDropdownItemClassName} />
-        </DropdownMenuPrimitive.Content>
-      </DropdownMenuPrimitive.Portal>
-    </DropdownMenuPrimitive.Root>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -59,20 +65,20 @@ export function ThemeDropdownSubmenu({ itemClassName }: ThemeDropdownSubmenuProp
   let { themeDefinition } = useTheme();
 
   return (
-    <DropdownMenuPrimitive.Sub>
-      <DropdownMenuPrimitive.SubTrigger className={itemClassName}>
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger className={itemClassName}>
         <PaletteIcon data-icon="inline-start" />
         {t("theme.selector.group")}
         <span className="ml-auto truncate text-xs text-muted-foreground">
           {themeDefinition.label}
         </span>
-      </DropdownMenuPrimitive.SubTrigger>
-      <DropdownMenuPrimitive.Portal>
-        <DropdownMenuPrimitive.SubContent className={themeDropdownContentClassName} sideOffset={8}>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="min-w-56" sideOffset={8}>
+        <DropdownMenuGroup>
           <ThemeMenuItems itemClassName={themeDropdownItemClassName} />
-        </DropdownMenuPrimitive.SubContent>
-      </DropdownMenuPrimitive.Portal>
-    </DropdownMenuPrimitive.Sub>
+        </DropdownMenuGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }
 
@@ -89,7 +95,7 @@ function ThemeMenuItems({ itemClassName }: ThemeMenuItemsProps) {
         let active = definition.id == theme;
         let Icon = themeIcon(definition);
         return (
-          <DropdownMenuPrimitive.Item
+          <DropdownMenuItem
             key={definition.id}
             aria-current={active ? "true" : undefined}
             className={itemClassName}
@@ -97,8 +103,8 @@ function ThemeMenuItems({ itemClassName }: ThemeMenuItemsProps) {
           >
             <Icon data-icon="inline-start" />
             <span className="min-w-0 flex-1 truncate">{definition.label}</span>
-            {active && <CheckIcon className="ml-auto size-4 text-primary" />}
-          </DropdownMenuPrimitive.Item>
+            {active && <CheckIcon className="ml-auto text-primary" />}
+          </DropdownMenuItem>
         );
       })}
     </>
@@ -109,11 +115,4 @@ function themeIcon(definition: ThemeDefinition) {
   return definition.appearance == "dark" ? MoonIcon : SunIcon;
 }
 
-const themeDropdownContentClassName =
-  "z-50 flex min-w-56 max-w-[calc(100vw-1rem)] flex-col gap-1 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95";
-
-const themeDropdownItemClassName = cn(
-  "flex min-h-9 cursor-default items-center gap-2 rounded-md px-2.5 py-2 text-sm outline-none select-none",
-  "data-[highlighted]:bg-muted data-[highlighted]:text-foreground",
-  "[&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-);
+const themeDropdownItemClassName = "min-h-9 px-2.5 py-2";

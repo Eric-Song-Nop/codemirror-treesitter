@@ -1,21 +1,28 @@
-import { CloudIcon, FolderOpenIcon, PlusIcon } from "lucide-react";
+import { CloudIcon, FolderOpenIcon, LanguagesIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
 import {
   FileTree,
   type FileTreeCreateKind,
   type FileTreeDeleteTarget,
 } from "@/components/FileTree";
 import { GroveMark } from "@/components/GroveMark";
+import { ThemeSelector } from "@/components/ThemeSelector";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace-backend";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { githubRepositoryUrl } from "@/lib/workspace/constants";
+import { GitHubIcon } from "./GitHubIcon";
 import { TooltipIconButton } from "./TooltipIconButton";
 import { WorkspaceLauncher } from "./WorkspaceLauncher";
 
 type WorkspaceSidebarProps = {
   browserSupported: boolean;
   busy: boolean;
+  canRefresh: boolean;
   dropboxConnecting: boolean;
   dropboxRestoreAvailable: boolean;
+  languageToggleLabel: string;
   open: boolean;
   restoreAvailable: boolean;
   restoreChecking: boolean;
@@ -28,18 +35,22 @@ type WorkspaceSidebarProps = {
   onLoadDirectory: (path: string) => Promise<void>;
   onOpenDropbox: () => void;
   onOpenFolder: () => void;
+  onRefresh: () => void;
   onRenameEntry: (target?: FileTreeDeleteTarget) => void;
   onRestoreDropbox: () => void;
   onRestoreFolder: () => void;
   onSelectEntry: (target: FileTreeDeleteTarget | null) => void;
   onSelectFile: (file: MarkdownFileNode) => void;
+  onToggleLanguage: () => void;
 };
 
 export function WorkspaceSidebar({
   browserSupported,
   busy,
+  canRefresh,
   dropboxConnecting,
   dropboxRestoreAvailable,
+  languageToggleLabel,
   open,
   restoreAvailable,
   restoreChecking,
@@ -52,11 +63,13 @@ export function WorkspaceSidebar({
   onLoadDirectory,
   onOpenDropbox,
   onOpenFolder,
+  onRefresh,
   onRenameEntry,
   onRestoreDropbox,
   onRestoreFolder,
   onSelectEntry,
   onSelectFile,
+  onToggleLanguage,
 }: WorkspaceSidebarProps) {
   let { t } = useI18n();
 
@@ -125,6 +138,70 @@ export function WorkspaceSidebar({
           onRestoreFolder={onRestoreFolder}
         />
       )}
+      <WorkspaceSidebarUtilityBar
+        busy={busy}
+        canRefresh={canRefresh}
+        languageToggleLabel={languageToggleLabel}
+        onRefresh={onRefresh}
+        onToggleLanguage={onToggleLanguage}
+      />
     </aside>
+  );
+}
+
+type WorkspaceSidebarUtilityBarProps = {
+  busy: boolean;
+  canRefresh: boolean;
+  languageToggleLabel: string;
+  onRefresh: () => void;
+  onToggleLanguage: () => void;
+};
+
+function WorkspaceSidebarUtilityBar({
+  busy,
+  canRefresh,
+  languageToggleLabel,
+  onRefresh,
+  onToggleLanguage,
+}: WorkspaceSidebarUtilityBarProps) {
+  let { t } = useI18n();
+
+  return (
+    <div className="flex shrink-0 items-center gap-1 border-t border-sidebar-border p-2">
+      <ThemeSelector menuAlign="start" />
+      <TooltipIconButton
+        label={languageToggleLabel}
+        size="icon-sm"
+        variant="ghost"
+        onClick={onToggleLanguage}
+      >
+        <LanguagesIcon data-icon="inline-start" />
+      </TooltipIconButton>
+      <TooltipIconButton
+        label={t("actions.refresh")}
+        size="icon-sm"
+        variant="ghost"
+        disabled={!canRefresh || busy}
+        onClick={onRefresh}
+      >
+        <RefreshCwIcon data-icon="inline-start" />
+      </TooltipIconButton>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button asChild className="ml-auto" size="icon-sm" variant="ghost">
+            <a
+              aria-label={t("actions.openGitHubRepository")}
+              href={githubRepositoryUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <GitHubIcon data-icon="inline-start" />
+              <span className="sr-only">{t("actions.gitHubRepository")}</span>
+            </a>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{t("actions.gitHubRepository")}</TooltipContent>
+      </Tooltip>
+    </div>
   );
 }
