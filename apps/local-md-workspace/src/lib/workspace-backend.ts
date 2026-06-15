@@ -8,6 +8,7 @@ export type MarkdownFileNode = {
 
 export type MarkdownDirectoryNode = {
   children: MarkdownTreeNode[];
+  childrenLoaded?: boolean;
   kind: "directory";
   name: string;
   path: string;
@@ -84,6 +85,34 @@ export function flattenMarkdownFiles(tree: MarkdownDirectoryNode) {
 export function findMarkdownFile(tree: MarkdownDirectoryNode | null, path: string | null) {
   if (!tree || !path) return null;
   return findMarkdownFileInNodes(tree.children, path);
+}
+
+export function findMarkdownDirectory(tree: MarkdownDirectoryNode | null, path: string | null) {
+  if (!tree || path == null) return null;
+  if (tree.path == path) return tree;
+  return findMarkdownDirectoryInNodes(tree.children, path);
+}
+
+export function replaceMarkdownDirectory(
+  tree: MarkdownDirectoryNode,
+  directory: MarkdownDirectoryNode,
+): MarkdownDirectoryNode {
+  let nextDirectory = mergeLoadedDirectory(tree, directory);
+  if (tree.path == directory.path) return nextDirectory;
+
+  let replaced = false;
+  let children: MarkdownTreeNode[] = tree.children.map((node): MarkdownTreeNode => {
+    if (node.kind == "file") return node;
+    if (node.path == directory.path) {
+      replaced = true;
+      return mergeLoadedDirectory(node, directory);
+    }
+    let nextNode: MarkdownDirectoryNode = replaceMarkdownDirectory(node, directory);
+    if (nextNode !== node) replaced = true;
+    return nextNode;
+  });
+
+  return replaced ? { ...tree, children: sortMarkdownTreeNodes(children) } : tree;
 }
 
 export function normalizeMarkdownPath(rawPath: string) {
@@ -168,6 +197,7 @@ export function buildMarkdownTreeFromPaths(name: string, paths: string[]) {
 export function buildMarkdownTreeFromEntries(name: string, entries: WorkspaceEntry[]) {
   let root: MarkdownDirectoryNode = {
     children: [],
+    childrenLoaded: true,
     kind: "directory",
     name,
     path: "",
@@ -184,6 +214,7 @@ export function buildMarkdownTreeFromEntries(name: string, entries: WorkspaceEnt
       if (!directory) {
         directory = {
           children: [],
+          childrenLoaded: true,
           kind: "directory",
           name: part,
           path,
@@ -226,6 +257,29 @@ export function buildMarkdownTreeFromEntries(name: string, entries: WorkspaceEnt
   return root;
 }
 
+export function buildMarkdownDirectoryFromEntries(
+  name: string,
+  path: string,
+  entries: WorkspaceEntry[],
+) {
+  let childrenByPath = new Map<string, MarkdownTreeNode>();
+  let normalizedDirectoryPath = normalizeBackendPath(path);
+
+  for (let entry of entries) {
+    let child = workspaceEntryToDirectMarkdownNode(normalizedDirectoryPath, entry);
+    if (!child) continue;
+    childrenByPath.set(child.path, child);
+  }
+
+  return {
+    children: sortMarkdownTreeNodes([...childrenByPath.values()]),
+    childrenLoaded: true,
+    kind: "directory",
+    name,
+    path: normalizedDirectoryPath,
+  } satisfies MarkdownDirectoryNode;
+}
+
 function collectMarkdownFiles(nodes: MarkdownTreeNode[], files: MarkdownFileNode[]) {
   for (let node of nodes) {
     if (node.kind == "file") {
@@ -248,8 +302,75 @@ function findMarkdownFileInNodes(nodes: MarkdownTreeNode[], path: string): Markd
   return null;
 }
 
+function findMarkdownDirectoryInNodes(
+  nodes: MarkdownTreeNode[],
+  path: string,
+): MarkdownDirectoryNode | null {
+  for (let node of nodes) {
+    if (node.kind == "file") continue;
+    if (node.path == path) return node;
+    let directory = findMarkdownDirectoryInNodes(node.children, path);
+    if (directory) return directory;
+  }
+  return null;
+}
+
 export function isHiddenLiveMdPath(path: string) {
   return path == ".livemd" || path.startsWith(".livemd/");
+}
+
+function workspaceEntryToDirectMarkdownNode(parentPath: string, entry: WorkspaceEntry) {
+  let path = normalizeBackendPath(entry.path);
+  if (!path) return null;
+  if (isHiddenLiveMdPath(path)) return null;
+
+  let relativePath = directChildRelativePath(parentPath, path);
+  if (!relativePath) return null;
+
+  let [childName, nested] = relativePath.split("/");
+  if (!childName) return null;
+
+  let childPath = joinWorkspacePath(parentPath, childName);
+  if (entry.isDirectory || nested) {
+    return {
+      children: [],
+      childrenLoaded: false,
+      kind: "directory",
+      name: childName,
+      path: childPath,
+    } satisfies MarkdownDirectoryNode;
+  }
+
+  if (!entry.isFile || !/\.md$/i.test(childName)) return null;
+  return {
+    kind: "file",
+    name: childName,
+    path: childPath,
+  } satisfies MarkdownFileNode;
+}
+
+function directChildRelativePath(parentPath: string, path: string) {
+  if (!parentPath) return path;
+  if (path == parentPath) return "";
+  return path.startsWith(`${parentPath}/`) ? path.slice(parentPath.length + 1) : "";
+}
+
+function mergeLoadedDirectory(current: MarkdownDirectoryNode, next: MarkdownDirectoryNode) {
+  if (current.path != next.path) return current;
+
+  let currentLoadedChildren = new Map(
+    current.children
+      .filter((node): node is MarkdownDirectoryNode => node.kind == "directory")
+      .filter((node) => node.childrenLoaded)
+      .map((node) => [node.path, node]),
+  );
+  let children = next.children.map((node) => {
+    if (node.kind == "file") return node;
+    let loadedChild = currentLoadedChildren.get(node.path);
+    return loadedChild ? { ...node, children: loadedChild.children, childrenLoaded: true } : node;
+  });
+
+  return { ...next, children: sortMarkdownTreeNodes(children) };
 }
 
 function sortTree(directory: MarkdownDirectoryNode) {

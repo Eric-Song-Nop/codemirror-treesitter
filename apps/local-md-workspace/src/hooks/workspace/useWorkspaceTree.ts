@@ -1,13 +1,17 @@
-import { useCallback } from "react";
+import { useCallback, type Dispatch, type SetStateAction } from "react";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import type { AccessFileHandle } from "@/lib/file-system";
 import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
 import {
+  buildMarkdownDirectoryFromEntries,
   findMarkdownFile,
+  findMarkdownDirectory,
+  replaceMarkdownDirectory,
   type MarkdownDirectoryNode,
   type MarkdownFileNode,
   type WorkspaceBackend,
 } from "@/lib/workspace-backend";
+import { basename, dirname } from "pathe";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
 import type { SingleFileSource } from "@/lib/workspace/types";
 
@@ -25,7 +29,7 @@ type UseWorkspaceTreeOptions = {
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
   selectedFileBackendRef: MutableRef<WorkspaceBackend | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
-  setTree: (tree: MarkdownDirectoryNode | null) => void;
+  setTree: Dispatch<SetStateAction<MarkdownDirectoryNode | null>>;
   setTreeSelection: (target: FileTreeDeleteTarget | null) => void;
   singleFileSourceRef: MutableRef<SingleFileSource | null>;
 };
@@ -46,7 +50,11 @@ export function useWorkspaceTree({
       nextSelectedPath?: null | string,
       options: { saveBeforeSelect?: boolean } = {},
     ) => {
-      let nextTree = await backend.readTree();
+      let nextTree = await loadSelectedPathAncestors(
+        backend,
+        await backend.readTree(),
+        nextSelectedPath ?? null,
+      );
       setTree(nextTree);
 
       let nextSelectedFile = findMarkdownFile(nextTree, nextSelectedPath ?? null);
@@ -108,9 +116,65 @@ export function useWorkspaceTree({
     [findCurrentEditorWorkspacePath, loadTree],
   );
 
+  let loadDirectory = useCallback(
+    async (backend: WorkspaceBackend, path: string) => {
+      let directory = await readBackendDirectory(backend, path);
+      if (!directory) return;
+      setTree((currentTree) =>
+        currentTree ? replaceMarkdownDirectory(currentTree, directory) : currentTree,
+      );
+    },
+    [setTree],
+  );
+
   return {
     findCurrentEditorWorkspacePath,
+    loadDirectory,
     loadTree,
     refreshWorkspaceForCurrentEditor,
   };
+}
+
+async function loadSelectedPathAncestors(
+  backend: WorkspaceBackend,
+  tree: MarkdownDirectoryNode,
+  selectedPath: string | null,
+) {
+  if (!selectedPath || findMarkdownFile(tree, selectedPath)) return tree;
+
+  for (let directoryPath of ancestorDirectoryPaths(selectedPath)) {
+    let directory = findMarkdownDirectory(tree, directoryPath);
+    if (!directory) break;
+    if (directory.childrenLoaded) continue;
+
+    let loadedDirectory = await readBackendDirectory(backend, directoryPath);
+    if (!loadedDirectory) break;
+    tree = replaceMarkdownDirectory(tree, loadedDirectory);
+    if (findMarkdownFile(tree, selectedPath)) break;
+  }
+
+  return tree;
+}
+
+async function readBackendDirectory(backend: WorkspaceBackend, path: string) {
+  if (!backend.listEntries) return null;
+  let entries = await backend.listEntries(path);
+  return buildMarkdownDirectoryFromEntries(directoryName(path, backend.name), path, entries);
+}
+
+function ancestorDirectoryPaths(filePath: string) {
+  let directoryPath = dirname(filePath);
+  if (directoryPath == ".") return [];
+
+  let paths: string[] = [];
+  let current = "";
+  for (let part of directoryPath.split("/")) {
+    current = current ? `${current}/${part}` : part;
+    paths.push(current);
+  }
+  return paths;
+}
+
+function directoryName(path: string, rootName: string) {
+  return path ? basename(path) : rootName;
 }

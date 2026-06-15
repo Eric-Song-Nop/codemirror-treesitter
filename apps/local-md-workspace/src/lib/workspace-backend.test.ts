@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  buildMarkdownDirectoryFromEntries,
   buildMarkdownTreeFromEntries,
   buildMarkdownTreeFromPaths,
   findMarkdownFile,
+  replaceMarkdownDirectory,
   flattenMarkdownFiles,
   normalizeMarkdownFileName,
   normalizeMarkdownPath,
@@ -110,5 +112,53 @@ describe("workspace backend path helpers", () => {
         path: "notes",
       },
     ]);
+  });
+
+  it("builds one directory level from backend entries", () => {
+    let directory = buildMarkdownDirectoryFromEntries("notes", "notes", [
+      { isDirectory: true, isFile: false, path: "notes/archive" },
+      { isDirectory: false, isFile: true, path: "notes/archive/2026.md" },
+      { isDirectory: false, isFile: true, path: "notes/today.md" },
+      { isDirectory: false, isFile: true, path: "notes/image.png" },
+    ]);
+
+    expect(directory).toMatchObject({
+      children: [
+        { children: [], childrenLoaded: false, kind: "directory", name: "archive" },
+        { kind: "file", name: "today.md", path: "notes/today.md" },
+      ],
+      childrenLoaded: true,
+      kind: "directory",
+      name: "notes",
+      path: "notes",
+    });
+  });
+
+  it("replaces a loaded directory while preserving loaded child directories", () => {
+    let tree = buildMarkdownTreeFromEntries("Workspace", [
+      { isDirectory: true, isFile: false, path: "notes/archive" },
+      { isDirectory: false, isFile: true, path: "notes/archive/2026.md" },
+    ]);
+    let nextNotes = buildMarkdownDirectoryFromEntries("notes", "notes", [
+      { isDirectory: true, isFile: false, path: "notes/archive" },
+      { isDirectory: false, isFile: true, path: "notes/today.md" },
+    ]);
+
+    let nextTree = replaceMarkdownDirectory(tree, nextNotes);
+
+    expect(nextTree.children[0]).toMatchObject({
+      children: [
+        {
+          children: [{ kind: "file", name: "2026.md", path: "notes/archive/2026.md" }],
+          childrenLoaded: true,
+          kind: "directory",
+          name: "archive",
+        },
+        { kind: "file", name: "today.md", path: "notes/today.md" },
+      ],
+      childrenLoaded: true,
+      kind: "directory",
+      name: "notes",
+    });
   });
 });

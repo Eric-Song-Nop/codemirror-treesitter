@@ -25,6 +25,7 @@ type WorkspaceSidebarProps = {
   workspaceOpen: boolean;
   onCreateEntry: (target?: FileTreeDeleteTarget | null, kind?: FileTreeCreateKind) => void;
   onDeleteEntry: (target: FileTreeDeleteTarget) => void;
+  onLoadDirectory: (path: string) => Promise<void>;
   onOpenDropbox: () => void;
   onOpenFolder: () => void;
   onRenameEntry: (target?: FileTreeDeleteTarget) => void;
@@ -48,6 +49,7 @@ export function WorkspaceSidebar({
   workspaceOpen,
   onCreateEntry,
   onDeleteEntry,
+  onLoadDirectory,
   onOpenDropbox,
   onOpenFolder,
   onRenameEntry,
@@ -104,6 +106,7 @@ export function WorkspaceSidebar({
           selectedPath={selectedPath}
           onCreateEntry={onCreateEntry}
           onDeleteEntry={onDeleteEntry}
+          onLoadDirectory={onLoadDirectory}
           onRenameEntry={onRenameEntry}
           onSelectEntry={onSelectEntry}
           onSelectFile={onSelectFile}

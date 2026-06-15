@@ -22,7 +22,8 @@ describe("local workspace backend", () => {
     await expect(backend.readTree()).resolves.toMatchObject({
       children: [
         {
-          children: [{ children: [], kind: "directory", name: "daily", path: "notes/daily" }],
+          children: [],
+          childrenLoaded: false,
           kind: "directory",
           name: "notes",
           path: "notes",
@@ -32,6 +33,9 @@ describe("local workspace backend", () => {
       name: "Workspace",
       path: "",
     });
+    await expect(backend.listEntries!("notes")).resolves.toEqual([
+      { isDirectory: true, isFile: false, path: "notes/daily" },
+    ]);
   });
 
   it("creates parent folders for nested file paths", async () => {
@@ -44,20 +48,20 @@ describe("local workspace backend", () => {
     await expect(backend.readTree()).resolves.toMatchObject({
       children: [
         {
-          children: [
-            {
-              children: [{ kind: "file", name: "today.md", path: "notes/daily/today.md" }],
-              kind: "directory",
-              name: "daily",
-              path: "notes/daily",
-            },
-          ],
+          children: [],
+          childrenLoaded: false,
           kind: "directory",
           name: "notes",
           path: "notes",
         },
       ],
     });
+    await expect(backend.listEntries!("notes")).resolves.toEqual([
+      { isDirectory: true, isFile: false, path: "notes/daily" },
+    ]);
+    await expect(backend.listEntries!("notes/daily")).resolves.toEqual([
+      { isDirectory: false, isFile: true, path: "notes/daily/today.md" },
+    ]);
   });
 
   it("keeps legacy .livemd files hidden from the Markdown tree", async () => {
@@ -82,13 +86,17 @@ describe("local workspace backend", () => {
     await expect(backend.readTree()).resolves.toMatchObject({
       children: [
         {
-          children: [{ kind: "file", name: "today.md", path: "notes/today.md" }],
+          children: [],
+          childrenLoaded: false,
           kind: "directory",
           name: "notes",
           path: "notes",
         },
       ],
     });
+    await expect(backend.listEntries!("notes")).resolves.toEqual([
+      { isDirectory: false, isFile: true, path: "notes/today.md" },
+    ]);
   });
 
   it("skips dependency, build, and VCS folders while reading the Markdown tree", async () => {
@@ -103,13 +111,17 @@ describe("local workspace backend", () => {
     await expect(backend.readTree()).resolves.toMatchObject({
       children: [
         {
-          children: [{ kind: "file", name: "today.md", path: "notes/today.md" }],
+          children: [],
+          childrenLoaded: false,
           kind: "directory",
           name: "notes",
           path: "notes",
         },
       ],
     });
+    await expect(backend.listEntries!("notes")).resolves.toEqual([
+      { isDirectory: false, isFile: true, path: "notes/today.md" },
+    ]);
   });
 
   it("finds a visible Markdown file path from a browser file handle", async () => {
@@ -164,14 +176,8 @@ describe("local workspace backend", () => {
     await expect(backend.readTree()).resolves.toMatchObject({
       children: [
         {
-          children: [
-            {
-              children: [{ kind: "file", name: "today.md", path: "docs/daily/today.md" }],
-              kind: "directory",
-              name: "daily",
-              path: "docs/daily",
-            },
-          ],
+          children: [],
+          childrenLoaded: false,
           kind: "directory",
           name: "docs",
           path: "docs",
@@ -181,6 +187,9 @@ describe("local workspace backend", () => {
       name: "Workspace",
       path: "",
     });
+    await expect(backend.listEntries!("docs")).resolves.toEqual([
+      { isDirectory: true, isFile: false, path: "docs/daily" },
+    ]);
   });
 });
 
