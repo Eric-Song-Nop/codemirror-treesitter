@@ -6,7 +6,6 @@ import {
   FolderOpenIcon,
   ImagePlusIcon,
   PrinterIcon,
-  SaveIcon,
   Share2Icon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,64 +21,22 @@ import {
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-type SaveAsMenuProps = {
-  busy: boolean;
-  canSaveToDevice: boolean;
-  onDownloadCopy: () => void;
-  onSaveToDevice: () => void;
-  onSaveToDropbox: () => void;
-};
-
-export function SaveAsMenu({
-  busy,
-  canSaveToDevice,
-  onDownloadCopy,
-  onSaveToDevice,
-  onSaveToDropbox,
-}: SaveAsMenuProps) {
-  let { t } = useI18n();
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button disabled={busy} size="sm">
-          <SaveIcon data-icon="inline-start" />
-          {t("actions.saveAs")}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-48" sideOffset={8}>
-        <DropdownMenuGroup>
-          <WorkspaceDropdownItem disabled={!canSaveToDevice || busy} onSelect={onSaveToDevice}>
-            <FolderOpenIcon />
-            {t("storage.thisDevice")}
-          </WorkspaceDropdownItem>
-          <WorkspaceDropdownItem disabled={busy} onSelect={onSaveToDropbox}>
-            <CloudIcon />
-            Dropbox
-          </WorkspaceDropdownItem>
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <WorkspaceDropdownItem disabled={busy} onSelect={onDownloadCopy}>
-            <DownloadIcon />
-            {t("actions.downloadCopy")}
-          </WorkspaceDropdownItem>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 type WorkspaceDocumentActionsMenuProps = {
   activeShare: boolean;
   busy: boolean;
   canExport: boolean;
   canInsertImage: boolean;
+  canSaveAs: boolean;
+  canSaveToDevice: boolean;
   canShare: boolean;
   className?: string;
+  dropboxConnecting: boolean;
+  onDownloadCopy: () => void;
   onExportHtml: () => void;
   onPrintPdf: () => void;
   onInsertImage: () => void;
+  onSaveToDevice: () => void;
+  onSaveToDropbox: () => void;
   onShareFile: () => void;
 };
 
@@ -88,15 +45,21 @@ export function WorkspaceDocumentActionsMenu({
   busy,
   canExport,
   canInsertImage,
+  canSaveAs,
+  canSaveToDevice,
   canShare,
   className,
+  dropboxConnecting,
+  onDownloadCopy,
   onExportHtml,
   onPrintPdf,
   onInsertImage,
+  onSaveToDevice,
+  onSaveToDropbox,
   onShareFile,
 }: WorkspaceDocumentActionsMenuProps) {
   let { t } = useI18n();
-  let disabled = busy || (!canShare && !canInsertImage && !canExport);
+  let disabled = busy || (!canSaveAs && !canShare && !canInsertImage && !canExport);
 
   return (
     <DropdownMenu>
@@ -113,6 +76,29 @@ export function WorkspaceDocumentActionsMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-56" sideOffset={8}>
+        {canSaveAs && (
+          <>
+            <DropdownMenuLabel>{t("actions.saveAs")}</DropdownMenuLabel>
+            <DropdownMenuGroup>
+              <WorkspaceDropdownItem disabled={!canSaveToDevice || busy} onSelect={onSaveToDevice}>
+                <FolderOpenIcon />
+                {t("storage.thisDevice")}
+              </WorkspaceDropdownItem>
+              <WorkspaceDropdownItem
+                disabled={busy || dropboxConnecting}
+                onSelect={onSaveToDropbox}
+              >
+                <CloudIcon />
+                Dropbox
+              </WorkspaceDropdownItem>
+              <WorkspaceDropdownItem disabled={busy} onSelect={onDownloadCopy}>
+                <DownloadIcon />
+                {t("actions.downloadCopy")}
+              </WorkspaceDropdownItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+          </>
+        )}
         {activeShare && (
           <>
             <DropdownMenuLabel className="flex min-w-0 items-center gap-2">

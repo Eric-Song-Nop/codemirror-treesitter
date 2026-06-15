@@ -2,7 +2,7 @@ import { MenuIcon, SaveIcon, Share2Icon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useI18n } from "@/lib/i18n";
 import type { SaveState } from "@/lib/workspace/types";
-import { SaveAsMenu, WorkspaceDocumentActionsMenu } from "./WorkspaceMenus";
+import { WorkspaceDocumentActionsMenu } from "./WorkspaceMenus";
 import { TooltipIconButton } from "./TooltipIconButton";
 
 type WorkspaceHeaderProps = {
@@ -78,24 +78,21 @@ export function WorkspaceHeader({
           {t("workspace.sharedFileBadge")}
         </Badge>
       )}
-      {canSaveAs && (
-        <SaveAsMenu
-          busy={busy || dropboxConnecting}
-          canSaveToDevice={canSaveToDevice}
-          onDownloadCopy={onDownloadCopy}
-          onSaveToDevice={onSaveAsLocal}
-          onSaveToDropbox={onSaveAsDropbox}
-        />
-      )}
       <WorkspaceDocumentActionsMenu
         activeShare={activeShare}
         busy={busy}
         canInsertImage={canInsertImage}
         canExport={canExport}
+        canSaveAs={canSaveAs}
+        canSaveToDevice={canSaveToDevice}
         canShare={canShare}
+        dropboxConnecting={dropboxConnecting}
+        onDownloadCopy={onDownloadCopy}
         onExportHtml={onExportHtml}
         onPrintPdf={onPrintPdf}
         onInsertImage={onInsertImage}
+        onSaveToDevice={onSaveAsLocal}
+        onSaveToDropbox={onSaveAsDropbox}
         onShareFile={onShareFile}
       />
     </header>
