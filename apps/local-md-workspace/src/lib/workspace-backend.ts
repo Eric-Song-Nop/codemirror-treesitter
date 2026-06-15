@@ -1,4 +1,9 @@
-export type WorkspaceBackendKind = "local" | "opendal-dropbox" | "opendal-onedrive" | "opendal-s3";
+export type WorkspaceBackendKind =
+  | "local"
+  | "opendal-dropbox"
+  | "opendal-gdrive"
+  | "opendal-onedrive"
+  | "opendal-s3";
 
 export type WorkspaceSourceRevision = {
   etag?: string;

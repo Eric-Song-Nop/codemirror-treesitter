@@ -13,7 +13,7 @@ GroveMd is built for a small set of workflows that should stay simple:
   locally, and keep images beside the document in normal workspace assets.
 - **Easy sync**: keep working from the local folder or connect a cloud-backed
   workspace when useful. Dropbox is the current user-facing cloud flow; OneDrive
-  has a shared OpenDAL backend foundation.
+  and Google Drive have shared OpenDAL backend foundations.
 - **No app install**: run the editor as a web app while still using browser
   file access for real local files.
 - **Collaboration**: share a single file link through the Grove relay so guests
@@ -56,11 +56,12 @@ collaboration flows.
 - **Collaboration and workspace layer**: Optional LiveMD Loro bindings use
   `loro-crdt` and `loro-codemirror`. Grove's local workspace app supports local
   folders, Dropbox through the OpenDAL browser WASM wrapper, a shared OpenDAL
-  cloud-backend foundation for OneDrive, i18next/react-i18next UI localization,
-  local image assets, and shared-file hosting. Grove's relay runs as the
-  `grove-relay` Cloudflare Worker with Durable Object persistence, WebSocket
-  sync, Wrangler, and the Cloudflare Vite plugin. The `collab-editor` app
-  remains a separate Cloudflare collaboration demo.
+  cloud-backend foundation for OneDrive and Google Drive,
+  i18next/react-i18next UI localization, local image assets, and shared-file
+  hosting. Grove's relay runs as the `grove-relay` Cloudflare Worker with
+  Durable Object persistence, WebSocket sync, Wrangler, and the Cloudflare Vite
+  plugin. The `collab-editor` app remains a separate Cloudflare collaboration
+  demo.
 
 ## Quickstart
 
@@ -205,12 +206,12 @@ entry points, dependency boundaries, source layout, and validation notes.
 - `apps/local-md-workspace`: Grove React, Vite+, shadcn/radix local-first
   Markdown workspace that opens a browser-granted local folder, edits `.md`
   files with LiveMD, supports Dropbox storage through OpenDAL WASM and OAuth
-  PKCE, has a shared OpenDAL backend foundation for OneDrive, supports image
-  insert/paste/drop through sibling `assets/` directories, supports file/folder
-  create, rename, delete, tree browsing, and autosave, can export standalone HTML
-  or open a browser print view for saving as PDF with scoped LiveMD document
-  styling, and can host or join Grove shared-file sessions through
-  `apps/grove-relay`.
+  PKCE, has a shared OpenDAL backend foundation for OneDrive and Google Drive,
+  supports image insert/paste/drop through sibling `assets/` directories,
+  supports file/folder create, rename, delete, tree browsing, and autosave, can
+  export standalone HTML or open a browser print view for saving as PDF with
+  scoped LiveMD document styling, and can host or join Grove shared-file
+  sessions through `apps/grove-relay`.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, share create/session/rotate/revoke APIs, WebSocket Loro sync,
   bounded relay queues, share expiration cleanup, and Wrangler deploy/types

@@ -1,4 +1,4 @@
-use opendal::services::{Dropbox, Onedrive, S3};
+use opendal::services::{Dropbox, Gdrive, Onedrive, S3};
 use opendal::{Entry, Metadata, Operator};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -73,6 +73,7 @@ impl WasmOpendalBrowserOperator {
         let provider = config.provider.trim().to_string();
         let operator = match provider.as_str() {
             "dropbox" => build_dropbox_operator(config)?,
+            "gdrive" => build_gdrive_operator(config)?,
             "onedrive" => build_onedrive_operator(config)?,
             "s3" => build_s3_operator(config)?,
             provider => {
@@ -89,6 +90,37 @@ impl WasmOpendalBrowserOperator {
 fn build_dropbox_operator(config: OpendalBrowserOperatorConfig) -> Result<Operator, JsValue> {
     let mut builder =
         Dropbox::default().access_token(required("accessToken", config.access_token.as_deref())?);
+
+    if let Some(root) = optional_root(config.root.as_deref())? {
+        builder = builder.root(&root);
+    }
+
+    Ok(Operator::new(builder).map_err(js_error)?.finish())
+}
+
+fn build_gdrive_operator(config: OpendalBrowserOperatorConfig) -> Result<Operator, JsValue> {
+    let mut builder = Gdrive::default();
+
+    match (
+        optional_text(config.access_token.as_deref()),
+        optional_text(config.refresh_token.as_deref()),
+    ) {
+        (Some(access_token), None) => {
+            builder = builder.access_token(access_token);
+        }
+        (None, Some(refresh_token)) => {
+            builder = builder
+                .refresh_token(refresh_token)
+                .client_id(required("clientId", config.client_id.as_deref())?)
+                .client_secret(required("clientSecret", config.client_secret.as_deref())?);
+        }
+        (Some(_), Some(_)) => {
+            return Err(js_error(
+                "accessToken and refreshToken cannot be set at the same time.",
+            ));
+        }
+        (None, None) => return Err(js_error("OpenDAL browser config requires accessToken.")),
+    }
 
     if let Some(root) = optional_root(config.root.as_deref())? {
         builder = builder.root(&root);

@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 console_error_panic_hook = "0.1.7"
 opendal = { version = "0.57.0", default-features = false, features = [
   "services-dropbox",
+  "services-gdrive",
   "services-onedrive",
   "services-s3",
 ] }

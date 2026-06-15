@@ -1,8 +1,14 @@
-export type OpendalBrowserProvider = "dropbox" | "onedrive" | "s3";
+export type OpendalBrowserProvider = "dropbox" | "gdrive" | "onedrive" | "s3";
 
 export type OpendalDropboxOperatorConfig = {
   accessToken: string;
   provider: "dropbox";
+  root?: string;
+};
+
+export type OpendalGoogleDriveOperatorConfig = {
+  accessToken: string;
+  provider: "gdrive";
   root?: string;
 };
 
@@ -25,6 +31,7 @@ export type OpendalOneDriveOperatorConfig = {
 
 export type OpendalBrowserOperatorConfig =
   | OpendalDropboxOperatorConfig
+  | OpendalGoogleDriveOperatorConfig
   | OpendalOneDriveOperatorConfig
   | OpendalS3OperatorConfig;
 
@@ -165,6 +172,17 @@ function normalizeConfig(config: OpendalBrowserOperatorConfig): OpendalBrowserOp
     return {
       accessToken: requireText((config as OpendalDropboxOperatorConfig).accessToken, "accessToken"),
       provider: "dropbox",
+      root: normalizeRoot(config.root),
+    };
+  }
+
+  if (provider == "gdrive") {
+    return {
+      accessToken: requireText(
+        (config as OpendalGoogleDriveOperatorConfig).accessToken,
+        "accessToken",
+      ),
+      provider: "gdrive",
       root: normalizeRoot(config.root),
     };
   }

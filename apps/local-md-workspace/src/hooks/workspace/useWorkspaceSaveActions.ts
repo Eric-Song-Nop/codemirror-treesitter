@@ -236,7 +236,12 @@ export function useWorkspaceSaveActions({
     clearPendingSaveTimer();
 
     let backendKind = selectedFileBackendRef.current?.kind;
-    let delay = backendKind == "opendal-dropbox" || backendKind == "opendal-onedrive" ? 2500 : 650;
+    let delay =
+      backendKind == "opendal-dropbox" ||
+      backendKind == "opendal-gdrive" ||
+      backendKind == "opendal-onedrive"
+        ? 2500
+        : 650;
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
       void saveCurrentFile();

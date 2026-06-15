@@ -2,8 +2,8 @@
 
 Grove local-first Markdown workspace. It is a React app built around LiveMD,
 the browser File System Access API, optional Dropbox storage through the
-OpenDAL WASM wrapper, a shared OpenDAL cloud-backend foundation for OneDrive,
-and optional shared-file collaboration through `apps/grove-relay`.
+OpenDAL WASM wrapper, shared OpenDAL cloud-backend foundations for OneDrive and
+Google Drive, and optional shared-file collaboration through `apps/grove-relay`.
 
 ## Responsibilities
 
@@ -12,7 +12,7 @@ and optional shared-file collaboration through `apps/grove-relay`.
 - Connect to Dropbox with OAuth PKCE and use
   `@codemirror-treesitter/opendal-wasm-browser` for browser-side file
   operations.
-- Provide a reusable OpenDAL workspace backend for Dropbox and OneDrive,
+- Provide a reusable OpenDAL workspace backend for Dropbox, OneDrive, and Google Drive,
   including cloud-save serialization, token refresh retry, metadata tracking,
   and ETag-based conditional writes when supported by the provider.
 - Build a Markdown file tree, create/rename/delete files and folders, autosave
@@ -56,9 +56,11 @@ and optional shared-file collaboration through `apps/grove-relay`.
 - `src/lib/file-system.ts`: File System Access API backend.
 - `src/lib/dropbox-oauth.ts` and `src/lib/dropbox-workspace-backend.ts`:
   Dropbox OAuth PKCE and Dropbox workspace adapter.
-- `src/lib/opendal-workspace-backend.ts` and
-  `src/lib/onedrive-workspace-backend.ts`: shared OpenDAL workspace backend and
-  OneDrive adapter foundation. OneDrive OAuth/UI entry is not wired yet.
+- `src/lib/opendal-workspace-backend.ts`,
+  `src/lib/onedrive-workspace-backend.ts`, and
+  `src/lib/google-drive-workspace-backend.ts`: shared OpenDAL workspace backend
+  plus OneDrive and Google Drive adapter foundations. OneDrive and Google Drive
+  OAuth/UI entries are not wired yet.
 - `src/lib/workspace-backend.ts`: normalized workspace tree, path, image, and
   backend contracts.
 - `src/lib/export/markdown-html.ts`: standalone HTML export wrapper, LiveMD

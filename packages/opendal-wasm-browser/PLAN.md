@@ -14,8 +14,10 @@ Current product direction: Dropbox is the first user-facing cloud workspace
 with a pure frontend OAuth code flow using PKCE and short-lived access tokens.
 OneDrive is the next cloud backend because OpenDAL exposes native metadata,
 rename, and `write_with_if_match` support that can fit Grove's existing CRDT
-conflict path. S3-compatible storage remains a useful OpenDAL/browser validation
-track, but it is no longer the first user-facing cloud workspace target.
+conflict path. Google Drive is also useful through OpenDAL's browser-compatible
+`gdrive` service, but it does not currently advertise native conditional writes.
+S3-compatible storage remains a useful OpenDAL/browser validation track, but it
+is no longer the first user-facing cloud workspace target.
 
 ## Key Constraints
 
@@ -37,6 +39,12 @@ track, but it is no longer the first user-facing cloud workspace target.
   refresh tokens in the frontend should be a separate explicit product decision.
 - OpenDAL OneDrive currently targets OneDrive Personal through Microsoft Graph
   `/me/drive`; the minimum Graph scope for workspace file IO is `Files.ReadWrite`.
+- The Google Drive browser product path should start with short-lived access
+  tokens. OpenDAL's Google Drive refresh-token flow requires `client_id`,
+  `client_secret`, and `refresh_token`, so it is not appropriate for the first
+  frontend-only product path.
+- OpenDAL Google Drive requires the Google Drive API to be enabled and an OAuth
+  scope containing `https://www.googleapis.com/auth/drive`.
 - The user-facing Dropbox flow is a normal browser OAuth login: the user clicks
   Connect Dropbox, signs in and approves access on Dropbox, and the app exchanges
   the returned authorization code for a short-lived access token with PKCE.
@@ -54,6 +62,7 @@ track, but it is no longer the first user-facing cloud workspace target.
 - Do not implement Dropbox background/offline access for the MVP.
 - Do not request or persist Dropbox refresh tokens for the MVP.
 - Do not wire OneDrive UI/OAuth in the backend-foundation pass.
+- Do not wire Google Drive UI/OAuth in the backend-foundation pass.
 - Do not persist access keys or secret tokens unless a later design explicitly
   opts into encrypted or user-confirmed storage.
 
@@ -62,10 +71,16 @@ track, but it is no longer the first user-facing cloud workspace target.
 The wrapper should expose a small TypeScript-friendly API:
 
 ```ts
-export type OpendalBrowserProvider = "dropbox" | "onedrive" | "s3";
+export type OpendalBrowserProvider = "dropbox" | "gdrive" | "onedrive" | "s3";
 
 export type OpendalDropboxOperatorConfig = {
   provider: "dropbox";
+  root?: string;
+  accessToken: string;
+};
+
+export type OpendalGoogleDriveOperatorConfig = {
+  provider: "gdrive";
   root?: string;
   accessToken: string;
 };
@@ -89,6 +104,7 @@ export type OpendalS3OperatorConfig = {
 
 export type OpendalBrowserOperatorConfig =
   | OpendalDropboxOperatorConfig
+  | OpendalGoogleDriveOperatorConfig
   | OpendalOneDriveOperatorConfig
   | OpendalS3OperatorConfig;
 
@@ -173,8 +189,9 @@ Current evidence:
 - `wasm-pack build --target web` generates `pkg/opendal_wasm_browser_bg.wasm`.
 - `vp pack` builds the TypeScript wrapper into `dist/`.
 - `smoke/index.html` provides a browser fixture for the generated wrapper.
-- The wrapper now supports `provider: "dropbox"`, `provider: "onedrive"`, and
-  `provider: "s3"` at the TypeScript and Rust constructor layers.
+- The wrapper now supports `provider: "dropbox"`, `provider: "gdrive"`,
+  `provider: "onedrive"`, and `provider: "s3"` at the TypeScript and Rust
+  constructor layers.
 
 ## Phase 2: Dropbox Browser Provider Spike
 
@@ -241,7 +258,7 @@ Introduce a backend interface:
 ```ts
 export type WorkspaceBackend = {
   id: string;
-  kind: "local" | "opendal-dropbox" | "opendal-onedrive" | "opendal-s3";
+  kind: "local" | "opendal-dropbox" | "opendal-gdrive" | "opendal-onedrive" | "opendal-s3";
   name: string;
   readTree(): Promise<MarkdownDirectoryNode>;
   readFile(path: string): Promise<string>;
@@ -345,7 +362,8 @@ Current implementation:
   key/root plus the current dirty Dropbox editor value and selected path when
   one exists.
 - `apps/local-md-workspace/src/lib/opendal-workspace-backend.ts` implements the
-  shared OpenDAL `WorkspaceBackend` behavior used by Dropbox and OneDrive:
+  shared OpenDAL `WorkspaceBackend` behavior used by Dropbox, Google Drive, and
+  OneDrive:
   memory-only access tokens, near-expiry refresh/re-authorization callbacks,
   one retry for expired-token errors, write serialization, coalescing, parent
   directory creation, and backend revision tracking.
@@ -624,6 +642,50 @@ Next OneDrive work:
 - Add credential-gated wrapper and app smoke tasks for real OneDrive file IO.
 - Decide separately whether any future refresh-token mode is acceptable in the
   browser product.
+
+## Phase 8: Google Drive Backend Foundation
+
+Status: wrapper and app backend foundation implemented; Google Drive OAuth/UI
+and real provider smoke are pending.
+
+Implementation order:
+
+1. Add OpenDAL Google Drive support to the WASM wrapper through
+   `services-gdrive`.
+2. Reuse the normalized metadata and write API already exposed by the wrapper.
+3. Share the cloud workspace backend logic with Dropbox and OneDrive.
+4. Keep Google Drive on ordinary OpenDAL writes until the provider advertises
+   `nativeWriteWithIfMatch`.
+5. Add Google OAuth/UI after the backend semantics are covered.
+6. Add credential-gated real Google Drive smoke after UI/OAuth exists.
+
+Current implementation:
+
+- `packages/opendal-wasm-browser` enables OpenDAL `services-gdrive`, accepts
+  `provider: "gdrive"` with a short-lived Google Drive API `accessToken`, and
+  returns normalized metadata when OpenDAL provides it.
+- `apps/local-md-workspace/src/lib/google-drive-workspace-backend.ts` creates an
+  `opendal-gdrive` workspace backend over the shared OpenDAL backend.
+- `apps/local-md-workspace/src/lib/opendal-workspace-backend.ts` supports
+  Dropbox, Google Drive, and OneDrive with the same token refresh, write queue,
+  parent-directory creation, tree synthesis, rename/delete/stat, and metadata
+  tracking behavior.
+- Google Drive currently does not get conditional writes because OpenDAL 0.57's
+  `gdrive` capability does not advertise `write_with_if_match`.
+
+Next Google Drive work:
+
+- Add Google OAuth PKCE helpers and non-secret config storage in
+  `apps/local-md-workspace`.
+- Add user-facing Connect/Reconnect Google Drive UI without refresh-token or
+  client-secret storage.
+- Add Google Drive-specific user-facing error messages for denied consent,
+  missing Drive API/scope, expired token, duplicate-name ambiguity, and provider
+  throttling/conflict responses.
+- Add credential-gated wrapper and app smoke tasks for real Google Drive file IO.
+- Decide whether Google Drive should use the broad
+  `https://www.googleapis.com/auth/drive` scope required by OpenDAL or wait for a
+  narrower app-folder style path before becoming visible.
 
 ## Deferred S3-Compatible Track
 

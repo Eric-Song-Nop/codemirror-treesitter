@@ -37,14 +37,17 @@ export type OpendalWorkspaceAccessToken = {
   expiresAt: number;
 };
 
-export type OpendalWorkspaceProvider = Extract<OpendalBrowserProvider, "dropbox" | "onedrive">;
+export type OpendalWorkspaceProvider = Extract<
+  OpendalBrowserProvider,
+  "dropbox" | "gdrive" | "onedrive"
+>;
 
 export type OpendalWorkspaceBackendOptions = {
   createOperator?: OpendalOperatorFactory;
   defaultName: string;
   expiredTokenPattern?: RegExp;
   getAccessToken: () => Promise<OpendalWorkspaceAccessToken>;
-  kind: Extract<WorkspaceBackendKind, "opendal-dropbox" | "opendal-onedrive">;
+  kind: Extract<WorkspaceBackendKind, "opendal-dropbox" | "opendal-gdrive" | "opendal-onedrive">;
   name?: string;
   notFoundPattern?: RegExp;
   provider: OpendalWorkspaceProvider;
@@ -430,6 +433,12 @@ function opendalOperatorConfig(
       return {
         accessToken: token.accessToken,
         provider: "dropbox",
+        root,
+      };
+    case "gdrive":
+      return {
+        accessToken: token.accessToken,
+        provider: "gdrive",
         root,
       };
     case "onedrive":
