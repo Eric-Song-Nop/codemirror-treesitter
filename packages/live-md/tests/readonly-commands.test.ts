@@ -152,6 +152,8 @@ describe("readonly LiveMD edit commands", () => {
     clickTablePreview(editor.view);
 
     expect(editor.view.state.selection.main.head).toBe(editor.value.indexOf("| Name"));
+    expect(editor.view.dom.querySelector(".cm-md-table-preview")).toBeNull();
+    expect(editor.view.contentDOM.textContent).toContain("| Name | Value |");
   });
 });
 

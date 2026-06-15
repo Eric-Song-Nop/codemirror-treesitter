@@ -68,6 +68,7 @@ type LiveMdBuild = {
   imageSourceResolver: LiveMdImageSourceResolver | null;
   lineClasses: Map<number, Set<string>>;
   linkBaseUrl: string | null;
+  ranges: readonly DocRange[];
   state: EditorState;
 };
 
@@ -203,6 +204,7 @@ function createLiveMdBuild(
   state: EditorState,
   activeLines: Set<number>,
   codeFenceLanguages: CodeFenceLanguageMap,
+  ranges: readonly DocRange[],
 ): LiveMdBuild {
   return {
     activeLines,
@@ -214,6 +216,7 @@ function createLiveMdBuild(
     imageSourceResolver: state.facet(liveMdImageSourceResolver),
     lineClasses: new Map(),
     linkBaseUrl: state.facet(liveMdLinkBaseUrl),
+    ranges,
     state,
   };
 }
@@ -225,9 +228,11 @@ function addLineClass(build: LiveMdBuild, lineNumber: number, className: string)
 }
 
 function addLineRangeClass(build: LiveMdBuild, from: number, to: number, className: string) {
-  forEachLineInRange(build.state, from, to, (docLine) =>
-    addLineClass(build, docLine.number, className),
-  );
+  forEachBuildRange(build, from, to, (rangeFrom, rangeTo) => {
+    forEachLineInRange(build.state, rangeFrom, rangeTo, (docLine) =>
+      addLineClass(build, docLine.number, className),
+    );
+  });
 }
 
 function addAtom(build: LiveMdBuild, from: number, to: number) {
@@ -264,6 +269,20 @@ function addSyntax(build: LiveMdBuild, from: number, to: number, decoration?: De
     if (decoration) return decoration;
     return build.activeLines.has(lineNumber) ? visibleSyntax : hiddenSyntax;
   });
+}
+
+function forEachBuildRange(
+  build: LiveMdBuild,
+  from: number,
+  to: number,
+  visit: (from: number, to: number) => void,
+) {
+  if (from >= to) return;
+  for (let range of build.ranges) {
+    let rangeFrom = Math.max(from, range.from);
+    let rangeTo = Math.min(to, range.to);
+    if (rangeFrom < rangeTo) visit(rangeFrom, rangeTo);
+  }
 }
 
 function finishDecorations(build: LiveMdBuild) {
@@ -336,11 +355,11 @@ function buildLiveMdBuild(
   codeFenceLanguages: CodeFenceLanguageMap,
   ranges: readonly DocRange[],
 ) {
-  let build = createLiveMdBuild(state, activeLines, codeFenceLanguages);
+  let build = createLiveMdBuild(state, activeLines, codeFenceLanguages, ranges);
 
   let tree = syntaxTree(state);
   let skipped: Array<{ from: number; to: number }> = [];
-  let matches = queryLiveMdMatches(tree, ranges);
+  let matches = queryLiveMdMatches(tree, liveMdQueryRanges(state, ranges));
   let paragraphContainers = new Map<string, ParagraphContainer>();
   let tables = new Map<string, CapturedTable>();
   for (let match of matches) {
@@ -361,12 +380,26 @@ function buildLiveMdBuild(
 }
 
 function queryLiveMdMatches(tree: Tree, ranges: readonly DocRange[]) {
-  let matches: TreeSitterQueryMatch[] = [];
-  for (let { from, to } of ranges) {
-    let options = from <= 0 && to >= tree.length ? undefined : { from, to };
-    matches.push(...queryTreeMatches(tree, liveMdQuerySource, options));
-  }
-  return matches;
+  if (!ranges.length) return [];
+  let queryFrom = Math.min(...ranges.map((range) => range.from));
+  let options = queryFrom > 0 ? { from: queryFrom } : undefined;
+  let matches = queryTreeMatches(tree, liveMdQuerySource, options);
+  if (ranges.some((range) => range.from <= 0 && range.to >= tree.length)) return matches;
+  return matches.filter((match) => matchTouchesRanges(match, ranges));
+}
+
+function matchTouchesRanges(match: TreeSitterQueryMatch, ranges: readonly DocRange[]) {
+  let node = capture(match, "feature")?.node ?? capture(match, "paragraph.child")?.node;
+  if (node) return nodeTouchesRanges(node, ranges);
+  return match.captures.some((item) => nodeTouchesRanges(item.node, ranges));
+}
+
+function nodeTouchesRanges(node: SyntaxNode, ranges: readonly DocRange[]) {
+  return ranges.some((range) => node.from <= range.to && node.to >= range.from);
+}
+
+function liveMdQueryRanges(state: EditorState, ranges: readonly DocRange[]) {
+  return expandPipeTableRanges(state, expandLeadingBlankRanges(state, ranges));
 }
 
 function fullDocRange(state: EditorState): readonly DocRange[] {
@@ -413,6 +446,59 @@ function mapDocRanges(ranges: readonly DocRange[], changes: ChangeDesc, state: E
 
 function expandLeadingBlankRanges(state: EditorState, ranges: readonly DocRange[]) {
   return mergeDocRanges(ranges.map((range) => expandLeadingBlankRange(state, range)));
+}
+
+function expandPipeTableRanges(state: EditorState, ranges: readonly DocRange[]) {
+  let tableRanges: DocRange[] = [];
+  for (let range of ranges) {
+    if (range.from > range.to) continue;
+    let firstLine = state.doc.lineAt(clamp(range.from, 0, state.doc.length));
+    let lastLine = state.doc.lineAt(clamp(Math.max(range.from, range.to - 1), 0, state.doc.length));
+    for (let lineNumber = firstLine.number; lineNumber <= lastLine.number; lineNumber++) {
+      let line = state.doc.line(lineNumber);
+      if (!lineMayBePipeTableLine(state.sliceDoc(line.from, line.to))) continue;
+      let tableRange = pipeTableLineBlock(state, lineNumber);
+      tableRanges.push(tableRange);
+      lineNumber = state.doc.lineAt(Math.max(tableRange.from, tableRange.to - 1)).number;
+    }
+  }
+  return mergeDocRanges([...ranges, ...tableRanges]);
+}
+
+function pipeTableLineBlock(state: EditorState, lineNumber: number): DocRange {
+  let fromLine = lineNumber;
+  for (; fromLine > 1; fromLine--) {
+    let previous = state.doc.line(fromLine - 1);
+    if (!lineMayBePipeTableLine(state.sliceDoc(previous.from, previous.to))) break;
+  }
+
+  let toLine = lineNumber;
+  for (; toLine < state.doc.lines; toLine++) {
+    let next = state.doc.line(toLine + 1);
+    if (!lineMayBePipeTableLine(state.sliceDoc(next.from, next.to))) break;
+  }
+
+  let lastLine = state.doc.line(toLine);
+  let to = lastLine.to < state.doc.length ? lastLine.to + 1 : lastLine.to;
+  return { from: state.doc.line(fromLine).from, to };
+}
+
+function lineMayBePipeTableLine(text: string) {
+  return text.trim().length > 0 && hasUnescapedPipe(text);
+}
+
+function hasUnescapedPipe(text: string) {
+  let backslashes = 0;
+  for (let index = 0; index < text.length; index++) {
+    let code = text.charCodeAt(index);
+    if (code == 92) {
+      backslashes++;
+      continue;
+    }
+    if (code == 124 && backslashes % 2 == 0) return true;
+    backslashes = 0;
+  }
+  return false;
 }
 
 function expandLeadingBlankRange(state: EditorState, range: DocRange): DocRange {
