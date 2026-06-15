@@ -1,4 +1,4 @@
-use opendal::services::{Dropbox, S3};
+use opendal::services::{Dropbox, Onedrive, S3};
 use opendal::{Entry, Metadata, Operator};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -9,12 +9,21 @@ struct OpendalBrowserOperatorConfig {
     access_token: Option<String>,
     access_key_id: Option<String>,
     bucket: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
     endpoint: Option<String>,
     provider: String,
     region: Option<String>,
+    refresh_token: Option<String>,
     root: Option<String>,
     secret_access_key: Option<String>,
     session_token: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpendalBrowserWriteOptions {
+    if_match: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -28,14 +37,23 @@ struct OpendalBrowserCapabilities {
     native_rename: bool,
     native_stat: bool,
     native_write: bool,
+    native_write_with_if_match: bool,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OpendalBrowserEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    etag: Option<String>,
     is_directory: bool,
     is_file: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_modified: Option<String>,
     path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
 }
 
 #[wasm_bindgen(js_name = OpendalBrowserOperator)]
@@ -55,6 +73,7 @@ impl WasmOpendalBrowserOperator {
         let provider = config.provider.trim().to_string();
         let operator = match provider.as_str() {
             "dropbox" => build_dropbox_operator(config)?,
+            "onedrive" => build_onedrive_operator(config)?,
             "s3" => build_s3_operator(config)?,
             provider => {
                 return Err(js_error(format!(
@@ -70,6 +89,39 @@ impl WasmOpendalBrowserOperator {
 fn build_dropbox_operator(config: OpendalBrowserOperatorConfig) -> Result<Operator, JsValue> {
     let mut builder =
         Dropbox::default().access_token(required("accessToken", config.access_token.as_deref())?);
+
+    if let Some(root) = optional_root(config.root.as_deref())? {
+        builder = builder.root(&root);
+    }
+
+    Ok(Operator::new(builder).map_err(js_error)?.finish())
+}
+
+fn build_onedrive_operator(config: OpendalBrowserOperatorConfig) -> Result<Operator, JsValue> {
+    let mut builder = Onedrive::default();
+
+    match (
+        optional_text(config.access_token.as_deref()),
+        optional_text(config.refresh_token.as_deref()),
+    ) {
+        (Some(access_token), None) => {
+            builder = builder.access_token(access_token);
+        }
+        (None, Some(refresh_token)) => {
+            builder = builder
+                .refresh_token(refresh_token)
+                .client_id(required("clientId", config.client_id.as_deref())?);
+            if let Some(client_secret) = optional_text(config.client_secret.as_deref()) {
+                builder = builder.client_secret(client_secret);
+            }
+        }
+        (Some(_), Some(_)) => {
+            return Err(js_error(
+                "accessToken and refreshToken cannot be set at the same time.",
+            ));
+        }
+        (None, None) => return Err(js_error("OpenDAL browser config requires accessToken.")),
+    }
 
     if let Some(root) = optional_root(config.root.as_deref())? {
         builder = builder.root(&root);
@@ -118,6 +170,7 @@ impl WasmOpendalBrowserOperator {
             native_rename: cap.rename,
             native_stat: cap.stat,
             native_write: cap.write,
+            native_write_with_if_match: cap.write_with_if_match,
         })
     }
 
@@ -153,12 +206,30 @@ impl WasmOpendalBrowserOperator {
     }
 
     #[wasm_bindgen(js_name = writeText)]
-    pub async fn write_text(&self, path: String, value: String) -> Result<(), JsValue> {
-        self.operator
-            .write(&normalize_file_path(&path)?, value.into_bytes())
-            .await
-            .map_err(js_error)?;
-        Ok(())
+    pub async fn write_text(
+        &self,
+        path: String,
+        value: String,
+        options: Option<JsValue>,
+    ) -> Result<JsValue, JsValue> {
+        let path = normalize_file_path(&path)?;
+        let options = parse_write_options(options)?;
+        let cap = self.operator.info().native_capability();
+        let metadata = match optional_text(options.if_match.as_deref()) {
+            Some(if_match) if cap.write_with_if_match => {
+                self.operator
+                    .write_with(&path, value.into_bytes())
+                    .if_match(if_match)
+                    .await
+                    .map_err(js_error)?
+            }
+            _ => self
+                .operator
+                .write(&path, value.into_bytes())
+                .await
+                .map_err(js_error)?,
+        };
+        to_js_value(metadata_to_payload(path, &metadata))
     }
 
     pub async fn delete(&self, path: String) -> Result<(), JsValue> {
@@ -207,9 +278,22 @@ fn entry_to_payload(entry: &Entry) -> OpendalBrowserEntry {
 
 fn metadata_to_payload(path: String, metadata: &Metadata) -> OpendalBrowserEntry {
     OpendalBrowserEntry {
+        etag: metadata.etag().map(str::to_string),
         is_directory: metadata.is_dir(),
         is_file: metadata.is_file(),
+        last_modified: metadata.last_modified().map(|value| value.to_string()),
         path,
+        size: metadata.is_file().then_some(metadata.content_length()),
+        version: metadata.version().map(str::to_string),
+    }
+}
+
+fn parse_write_options(options: Option<JsValue>) -> Result<OpendalBrowserWriteOptions, JsValue> {
+    match options {
+        Some(value) if !value.is_null() && !value.is_undefined() => {
+            serde_wasm_bindgen::from_value(value).map_err(js_error)
+        }
+        _ => Ok(OpendalBrowserWriteOptions::default()),
     }
 }
 

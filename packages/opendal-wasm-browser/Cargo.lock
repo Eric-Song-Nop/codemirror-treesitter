@@ -895,6 +895,7 @@ checksum = "96c9c85ce253ff87225e7669979d877a20c98a06604ec9d6dd5f4473e08f1ae1"
 dependencies = [
  "opendal-core",
  "opendal-service-dropbox",
+ "opendal-service-onedrive",
  "opendal-service-s3",
 ]
 
@@ -938,6 +939,22 @@ dependencies = [
  "opendal-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "opendal-service-onedrive"
+version = "0.57.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "817bf55e1ff2894706df864cae50a3c79bb66161fc3a8e222053b53610d599b8"
+dependencies = [
+ "bytes",
+ "http",
+ "log",
+ "mea",
+ "opendal-core",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

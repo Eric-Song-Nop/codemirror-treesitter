@@ -1,4 +1,4 @@
-export type OpendalBrowserProvider = "dropbox" | "s3";
+export type OpendalBrowserProvider = "dropbox" | "onedrive" | "s3";
 
 export type OpendalDropboxOperatorConfig = {
   accessToken: string;
@@ -17,7 +17,16 @@ export type OpendalS3OperatorConfig = {
   sessionToken?: string;
 };
 
-export type OpendalBrowserOperatorConfig = OpendalDropboxOperatorConfig | OpendalS3OperatorConfig;
+export type OpendalOneDriveOperatorConfig = {
+  accessToken: string;
+  provider: "onedrive";
+  root?: string;
+};
+
+export type OpendalBrowserOperatorConfig =
+  | OpendalDropboxOperatorConfig
+  | OpendalOneDriveOperatorConfig
+  | OpendalS3OperatorConfig;
 
 export type OpendalBrowserCapabilities = {
   nativeCopy: boolean;
@@ -28,12 +37,21 @@ export type OpendalBrowserCapabilities = {
   nativeRename: boolean;
   nativeStat: boolean;
   nativeWrite: boolean;
+  nativeWriteWithIfMatch: boolean;
 };
 
 export type OpendalBrowserEntry = {
+  etag?: string;
   isDirectory: boolean;
   isFile: boolean;
+  lastModified?: string;
   path: string;
+  size?: number;
+  version?: string;
+};
+
+export type OpendalBrowserWriteOptions = {
+  ifMatch?: string;
 };
 
 export type OpendalBrowserOperator = {
@@ -44,7 +62,11 @@ export type OpendalBrowserOperator = {
   readText(path: string): Promise<string>;
   rename(from: string, to: string): Promise<void>;
   stat(path: string): Promise<OpendalBrowserEntry>;
-  writeText(path: string, value: string): Promise<void>;
+  writeText(
+    path: string,
+    value: string,
+    options?: OpendalBrowserWriteOptions,
+  ): Promise<OpendalBrowserEntry | void>;
 };
 
 export type CreateOpendalBrowserOperatorOptions = {
@@ -60,7 +82,7 @@ type GeneratedOperator = {
   readText(path: string): Promise<string>;
   rename(from: string, to: string): Promise<void>;
   stat(path: string): Promise<unknown>;
-  writeText(path: string, value: string): Promise<void>;
+  writeText(path: string, value: string, options?: OpendalBrowserWriteOptions): Promise<unknown>;
 };
 
 type GeneratedOperatorConstructor = new (config: OpendalBrowserOperatorConfig) => GeneratedOperator;
@@ -128,8 +150,10 @@ class WasmOpendalBrowserOperator implements OpendalBrowserOperator {
     return parseEntry(await this.operator.stat(path));
   }
 
-  async writeText(path: string, value: string) {
-    await this.operator.writeText(path, value);
+  async writeText(path: string, value: string, options?: OpendalBrowserWriteOptions) {
+    let result = await this.operator.writeText(path, value, options);
+    if (result == null) return undefined;
+    return parseEntry(result, "write result");
   }
 }
 
@@ -141,6 +165,17 @@ function normalizeConfig(config: OpendalBrowserOperatorConfig): OpendalBrowserOp
     return {
       accessToken: requireText((config as OpendalDropboxOperatorConfig).accessToken, "accessToken"),
       provider: "dropbox",
+      root: normalizeRoot(config.root),
+    };
+  }
+
+  if (provider == "onedrive") {
+    return {
+      accessToken: requireText(
+        (config as OpendalOneDriveOperatorConfig).accessToken,
+        "accessToken",
+      ),
+      provider: "onedrive",
       root: normalizeRoot(config.root),
     };
   }
@@ -173,6 +208,7 @@ function parseCapabilities(value: unknown): OpendalBrowserCapabilities {
     nativeRename: Boolean(record.nativeRename),
     nativeStat: Boolean(record.nativeStat),
     nativeWrite: Boolean(record.nativeWrite),
+    nativeWriteWithIfMatch: Boolean(record.nativeWriteWithIfMatch),
   };
 }
 
@@ -184,9 +220,13 @@ function parseEntries(value: unknown) {
 function parseEntry(value: unknown, label = "entry"): OpendalBrowserEntry {
   let record = requireRecord(value, label);
   return {
+    etag: optionalText(record.etag, `${label}.etag`),
     isDirectory: Boolean(record.isDirectory),
     isFile: Boolean(record.isFile),
+    lastModified: optionalText(record.lastModified, `${label}.lastModified`),
     path: requireText(record.path, `${label}.path`),
+    size: optionalNumber(record.size, `${label}.size`),
+    version: optionalText(record.version, `${label}.version`),
   };
 }
 
@@ -202,6 +242,22 @@ function requireText(value: unknown, label: string) {
     throw new Error(`OpenDAL browser config requires ${label}.`);
   }
   return value.trim();
+}
+
+function optionalText(value: unknown, label: string) {
+  if (value == null) return undefined;
+  if (typeof value != "string") {
+    throw new Error(`OpenDAL ${label} returned a non-string value.`);
+  }
+  return value;
+}
+
+function optionalNumber(value: unknown, label: string) {
+  if (value == null) return undefined;
+  if (typeof value != "number" || !Number.isFinite(value)) {
+    throw new Error(`OpenDAL ${label} returned a non-number value.`);
+  }
+  return value;
 }
 
 function emptyToUndefined(value: null | string | undefined) {

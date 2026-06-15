@@ -255,6 +255,7 @@ describe("Dropbox workspace backend", () => {
             nativeRename: true,
             nativeStat: true,
             nativeWrite: true,
+            nativeWriteWithIfMatch: false,
           }),
           async createDir() {
             createDirCalls += 1;
@@ -324,6 +325,7 @@ function fakeOperator(overrides: Partial<OpendalBrowserOperator>): OpendalBrowse
       nativeRename: true,
       nativeStat: true,
       nativeWrite: true,
+      nativeWriteWithIfMatch: false,
     }),
     createDir: async () => {},
     delete: async () => {},
