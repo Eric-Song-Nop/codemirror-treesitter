@@ -209,8 +209,6 @@
   "theme.selector.group": "Theme",
   "theme.selector.label": "Theme: {label}",
   "workspace.dropboxWorkspace": "Dropbox workspace",
-  "workspace.markdownFileCount_one": "1 markdown file",
-  "workspace.markdownFileCount_other": "{count} markdown files",
   "workspace.placeholder": "Start writing...",
   "workspace.sharedFileBadge": "Shared file"
 }

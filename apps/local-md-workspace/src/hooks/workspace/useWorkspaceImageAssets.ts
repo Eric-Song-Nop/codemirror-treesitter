@@ -16,17 +16,14 @@ import type { LiveMdImageFilesInput } from "@/components/LiveMdEditor";
 import { resolveMarkdownImagePath } from "@/lib/export/markdown-html";
 import { errorToMessage } from "@/lib/workspace/errors";
 import {
-  createWorkspaceImageAssets,
+  createWorkspaceImageAssetFromBytes,
   insertImageMarkdown,
   isImageFile,
+  isImageFileName,
   revokeImageAssetUrls,
 } from "@/lib/workspace/images";
 import type { EditorDocument, SingleFileSource, WorkspaceImageAsset } from "@/lib/workspace/types";
-import type {
-  MarkdownFileNode,
-  WorkspaceBackend,
-  WorkspaceImageNode,
-} from "@/lib/workspace-backend";
+import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
 
 type UseWorkspaceImageAssetsOptions = {
   editorDocument: EditorDocument;
@@ -54,6 +51,7 @@ export function useWorkspaceImageAssets({
   workspaceBackendRef,
 }: UseWorkspaceImageAssetsOptions) {
   let imageAssetsRef = useRef(new Map<string, WorkspaceImageAsset>());
+  let imageLoadPromisesRef = useRef(new Map<string, Promise<WorkspaceImageAsset | null>>());
   let imageInputRef = useRef<HTMLInputElement | null>(null);
   let [imageAssetVersion, setImageAssetVersion] = useState(0);
 
@@ -82,14 +80,54 @@ export function useWorkspaceImageAssets({
     setImageAssetVersion((version) => version + 1);
   }, []);
 
+  useEffect(() => {
+    imageLoadPromisesRef.current = new Map();
+    replaceImageAssets([]);
+  }, [replaceImageAssets, workspaceBackend?.id]);
+
+  let loadImageAsset = useCallback(
+    (path: string) => {
+      if (!isImageFileName(path)) return Promise.resolve(null);
+
+      let cached = imageAssetsRef.current.get(path);
+      if (cached) return Promise.resolve(cached);
+
+      let backend = workspaceBackendRef.current;
+      if (!backend?.readBytes) return Promise.resolve(null);
+
+      let loadKey = `${backend.id}\0${path}`;
+      let pending = imageLoadPromisesRef.current.get(loadKey);
+      if (pending) return pending;
+
+      let promise = backend
+        .readBytes(path)
+        .then((bytes) => {
+          if (workspaceBackendRef.current?.id != backend.id) return null;
+          let asset = createWorkspaceImageAssetFromBytes(path, bytes);
+          upsertImageAssets([asset]);
+          return asset;
+        })
+        .catch(() => null)
+        .finally(() => {
+          imageLoadPromisesRef.current.delete(loadKey);
+        });
+      imageLoadPromisesRef.current.set(loadKey, promise);
+      return promise;
+    },
+    [upsertImageAssets, workspaceBackendRef],
+  );
+
   let resolveImageSource = useMemo<LiveMdImageSourceResolver>(() => {
     return (source) => {
       if (singleFileSource) return source;
       let imagePath = resolveMarkdownImagePath(source, editorDocument.path);
       if (!imagePath) return source;
-      return imageAssetsRef.current.get(imagePath)?.url ?? source;
+      let asset = imageAssetsRef.current.get(imagePath);
+      if (asset) return asset.url;
+      void loadImageAsset(imagePath);
+      return source;
     };
-  }, [editorDocument.path, imageAssetVersion, singleFileSource]);
+  }, [editorDocument.path, imageAssetVersion, loadImageAsset, singleFileSource]);
 
   let insertImageFiles = useCallback(
     async (files: File[], options: { position?: number; view?: EditorView } = {}) => {
@@ -155,16 +193,13 @@ export function useWorkspaceImageAssets({
   );
 
   let resolveImageAssetFile = useCallback(
-    (path: string) =>
-      singleFileSourceRef.current ? null : (imageAssetsRef.current.get(path)?.file ?? null),
-    [singleFileSourceRef],
-  );
-
-  let loadWorkspaceImageAssets = useCallback(
-    async (nextImageNodes: WorkspaceImageNode[]) => {
-      replaceImageAssets(await createWorkspaceImageAssets(nextImageNodes));
+    async (path: string) => {
+      if (singleFileSourceRef.current) return null;
+      let cached = imageAssetsRef.current.get(path);
+      if (cached) return cached.file;
+      return (await loadImageAsset(path))?.file ?? null;
     },
-    [replaceImageAssets],
+    [loadImageAsset, singleFileSourceRef],
   );
 
   return {
@@ -176,6 +211,5 @@ export function useWorkspaceImageAssets({
     handleEditorImageFiles,
     handleImageInputChange,
     resolveImageAssetFile,
-    replaceImageAssets: loadWorkspaceImageAssets,
   };
 }

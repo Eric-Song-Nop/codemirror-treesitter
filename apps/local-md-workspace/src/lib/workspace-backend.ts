@@ -15,13 +15,13 @@ export type MarkdownDirectoryNode = {
 
 export type MarkdownTreeNode = MarkdownDirectoryNode | MarkdownFileNode;
 
-export type WorkspaceImageNode = {
+export type WorkspaceImageAssetNode = {
   file: File;
   name: string;
   path: string;
 };
 
-export type CreatedWorkspaceImageNode = WorkspaceImageNode & {
+export type CreatedWorkspaceImageNode = WorkspaceImageAssetNode & {
   markdownReference: string;
 };
 
@@ -54,7 +54,6 @@ export type WorkspaceBackend = {
   listEntries?: (path: string) => Promise<WorkspaceEntry[]>;
   readBytes?: (path: string) => Promise<Uint8Array>;
   readFile(path: string): Promise<string>;
-  readImages?: () => Promise<WorkspaceImageNode[]>;
   readTextFile?: (path: string) => Promise<string>;
   readTree(): Promise<MarkdownDirectoryNode>;
   renameEntry?: (from: string, to: string) => Promise<void>;
@@ -80,6 +79,11 @@ export function flattenMarkdownFiles(tree: MarkdownDirectoryNode) {
   let files: MarkdownFileNode[] = [];
   collectMarkdownFiles(tree.children, files);
   return files;
+}
+
+export function findMarkdownFile(tree: MarkdownDirectoryNode | null, path: string | null) {
+  if (!tree || !path) return null;
+  return findMarkdownFileInNodes(tree.children, path);
 }
 
 export function normalizeMarkdownPath(rawPath: string) {
@@ -230,6 +234,18 @@ function collectMarkdownFiles(nodes: MarkdownTreeNode[], files: MarkdownFileNode
       collectMarkdownFiles(node.children, files);
     }
   }
+}
+
+function findMarkdownFileInNodes(nodes: MarkdownTreeNode[], path: string): MarkdownFileNode | null {
+  for (let node of nodes) {
+    if (node.kind == "file") {
+      if (node.path == path) return node;
+    } else {
+      let file = findMarkdownFileInNodes(node.children, path);
+      if (file) return file;
+    }
+  }
+  return null;
 }
 
 export function isHiddenLiveMdPath(path: string) {

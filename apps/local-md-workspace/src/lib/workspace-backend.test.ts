@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildMarkdownTreeFromEntries,
   buildMarkdownTreeFromPaths,
+  findMarkdownFile,
   flattenMarkdownFiles,
   normalizeMarkdownFileName,
   normalizeMarkdownPath,
@@ -82,6 +83,12 @@ describe("workspace backend path helpers", () => {
       "notes/today.md",
       "root.md",
     ]);
+    expect(findMarkdownFile(tree, "notes/10.md")).toEqual({
+      kind: "file",
+      name: "10.md",
+      path: "notes/10.md",
+    });
+    expect(findMarkdownFile(tree, "notes/missing.md")).toBeNull();
   });
 
   it("synthesizes empty directories from backend entries", () => {

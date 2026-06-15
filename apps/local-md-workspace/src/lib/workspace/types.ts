@@ -1,5 +1,4 @@
 import type { OwnerShareRecord } from "@/lib/collaboration/share-storage";
-import type { WorkspaceImageNode } from "@/lib/workspace-backend";
 
 export type SaveState = "idle" | "pending" | "saving" | "saved" | "error";
 
@@ -27,7 +26,10 @@ export type EditorDocument = {
   version: number;
 };
 
-export type WorkspaceImageAsset = WorkspaceImageNode & {
+export type WorkspaceImageAsset = {
+  file: File;
+  name: string;
+  path: string;
   url: string;
 };
 

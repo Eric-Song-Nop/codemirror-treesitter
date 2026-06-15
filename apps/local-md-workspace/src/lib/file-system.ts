@@ -11,7 +11,6 @@ import {
   type WorkspaceEntry,
   type WorkspaceEntryStat,
   type WorkspaceBackend,
-  type WorkspaceImageNode,
 } from "./workspace-backend.ts";
 
 type AccessPermissionMode = "read" | "readwrite";
@@ -77,6 +76,22 @@ const markdownFilePickerTypes = [
     description: "Markdown",
   },
 ];
+
+const ignoredWorkspaceScanDirectories = new Set([
+  ".cache",
+  ".git",
+  ".hg",
+  ".next",
+  ".parcel-cache",
+  ".svn",
+  ".turbo",
+  ".vite",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "target",
+]);
 
 export function supportsDirectoryPicker() {
   return typeof (window as PickerWindow).showDirectoryPicker == "function";
@@ -151,7 +166,6 @@ export function createLocalWorkspaceBackend(
     listEntries: (path) => listWorkspaceEntries(handle, path),
     readBytes: (path) => readWorkspaceBytes(handle, path),
     readFile: (path) => readMarkdownPath(handle, path),
-    readImages: () => readWorkspaceImages(handle),
     readTextFile: (path) => readMarkdownPath(handle, path),
     readTree: () => readWorkspaceTree(handle),
     findFilePathForHandle: (fileHandle) => findWorkspacePathForFileHandle(handle, fileHandle),
@@ -180,14 +194,6 @@ async function findWorkspacePathForFileHandle(
 ) {
   if (!isAccessFileHandle(fileHandle)) return null;
   return findMarkdownFilePathForHandle(rootHandle, "", fileHandle);
-}
-
-async function readWorkspaceImages(handle: AccessDirectoryHandle) {
-  let images: WorkspaceImageNode[] = [];
-  await collectWorkspaceImages(handle, "", images);
-  return images.sort((left, right) =>
-    left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
-  );
 }
 
 async function readMarkdownPath(rootHandle: AccessDirectoryHandle, path: string) {
@@ -455,6 +461,7 @@ async function readDirectoryChildren(handle: AccessDirectoryHandle, path: string
     if (isLiveMdEntry(path, entry.name)) continue;
     let entryPath = joinWorkspacePath(path, entry.name);
     if (entry.kind == "directory") {
+      if (isIgnoredWorkspaceScanDirectory(entry.name)) continue;
       let directoryChildren = await readDirectoryChildren(entry, entryPath);
       children.push({
         children: directoryChildren,
@@ -483,6 +490,7 @@ async function findMarkdownFilePathForHandle(
     if (isLiveMdEntry(path, entry.name)) continue;
     let entryPath = joinWorkspacePath(path, entry.name);
     if (entry.kind == "directory") {
+      if (isIgnoredWorkspaceScanDirectory(entry.name)) continue;
       let match = await findMarkdownFilePathForHandle(entry, entryPath, target);
       if (match) return match;
     } else if (/\.md$/i.test(entry.name) && (await isSameAccessEntry(entry, target))) {
@@ -490,26 +498,6 @@ async function findMarkdownFilePathForHandle(
     }
   }
   return null;
-}
-
-async function collectWorkspaceImages(
-  handle: AccessDirectoryHandle,
-  path: string,
-  images: WorkspaceImageNode[],
-) {
-  for await (let entry of handle.values()) {
-    if (isLiveMdEntry(path, entry.name)) continue;
-    let entryPath = joinWorkspacePath(path, entry.name);
-    if (entry.kind == "directory") {
-      await collectWorkspaceImages(entry, entryPath, images);
-    } else if (isImageFileName(entry.name)) {
-      images.push({
-        file: await entry.getFile(),
-        name: entry.name,
-        path: entryPath,
-      });
-    }
-  }
 }
 
 function normalizeDirectoryPath(path: string) {
@@ -525,6 +513,10 @@ function normalizeEntryPath(path: string) {
 
 function isLiveMdEntry(parentPath: string, name: string) {
   return !parentPath && name == ".livemd";
+}
+
+function isIgnoredWorkspaceScanDirectory(name: string) {
+  return ignoredWorkspaceScanDirectories.has(name);
 }
 
 async function isSameAccessEntry(left: AccessFileHandle, right: AccessFileHandle) {

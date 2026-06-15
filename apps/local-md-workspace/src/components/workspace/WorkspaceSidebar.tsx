@@ -16,7 +16,6 @@ type WorkspaceSidebarProps = {
   busy: boolean;
   dropboxConnecting: boolean;
   dropboxRestoreAvailable: boolean;
-  files: MarkdownFileNode[];
   open: boolean;
   restoreAvailable: boolean;
   restoreChecking: boolean;
@@ -40,7 +39,6 @@ export function WorkspaceSidebar({
   busy,
   dropboxConnecting,
   dropboxRestoreAvailable,
-  files,
   open,
   restoreAvailable,
   restoreChecking,
@@ -71,13 +69,6 @@ export function WorkspaceSidebar({
         <GroveMark className="size-8" decorative />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{rootName}</div>
-          {workspaceOpen && (
-            <div className="truncate text-xs text-sidebar-foreground/55">
-              {files.length == 1
-                ? t("workspace.markdownFileCount_one")
-                : t("workspace.markdownFileCount_other", { count: files.length })}
-            </div>
-          )}
         </div>
         <TooltipIconButton
           label={t("actions.openFolder")}

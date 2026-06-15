@@ -4,7 +4,7 @@ import { DeleteEntryDialog } from "@/components/workspace/DeleteEntryDialog";
 import { FileNameDialog, SaveAsDropboxDialog } from "@/components/workspace/FileDialogs";
 import { ShareFileDialog } from "@/components/workspace/ShareFileDialog";
 import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
-import type { MarkdownFileNode } from "@/lib/workspace-backend";
+import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace-backend";
 import type { ActiveOwnerShareRecord, FileDialogMode } from "@/lib/workspace/types";
 
 type FileNameDialogState = {
@@ -53,9 +53,9 @@ type CommandPaletteState = {
   canSaveAsLocal: boolean;
   disabled: boolean;
   dropboxConnecting: boolean;
-  files: MarkdownFileNode[];
   selectedPath: string | null;
   sidebarOpen: boolean;
+  tree: MarkdownDirectoryNode | null;
   onConnectDropbox: () => void;
   onDownloadCopy: () => void;
   onInsertImage: () => void;
@@ -138,9 +138,9 @@ export function WorkspaceDialogs({
         canSaveAsLocal={commandPalette.canSaveAsLocal}
         disabled={commandPalette.disabled}
         dropboxConnecting={commandPalette.dropboxConnecting}
-        files={commandPalette.files}
         selectedPath={commandPalette.selectedPath}
         sidebarOpen={commandPalette.sidebarOpen}
+        tree={commandPalette.tree}
         onConnectDropbox={commandPalette.onConnectDropbox}
         onDownloadCopy={commandPalette.onDownloadCopy}
         onInsertImage={commandPalette.onInsertImage}

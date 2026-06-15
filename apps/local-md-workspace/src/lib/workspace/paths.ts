@@ -1,9 +1,9 @@
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import type { TFunction } from "@/lib/i18n";
-import type {
-  MarkdownDirectoryNode,
-  MarkdownFileNode,
-  WorkspaceBackend,
+import {
+  findMarkdownFile,
+  type MarkdownDirectoryNode,
+  type WorkspaceBackend,
 } from "@/lib/workspace-backend";
 
 export function isPathInsideDirectory(path: string, directory: string) {
@@ -30,7 +30,7 @@ export function pathAfterDirectoryRename(
 }
 
 export function defaultNewFilePath(
-  files: MarkdownFileNode[],
+  tree: MarkdownDirectoryNode | null,
   selection: FileTreeDeleteTarget | null,
   t: TFunction,
 ) {
@@ -43,11 +43,11 @@ export function defaultNewFilePath(
         : "";
   let baseName = `${today}.md`;
   let basePath = joinWorkspacePath(parentPath, baseName);
-  if (!files.some((file) => file.path == basePath)) return basePath;
+  if (!findMarkdownFile(tree, basePath)) return basePath;
 
   for (let index = 2; index < 1000; index += 1) {
     let path = joinWorkspacePath(parentPath, `${today}-${index}.md`);
-    if (!files.some((file) => file.path == path)) return path;
+    if (!findMarkdownFile(tree, path)) return path;
   }
 
   return joinWorkspacePath(parentPath, t("defaults.untitledFile"));
