@@ -3,11 +3,10 @@ import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import type { AccessFileHandle } from "@/lib/file-system";
 import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
 import {
-  flattenMarkdownFiles,
+  findMarkdownFile,
   type MarkdownDirectoryNode,
   type MarkdownFileNode,
   type WorkspaceBackend,
-  type WorkspaceImageNode,
 } from "@/lib/workspace-backend";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
 import type { SingleFileSource } from "@/lib/workspace/types";
@@ -24,10 +23,8 @@ type UseWorkspaceTreeOptions = {
     options?: { saveCurrent?: boolean },
   ) => Promise<void>;
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
-  replaceWorkspaceImageAssets: (nextImageNodes: WorkspaceImageNode[]) => Promise<void>;
   selectedFileBackendRef: MutableRef<WorkspaceBackend | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
-  setFiles: (files: MarkdownFileNode[]) => void;
   setTree: (tree: MarkdownDirectoryNode | null) => void;
   setTreeSelection: (target: FileTreeDeleteTarget | null) => void;
   singleFileSourceRef: MutableRef<SingleFileSource | null>;
@@ -37,10 +34,8 @@ export function useWorkspaceTree({
   clearActiveDocument,
   loadFile,
   localFileHandleRef,
-  replaceWorkspaceImageAssets,
   selectedFileBackendRef,
   selectedFileRef,
-  setFiles,
   setTree,
   setTreeSelection,
   singleFileSourceRef,
@@ -51,18 +46,10 @@ export function useWorkspaceTree({
       nextSelectedPath?: null | string,
       options: { saveBeforeSelect?: boolean } = {},
     ) => {
-      let [nextTree, nextImageNodes] = await Promise.all([
-        backend.readTree(),
-        backend.readImages?.() ?? Promise.resolve([]),
-      ]);
-      await replaceWorkspaceImageAssets(nextImageNodes);
-      let nextFiles = flattenMarkdownFiles(nextTree);
+      let nextTree = await backend.readTree();
       setTree(nextTree);
-      setFiles(nextFiles);
 
-      let nextSelectedFile = nextSelectedPath
-        ? (nextFiles.find((file) => file.path == nextSelectedPath) ?? null)
-        : null;
+      let nextSelectedFile = findMarkdownFile(nextTree, nextSelectedPath ?? null);
 
       if (nextSelectedFile) {
         await loadFile(backend, nextSelectedFile, {
@@ -87,10 +74,8 @@ export function useWorkspaceTree({
     [
       clearActiveDocument,
       loadFile,
-      replaceWorkspaceImageAssets,
       selectedFileBackendRef,
       selectedFileRef,
-      setFiles,
       setTree,
       setTreeSelection,
       singleFileSourceRef,

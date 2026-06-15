@@ -6,7 +6,7 @@ import type {
   MarkdownFileNode,
   MarkdownTreeNode,
 } from "@/lib/workspace-backend";
-import { flattenMarkdownFiles } from "@/lib/workspace-backend";
+import { findMarkdownFile } from "@/lib/workspace-backend";
 import { useI18n, type TFunction } from "@/lib/i18n";
 
 type FileTreeProps = {
@@ -38,17 +38,13 @@ export const FileTree = memo(function FileTree({
 }: FileTreeProps) {
   let { t } = useI18n();
   let paths = useMemo(() => (root ? collectTreePaths(root.children) : []), [root]);
-  let filesByPath = useMemo(
-    () => new Map(root ? flattenMarkdownFiles(root).map((file) => [file.path, file]) : []),
-    [root],
-  );
   let latestSelection = {
-    filesByPath,
     onCreateEntry,
     onDeleteEntry,
     onRenameEntry,
     onSelectEntry,
     onSelectFile,
+    root,
     selectedPath,
     t,
   };
@@ -110,11 +106,11 @@ export const FileTree = memo(function FileTree({
         if (!nextPath) return;
 
         let latest = latestSelectionRef.current;
-        let target = resolveSelectionTarget(nextPath, latest.filesByPath);
+        let target = resolveSelectionTarget(nextPath, latest.root);
         if (target) latest.onSelectEntry(target);
         if (nextPath == latest.selectedPath) return;
 
-        let file = latest.filesByPath.get(nextPath);
+        let file = findMarkdownFile(latest.root, nextPath);
         if (file) latest.onSelectFile(file);
       },
     });
@@ -217,9 +213,9 @@ function normalizeDeleteTarget(target: FileTreeDeleteTarget): FileTreeDeleteTarg
 
 function resolveSelectionTarget(
   path: string,
-  filesByPath: Map<string, MarkdownFileNode>,
+  root: MarkdownDirectoryNode | null,
 ): FileTreeDeleteTarget | null {
-  let file = filesByPath.get(path);
+  let file = findMarkdownFile(root, path);
   if (file) return { kind: "file", name: file.name, path: file.path };
 
   let directoryPath = workspaceDirectoryPath(path);

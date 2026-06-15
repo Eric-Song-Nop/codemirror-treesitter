@@ -25,7 +25,6 @@ type MutableRef<T> = {
 type UseWorkspaceEntryDialogsOptions = {
   beginDocumentTransition: (path?: string) => void;
   clearActiveDocument: () => void;
-  files: MarkdownFileNode[];
   loadTree: (
     backend: WorkspaceBackend,
     nextSelectedPath?: null | string,
@@ -49,7 +48,6 @@ type UseWorkspaceEntryDialogsOptions = {
 export function useWorkspaceEntryDialogs({
   beginDocumentTransition,
   clearActiveDocument,
-  files,
   loadTree,
   saveCurrentFile,
   saveOperationRef,
@@ -78,11 +76,11 @@ export function useWorkspaceEntryDialogs({
       setFileDialogValue(
         kind == "directory"
           ? defaultNewFolderPath(tree, target, t)
-          : defaultNewFilePath(files, target, t),
+          : defaultNewFilePath(tree, target, t),
       );
       setFileDialogMode("create");
     },
-    [files, t, tree, treeSelection],
+    [t, tree, treeSelection],
   );
 
   let openRenameDialog = useCallback(

@@ -29,6 +29,7 @@ import {
   type AccessFileHandle,
 } from "@/lib/file-system";
 import {
+  findMarkdownFile,
   type MarkdownDirectoryNode,
   type MarkdownFileNode,
   type WorkspaceBackend,
@@ -65,7 +66,6 @@ export function LocalWorkspaceApp() {
     loadStoredWorkspaceKind(),
   );
   let [tree, setTree] = useState<MarkdownDirectoryNode | null>(null);
-  let [files, setFiles] = useState<MarkdownFileNode[]>([]);
   let [selectedFile, setSelectedFile] = useState<MarkdownFileNode | null>(null);
   let [treeSelection, setTreeSelection] = useState<FileTreeDeleteTarget | null>(null);
   let [singleFileSource, setSingleFileSource] = useState<SingleFileSource | null>(null);
@@ -160,15 +160,7 @@ export function LocalWorkspaceApp() {
       : selectedFile.path
     : "";
   let headerTitle = singleFileSource?.name ?? selectedFile?.name ?? rootName;
-  let headerSubtitle = singleFileSource
-    ? ""
-    : selectedFile
-      ? selectedPathLabel
-      : workspaceBackend
-        ? files.length == 1
-          ? t("workspace.markdownFileCount_one")
-          : t("workspace.markdownFileCount_other", { count: files.length })
-        : "";
+  let headerSubtitle = singleFileSource ? "" : selectedFile ? selectedPathLabel : "";
   let browserSupported = supportsDirectoryPicker();
   let canShareFile = Boolean(!singleFileSource && workspaceBackend && selectedFile);
   let canRefreshWorkspace = Boolean(workspaceBackend);
@@ -183,7 +175,6 @@ export function LocalWorkspaceApp() {
     handleEditorImageFiles,
     handleImageInputChange,
     imageInputRef,
-    replaceImageAssets: replaceWorkspaceImageAssets,
     resolveImageAssetFile,
     resolveImageSource,
   } = useWorkspaceImageAssets({
@@ -281,10 +272,8 @@ export function LocalWorkspaceApp() {
     clearActiveDocument,
     loadFile,
     localFileHandleRef,
-    replaceWorkspaceImageAssets,
     selectedFileBackendRef,
     selectedFileRef,
-    setFiles,
     setTree,
     setTreeSelection,
     singleFileSourceRef,
@@ -384,7 +373,6 @@ export function LocalWorkspaceApp() {
   } = useWorkspaceEntryDialogs({
     beginDocumentTransition,
     clearActiveDocument,
-    files,
     loadTree,
     saveCurrentFile,
     saveOperationRef,
@@ -422,14 +410,14 @@ export function LocalWorkspaceApp() {
     let retryPath = retryLoadPath;
     if (!backend || !retryPath) return;
 
-    let file = files.find((item) => item.path == retryPath);
+    let file = findMarkdownFile(tree, retryPath);
     if (!file) {
       await refreshWorkspace();
       return;
     }
 
     await loadFile(backend, file, { saveCurrent: false });
-  }, [files, loadFile, refreshWorkspace, retryLoadPath, workspaceBackend]);
+  }, [loadFile, refreshWorkspace, retryLoadPath, tree, workspaceBackend]);
 
   let { createSharedFileLink, rotateSharedFileLink, stopSharingFile } = useWorkspaceShareActions({
     activeShareRecord,
@@ -505,7 +493,6 @@ export function LocalWorkspaceApp() {
           busy={busy}
           dropboxConnecting={dropboxConnecting}
           dropboxRestoreAvailable={dropboxRestoreAvailable}
-          files={files}
           open={sidebarOpen}
           restoreAvailable={restoreAvailable}
           restoreChecking={restoreChecking}
@@ -637,9 +624,9 @@ export function LocalWorkspaceApp() {
               saveAsDropboxDialogOpen ||
               deleteTarget != null,
             dropboxConnecting,
-            files,
             selectedPath,
             sidebarOpen,
+            tree,
             onConnectDropbox: connectDropbox,
             onDownloadCopy: downloadCurrentMarkdownCopy,
             onInsertImage: () => imageInputRef.current?.click(),

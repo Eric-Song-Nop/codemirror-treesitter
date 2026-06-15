@@ -91,6 +91,27 @@ describe("local workspace backend", () => {
     });
   });
 
+  it("skips dependency, build, and VCS folders while reading the Markdown tree", async () => {
+    let root = new MemoryDirectoryHandle("Workspace");
+    let backend = createLocalWorkspaceBackend(root);
+
+    await backend.createFile("notes/today.md");
+    await backend.createFile("node_modules/pkg/README.md");
+    await backend.createFile(".git/hooks/pre-commit.md");
+    await backend.createFile("dist/generated.md");
+
+    await expect(backend.readTree()).resolves.toMatchObject({
+      children: [
+        {
+          children: [{ kind: "file", name: "today.md", path: "notes/today.md" }],
+          kind: "directory",
+          name: "notes",
+          path: "notes",
+        },
+      ],
+    });
+  });
+
   it("finds a visible Markdown file path from a browser file handle", async () => {
     let root = new MemoryDirectoryHandle("Workspace");
     let backend = createLocalWorkspaceBackend(root);

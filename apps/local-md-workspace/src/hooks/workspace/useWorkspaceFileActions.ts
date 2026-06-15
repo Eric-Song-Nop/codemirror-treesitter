@@ -7,6 +7,7 @@ import {
 import { openStandaloneHtmlPrintView } from "@/lib/export/browser-print";
 import {
   createStandaloneMarkdownHtml,
+  type MarkdownHtmlExportOptions,
   snapshotMarkdownHtmlExportTheme,
 } from "@/lib/export/markdown-html";
 import {
@@ -45,7 +46,7 @@ type MarkdownHtmlExportInput = {
   documentPath: string;
   fileName: string;
   markdown: string;
-  resolveAsset: (path: string) => File | null;
+  resolveAsset: MarkdownHtmlExportOptions["resolveAsset"];
   theme: ReturnType<typeof snapshotMarkdownHtmlExportTheme>;
   title: string;
 };
@@ -69,7 +70,7 @@ type UseWorkspaceFileActionsOptions = {
   ) => Promise<void>;
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
   refreshWorkspaceForCurrentEditor: (backend: WorkspaceBackend) => Promise<void>;
-  resolveImageAssetFile: (path: string) => File | null;
+  resolveImageAssetFile: NonNullable<MarkdownHtmlExportOptions["resolveAsset"]>;
   saveCurrentFile: () => Promise<boolean>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
   setBusy: (busy: boolean) => void;

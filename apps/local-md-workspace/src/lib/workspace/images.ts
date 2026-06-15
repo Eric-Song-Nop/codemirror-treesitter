@@ -1,16 +1,20 @@
 import type { EditorView } from "@codemirror/view";
-import type { WorkspaceImageNode } from "@/lib/workspace-backend";
 import type { WorkspaceImageAsset } from "@/lib/workspace/types";
 
-export async function createWorkspaceImageAssets(nodes: WorkspaceImageNode[]) {
-  let assets: WorkspaceImageAsset[] = [];
-  for (let node of nodes) {
-    assets.push({
-      ...node,
-      url: URL.createObjectURL(node.file),
-    });
-  }
-  return assets;
+export function createWorkspaceImageAssetFromBytes(
+  path: string,
+  bytes: Uint8Array,
+): WorkspaceImageAsset {
+  let name = path.split("/").at(-1) ?? path;
+  let buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  let file = new File([buffer], name, { type: imageMediaTypeFromPath(path) });
+  return {
+    file,
+    name,
+    path,
+    url: URL.createObjectURL(file),
+  };
 }
 
 export function revokeImageAssetUrls(assets: ReadonlyMap<string, WorkspaceImageAsset>) {
@@ -42,9 +46,11 @@ export function insertImageMarkdown(
 }
 
 export function isImageFile(file: File) {
-  return (
-    file.type.startsWith("image/") || /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(file.name)
-  );
+  return file.type.startsWith("image/") || isImageFileName(file.name);
+}
+
+export function isImageFileName(fileName: string) {
+  return /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(fileName);
 }
 
 function imageAssetMarkdown(asset: WorkspaceImageAsset & { markdownReference: string }) {
@@ -56,6 +62,29 @@ function imageAltText(fileName: string) {
     .replace(/\.[^.]+$/, "")
     .replace(/[-_]+/g, " ")
     .trim();
+}
+
+function imageMediaTypeFromPath(path: string) {
+  let extension = path.slice(path.lastIndexOf(".")).toLowerCase();
+  switch (extension) {
+    case ".avif":
+      return "image/avif";
+    case ".bmp":
+      return "image/bmp";
+    case ".gif":
+      return "image/gif";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".svg":
+      return "image/svg+xml";
+    case ".webp":
+      return "image/webp";
+    default:
+      return "application/octet-stream";
+  }
 }
 
 function blockInsertText(

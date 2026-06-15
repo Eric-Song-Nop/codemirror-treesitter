@@ -23,7 +23,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { MarkdownFileNode } from "@/lib/workspace-backend";
+import {
+  flattenMarkdownFiles,
+  type MarkdownDirectoryNode,
+  type MarkdownFileNode,
+} from "@/lib/workspace-backend";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { themeDefinitions, useTheme } from "@/theme";
@@ -36,9 +40,9 @@ type WorkspaceCommandPaletteProps = {
   canSaveAsLocal: boolean;
   disabled?: boolean;
   dropboxConnecting: boolean;
-  files: MarkdownFileNode[];
   selectedPath: string | null;
   sidebarOpen: boolean;
+  tree: MarkdownDirectoryNode | null;
   onConnectDropbox: () => void;
   onDownloadCopy: () => void;
   onInsertImage: () => void;
@@ -69,9 +73,9 @@ export function WorkspaceCommandPalette({
   canSaveAsLocal,
   disabled = false,
   dropboxConnecting,
-  files,
   selectedPath,
   sidebarOpen,
+  tree,
   onConnectDropbox,
   onDownloadCopy,
   onInsertImage,
@@ -85,6 +89,7 @@ export function WorkspaceCommandPalette({
   let { t } = useI18n();
   let [open, setOpen] = useState(false);
   let { setTheme, theme } = useTheme();
+  let files = useMemo(() => (open && tree ? flattenMarkdownFiles(tree) : []), [open, tree]);
 
   useEffect(() => {
     let handleKeyDown = (event: KeyboardEvent) => {
