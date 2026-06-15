@@ -1,7 +1,11 @@
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { WorkspaceCommandPalette } from "@/components/WorkspaceCommandPalette";
 import { DeleteEntryDialog } from "@/components/workspace/DeleteEntryDialog";
-import { FileNameDialog, SaveAsDropboxDialog } from "@/components/workspace/FileDialogs";
+import {
+  FileNameDialog,
+  SaveAsDropboxDialog,
+  SaveAsOneDriveDialog,
+} from "@/components/workspace/FileDialogs";
 import { ShareFileDialog } from "@/components/workspace/ShareFileDialog";
 import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
 import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace-backend";
@@ -45,6 +49,16 @@ type SaveAsDropboxDialogState = {
   onValueChange: (value: string) => void;
 };
 
+type SaveAsOneDriveDialogState = {
+  busy: boolean;
+  error: string;
+  open: boolean;
+  value: string;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (value: string) => Promise<void>;
+  onValueChange: (value: string) => void;
+};
+
 type CommandPaletteState = {
   browserSupported: boolean;
   busy: boolean;
@@ -53,15 +67,18 @@ type CommandPaletteState = {
   canSaveAsLocal: boolean;
   disabled: boolean;
   dropboxConnecting: boolean;
+  oneDriveConnecting: boolean;
   selectedPath: string | null;
   sidebarOpen: boolean;
   tree: MarkdownDirectoryNode | null;
   onConnectDropbox: () => void;
+  onConnectOneDrive: () => void;
   onDownloadCopy: () => void;
   onInsertImage: () => void;
   onNewDraft: () => void;
   onOpenFolder: () => void;
   onSaveAsDropbox: () => void;
+  onSaveAsOneDrive: () => void;
   onSaveAsLocal: () => void;
   onSelectFile: (file: MarkdownFileNode) => void;
   onToggleSidebar: () => void;
@@ -79,6 +96,7 @@ type WorkspaceDialogsProps = {
   deleteDialog: DeleteDialogState;
   fileNameDialog: FileNameDialogState;
   saveAsDropboxDialog: SaveAsDropboxDialogState;
+  saveAsOneDriveDialog: SaveAsOneDriveDialogState;
   shareDialog: ShareDialogState;
 };
 
@@ -87,6 +105,7 @@ export function WorkspaceDialogs({
   deleteDialog,
   fileNameDialog,
   saveAsDropboxDialog,
+  saveAsOneDriveDialog,
   shareDialog,
 }: WorkspaceDialogsProps) {
   return (
@@ -130,6 +149,16 @@ export function WorkspaceDialogs({
         onValueChange={saveAsDropboxDialog.onValueChange}
       />
 
+      <SaveAsOneDriveDialog
+        busy={saveAsOneDriveDialog.busy}
+        error={saveAsOneDriveDialog.error}
+        open={saveAsOneDriveDialog.open}
+        value={saveAsOneDriveDialog.value}
+        onOpenChange={saveAsOneDriveDialog.onOpenChange}
+        onSubmit={saveAsOneDriveDialog.onSubmit}
+        onValueChange={saveAsOneDriveDialog.onValueChange}
+      />
+
       <WorkspaceCommandPalette
         browserSupported={commandPalette.browserSupported}
         busy={commandPalette.busy}
@@ -138,15 +167,18 @@ export function WorkspaceDialogs({
         canSaveAsLocal={commandPalette.canSaveAsLocal}
         disabled={commandPalette.disabled}
         dropboxConnecting={commandPalette.dropboxConnecting}
+        oneDriveConnecting={commandPalette.oneDriveConnecting}
         selectedPath={commandPalette.selectedPath}
         sidebarOpen={commandPalette.sidebarOpen}
         tree={commandPalette.tree}
         onConnectDropbox={commandPalette.onConnectDropbox}
+        onConnectOneDrive={commandPalette.onConnectOneDrive}
         onDownloadCopy={commandPalette.onDownloadCopy}
         onInsertImage={commandPalette.onInsertImage}
         onNewDraft={commandPalette.onNewDraft}
         onOpenFolder={commandPalette.onOpenFolder}
         onSaveAsDropbox={commandPalette.onSaveAsDropbox}
+        onSaveAsOneDrive={commandPalette.onSaveAsOneDrive}
         onSaveAsLocal={commandPalette.onSaveAsLocal}
         onSelectFile={commandPalette.onSelectFile}
         onToggleSidebar={commandPalette.onToggleSidebar}

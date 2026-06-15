@@ -4,10 +4,12 @@ import {
   clearStoredWorkspaceSelectedPath,
   loadStoredDropboxWorkspaceConfig,
   loadStoredLocalWorkspaceRecord,
+  loadStoredOneDriveWorkspaceConfig,
   loadStoredWorkspaceSelectedPath,
   loadStoredWorkspaceKind,
   rememberStoredLocalWorkspace,
   saveStoredDropboxWorkspaceConfig,
+  saveStoredOneDriveWorkspaceConfig,
   saveStoredWorkspaceSelectedPath,
   saveStoredWorkspaceKind,
 } from "./workspace-store.ts";
@@ -16,6 +18,7 @@ const DB_NAME = "local-md-workspace";
 const STORE_NAME = "workspace";
 const HANDLE_KEY = "directory-handle";
 const DROPBOX_CONFIG_KEY = "local-md-workspace:dropbox-config";
+const ONEDRIVE_CONFIG_KEY = "local-md-workspace:onedrive-config";
 const WORKSPACE_KIND_KEY = "local-md-workspace:workspace-kind";
 const SELECTED_PATH_KEY_PREFIX = "local-md-workspace:selected-path";
 
@@ -69,6 +72,38 @@ describe("Dropbox workspace config storage", () => {
     expect(values.has(DROPBOX_CONFIG_KEY)).toBe(false);
   });
 
+  it("saves and restores normalized non-secret OneDrive config", () => {
+    saveStoredOneDriveWorkspaceConfig({
+      clientId: " test-client-id ",
+      root: " \\notes\\daily/ ",
+    });
+
+    expect(values.get(ONEDRIVE_CONFIG_KEY)).toBe(
+      JSON.stringify({
+        clientId: "test-client-id",
+        root: "notes/daily",
+      }),
+    );
+    expect(loadStoredOneDriveWorkspaceConfig()).toEqual({
+      clientId: "test-client-id",
+      root: "notes/daily",
+    });
+  });
+
+  it("ignores malformed or empty stored OneDrive config", () => {
+    values.set(ONEDRIVE_CONFIG_KEY, JSON.stringify({ clientId: " " }));
+    expect(loadStoredOneDriveWorkspaceConfig()).toBeNull();
+
+    values.set(ONEDRIVE_CONFIG_KEY, "{");
+    expect(loadStoredOneDriveWorkspaceConfig()).toBeNull();
+  });
+
+  it("does not persist invalid OneDrive client IDs", () => {
+    saveStoredOneDriveWorkspaceConfig({ clientId: " " });
+
+    expect(values.has(ONEDRIVE_CONFIG_KEY)).toBe(false);
+  });
+
   it("saves and restores the last workspace kind", () => {
     saveStoredWorkspaceKind("dropbox");
     expect(values.get(WORKSPACE_KIND_KEY)).toBe("dropbox");
@@ -77,6 +112,10 @@ describe("Dropbox workspace config storage", () => {
     saveStoredWorkspaceKind("local");
     expect(values.get(WORKSPACE_KIND_KEY)).toBe("local");
     expect(loadStoredWorkspaceKind()).toBe("local");
+
+    saveStoredWorkspaceKind("onedrive");
+    expect(values.get(WORKSPACE_KIND_KEY)).toBe("onedrive");
+    expect(loadStoredWorkspaceKind()).toBe("onedrive");
   });
 
   it("ignores unknown stored workspace kinds", () => {
@@ -104,15 +143,18 @@ describe("workspace selected path storage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("isolates selected paths between local and Dropbox workspace contexts", () => {
+  it("isolates selected paths between local and cloud workspace contexts", () => {
     let localContext = { kind: "local" as const, workspaceId: "/Users/test/notes" };
     let dropboxContext = { kind: "dropbox" as const, workspaceId: "/Users/test/notes" };
+    let oneDriveContext = { kind: "onedrive" as const, workspaceId: "/Users/test/notes" };
 
     saveStoredWorkspaceSelectedPath(localContext, "local.md");
     saveStoredWorkspaceSelectedPath(dropboxContext, "dropbox.md");
+    saveStoredWorkspaceSelectedPath(oneDriveContext, "onedrive.md");
 
     expect(loadStoredWorkspaceSelectedPath(localContext)).toBe("local.md");
     expect(loadStoredWorkspaceSelectedPath(dropboxContext)).toBe("dropbox.md");
+    expect(loadStoredWorkspaceSelectedPath(oneDriveContext)).toBe("onedrive.md");
   });
 
   it("isolates selected paths between workspace ids within the same kind", () => {
@@ -265,7 +307,7 @@ describe("local workspace record storage", () => {
   });
 });
 
-function selectedPathKey(kind: "local" | "dropbox", workspaceId: string) {
+function selectedPathKey(kind: "local" | "dropbox" | "onedrive", workspaceId: string) {
   return `${SELECTED_PATH_KEY_PREFIX}:${kind}:${encodeURIComponent(workspaceId)}`;
 }
 

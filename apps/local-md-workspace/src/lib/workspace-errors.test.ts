@@ -16,12 +16,35 @@ describe("workspace error messages", () => {
     );
   });
 
+  it("classifies OneDrive OAuth failures", () => {
+    expect(workspaceErrorMessage(new Error("OneDrive authorization popup was blocked."))).toBe(
+      "OneDrive authorization popup was blocked. Allow popups for this site and try again.",
+    );
+    expect(
+      workspaceErrorMessage(new Error("OneDrive authorization was closed before it completed.")),
+    ).toBe(
+      "OneDrive authorization was closed before it completed. Reconnect OneDrive workspace to continue.",
+    );
+    expect(workspaceErrorMessage(new Error("OneDrive authorization failed: access_denied"))).toBe(
+      "OneDrive authorization was denied.",
+    );
+  });
+
   it("classifies Dropbox expired-token and revoked-token failures", () => {
     expect(workspaceErrorMessage(new Error("expired_access_token"))).toBe(
       "Dropbox access token expired. Reconnect Dropbox workspace to continue.",
     );
     expect(workspaceErrorMessage(new Error("invalid_access_token"))).toBe(
       "Dropbox authorization is invalid or was revoked. Reconnect Dropbox workspace to continue.",
+    );
+  });
+
+  it("classifies OneDrive expired-token and revoked-token failures", () => {
+    expect(workspaceErrorMessage(new Error("OneDrive expired_access_token"))).toBe(
+      "OneDrive access token expired. Reconnect OneDrive workspace to continue.",
+    );
+    expect(workspaceErrorMessage(new Error("OneDrive InvalidAuthenticationToken"))).toBe(
+      "OneDrive authorization is invalid or was revoked. Reconnect OneDrive workspace to continue.",
     );
   });
 
@@ -34,12 +57,30 @@ describe("workspace error messages", () => {
     );
   });
 
+  it("classifies missing OneDrive file scopes", () => {
+    expect(workspaceErrorMessage(new Error("OneDrive missing scope Files.ReadWrite"))).toBe(
+      "OneDrive app is missing required file permissions: Files.ReadWrite. Enable those scopes and reconnect OneDrive workspace.",
+    );
+    expect(workspaceErrorMessage(new Error("OneDrive insufficient privileges"))).toBe(
+      "OneDrive app is missing required file permissions: Files.ReadWrite. Enable those scopes and reconnect OneDrive workspace.",
+    );
+  });
+
   it("classifies Dropbox token exchange failures", () => {
     expect(workspaceErrorMessage(new Error("invalid_grant"))).toBe(
       "Dropbox token exchange failed. Check the app key and reconnect Dropbox workspace.",
     );
     expect(workspaceErrorMessage(new Error("Dropbox token exchange failed (400)."))).toBe(
       "Dropbox token exchange failed. Check the app key and reconnect Dropbox workspace.",
+    );
+  });
+
+  it("classifies OneDrive token exchange failures", () => {
+    expect(workspaceErrorMessage(new Error("OneDrive token exchange failed: invalid_grant"))).toBe(
+      "OneDrive token exchange failed. Check the client ID and reconnect OneDrive workspace.",
+    );
+    expect(workspaceErrorMessage(new Error("OneDrive token exchange failed (400)."))).toBe(
+      "OneDrive token exchange failed. Check the client ID and reconnect OneDrive workspace.",
     );
   });
 
@@ -55,6 +96,17 @@ describe("workspace error messages", () => {
       ),
     ).toBe(
       "Dropbox app folder or workspace path is no longer available. Check the Dropbox app folder setting, then reconnect Dropbox workspace.",
+    );
+  });
+
+  it("classifies unavailable OneDrive workspace paths", () => {
+    expect(workspaceErrorMessage(new Error("OpenDAL OneDrive API error 404 itemNotFound"))).toBe(
+      "OneDrive workspace path is no longer available. Check the OneDrive root setting, then reconnect OneDrive workspace.",
+    );
+    expect(
+      workspaceErrorMessage(new Error("GET https://graph.microsoft.com/v1.0/me/drive 404")),
+    ).toBe(
+      "OneDrive workspace path is no longer available. Check the OneDrive root setting, then reconnect OneDrive workspace.",
     );
   });
 

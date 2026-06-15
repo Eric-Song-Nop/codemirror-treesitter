@@ -1,15 +1,15 @@
 # local-md-workspace
 
 Grove local-first Markdown workspace. It is a React app built around LiveMD,
-the browser File System Access API, optional Dropbox storage through the
-OpenDAL WASM wrapper, shared OpenDAL cloud-backend foundations for OneDrive and
+the browser File System Access API, optional Dropbox and OneDrive storage
+through the OpenDAL WASM wrapper, a shared OpenDAL cloud-backend foundation for
 Google Drive, and optional shared-file collaboration through `apps/grove-relay`.
 
 ## Responsibilities
 
 - Open a browser-granted local directory and edit `.md` files with LiveMD.
 - Restore previously granted local handles when browser permissions allow it.
-- Connect to Dropbox with OAuth PKCE and use
+- Connect to Dropbox or OneDrive with OAuth PKCE and use
   `@codemirror-treesitter/opendal-wasm-browser` for browser-side file
   operations.
 - Provide a reusable OpenDAL workspace backend for Dropbox, OneDrive, and Google Drive,
@@ -54,13 +54,14 @@ Google Drive, and optional shared-file collaboration through `apps/grove-relay`.
 - `src/theme/*`: shared named-theme contract, document/storage adapters, and
   CSS token ownership for the local and shared workspace routes.
 - `src/lib/file-system.ts`: File System Access API backend.
-- `src/lib/dropbox-oauth.ts` and `src/lib/dropbox-workspace-backend.ts`:
-  Dropbox OAuth PKCE and Dropbox workspace adapter.
+- `src/lib/dropbox-oauth.ts`, `src/lib/onedrive-oauth.ts`, and matching
+  `*-workspace-backend.ts` files: OAuth PKCE and OpenDAL workspace adapters for
+  Dropbox and OneDrive.
 - `src/lib/opendal-workspace-backend.ts`,
   `src/lib/onedrive-workspace-backend.ts`, and
   `src/lib/google-drive-workspace-backend.ts`: shared OpenDAL workspace backend
-  plus OneDrive and Google Drive adapter foundations. OneDrive and Google Drive
-  OAuth/UI entries are not wired yet.
+  plus OneDrive and Google Drive adapter foundations. Google Drive OAuth/UI is
+  not wired yet.
 - `src/lib/workspace-backend.ts`: normalized workspace tree, path, image, and
   backend contracts.
 - `src/lib/export/markdown-html.ts`: standalone HTML export wrapper, LiveMD
@@ -82,6 +83,13 @@ Optional Dropbox configuration:
 ```env
 VITE_DROPBOX_APP_KEY="your-public-dropbox-app-key"
 VITE_DROPBOX_REDIRECT_URI="http://localhost:5173"
+```
+
+Optional OneDrive configuration:
+
+```env
+VITE_ONEDRIVE_CLIENT_ID="your-public-onedrive-client-id"
+VITE_ONEDRIVE_REDIRECT_URI="http://localhost:5173"
 ```
 
 Optional relay configuration:

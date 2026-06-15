@@ -62,6 +62,14 @@ export function hasDropboxOAuthCallback(search: string | URLSearchParams = windo
   return Boolean(parseDropboxOAuthCallback(search));
 }
 
+export function hasDropboxRedirectTransaction(storage = window.sessionStorage) {
+  try {
+    return Boolean(storage.getItem(DROPBOX_REDIRECT_TRANSACTION_KEY));
+  } catch {
+    return false;
+  }
+}
+
 export function completeDropboxPopupOAuthIfPresent() {
   let callback = parseDropboxOAuthCallback(window.location.search);
   if (!callback || !window.opener) return false;

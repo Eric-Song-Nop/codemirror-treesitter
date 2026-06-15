@@ -4,9 +4,71 @@ const DROPBOX_REQUIRED_SCOPES = [
   "files.content.write",
 ];
 
+const ONEDRIVE_REQUIRED_SCOPES = ["Files.ReadWrite"];
+
 export function workspaceErrorMessage(error: unknown) {
   let message = error instanceof Error ? error.message : String(error);
   let normalized = normalizeErrorText(message);
+
+  if (isOneDriveError(normalized)) {
+    if (matchesAny(normalized, ["popup was blocked", "popup blocked"])) {
+      return "OneDrive authorization popup was blocked. Allow popups for this site and try again.";
+    }
+
+    if (
+      matchesAny(normalized, [
+        "authorization was closed",
+        "closed before it completed",
+        "timed out",
+      ])
+    ) {
+      return "OneDrive authorization was closed before it completed. Reconnect OneDrive workspace to continue.";
+    }
+
+    if (matchesAny(normalized, ["authorization was denied", "access denied"])) {
+      return "OneDrive authorization was denied.";
+    }
+
+    if (
+      matchesAny(normalized, ["missing scope", "insufficient scope"]) ||
+      isOneDriveMissingScope(message)
+    ) {
+      return `OneDrive app is missing required file permissions: ${ONEDRIVE_REQUIRED_SCOPES.join(
+        ", ",
+      )}. Enable those scopes and reconnect OneDrive workspace.`;
+    }
+
+    if (matchesAny(normalized, ["expired access token", "access token expired", "token expired"])) {
+      return "OneDrive access token expired. Reconnect OneDrive workspace to continue.";
+    }
+
+    if (
+      matchesAny(normalized, [
+        "invalid access token",
+        "authorization was revoked",
+        "token was revoked",
+        "access token is invalid",
+        "invalidauthenticationtoken",
+      ])
+    ) {
+      return "OneDrive authorization is invalid or was revoked. Reconnect OneDrive workspace to continue.";
+    }
+
+    if (
+      matchesAny(normalized, [
+        "token exchange failed",
+        "token exchange returned an invalid response",
+        "invalid grant",
+        "invalid client",
+      ])
+    ) {
+      return "OneDrive token exchange failed. Check the client ID and reconnect OneDrive workspace.";
+    }
+
+    if (isOneDrivePathUnavailable(normalized)) {
+      return "OneDrive workspace path is no longer available. Check the OneDrive root setting, then reconnect OneDrive workspace.";
+    }
+  }
 
   if (matchesAny(normalized, ["popup was blocked", "popup blocked"])) {
     return "Dropbox authorization popup was blocked. Allow popups for this site and try again.";
@@ -92,11 +154,53 @@ function isDropboxPathUnavailable(normalized: string) {
   );
 }
 
+function isOneDriveError(normalized: string) {
+  return (
+    matchesAny(normalized, [
+      "onedrive",
+      "graph.microsoft.com",
+      "graph microsoft com",
+      "login microsoftonline com",
+      "microsoft graph",
+    ]) || matchesAny(normalized, ["invalidauthenticationtoken", "itemnotfound"])
+  );
+}
+
+function isOneDrivePathUnavailable(normalized: string) {
+  return (
+    matchesAny(normalized, [
+      "onedrive",
+      "graph.microsoft.com",
+      "graph microsoft com",
+      "microsoft graph",
+      "opendal",
+      "itemnotfound",
+    ]) &&
+    matchesAny(normalized, [
+      "404",
+      "itemnotfound",
+      "item not found",
+      "path not found",
+      "path_not_found",
+      "not found",
+      "not_found",
+    ])
+  );
+}
+
 function isMissingScope(message: string) {
   let normalized = normalizeErrorText(message);
   return (
     matchesAny(normalized, ["missing scope", "not enough permissions"]) ||
     DROPBOX_REQUIRED_SCOPES.some((scope) => normalized.includes(scope))
+  );
+}
+
+function isOneDriveMissingScope(message: string) {
+  let normalized = normalizeErrorText(message);
+  return (
+    matchesAny(normalized, ["missing scope", "insufficient privileges", "insufficient scope"]) ||
+    ONEDRIVE_REQUIRED_SCOPES.some((scope) => normalized.includes(scope.toLowerCase()))
   );
 }
 

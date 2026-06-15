@@ -22,6 +22,8 @@ type WorkspaceSidebarProps = {
   canRefresh: boolean;
   dropboxConnecting: boolean;
   dropboxRestoreAvailable: boolean;
+  oneDriveConnecting: boolean;
+  oneDriveRestoreAvailable: boolean;
   languageToggleLabel: string;
   open: boolean;
   restoreAvailable: boolean;
@@ -34,10 +36,12 @@ type WorkspaceSidebarProps = {
   onDeleteEntry: (target: FileTreeDeleteTarget) => void;
   onLoadDirectory: (path: string) => Promise<void>;
   onOpenDropbox: () => void;
+  onOpenOneDrive: () => void;
   onOpenFolder: () => void;
   onRefresh: () => void;
   onRenameEntry: (target?: FileTreeDeleteTarget) => void;
   onRestoreDropbox: () => void;
+  onRestoreOneDrive: () => void;
   onRestoreFolder: () => void;
   onSelectEntry: (target: FileTreeDeleteTarget | null) => void;
   onSelectFile: (file: MarkdownFileNode) => void;
@@ -50,6 +54,8 @@ export function WorkspaceSidebar({
   canRefresh,
   dropboxConnecting,
   dropboxRestoreAvailable,
+  oneDriveConnecting,
+  oneDriveRestoreAvailable,
   languageToggleLabel,
   open,
   restoreAvailable,
@@ -62,10 +68,12 @@ export function WorkspaceSidebar({
   onDeleteEntry,
   onLoadDirectory,
   onOpenDropbox,
+  onOpenOneDrive,
   onOpenFolder,
   onRefresh,
   onRenameEntry,
   onRestoreDropbox,
+  onRestoreOneDrive,
   onRestoreFolder,
   onSelectEntry,
   onSelectFile,
@@ -104,6 +112,15 @@ export function WorkspaceSidebar({
           <CloudIcon data-icon="inline-start" />
         </TooltipIconButton>
         <TooltipIconButton
+          label={t("actions.connectOneDrive")}
+          size="icon-sm"
+          variant="ghost"
+          onClick={onOpenOneDrive}
+          disabled={busy || oneDriveConnecting}
+        >
+          <CloudIcon data-icon="inline-start" />
+        </TooltipIconButton>
+        <TooltipIconButton
           label={t("actions.newFile")}
           size="icon-sm"
           variant="ghost"
@@ -130,11 +147,15 @@ export function WorkspaceSidebar({
           busy={busy}
           dropboxConnecting={dropboxConnecting}
           dropboxRestoreAvailable={dropboxRestoreAvailable}
+          oneDriveConnecting={oneDriveConnecting}
+          oneDriveRestoreAvailable={oneDriveRestoreAvailable}
           restoreAvailable={restoreAvailable}
           restoreChecking={restoreChecking}
           onOpenDropbox={onOpenDropbox}
+          onOpenOneDrive={onOpenOneDrive}
           onOpenFolder={onOpenFolder}
           onRestoreDropbox={onRestoreDropbox}
+          onRestoreOneDrive={onRestoreOneDrive}
           onRestoreFolder={onRestoreFolder}
         />
       )}

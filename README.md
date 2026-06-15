@@ -12,8 +12,8 @@ GroveMd is built for a small set of workflows that should stay simple:
 - **Local first**: grant access to a folder, edit Markdown in place, autosave
   locally, and keep images beside the document in normal workspace assets.
 - **Easy sync**: keep working from the local folder or connect a cloud-backed
-  workspace when useful. Dropbox is the current user-facing cloud flow; OneDrive
-  and Google Drive have shared OpenDAL backend foundations.
+  workspace when useful. Dropbox and OneDrive are user-facing cloud flows;
+  Google Drive has a shared OpenDAL backend foundation.
 - **No app install**: run the editor as a web app while still using browser
   file access for real local files.
 - **Collaboration**: share a single file link through the Grove relay so guests
@@ -55,8 +55,8 @@ collaboration flows.
   and code-fence highlighting themes.
 - **Collaboration and workspace layer**: Optional LiveMD Loro bindings use
   `loro-crdt` and `loro-codemirror`. Grove's local workspace app supports local
-  folders, Dropbox through the OpenDAL browser WASM wrapper, a shared OpenDAL
-  cloud-backend foundation for OneDrive and Google Drive,
+  folders, Dropbox and OneDrive through the OpenDAL browser WASM wrapper, a
+  shared OpenDAL cloud-backend foundation for Google Drive,
   i18next/react-i18next UI localization, local image assets, and shared-file
   hosting. Grove's relay runs as the `grove-relay` Cloudflare Worker with
   Durable Object persistence, WebSocket sync, Wrangler, and the Cloudflare Vite
@@ -205,8 +205,8 @@ entry points, dependency boundaries, source layout, and validation notes.
   `<live-md-editor>` element.
 - `apps/local-md-workspace`: Grove React, Vite+, shadcn/radix local-first
   Markdown workspace that opens a browser-granted local folder, edits `.md`
-  files with LiveMD, supports Dropbox storage through OpenDAL WASM and OAuth
-  PKCE, has a shared OpenDAL backend foundation for OneDrive and Google Drive,
+  files with LiveMD, supports Dropbox and OneDrive storage through OpenDAL WASM
+  and OAuth PKCE, has a shared OpenDAL backend foundation for Google Drive,
   supports image insert/paste/drop through sibling `assets/` directories,
   supports file/folder create, rename, delete, tree browsing, and autosave, can
   export standalone HTML or open a browser print view for saving as PDF with
@@ -493,7 +493,8 @@ Production Grove deploys use the Cloudflare Pages project `grove` at
 `https://app.grovemd.net`, with `https://grovemd.net` redirecting to that app
 origin, and the `grove-relay` Worker custom domain at
 `https://relay.grovemd.net`. The Grove CI/CD workflow enforces
-`VITE_DROPBOX_REDIRECT_URI=https://app.grovemd.net/` for Dropbox OAuth and
+`VITE_DROPBOX_REDIRECT_URI=https://app.grovemd.net/` for Dropbox OAuth,
+`VITE_ONEDRIVE_REDIRECT_URI=https://app.grovemd.net/` for OneDrive OAuth, and
 builds the frontend against the relay custom domain. It also runs
 `vp run local-md-workspace#i18n:check` to verify English/Chinese message keys and
 placeholders before tests. CI deploys the relay Worker with

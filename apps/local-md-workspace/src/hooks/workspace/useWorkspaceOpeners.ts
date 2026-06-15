@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import type { DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
+import type { OneDriveRedirectDraft } from "@/lib/onedrive-redirect-draft";
 import {
   type AccessDirectoryHandle,
   createLocalWorkspaceBackend,
@@ -9,17 +10,21 @@ import {
 } from "@/lib/file-system";
 import { defaultSidebarOpen } from "@/lib/workspace/constants";
 import { defaultDropboxAppKey } from "@/lib/workspace/dropbox-config";
+import { defaultOneDriveClientId } from "@/lib/workspace/onedrive-config";
 import { errorToMessage, isAbortError } from "@/lib/workspace/errors";
 import { loadWorkspaceSelectedPath } from "@/lib/workspace/state";
 import type {
   StoredDropboxWorkspaceConfig,
   StoredLocalWorkspaceRecord,
+  StoredOneDriveWorkspaceConfig,
 } from "@/lib/workspace-store";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
 
 type UseWorkspaceOpenersOptions = {
   clearDropboxAccessToken: () => void;
+  clearOneDriveAccessToken: () => void;
   createDropboxBackend: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceBackend>;
+  createOneDriveBackend: (config: StoredOneDriveWorkspaceConfig) => Promise<WorkspaceBackend>;
   folderAccessUnavailableMessage: string;
   loadTree: (
     backend: WorkspaceBackend,
@@ -28,39 +33,45 @@ type UseWorkspaceOpenersOptions = {
   ) => Promise<void>;
   refreshWorkspaceForCurrentEditor: (backend: WorkspaceBackend) => Promise<void>;
   rememberWorkspaceHandle: (handle: AccessDirectoryHandle) => Promise<StoredLocalWorkspaceRecord>;
-  restoreDropboxRedirectEditorDraft: (
+  restoreCloudRedirectEditorDraft: (
     backend: WorkspaceBackend,
-    draft: DropboxRedirectDraft,
+    draft: DropboxRedirectDraft | OneDriveRedirectDraft,
   ) => boolean;
   saveCurrentFile: () => Promise<boolean>;
   setBusy: (busy: boolean) => void;
   setDropboxConnecting: (connecting: boolean) => void;
   setErrorMessage: (message: string) => void;
+  setOneDriveConnecting: (connecting: boolean) => void;
   setRetryLoadPath: (path: string | null) => void;
   setSidebarOpen: (open: boolean) => void;
   setWorkspaceBackend: (backend: WorkspaceBackend) => void;
   storedDropboxConfig: StoredDropboxWorkspaceConfig | null;
   storedLocalWorkspace: StoredLocalWorkspaceRecord | null;
+  storedOneDriveConfig: StoredOneDriveWorkspaceConfig | null;
   workspaceBackend: WorkspaceBackend | null;
 };
 
 export function useWorkspaceOpeners({
   clearDropboxAccessToken,
+  clearOneDriveAccessToken,
   createDropboxBackend,
+  createOneDriveBackend,
   folderAccessUnavailableMessage,
   loadTree,
   refreshWorkspaceForCurrentEditor,
   rememberWorkspaceHandle,
-  restoreDropboxRedirectEditorDraft,
+  restoreCloudRedirectEditorDraft,
   saveCurrentFile,
   setBusy,
   setDropboxConnecting,
   setErrorMessage,
+  setOneDriveConnecting,
   setRetryLoadPath,
   setSidebarOpen,
   setWorkspaceBackend,
   storedDropboxConfig,
   storedLocalWorkspace,
+  storedOneDriveConfig,
   workspaceBackend,
 }: UseWorkspaceOpenersOptions) {
   let openWorkspace = useCallback(async () => {
@@ -83,6 +94,7 @@ export function useWorkspaceOpeners({
       let record = await rememberWorkspaceHandle(handle);
       let backend = createLocalWorkspaceBackend(handle, record.id);
       clearDropboxAccessToken();
+      clearOneDriveAccessToken();
       setWorkspaceBackend(backend);
       setSidebarOpen(defaultSidebarOpen());
       await loadTree(backend, loadWorkspaceSelectedPath(backend));
@@ -93,6 +105,7 @@ export function useWorkspaceOpeners({
     }
   }, [
     clearDropboxAccessToken,
+    clearOneDriveAccessToken,
     folderAccessUnavailableMessage,
     loadTree,
     rememberWorkspaceHandle,
@@ -130,7 +143,7 @@ export function useWorkspaceOpeners({
             saveBeforeSelect: false,
           },
         );
-        if (options.restoreDraft) restoreDropboxRedirectEditorDraft(backend, options.restoreDraft);
+        if (options.restoreDraft) restoreCloudRedirectEditorDraft(backend, options.restoreDraft);
         return true;
       } catch (error) {
         setErrorMessage(errorToMessage(error));
@@ -144,11 +157,62 @@ export function useWorkspaceOpeners({
     [
       createDropboxBackend,
       loadTree,
-      restoreDropboxRedirectEditorDraft,
+      restoreCloudRedirectEditorDraft,
       saveCurrentFile,
       setBusy,
       setDropboxConnecting,
       setErrorMessage,
+      setRetryLoadPath,
+      setSidebarOpen,
+      setWorkspaceBackend,
+    ],
+  );
+
+  let openOneDriveWorkspace = useCallback(
+    async (
+      config: StoredOneDriveWorkspaceConfig,
+      options: {
+        restoreDraft?: OneDriveRedirectDraft | null;
+        skipSaveCurrent?: boolean;
+      } = {},
+    ) => {
+      setErrorMessage("");
+      setRetryLoadPath(null);
+      if (!options.skipSaveCurrent && !(await saveCurrentFile())) return false;
+
+      setBusy(true);
+      setOneDriveConnecting(true);
+
+      try {
+        let backend = await createOneDriveBackend(config);
+        setWorkspaceBackend(backend);
+        setSidebarOpen(defaultSidebarOpen());
+        await loadTree(
+          backend,
+          options.restoreDraft?.selectedPath ?? loadWorkspaceSelectedPath(backend),
+          {
+            saveBeforeSelect: false,
+          },
+        );
+        if (options.restoreDraft) restoreCloudRedirectEditorDraft(backend, options.restoreDraft);
+        return true;
+      } catch (error) {
+        setErrorMessage(errorToMessage(error));
+        setRetryLoadPath(null);
+        return false;
+      } finally {
+        setOneDriveConnecting(false);
+        setBusy(false);
+      }
+    },
+    [
+      createOneDriveBackend,
+      loadTree,
+      restoreCloudRedirectEditorDraft,
+      saveCurrentFile,
+      setBusy,
+      setErrorMessage,
+      setOneDriveConnecting,
       setRetryLoadPath,
       setSidebarOpen,
       setWorkspaceBackend,
@@ -173,6 +237,7 @@ export function useWorkspaceOpeners({
         storedLocalWorkspace.id,
       );
       clearDropboxAccessToken();
+      clearOneDriveAccessToken();
       setWorkspaceBackend(backend);
       setSidebarOpen(defaultSidebarOpen());
       await loadTree(backend, loadWorkspaceSelectedPath(backend), { saveBeforeSelect: false });
@@ -184,6 +249,7 @@ export function useWorkspaceOpeners({
     }
   }, [
     clearDropboxAccessToken,
+    clearOneDriveAccessToken,
     loadTree,
     setBusy,
     setErrorMessage,
@@ -208,6 +274,22 @@ export function useWorkspaceOpeners({
       root: storedDropboxConfig.root,
     });
   }, [openDropboxWorkspace, setErrorMessage, setRetryLoadPath, storedDropboxConfig]);
+
+  let restoreOneDriveWorkspace = useCallback(async () => {
+    if (!storedOneDriveConfig) return;
+    let clientId = defaultOneDriveClientId();
+    if (!clientId) {
+      setErrorMessage(
+        "OneDrive workspace is not configured. Set VITE_ONEDRIVE_CLIENT_ID for this app.",
+      );
+      setRetryLoadPath(null);
+      return;
+    }
+    await openOneDriveWorkspace({
+      clientId,
+      root: storedOneDriveConfig.root,
+    });
+  }, [openOneDriveWorkspace, setErrorMessage, setRetryLoadPath, storedOneDriveConfig]);
 
   let refreshWorkspace = useCallback(async () => {
     if (!workspaceBackend || !(await saveCurrentFile())) return;
@@ -234,9 +316,11 @@ export function useWorkspaceOpeners({
 
   return {
     openDropboxWorkspace,
+    openOneDriveWorkspace,
     openWorkspace,
     refreshWorkspace,
     restoreDropboxWorkspace,
+    restoreOneDriveWorkspace,
     restoreStoredWorkspace,
   };
 }

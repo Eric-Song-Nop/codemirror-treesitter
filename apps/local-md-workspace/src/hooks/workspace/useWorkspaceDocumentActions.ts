@@ -13,6 +13,7 @@ import {
   type OwnerShareRecord,
 } from "@/lib/collaboration/share-storage";
 import type { DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
+import type { OneDriveRedirectDraft } from "@/lib/onedrive-redirect-draft";
 import { type AccessFileHandle } from "@/lib/file-system";
 import {
   clearLastSingleFileDraft,
@@ -36,6 +37,8 @@ import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend
 type MutableRef<T> = {
   current: T;
 };
+
+type CloudRedirectDraft = DropboxRedirectDraft | OneDriveRedirectDraft;
 
 type StartOwnerShareHost = (
   record: OwnerShareRecord,
@@ -431,8 +434,8 @@ export function useWorkspaceDocumentActions({
     ],
   );
 
-  let restoreDropboxRedirectEditorDraft = useCallback(
-    (backend: WorkspaceBackend, draft: DropboxRedirectDraft) => {
+  let restoreCloudRedirectEditorDraft = useCallback(
+    (backend: WorkspaceBackend, draft: CloudRedirectDraft) => {
       if (!draft.selectedPath || draft.dirtyValue == null) return false;
 
       let file = selectedFileRef.current;
@@ -525,7 +528,7 @@ export function useWorkspaceDocumentActions({
     handleEditorInput,
     loadFile,
     openSingleFileDraft,
-    restoreDropboxRedirectEditorDraft,
+    restoreCloudRedirectEditorDraft,
     saveCurrentFile,
   };
 }

@@ -9,6 +9,7 @@ import { WorkspaceErrorBanner } from "@/components/workspace/WorkspaceErrorBanne
 import { WorkspaceHeader } from "@/components/workspace/WorkspaceHeader";
 import { WorkspaceSidebar } from "@/components/workspace/WorkspaceSidebar";
 import { useDropboxWorkspaceBackend } from "@/hooks/workspace/useDropboxWorkspaceBackend";
+import { useOneDriveWorkspaceBackend } from "@/hooks/workspace/useOneDriveWorkspaceBackend";
 import { useOwnerShareHost } from "@/hooks/workspace/useOwnerShareHost";
 import { useWorkspaceDocumentActions } from "@/hooks/workspace/useWorkspaceDocumentActions";
 import { useWorkspaceEntryDialogs } from "@/hooks/workspace/useWorkspaceEntryDialogs";
@@ -20,6 +21,7 @@ import { useWorkspaceShareState } from "@/hooks/workspace/useWorkspaceShareState
 import { useWorkspaceStartup } from "@/hooks/workspace/useWorkspaceStartup";
 import { useWorkspaceTree } from "@/hooks/workspace/useWorkspaceTree";
 import { completeDropboxPopupOAuthIfPresent } from "@/lib/dropbox-oauth";
+import { completeOneDrivePopupOAuthIfPresent } from "@/lib/onedrive-oauth";
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
 import { isMobileBrowser } from "@/lib/browser-support";
 import {
@@ -38,16 +40,19 @@ import { useI18n } from "@/lib/i18n";
 import { useLiveMdPreloadError } from "@/lib/live-md-preload";
 import { defaultSidebarOpen, isMobileSidebarViewport } from "@/lib/workspace/constants";
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
+import { defaultOneDriveClientId, defaultOneDriveRoot } from "@/lib/workspace/onedrive-config";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { createEphemeralLocalWorkspaceRecord, saveStateLabel } from "@/lib/workspace/state";
 import type { EditorDocument, SaveState, SingleFileSource } from "@/lib/workspace/types";
 import {
   loadStoredDropboxWorkspaceConfig,
+  loadStoredOneDriveWorkspaceConfig,
   loadStoredWorkspaceKind,
   rememberStoredLocalWorkspace,
   saveStoredWorkspaceKind,
   type StoredLocalWorkspaceRecord,
   type StoredDropboxWorkspaceConfig,
+  type StoredOneDriveWorkspaceConfig,
   type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
 
@@ -63,6 +68,8 @@ export function LocalWorkspaceApp() {
   let [storedDropboxConfig, setStoredDropboxConfig] = useState<StoredDropboxWorkspaceConfig | null>(
     () => loadStoredDropboxWorkspaceConfig(),
   );
+  let [storedOneDriveConfig, setStoredOneDriveConfig] =
+    useState<StoredOneDriveWorkspaceConfig | null>(() => loadStoredOneDriveWorkspaceConfig());
   let [storedWorkspaceKind, setStoredWorkspaceKind] = useState<StoredWorkspaceKind | null>(() =>
     loadStoredWorkspaceKind(),
   );
@@ -81,6 +88,7 @@ export function LocalWorkspaceApp() {
   let [retryLoadPath, setRetryLoadPath] = useState<string | null>(null);
   let [busy, setBusy] = useState(false);
   let [dropboxConnecting, setDropboxConnecting] = useState(false);
+  let [oneDriveConnecting, setOneDriveConnecting] = useState(false);
   let [restoreChecking, setRestoreChecking] = useState(false);
   let [sidebarOpen, setSidebarOpen] = useState(() => defaultSidebarOpen());
 
@@ -151,6 +159,7 @@ export function LocalWorkspaceApp() {
 
   useEffect(() => {
     completeDropboxPopupOAuthIfPresent();
+    completeOneDrivePopupOAuthIfPresent();
   }, []);
 
   let selectedPath = singleFileSource ? null : (selectedFile?.path ?? null);
@@ -200,6 +209,16 @@ export function LocalWorkspaceApp() {
       t,
       workspaceBackendRef,
     });
+  let { clearOneDriveAccessToken, createOneDriveBackend, setOneDriveRedirectAccessToken } =
+    useOneDriveWorkspaceBackend({
+      dirtyRef,
+      editorValueRef,
+      selectedFileRef,
+      setStoredOneDriveConfig,
+      setStoredWorkspaceKind,
+      t,
+      workspaceBackendRef,
+    });
 
   let setSaveStateSynced = useCallback((nextState: SaveState) => {
     if (saveStateRef.current == nextState) return;
@@ -232,7 +251,7 @@ export function LocalWorkspaceApp() {
     handleEditorInput,
     loadFile,
     openSingleFileDraft,
-    restoreDropboxRedirectEditorDraft,
+    restoreCloudRedirectEditorDraft,
     saveCurrentFile,
   } = useWorkspaceDocumentActions({
     activeDocumentGenerationRef,
@@ -303,35 +322,43 @@ export function LocalWorkspaceApp() {
 
   let {
     openDropboxWorkspace,
+    openOneDriveWorkspace,
     openWorkspace,
     refreshWorkspace,
     restoreDropboxWorkspace,
+    restoreOneDriveWorkspace,
     restoreStoredWorkspace,
   } = useWorkspaceOpeners({
     clearDropboxAccessToken,
+    clearOneDriveAccessToken,
     createDropboxBackend,
+    createOneDriveBackend,
     folderAccessUnavailableMessage,
     loadTree,
     refreshWorkspaceForCurrentEditor,
     rememberWorkspaceHandle,
-    restoreDropboxRedirectEditorDraft,
+    restoreCloudRedirectEditorDraft,
     saveCurrentFile,
     setBusy,
     setDropboxConnecting,
     setErrorMessage,
+    setOneDriveConnecting,
     setRetryLoadPath,
     setSidebarOpen,
     setWorkspaceBackend,
     storedDropboxConfig,
     storedLocalWorkspace,
+    storedOneDriveConfig,
     workspaceBackend,
   });
 
   useWorkspaceStartup({
     browserSupported,
     clearDropboxAccessToken,
+    clearOneDriveAccessToken,
     loadTree,
     openDropboxWorkspace,
+    openOneDriveWorkspace,
     openSingleFileDraft,
     selectedFile,
     selectedFileRef,
@@ -339,6 +366,8 @@ export function LocalWorkspaceApp() {
     setDropboxConnecting,
     setDropboxRedirectAccessToken,
     setErrorMessage,
+    setOneDriveConnecting,
+    setOneDriveRedirectAccessToken,
     setRestoreChecking,
     setRetryLoadPath,
     setSidebarOpen,
@@ -346,6 +375,7 @@ export function LocalWorkspaceApp() {
     setWorkspaceBackend,
     storedDropboxConfig,
     storedLocalWorkspace,
+    storedOneDriveConfig,
     storedWorkspaceKind,
     workspaceBackend,
   });
@@ -418,6 +448,22 @@ export function LocalWorkspaceApp() {
     });
   };
 
+  let connectOneDrive = () => {
+    let clientId = defaultOneDriveClientId();
+    if (!clientId) {
+      setErrorMessage(
+        "OneDrive workspace is not configured. Set VITE_ONEDRIVE_CLIENT_ID for this app.",
+      );
+      setRetryLoadPath(null);
+      return;
+    }
+
+    void openOneDriveWorkspace({
+      clientId,
+      root: storedOneDriveConfig?.root ?? defaultOneDriveRoot(),
+    });
+  };
+
   let retryUnavailableCollabFile = useCallback(async () => {
     let backend = workspaceBackend;
     let retryPath = retryLoadPath;
@@ -455,20 +501,28 @@ export function LocalWorkspaceApp() {
 
   let {
     closeSaveAsDropboxDialog,
+    closeSaveAsOneDriveDialog,
     downloadCurrentMarkdownCopy,
     exportCurrentFileAsHtml,
     openSaveAsDropboxDialog,
+    openSaveAsOneDriveDialog,
     printCurrentFileAsPdf,
     saveAsDropboxDialogOpen,
     saveAsDropboxError,
     saveAsDropboxPath,
+    saveAsOneDriveDialogOpen,
+    saveAsOneDriveError,
+    saveAsOneDrivePath,
     saveSingleFileAsLocal,
     setSaveAsDropboxPath,
+    setSaveAsOneDrivePath,
     submitSaveAsDropbox,
+    submitSaveAsOneDrive,
   } = useWorkspaceFileActions({
     activateSingleFileDocument,
     collabDocumentRef,
     createDropboxBackend,
+    createOneDriveBackend,
     discardMaterializedDraft,
     editorElementRef,
     editorValueRef,
@@ -481,10 +535,12 @@ export function LocalWorkspaceApp() {
     setBusy,
     setDropboxConnecting,
     setErrorMessage,
+    setOneDriveConnecting,
     setRetryLoadPath,
     setWorkspaceBackend,
     singleFileSourceRef,
     storedDropboxConfig,
+    storedOneDriveConfig,
     t,
     workspaceBackendRef,
   });
@@ -497,6 +553,7 @@ export function LocalWorkspaceApp() {
     locale == "en" ? t("actions.switchToChinese") : t("actions.switchToEnglish");
   let restoreAvailable = Boolean(storedLocalWorkspace);
   let dropboxRestoreAvailable = Boolean(storedDropboxConfig);
+  let oneDriveRestoreAvailable = Boolean(storedOneDriveConfig);
 
   return (
     <TooltipProvider>
@@ -507,6 +564,8 @@ export function LocalWorkspaceApp() {
           canRefresh={canRefreshWorkspace}
           dropboxConnecting={dropboxConnecting}
           dropboxRestoreAvailable={dropboxRestoreAvailable}
+          oneDriveConnecting={oneDriveConnecting}
+          oneDriveRestoreAvailable={oneDriveRestoreAvailable}
           languageToggleLabel={languageToggleLabel}
           open={sidebarOpen}
           restoreAvailable={restoreAvailable}
@@ -519,10 +578,12 @@ export function LocalWorkspaceApp() {
           onDeleteEntry={requestDeleteEntry}
           onLoadDirectory={loadTreeDirectory}
           onOpenDropbox={connectDropbox}
+          onOpenOneDrive={connectOneDrive}
           onOpenFolder={() => void openWorkspace()}
           onRefresh={() => void refreshWorkspace()}
           onRenameEntry={openRenameDialog}
           onRestoreDropbox={() => void restoreDropboxWorkspace()}
+          onRestoreOneDrive={() => void restoreOneDriveWorkspace()}
           onRestoreFolder={() => void restoreStoredWorkspace()}
           onSelectEntry={setTreeSelection}
           onSelectFile={selectFile}
@@ -556,6 +617,7 @@ export function LocalWorkspaceApp() {
             canSaveToDevice={supportsSaveFilePicker()}
             canShare={canShareFile}
             dropboxConnecting={dropboxConnecting}
+            oneDriveConnecting={oneDriveConnecting}
             saveLabel={saveLabel}
             saveState={saveState}
             sidebarOpen={sidebarOpen}
@@ -566,6 +628,7 @@ export function LocalWorkspaceApp() {
             onInsertImage={() => imageInputRef.current?.click()}
             onPrintPdf={() => void printCurrentFileAsPdf()}
             onSaveAsDropbox={openSaveAsDropboxDialog}
+            onSaveAsOneDrive={openSaveAsOneDriveDialog}
             onSaveAsLocal={() => void saveSingleFileAsLocal()}
             onShareFile={openShareDialog}
             onToggleSidebar={toggleSidebar}
@@ -626,6 +689,15 @@ export function LocalWorkspaceApp() {
             onSubmit: submitSaveAsDropbox,
             onValueChange: setSaveAsDropboxPath,
           }}
+          saveAsOneDriveDialog={{
+            busy: busy || oneDriveConnecting,
+            error: saveAsOneDriveError,
+            open: saveAsOneDriveDialogOpen,
+            value: saveAsOneDrivePath,
+            onOpenChange: closeSaveAsOneDriveDialog,
+            onSubmit: submitSaveAsOneDrive,
+            onValueChange: setSaveAsOneDrivePath,
+          }}
           commandPalette={{
             browserSupported,
             busy,
@@ -636,17 +708,21 @@ export function LocalWorkspaceApp() {
               fileDialogMode != null ||
               shareDialogOpen ||
               saveAsDropboxDialogOpen ||
+              saveAsOneDriveDialogOpen ||
               deleteTarget != null,
             dropboxConnecting,
+            oneDriveConnecting,
             selectedPath,
             sidebarOpen,
             tree,
             onConnectDropbox: connectDropbox,
+            onConnectOneDrive: connectOneDrive,
             onDownloadCopy: downloadCurrentMarkdownCopy,
             onInsertImage: () => imageInputRef.current?.click(),
             onNewDraft: () => void openSingleFileDraft(),
             onOpenFolder: () => void openWorkspace(),
             onSaveAsDropbox: openSaveAsDropboxDialog,
+            onSaveAsOneDrive: openSaveAsOneDriveDialog,
             onSaveAsLocal: () => void saveSingleFileAsLocal(),
             onSelectFile: selectFile,
             onToggleSidebar: toggleSidebar,

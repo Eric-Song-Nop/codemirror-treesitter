@@ -88,6 +88,13 @@ export function translateKnownMessage(message: string, t: TFunction) {
     return t("errors.dropboxMissingScopes", { scopes: missingScopes.groups.scopes });
   }
 
+  let missingOneDriveScopes = message.match(
+    /^OneDrive app is missing required file permissions: (?<scopes>.+)\. Enable those scopes and reconnect OneDrive workspace\.$/,
+  );
+  if (missingOneDriveScopes?.groups) {
+    return t("errors.onedriveMissingScopes", { scopes: missingOneDriveScopes.groups.scopes });
+  }
+
   let pathExists = message.match(/^(?<path>.+) already exists\.$/);
   if (pathExists?.groups) {
     return t("errors.pathAlreadyExists", { path: pathExists.groups.path });
@@ -194,6 +201,25 @@ const exactMessageKeys: Readonly<Record<string, TranslationKey>> = {
     "errors.dropboxTokenExchangeFailed",
   "Dropbox workspace is not configured. Set VITE_DROPBOX_APP_KEY for this app.":
     "errors.dropboxNotConfigured",
+  "OneDrive access token expired. Reconnect OneDrive workspace to continue.":
+    "errors.onedriveAccessTokenExpired",
+  "OneDrive authorization did not return a code.": "errors.onedriveAuthorizationCodeMissing",
+  "OneDrive authorization is invalid or was revoked. Reconnect OneDrive workspace to continue.":
+    "errors.onedriveAuthorizationInvalid",
+  "OneDrive authorization popup was blocked. Allow popups for this site and try again.":
+    "errors.onedrivePopupBlocked",
+  "OneDrive authorization state did not match.": "errors.onedriveAuthorizationStateMismatch",
+  "OneDrive authorization state was not found.": "errors.onedriveAuthorizationStateMissing",
+  "OneDrive authorization was closed before it completed. Reconnect OneDrive workspace to continue.":
+    "errors.onedriveAuthorizationClosed",
+  "OneDrive authorization was denied.": "errors.onedriveAuthorizationDenied",
+  "OneDrive client ID is required.": "errors.onedriveClientIdRequired",
+  "OneDrive token exchange failed. Check the client ID and reconnect OneDrive workspace.":
+    "errors.onedriveTokenExchangeFailed",
+  "OneDrive workspace is not configured. Set VITE_ONEDRIVE_CLIENT_ID for this app.":
+    "errors.onedriveNotConfigured",
+  "OneDrive workspace path is no longer available. Check the OneDrive root setting, then reconnect OneDrive workspace.":
+    "errors.onedrivePathUnavailable",
   "Enter a file name, not a path.": "errors.enterFileNameNotPath",
   "Enter a file name.": "errors.enterFileName",
   "Enter a folder name, not a path.": "errors.enterFolderNameNotPath",

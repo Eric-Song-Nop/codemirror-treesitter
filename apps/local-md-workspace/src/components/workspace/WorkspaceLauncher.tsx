@@ -7,11 +7,15 @@ type WorkspaceLauncherProps = {
   busy: boolean;
   dropboxConnecting: boolean;
   dropboxRestoreAvailable: boolean;
+  oneDriveConnecting: boolean;
+  oneDriveRestoreAvailable: boolean;
   restoreAvailable: boolean;
   restoreChecking: boolean;
   onOpenDropbox: () => void;
+  onOpenOneDrive: () => void;
   onOpenFolder: () => void;
   onRestoreDropbox: () => void;
+  onRestoreOneDrive: () => void;
   onRestoreFolder: () => void;
 };
 
@@ -20,15 +24,19 @@ export function WorkspaceLauncher({
   busy,
   dropboxConnecting,
   dropboxRestoreAvailable,
+  oneDriveConnecting,
+  oneDriveRestoreAvailable,
   restoreAvailable,
   restoreChecking,
   onOpenDropbox,
+  onOpenOneDrive,
   onOpenFolder,
   onRestoreDropbox,
+  onRestoreOneDrive,
   onRestoreFolder,
 }: WorkspaceLauncherProps) {
   let { t } = useI18n();
-  let hasPrimaryRestore = restoreAvailable || dropboxRestoreAvailable;
+  let hasPrimaryRestore = restoreAvailable || dropboxRestoreAvailable || oneDriveRestoreAvailable;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
@@ -53,6 +61,17 @@ export function WorkspaceLauncher({
           {t("actions.continueDropbox")}
         </Button>
       )}
+      {oneDriveRestoreAvailable && (
+        <Button
+          className="justify-start"
+          disabled={busy || oneDriveConnecting}
+          variant={restoreAvailable || dropboxRestoreAvailable ? "outline" : "default"}
+          onClick={onRestoreOneDrive}
+        >
+          <CloudIcon data-icon="inline-start" />
+          {t("actions.continueOneDrive")}
+        </Button>
+      )}
       <Button
         className="justify-start"
         disabled={!browserSupported || busy}
@@ -70,6 +89,15 @@ export function WorkspaceLauncher({
       >
         <CloudIcon data-icon="inline-start" />
         {t("actions.connectDropbox")}
+      </Button>
+      <Button
+        className="justify-start"
+        disabled={busy || oneDriveConnecting}
+        variant="outline"
+        onClick={onOpenOneDrive}
+      >
+        <CloudIcon data-icon="inline-start" />
+        {t("actions.connectOneDrive")}
       </Button>
     </div>
   );

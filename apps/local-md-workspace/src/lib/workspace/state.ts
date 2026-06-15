@@ -44,6 +44,7 @@ export function workspaceSelectedPathContext(
 ): StoredWorkspaceSelectedPathContext | null {
   if (backend.kind == "local") return { kind: "local", workspaceId: backend.id };
   if (backend.kind == "opendal-dropbox") return { kind: "dropbox", workspaceId: backend.id };
+  if (backend.kind == "opendal-onedrive") return { kind: "onedrive", workspaceId: backend.id };
   return null;
 }
 

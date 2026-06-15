@@ -6,6 +6,7 @@ const STORE_NAME = "workspace";
 const HANDLE_KEY = "directory-handle";
 const LOCAL_WORKSPACE_RECORDS_KEY = "local-workspaces";
 const DROPBOX_CONFIG_KEY = "local-md-workspace:dropbox-config";
+const ONEDRIVE_CONFIG_KEY = "local-md-workspace:onedrive-config";
 const WORKSPACE_KIND_KEY = "local-md-workspace:workspace-kind";
 const SELECTED_PATH_KEY_PREFIX = "local-md-workspace:selected-path";
 
@@ -14,7 +15,12 @@ export type StoredDropboxWorkspaceConfig = {
   root?: string;
 };
 
-export type StoredWorkspaceKind = "local" | "dropbox";
+export type StoredOneDriveWorkspaceConfig = {
+  clientId: string;
+  root?: string;
+};
+
+export type StoredWorkspaceKind = "local" | "dropbox" | "onedrive";
 
 export type StoredWorkspaceSelectedPathContext = {
   kind: StoredWorkspaceKind;
@@ -105,6 +111,28 @@ export function saveStoredDropboxWorkspaceConfig(config: StoredDropboxWorkspaceC
   } catch {}
 }
 
+export function loadStoredOneDriveWorkspaceConfig() {
+  if (!canUseLocalStorage()) return null;
+
+  try {
+    let raw = window.localStorage.getItem(ONEDRIVE_CONFIG_KEY);
+    if (!raw) return null;
+    return parseOneDriveWorkspaceConfig(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+export function saveStoredOneDriveWorkspaceConfig(config: StoredOneDriveWorkspaceConfig) {
+  if (!canUseLocalStorage()) return;
+
+  let normalized = parseOneDriveWorkspaceConfig(config);
+  if (!normalized) return;
+  try {
+    window.localStorage.setItem(ONEDRIVE_CONFIG_KEY, JSON.stringify(normalized));
+  } catch {}
+}
+
 export function loadStoredWorkspaceKind() {
   if (!canUseLocalStorage()) return null;
 
@@ -189,9 +217,28 @@ function parseDropboxWorkspaceConfig(value: unknown): StoredDropboxWorkspaceConf
   return root ? { appKey, root } : { appKey };
 }
 
+function parseOneDriveWorkspaceConfig(value: unknown): StoredOneDriveWorkspaceConfig | null {
+  if (!value || typeof value != "object") return null;
+  let record = value as Record<string, unknown>;
+  if (typeof record.clientId != "string") return null;
+
+  let clientId = record.clientId.trim();
+  if (!clientId) return null;
+
+  let root =
+    typeof record.root == "string"
+      ? record.root
+          .trim()
+          .replace(/\\/g, "/")
+          .replace(/^\/+|\/+$/g, "")
+      : "";
+
+  return root ? { clientId, root } : { clientId };
+}
+
 function parseWorkspaceKind(value: unknown): StoredWorkspaceKind | null {
   if (typeof value != "string") return null;
-  if (value == "local" || value == "dropbox") return value;
+  if (value == "local" || value == "dropbox" || value == "onedrive") return value;
   return null;
 }
 

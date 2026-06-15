@@ -10,12 +10,13 @@ The first milestone is not a general OpenDAL JavaScript binding. It is a narrow
 workspace storage adapter with enough operations to back the existing local
 Markdown editor flow.
 
-Current product direction: Dropbox is the first user-facing cloud workspace
-with a pure frontend OAuth code flow using PKCE and short-lived access tokens.
-OneDrive is the next cloud backend because OpenDAL exposes native metadata,
-rename, and `write_with_if_match` support that can fit Grove's existing CRDT
-conflict path. Google Drive is also useful through OpenDAL's browser-compatible
-`gdrive` service, but it does not currently advertise native conditional writes.
+Current product direction: Dropbox and OneDrive are user-facing cloud
+workspaces with pure frontend OAuth code flows using PKCE and short-lived
+access tokens. OneDrive is especially useful because OpenDAL exposes native
+metadata, rename, and `write_with_if_match` support that can fit Grove's
+existing CRDT conflict path. Google Drive is also useful through OpenDAL's
+browser-compatible `gdrive` service, but it does not currently advertise native
+conditional writes.
 S3-compatible storage remains a useful OpenDAL/browser validation track, but it
 is no longer the first user-facing cloud workspace target.
 
@@ -61,7 +62,7 @@ is no longer the first user-facing cloud workspace target.
 - Do not add a server gateway or presign service for this track.
 - Do not implement Dropbox background/offline access for the MVP.
 - Do not request or persist Dropbox refresh tokens for the MVP.
-- Do not wire OneDrive UI/OAuth in the backend-foundation pass.
+- Do not wire OneDrive UI/OAuth in the backend-foundation pass itself.
 - Do not wire Google Drive UI/OAuth in the backend-foundation pass.
 - Do not persist access keys or secret tokens unless a later design explicitly
   opts into encrypted or user-confirmed storage.
@@ -594,10 +595,10 @@ OPENDAL_DROPBOX_ACCESS_TOKEN="..." \
   vp run @codemirror-treesitter/opendal-wasm-browser#validate:dropbox
 ```
 
-## Phase 7: OneDrive Backend Foundation
+## Phase 7: OneDrive Backend and OAuth/UI
 
-Status: wrapper and app backend foundation implemented; OneDrive OAuth/UI and
-real provider smoke are pending.
+Status: wrapper, app backend, OAuth PKCE, redirect recovery, and user-facing UI
+implemented; real provider smoke is pending.
 
 The implementation order for OneDrive should stay separate from the Dropbox
 user-facing flow:
@@ -628,18 +629,25 @@ Current implementation:
   source revisions from `stat`, `list`, `read`, and successful writes.
 - `apps/local-md-workspace/src/lib/onedrive-workspace-backend.ts` creates an
   `opendal-onedrive` workspace backend over the shared OpenDAL backend.
+- `apps/local-md-workspace/src/lib/onedrive-oauth.ts` implements popup-first
+  OAuth PKCE with full-page redirect fallback and tab-scoped transaction
+  recovery.
+- `apps/local-md-workspace` stores only non-secret OneDrive config (`clientId`
+  and optional root), keeps access tokens in memory, and re-authorizes when the
+  short-lived token is missing or expiring.
+- The app exposes Connect/Continue OneDrive and Save As OneDrive actions in the
+  launcher, sidebar, header menu, command palette, and save-as dialog.
+- Redirect recovery keeps a tab-scoped OneDrive dirty-editor draft for the
+  selected OneDrive file and restores it after OAuth returns.
 - `apps/local-md-workspace/src/lib/workspace-file-conflict.ts` classifies
   412/Precondition Failed/ConditionNotMatch errors as write conflicts so the
   existing CRDT merge retry path can handle them.
 
 Next OneDrive work:
 
-- Add Microsoft OAuth PKCE helpers and non-secret config storage in
-  `apps/local-md-workspace`.
-- Add user-facing Connect/Reconnect OneDrive UI without refresh-token storage.
-- Add OneDrive-specific user-facing error messages for denied consent, missing
-  `Files.ReadWrite`, expired token, and provider throttling/conflict responses.
 - Add credential-gated wrapper and app smoke tasks for real OneDrive file IO.
+- Add manual/browser smoke coverage for OneDrive connect, redirect fallback,
+  save-as, and conditional-write conflict behavior with a real Microsoft app.
 - Decide separately whether any future refresh-token mode is acceptable in the
   browser product.
 

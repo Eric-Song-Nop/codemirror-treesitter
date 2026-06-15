@@ -1,58 +1,58 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
-  authorizeDropboxWithPkce,
-  completeDropboxRedirectOAuthIfPresent,
-  createDropboxAuthorizeUrl,
-  createDropboxPkceChallenge,
-  createDropboxPkceVerifier,
-  DEFAULT_DROPBOX_SCOPES,
-  DROPBOX_REDIRECT_TRANSACTION_KEY,
-  hasDropboxOAuthCallback,
-  hasDropboxRedirectTransaction,
-  parseDropboxOAuthCallback,
-} from "./dropbox-oauth.ts";
+  authorizeOneDriveWithPkce,
+  completeOneDriveRedirectOAuthIfPresent,
+  createOneDriveAuthorizeUrl,
+  createOneDrivePkceChallenge,
+  createOneDrivePkceVerifier,
+  DEFAULT_ONEDRIVE_SCOPES,
+  hasOneDriveOAuthCallback,
+  hasOneDriveRedirectTransaction,
+  ONEDRIVE_REDIRECT_TRANSACTION_KEY,
+  parseOneDriveOAuthCallback,
+} from "./onedrive-oauth.ts";
 
-describe("Dropbox OAuth PKCE helpers", () => {
+describe("OneDrive OAuth PKCE helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
   it("creates the RFC 7636 S256 code challenge", async () => {
     await expect(
-      createDropboxPkceChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+      createOneDrivePkceChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
     ).resolves.toBe("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
   });
 
   it("encodes verifiers without base64 padding or unsafe URL characters", () => {
-    let verifier = createDropboxPkceVerifier(new Uint8Array([0, 255, 254, 253, 1, 2]));
+    let verifier = createOneDrivePkceVerifier(new Uint8Array([0, 255, 254, 253, 1, 2]));
 
     expect(verifier).not.toContain("+");
     expect(verifier).not.toContain("/");
     expect(verifier).not.toContain("=");
   });
 
-  it("builds a short-lived Dropbox authorization URL", () => {
-    let url = createDropboxAuthorizeUrl({
-      appKey: " app-key ",
+  it("builds a short-lived OneDrive authorization URL", () => {
+    let url = createOneDriveAuthorizeUrl({
+      clientId: " client-id ",
       codeChallenge: "challenge",
       redirectUri: "http://127.0.0.1:5173/",
       state: "state",
     });
 
-    expect(url.origin).toBe("https://www.dropbox.com");
-    expect(url.pathname).toBe("/oauth2/authorize");
-    expect(url.searchParams.get("client_id")).toBe("app-key");
+    expect(url.origin).toBe("https://login.microsoftonline.com");
+    expect(url.pathname).toBe("/common/oauth2/v2.0/authorize");
+    expect(url.searchParams.get("client_id")).toBe("client-id");
     expect(url.searchParams.get("code_challenge")).toBe("challenge");
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(url.searchParams.get("redirect_uri")).toBe("http://127.0.0.1:5173/");
+    expect(url.searchParams.get("response_mode")).toBe("query");
     expect(url.searchParams.get("response_type")).toBe("code");
-    expect(url.searchParams.get("scope")).toBe(DEFAULT_DROPBOX_SCOPES.join(" "));
+    expect(url.searchParams.get("scope")).toBe(DEFAULT_ONEDRIVE_SCOPES.join(" "));
     expect(url.searchParams.get("state")).toBe("state");
-    expect(url.searchParams.get("token_access_type")).toBe("online");
   });
 
   it("parses callback codes and errors", () => {
-    expect(parseDropboxOAuthCallback("?state=s1&code=c1")).toEqual({
+    expect(parseOneDriveOAuthCallback("?state=s1&code=c1")).toEqual({
       code: "c1",
       error: undefined,
       errorDescription: undefined,
@@ -60,7 +60,7 @@ describe("Dropbox OAuth PKCE helpers", () => {
     });
 
     expect(
-      parseDropboxOAuthCallback("state=s2&error=access_denied&error_description=Denied"),
+      parseOneDriveOAuthCallback("state=s2&error=access_denied&error_description=Denied"),
     ).toEqual({
       code: undefined,
       error: "access_denied",
@@ -70,21 +70,21 @@ describe("Dropbox OAuth PKCE helpers", () => {
   });
 
   it("ignores incomplete callback URLs", () => {
-    expect(parseDropboxOAuthCallback("?code=c1")).toBeNull();
-    expect(parseDropboxOAuthCallback("?state=s1")).toBeNull();
+    expect(parseOneDriveOAuthCallback("?code=c1")).toBeNull();
+    expect(parseOneDriveOAuthCallback("?state=s1")).toBeNull();
   });
 
   it("detects complete OAuth callback URLs and stored redirect transactions", () => {
     let values = new Map<string, string>();
     let storage = memoryStorage(values);
 
-    expect(hasDropboxOAuthCallback("?state=s1&code=c1")).toBe(true);
-    expect(hasDropboxOAuthCallback("?state=s1&error=access_denied")).toBe(true);
-    expect(hasDropboxOAuthCallback("?state=s1")).toBe(false);
-    expect(hasDropboxRedirectTransaction(storage)).toBe(false);
+    expect(hasOneDriveOAuthCallback("?state=s1&code=c1")).toBe(true);
+    expect(hasOneDriveOAuthCallback("?state=s1&error=access_denied")).toBe(true);
+    expect(hasOneDriveOAuthCallback("?state=s1")).toBe(false);
+    expect(hasOneDriveRedirectTransaction(storage)).toBe(false);
 
-    values.set(DROPBOX_REDIRECT_TRANSACTION_KEY, "{}");
-    expect(hasDropboxRedirectTransaction(storage)).toBe(true);
+    values.set(ONEDRIVE_REDIRECT_TRANSACTION_KEY, "{}");
+    expect(hasOneDriveRedirectTransaction(storage)).toBe(true);
   });
 
   it("falls back to a full-page PKCE redirect when the popup is blocked", async () => {
@@ -97,12 +97,12 @@ describe("Dropbox OAuth PKCE helpers", () => {
       sessionStorage: memoryStorage(values),
     });
 
-    void authorizeDropboxWithPkce({
+    void authorizeOneDriveWithPkce({
       allowFullPageRedirect: true,
-      appKey: " app-key ",
+      clientId: " client-id ",
       onBeforeFullPageRedirect: onBeforeRedirect,
       redirectUri: "http://127.0.0.1:5173/",
-      scopes: ["files.metadata.read"],
+      scopes: ["Files.ReadWrite"],
     }).catch(() => {});
     await waitFor(() => assign.mock.calls.length == 1);
 
@@ -110,19 +110,19 @@ describe("Dropbox OAuth PKCE helpers", () => {
     expect(assign).toHaveBeenCalledTimes(1);
 
     let authUrl = new URL(assign.mock.calls[0]![0]);
-    expect(authUrl.origin).toBe("https://www.dropbox.com");
-    expect(authUrl.searchParams.get("client_id")).toBe("app-key");
+    expect(authUrl.origin).toBe("https://login.microsoftonline.com");
+    expect(authUrl.searchParams.get("client_id")).toBe("client-id");
     expect(authUrl.searchParams.get("redirect_uri")).toBe("http://127.0.0.1:5173/");
-    expect(authUrl.searchParams.get("scope")).toBe("files.metadata.read");
+    expect(authUrl.searchParams.get("scope")).toBe("Files.ReadWrite");
+    expect(authUrl.searchParams.get("response_mode")).toBe("query");
     expect(authUrl.searchParams.get("response_type")).toBe("code");
     expect(authUrl.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(authUrl.searchParams.get("token_access_type")).toBe("online");
 
-    let transaction = JSON.parse(values.get(DROPBOX_REDIRECT_TRANSACTION_KEY)!);
+    let transaction = JSON.parse(values.get(ONEDRIVE_REDIRECT_TRANSACTION_KEY)!);
     let redirectContext = onBeforeRedirect.mock.calls[0]![0];
-    expect(transaction.appKey).toBe("app-key");
+    expect(transaction.clientId).toBe("client-id");
     expect(transaction.redirectUri).toBe("http://127.0.0.1:5173/");
-    expect(transaction.scopes).toEqual(["files.metadata.read"]);
+    expect(transaction.scopes).toEqual(["Files.ReadWrite"]);
     expect(transaction.state).toBe(authUrl.searchParams.get("state"));
     expect(transaction.state).toBe(redirectContext.state);
     expect(transaction.codeVerifier).toEqual(expect.any(String));
@@ -133,13 +133,13 @@ describe("Dropbox OAuth PKCE helpers", () => {
     let values = new Map<string, string>();
     let storage = memoryStorage(values);
     values.set(
-      DROPBOX_REDIRECT_TRANSACTION_KEY,
+      ONEDRIVE_REDIRECT_TRANSACTION_KEY,
       JSON.stringify({
-        appKey: "app-key",
+        clientId: "client-id",
         codeVerifier: "verifier",
         createdAt: 1,
         redirectUri: "http://127.0.0.1:5173/",
-        scopes: DEFAULT_DROPBOX_SCOPES,
+        scopes: DEFAULT_ONEDRIVE_SCOPES,
         state: "state",
       }),
     );
@@ -157,37 +157,38 @@ describe("Dropbox OAuth PKCE helpers", () => {
       },
     });
 
-    let token = await completeDropboxRedirectOAuthIfPresent({
+    let token = await completeOneDriveRedirectOAuthIfPresent({
       search: "?state=state&code=code",
       storage,
     });
 
     expect(token?.accessToken).toBe("access-token");
-    expect(token?.appKey).toBe("app-key");
+    expect(token?.clientId).toBe("client-id");
     expect(token?.redirectUri).toBe("http://127.0.0.1:5173/");
-    expect(token?.scopes).toEqual(DEFAULT_DROPBOX_SCOPES);
-    expect(values.has(DROPBOX_REDIRECT_TRANSACTION_KEY)).toBe(false);
+    expect(token?.scopes).toEqual(DEFAULT_ONEDRIVE_SCOPES);
+    expect(values.has(ONEDRIVE_REDIRECT_TRANSACTION_KEY)).toBe(false);
     expect(replaceState).toHaveBeenCalledWith(null, "", "/");
 
     let body = fetch.mock.calls[0]?.[1]?.body;
     expect(body).toBeInstanceOf(URLSearchParams);
-    expect((body as URLSearchParams).get("client_id")).toBe("app-key");
+    expect((body as URLSearchParams).get("client_id")).toBe("client-id");
     expect((body as URLSearchParams).get("code")).toBe("code");
     expect((body as URLSearchParams).get("code_verifier")).toBe("verifier");
     expect((body as URLSearchParams).get("grant_type")).toBe("authorization_code");
+    expect((body as URLSearchParams).get("scope")).toBe(DEFAULT_ONEDRIVE_SCOPES.join(" "));
   });
 
-  it("accepts Dropbox token responses with string expires_in values", async () => {
+  it("accepts OneDrive token responses with string expires_in values", async () => {
     let values = new Map<string, string>();
     let storage = memoryStorage(values);
     values.set(
-      DROPBOX_REDIRECT_TRANSACTION_KEY,
+      ONEDRIVE_REDIRECT_TRANSACTION_KEY,
       JSON.stringify({
-        appKey: "app-key",
+        clientId: "client-id",
         codeVerifier: "verifier",
         createdAt: 1,
         redirectUri: "http://127.0.0.1:5173/",
-        scopes: DEFAULT_DROPBOX_SCOPES,
+        scopes: DEFAULT_ONEDRIVE_SCOPES,
         state: "state",
       }),
     );
@@ -204,7 +205,7 @@ describe("Dropbox OAuth PKCE helpers", () => {
       },
     });
 
-    let token = await completeDropboxRedirectOAuthIfPresent({
+    let token = await completeOneDriveRedirectOAuthIfPresent({
       search: "?state=state&code=code",
       storage,
     });
@@ -217,13 +218,13 @@ describe("Dropbox OAuth PKCE helpers", () => {
     let values = new Map<string, string>();
     let storage = memoryStorage(values);
     values.set(
-      DROPBOX_REDIRECT_TRANSACTION_KEY,
+      ONEDRIVE_REDIRECT_TRANSACTION_KEY,
       JSON.stringify({
-        appKey: "app-key",
+        clientId: "client-id",
         codeVerifier: "verifier",
         createdAt: 1,
         redirectUri: "http://127.0.0.1:5173/",
-        scopes: DEFAULT_DROPBOX_SCOPES,
+        scopes: DEFAULT_ONEDRIVE_SCOPES,
         state: "expected-state",
       }),
     );
@@ -238,11 +239,11 @@ describe("Dropbox OAuth PKCE helpers", () => {
     });
 
     await expect(
-      completeDropboxRedirectOAuthIfPresent({
+      completeOneDriveRedirectOAuthIfPresent({
         search: "?state=callback-state&code=code",
         storage,
       }),
-    ).rejects.toThrow("Dropbox authorization state did not match.");
+    ).rejects.toThrow("OneDrive authorization state did not match.");
   });
 });
 
