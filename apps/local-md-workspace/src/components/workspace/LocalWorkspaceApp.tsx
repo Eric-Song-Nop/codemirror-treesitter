@@ -38,6 +38,7 @@ import { useI18n } from "@/lib/i18n";
 import { useLiveMdPreloadError } from "@/lib/live-md-preload";
 import { defaultSidebarOpen, isMobileSidebarViewport } from "@/lib/workspace/constants";
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
+import { errorToMessage } from "@/lib/workspace/errors";
 import { createEphemeralLocalWorkspaceRecord, saveStateLabel } from "@/lib/workspace/state";
 import type { EditorDocument, SaveState, SingleFileSource } from "@/lib/workspace/types";
 import {
@@ -268,7 +269,7 @@ export function LocalWorkspaceApp() {
     stopOwnerShareHost,
   });
 
-  let { loadTree, refreshWorkspaceForCurrentEditor } = useWorkspaceTree({
+  let { loadDirectory, loadTree, refreshWorkspaceForCurrentEditor } = useWorkspaceTree({
     clearActiveDocument,
     loadFile,
     localFileHandleRef,
@@ -278,6 +279,18 @@ export function LocalWorkspaceApp() {
     setTreeSelection,
     singleFileSourceRef,
   });
+
+  let loadTreeDirectory = useCallback(
+    async (path: string) => {
+      if (!workspaceBackend) return;
+      try {
+        await loadDirectory(workspaceBackend, path);
+      } catch (error) {
+        setErrorMessage(errorToMessage(error));
+      }
+    },
+    [loadDirectory, setErrorMessage, workspaceBackend],
+  );
 
   let rememberWorkspaceHandle = useCallback(async (handle: AccessDirectoryHandle) => {
     let record = await rememberStoredLocalWorkspace(handle);
@@ -502,6 +515,7 @@ export function LocalWorkspaceApp() {
           workspaceOpen={Boolean(workspaceBackend)}
           onCreateEntry={openCreateDialog}
           onDeleteEntry={requestDeleteEntry}
+          onLoadDirectory={loadTreeDirectory}
           onOpenDropbox={connectDropbox}
           onOpenFolder={() => void openWorkspace()}
           onRenameEntry={openRenameDialog}

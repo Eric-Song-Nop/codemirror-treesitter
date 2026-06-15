@@ -182,6 +182,7 @@ export function createLocalWorkspaceBackend(
 async function readWorkspaceTree(handle: AccessDirectoryHandle): Promise<MarkdownDirectoryNode> {
   return {
     children: await readDirectoryChildren(handle, ""),
+    childrenLoaded: true,
     kind: "directory",
     name: handle.name || "Workspace",
     path: "",
@@ -254,6 +255,8 @@ async function listWorkspaceEntries(rootHandle: AccessDirectoryHandle, path: str
   let entries: WorkspaceEntry[] = [];
 
   for await (let entry of directory.values()) {
+    if (isLiveMdEntry(path, entry.name)) continue;
+    if (entry.kind == "directory" && isIgnoredWorkspaceScanDirectory(entry.name)) continue;
     entries.push({
       isDirectory: entry.kind == "directory",
       isFile: entry.kind == "file",
@@ -462,9 +465,9 @@ async function readDirectoryChildren(handle: AccessDirectoryHandle, path: string
     let entryPath = joinWorkspacePath(path, entry.name);
     if (entry.kind == "directory") {
       if (isIgnoredWorkspaceScanDirectory(entry.name)) continue;
-      let directoryChildren = await readDirectoryChildren(entry, entryPath);
       children.push({
-        children: directoryChildren,
+        children: [],
+        childrenLoaded: false,
         kind: "directory",
         name: entry.name,
         path: entryPath,

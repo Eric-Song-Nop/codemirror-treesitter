@@ -6,7 +6,7 @@ import type {
   MarkdownFileNode,
   MarkdownTreeNode,
 } from "@/lib/workspace-backend";
-import { findMarkdownFile } from "@/lib/workspace-backend";
+import { findMarkdownDirectory, findMarkdownFile } from "@/lib/workspace-backend";
 import { useI18n, type TFunction } from "@/lib/i18n";
 
 type FileTreeProps = {
@@ -14,6 +14,7 @@ type FileTreeProps = {
   onDeleteEntry: (target: FileTreeDeleteTarget) => void;
   onRenameEntry: (target: FileTreeDeleteTarget) => void;
   onSelectEntry: (target: FileTreeDeleteTarget) => void;
+  onLoadDirectory: (path: string) => Promise<void>;
   root: MarkdownDirectoryNode | null;
   selectedPath: null | string;
   onSelectFile: (file: MarkdownFileNode) => void;
@@ -32,6 +33,7 @@ export const FileTree = memo(function FileTree({
   onDeleteEntry,
   onRenameEntry,
   onSelectEntry,
+  onLoadDirectory,
   root,
   selectedPath,
   onSelectFile,
@@ -43,6 +45,7 @@ export const FileTree = memo(function FileTree({
     onDeleteEntry,
     onRenameEntry,
     onSelectEntry,
+    onLoadDirectory,
     onSelectFile,
     root,
     selectedPath,
@@ -52,6 +55,7 @@ export const FileTree = memo(function FileTree({
   let initialExpandedDirectoryPathRef = useRef(treeDirectoryPathForFile(selectedPath));
   let pathsRef = useRef(paths);
   let latestSelectionRef = useRef(latestSelection);
+  let loadingDirectoryPathsRef = useRef(new Set<string>());
   let modelRef = useRef<TreesFileTree | null>(null);
   let syncingSelectionRef = useRef(false);
   latestSelectionRef.current = latestSelection;
@@ -107,7 +111,23 @@ export const FileTree = memo(function FileTree({
 
         let latest = latestSelectionRef.current;
         let target = resolveSelectionTarget(nextPath, latest.root);
-        if (target) latest.onSelectEntry(target);
+        if (target) {
+          latest.onSelectEntry(target);
+          let loadingDirectoryPaths = loadingDirectoryPathsRef.current;
+          if (
+            target.kind == "directory" &&
+            shouldLoadDirectory(latest.root, target.path) &&
+            !loadingDirectoryPaths.has(target.path)
+          ) {
+            loadingDirectoryPaths.add(target.path);
+            void latest
+              .onLoadDirectory(target.path)
+              .finally(() => {
+                loadingDirectoryPaths.delete(target.path);
+              })
+              .catch(() => {});
+          }
+        }
         if (nextPath == latest.selectedPath) return;
 
         let file = findMarkdownFile(latest.root, nextPath);
@@ -160,6 +180,11 @@ export const FileTree = memo(function FileTree({
 
   return <div ref={containerRef} className="local-md-file-tree min-h-0 flex-1 overflow-auto" />;
 });
+
+function shouldLoadDirectory(root: MarkdownDirectoryNode | null, path: string) {
+  let directory = findMarkdownDirectory(root, path);
+  return Boolean(directory && !directory.childrenLoaded);
+}
 
 function renderFileTreeContextMenu(
   target: FileTreeDeleteTarget,
