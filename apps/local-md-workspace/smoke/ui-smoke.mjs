@@ -115,6 +115,7 @@ async function attachLocalWorkspaceTarget(client) {
 }
 
 async function assertGitHubRepositoryLink(client, sessionId) {
+  await ensureSidebarOpen(client, sessionId);
   let state = await client.evaluate(
     `
       (() => {
@@ -134,53 +135,6 @@ async function assertGitHubRepositoryLink(client, sessionId) {
     sessionId,
   );
 
-  if (state.found && !state.visible) {
-    await client.evaluate(
-      `
-        (() => {
-          let button = Array.from(document.querySelectorAll("button")).find((item) =>
-            item.getAttribute("aria-label") == "More actions" && item.getClientRects().length
-          );
-          button?.dispatchEvent(
-            new PointerEvent("pointerdown", {
-              bubbles: true,
-              button: 0,
-              pointerType: "mouse"
-            })
-          );
-          button?.dispatchEvent(
-            new PointerEvent("pointerup", {
-              bubbles: true,
-              button: 0,
-              pointerType: "mouse"
-            })
-          );
-          button?.click();
-        })()
-      `,
-      sessionId,
-    );
-    await waitForSettledUi();
-    state = await client.evaluate(
-      `
-        (() => {
-          let links = Array.from(document.querySelectorAll(${JSON.stringify(`a[href="${GITHUB_REPOSITORY_URL}"]`)}));
-          let link = links.find((item) => item.getClientRects().length) ?? links[0] ?? null;
-          return {
-            ariaLabel: link?.getAttribute("aria-label") ?? null,
-            found: Boolean(link),
-            hasIcon: Boolean(link?.querySelector("svg")),
-            rel: link?.getAttribute("rel") ?? null,
-            target: link?.getAttribute("target") ?? null,
-            text: link?.textContent?.trim() ?? null,
-            visible: Boolean(link?.getClientRects().length)
-          };
-        })()
-      `,
-      sessionId,
-    );
-  }
-
   if (
     !state.found ||
     !state.visible ||
@@ -192,19 +146,6 @@ async function assertGitHubRepositoryLink(client, sessionId) {
   ) {
     throw new Error(`GitHub repository link did not render correctly: ${JSON.stringify(state)}`);
   }
-
-  await client.evaluate(
-    `
-      document.dispatchEvent(new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        code: "Escape",
-        key: "Escape"
-      }));
-    `,
-    sessionId,
-  );
-  await waitForSettledUi();
 }
 
 async function assertInitialDropboxUi(client, sessionId) {
@@ -826,18 +767,7 @@ async function closeTarget(client, target) {
 }
 
 async function createSharedFileLink(client, ownerSessionId) {
-  await client.evaluate(
-    `
-      (() => {
-        let button = Array.from(document.querySelectorAll("button")).find((item) =>
-          item.textContent.includes("Share file") && !item.disabled
-        );
-        if (!button) throw new Error("Share file button was not found.");
-        button.click();
-      })()
-    `,
-    ownerSessionId,
-  );
+  await clickDocumentActionMenuItem(client, ownerSessionId, "Share file");
   await client.waitForPredicate(
     `document.body.innerText.includes("Anyone with this link can edit")`,
     ownerSessionId,
@@ -867,6 +797,67 @@ async function createSharedFileLink(client, ownerSessionId) {
     throw new Error(`Shared file link was not generated: ${link}`);
   }
   return link;
+}
+
+async function clickDocumentActionMenuItem(client, sessionId, label) {
+  await client.evaluate(
+    `
+      (() => {
+        let button = Array.from(document.querySelectorAll("button")).find((item) =>
+          item.getAttribute("aria-label") == "More actions" &&
+          !item.disabled &&
+          item.getClientRects().length
+        );
+        if (!button) throw new Error("More actions button was not found.");
+        button.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            bubbles: true,
+            button: 0,
+            pointerType: "mouse"
+          })
+        );
+        button.dispatchEvent(
+          new PointerEvent("pointerup", {
+            bubbles: true,
+            button: 0,
+            pointerType: "mouse"
+          })
+        );
+        button.click();
+      })()
+    `,
+    sessionId,
+  );
+  await waitForSettledUi();
+  await client.evaluate(
+    `
+      (() => {
+        let item = Array.from(document.querySelectorAll('[role="menuitem"]')).find((candidate) =>
+          candidate.textContent.includes(${JSON.stringify(label)}) &&
+          candidate.getAttribute("aria-disabled") != "true" &&
+          candidate.getClientRects().length
+        );
+        if (!item) throw new Error(${JSON.stringify(`${label} menu item was not found.`)});
+        item.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            bubbles: true,
+            button: 0,
+            pointerType: "mouse"
+          })
+        );
+        item.dispatchEvent(
+          new PointerEvent("pointerup", {
+            bubbles: true,
+            button: 0,
+            pointerType: "mouse"
+          })
+        );
+        item.click();
+      })()
+    `,
+    sessionId,
+  );
+  await waitForSettledUi();
 }
 
 async function waitForLocalWorkspaceReady(client, sessionId) {

@@ -504,8 +504,10 @@ export function LocalWorkspaceApp() {
         <WorkspaceSidebar
           browserSupported={browserSupported}
           busy={busy}
+          canRefresh={canRefreshWorkspace}
           dropboxConnecting={dropboxConnecting}
           dropboxRestoreAvailable={dropboxRestoreAvailable}
+          languageToggleLabel={languageToggleLabel}
           open={sidebarOpen}
           restoreAvailable={restoreAvailable}
           restoreChecking={restoreChecking}
@@ -518,11 +520,13 @@ export function LocalWorkspaceApp() {
           onLoadDirectory={loadTreeDirectory}
           onOpenDropbox={connectDropbox}
           onOpenFolder={() => void openWorkspace()}
+          onRefresh={() => void refreshWorkspace()}
           onRenameEntry={openRenameDialog}
           onRestoreDropbox={() => void restoreDropboxWorkspace()}
           onRestoreFolder={() => void restoreStoredWorkspace()}
           onSelectEntry={setTreeSelection}
           onSelectFile={selectFile}
+          onToggleLanguage={toggleLocale}
         />
 
         {sidebarOpen && (
@@ -548,12 +552,10 @@ export function LocalWorkspaceApp() {
             busy={busy}
             canExport={Boolean(selectedFile)}
             canInsertImage={canInsertImage}
-            canRefresh={canRefreshWorkspace}
             canSaveAs={Boolean(selectedFile)}
             canSaveToDevice={supportsSaveFilePicker()}
             canShare={canShareFile}
             dropboxConnecting={dropboxConnecting}
-            languageToggleLabel={languageToggleLabel}
             saveLabel={saveLabel}
             saveState={saveState}
             sidebarOpen={sidebarOpen}
@@ -563,11 +565,9 @@ export function LocalWorkspaceApp() {
             onExportHtml={() => void exportCurrentFileAsHtml()}
             onInsertImage={() => imageInputRef.current?.click()}
             onPrintPdf={() => void printCurrentFileAsPdf()}
-            onRefresh={() => void refreshWorkspace()}
             onSaveAsDropbox={openSaveAsDropboxDialog}
             onSaveAsLocal={() => void saveSingleFileAsLocal()}
             onShareFile={openShareDialog}
-            onToggleLanguage={toggleLocale}
             onToggleSidebar={toggleSidebar}
           />
 
