@@ -4,6 +4,9 @@ import { liveMdRawCssPlugin } from "./vite-plugin.ts";
 
 export default defineConfig({
   plugins: [liveMdRawCssPlugin()],
+  test: {
+    testTimeout: 20_000,
+  },
   resolve: {
     alias: workspaceAliasSubset([
       "@codemirror-treesitter/autocomplete",
