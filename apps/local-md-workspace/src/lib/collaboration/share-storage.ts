@@ -1,4 +1,5 @@
 import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import { workspaceNamespace } from "@/lib/workspace/source-identity";
 import {
   getCollabDocumentValue,
   hashMarkdownText,
@@ -122,7 +123,7 @@ export async function createOwnerShare({
     path: file.path,
     schemaVersion,
     shareId: credentials.shareId,
-    workspaceId: workspaceShareNamespace(backend),
+    workspaceId: workspaceNamespace(backend),
   };
 
   await createRelayShare(relayOrigin, {
@@ -204,7 +205,7 @@ export async function readOwnerShareRecord(_backend: WorkspaceBackend, shareId: 
 
 export async function findOwnerShareRecordForPath(backend: WorkspaceBackend, path: string) {
   let store = shareRecordStore();
-  let workspaceId = workspaceShareNamespace(backend);
+  let workspaceId = workspaceNamespace(backend);
   let records: OwnerShareRecord[] = [];
   for (let index = 0; index < store.length; index++) {
     let key = store.key(index);
@@ -297,10 +298,6 @@ function parseOwnerShareRecord(value: unknown): OwnerShareRecord {
 
 export function resetOwnerShareRecordStoreForTests() {
   memoryShareRecords = new Map();
-}
-
-function workspaceShareNamespace(backend: WorkspaceBackend) {
-  return `${backend.kind}:${backend.id}`;
 }
 
 function shareRecordStore(): ShareRecordStore {

@@ -3,6 +3,11 @@ import type { Extension } from "@codemirror/state";
 import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import type { Frontiers } from "loro-crdt";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
+import {
+  documentSourceDocumentIdInput,
+  documentSourceRef,
+  workspaceNamespace,
+} from "@/lib/workspace/source-identity";
 import { hashMarkdownText } from "../markdown-hash.ts";
 import {
   appendBrowserCollabUpdates,
@@ -473,7 +478,7 @@ function replaceMarkdownText(doc: LoroDoc, value: string) {
 }
 
 async function createDocumentId(backend: WorkspaceBackend, path: string) {
-  let value = `${workspaceDocumentNamespace(backend)}:${path}`;
+  let value = documentSourceDocumentIdInput(documentSourceRef(backend, path));
   try {
     let bytes = new TextEncoder().encode(value);
     let digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -484,7 +489,7 @@ async function createDocumentId(backend: WorkspaceBackend, path: string) {
 }
 
 function workspaceDocumentNamespace(backend: WorkspaceBackend) {
-  return `${backend.kind}:${backend.id}`;
+  return workspaceNamespace(backend);
 }
 
 function encodeBase64Url(bytes: Uint8Array) {
