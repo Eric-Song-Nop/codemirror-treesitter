@@ -24,6 +24,7 @@ import {
   rememberLastSingleFileDraft,
 } from "@/lib/single-file-draft-store";
 import { errorToMessage } from "@/lib/workspace/errors";
+import { createDocumentSession, type DocumentSession } from "@/lib/workspace/document-session";
 import { createSingleFileDraftBackend, singleFileMarkdownNode } from "@/lib/workspace/single-file";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
 import type {
@@ -43,8 +44,7 @@ type CloudRedirectDraft = DropboxRedirectDraft | GoogleDriveRedirectDraft | OneD
 
 type StartOwnerShareHost = (
   record: OwnerShareRecord,
-  backend: WorkspaceBackend,
-  document: CollabDocumentState,
+  session: DocumentSession,
   options?: { actionLabel?: string; shouldContinue?: () => boolean },
 ) => Promise<void>;
 
@@ -396,9 +396,13 @@ export function useWorkspaceDocumentActions({
         setActiveShareRecord(restoredShareRecord);
         setCreatedShare(null);
         if (restoredShareRecord) {
-          void startOwnerShareHost(restoredShareRecord, backend, document, {
-            shouldContinue: isCurrentLoadRequest,
-          });
+          void startOwnerShareHost(
+            restoredShareRecord,
+            createDocumentSession(backend, file, document),
+            {
+              shouldContinue: isCurrentLoadRequest,
+            },
+          );
         }
         if (needsSourceWrite) scheduleAutoSave();
         setRetryLoadPath(null);

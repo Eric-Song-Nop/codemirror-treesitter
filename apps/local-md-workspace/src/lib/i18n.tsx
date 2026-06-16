@@ -144,6 +144,15 @@ export function translateKnownMessage(message: string, t: TFunction) {
     });
   }
 
+  let hostSourceMismatch = message.match(
+    /^(?<action>.+), but this file is no longer the shared source\.$/,
+  );
+  if (hostSourceMismatch?.groups) {
+    return t("errors.shareHostSourceMismatch", {
+      action: translateShareActionLabel(hostSourceMismatch.groups.action, t),
+    });
+  }
+
   let hostKey = message.match(
     /^(?<action>.+), but this browser cannot host it without the host key\.$/,
   );

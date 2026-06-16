@@ -3,7 +3,6 @@ import type { VersionVector } from "loro-crdt";
 import {
   getCollabDocumentValue,
   savePendingCollabDocumentUpdates,
-  type CollabDocumentState,
 } from "@/lib/collaboration/markdown-document";
 import {
   configuredShareRelayOrigin,
@@ -21,6 +20,7 @@ import {
 } from "@/lib/workspace/share-host";
 import type { ActiveOwnerShareRecord, SaveState } from "@/lib/workspace/types";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
+import type { DocumentSession } from "@/lib/workspace/document-session";
 import { documentSourceRef, sameDocumentSourceRef } from "@/lib/workspace/source-identity";
 
 type MutableRef<T> = {
@@ -111,15 +111,14 @@ export function useOwnerShareHost({
   let startOwnerShareHost = useCallback(
     async (
       record: OwnerShareRecord,
-      backend: WorkspaceBackend,
-      document: CollabDocumentState,
+      session: DocumentSession,
       options: { actionLabel?: string; shouldContinue?: () => boolean } = {},
     ) => {
       if (options.shouldContinue && !options.shouldContinue()) return;
       stopOwnerShareHost();
 
       let actionLabel = options.actionLabel ?? "Link created";
-      if (!isOwnerShareSource(record, backend, document.path)) {
+      if (!sameDocumentSourceRef(record.sourceRef, session.sourceRef)) {
         setShareError(`${actionLabel}, but this file is no longer the shared source.`);
         return;
       }
@@ -130,7 +129,7 @@ export function useOwnerShareHost({
       }
 
       try {
-        let session = await createRelayShareSession(
+        let relaySession = await createRelayShareSession(
           configuredShareRelayOrigin(),
           record.shareId,
           "host",
@@ -141,23 +140,25 @@ export function useOwnerShareHost({
           current?.shareId == record.shareId
             ? {
                 ...current,
-                expiresAt: session.shareExpiresAt,
-                guestCount: session.guestCount,
-                hostOnline: session.hostOnline,
-                peerCount: session.peerCount,
-                pendingHostSave: session.pendingHostSave,
+                expiresAt: relaySession.shareExpiresAt,
+                guestCount: relaySession.guestCount,
+                hostOnline: relaySession.hostOnline,
+                peerCount: relaySession.peerCount,
+                pendingHostSave: relaySession.pendingHostSave,
               }
             : current,
         );
         let connection = new ShareRelayConnection({
           clientId: getOrCreateOwnerShareClientId(),
-          doc: document.doc,
+          doc: session.collabDocument.doc,
           onDocumentImported: () => {
-            editorValueRef.current = getCollabDocumentValue(document);
+            editorValueRef.current = getCollabDocumentValue(session.collabDocument);
             editVersionRef.current += 1;
             dirtyRef.current = true;
             setSaveStateSynced("pending");
-            void savePendingCollabDocumentUpdates(backend, document).catch(() => {});
+            void savePendingCollabDocumentUpdates(session.backend, session.collabDocument).catch(
+              () => {},
+            );
             scheduleAutoSaveRef.current();
           },
           onError: (message) => setShareError(message),
@@ -167,14 +168,16 @@ export function useOwnerShareHost({
             );
           },
           relayOrigin: configuredShareRelayOrigin(),
-          sessionToken: session.sessionToken,
+          sessionToken: relaySession.sessionToken,
           shareId: record.shareId,
         });
         shareHostConnectionRef.current = connection;
         shareHostRecordRef.current = record;
-        shareHostUpdateCleanupRef.current = document.doc.subscribeLocalUpdates((bytes) => {
-          connection.enqueueDocumentUpdate(bytes);
-        });
+        shareHostUpdateCleanupRef.current = session.collabDocument.doc.subscribeLocalUpdates(
+          (bytes) => {
+            connection.enqueueDocumentUpdate(bytes);
+          },
+        );
         connection.connect();
       } catch (error) {
         if (options.shouldContinue && !options.shouldContinue()) return;

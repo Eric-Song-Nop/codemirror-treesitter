@@ -200,6 +200,7 @@
   "errors.relayNotConfigured": "共享文件 relay 未配置。",
   "errors.relayWrongShare": "Relay 返回了错误的共享文件。",
   "errors.shareHostMissingKey": "{action}，但此浏览器缺少主机密钥，无法托管共享。",
+  "errors.shareHostSourceMismatch": "{action}，但这个文件不再是此共享的来源。",
   "errors.sharedMetadataUnavailable": "此浏览器中没有可用的共享文件元数据。",
   "errors.storageUnsupportedOperation": "此存储后端不支持该操作。",
   "errors.unsupportedImage": "{name} 不是受支持的图片。",

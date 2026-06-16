@@ -200,6 +200,7 @@
   "errors.relayNotConfigured": "Shared file relay is not configured.",
   "errors.relayWrongShare": "Relay returned the wrong share.",
   "errors.shareHostMissingKey": "{action}, but this browser cannot host it without the host key.",
+  "errors.shareHostSourceMismatch": "{action}, but this file is no longer the shared source.",
   "errors.sharedMetadataUnavailable": "Shared file metadata is not available in this browser.",
   "errors.storageUnsupportedOperation": "This storage backend does not support that operation.",
   "errors.unsupportedImage": "{name} is not a supported image.",
