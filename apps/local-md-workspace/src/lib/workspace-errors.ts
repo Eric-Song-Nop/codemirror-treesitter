@@ -5,10 +5,74 @@ const DROPBOX_REQUIRED_SCOPES = [
 ];
 
 const ONEDRIVE_REQUIRED_SCOPES = ["Files.ReadWrite"];
+const GOOGLE_DRIVE_REQUIRED_SCOPES = ["https://www.googleapis.com/auth/drive"];
 
 export function workspaceErrorMessage(error: unknown) {
   let message = error instanceof Error ? error.message : String(error);
   let normalized = normalizeErrorText(message);
+
+  if (isGoogleDriveError(normalized)) {
+    if (matchesAny(normalized, ["popup was blocked", "popup blocked"])) {
+      return "Google Drive authorization popup was blocked. Allow popups for this site and try again.";
+    }
+
+    if (
+      matchesAny(normalized, [
+        "authorization was closed",
+        "closed before it completed",
+        "timed out",
+      ])
+    ) {
+      return "Google Drive authorization was closed before it completed. Reconnect Google Drive workspace to continue.";
+    }
+
+    if (matchesAny(normalized, ["authorization was denied", "access denied"])) {
+      return "Google Drive authorization was denied.";
+    }
+
+    if (
+      matchesAny(normalized, ["missing scope", "insufficient scope"]) ||
+      isGoogleDriveMissingScope(message)
+    ) {
+      return `Google Drive app is missing required file permissions: ${GOOGLE_DRIVE_REQUIRED_SCOPES.join(
+        ", ",
+      )}. Enable those scopes and reconnect Google Drive workspace.`;
+    }
+
+    if (matchesAny(normalized, ["expired access token", "access token expired", "token expired"])) {
+      return "Google Drive access token expired. Reconnect Google Drive workspace to continue.";
+    }
+
+    if (
+      matchesAny(normalized, [
+        "invalid access token",
+        "authorization was revoked",
+        "token was revoked",
+        "access token is invalid",
+        "invalid token",
+        "invalid credentials",
+        "unauthorized",
+        "401",
+      ])
+    ) {
+      return "Google Drive authorization is invalid or was revoked. Reconnect Google Drive workspace to continue.";
+    }
+
+    if (
+      matchesAny(normalized, [
+        "token exchange failed",
+        "token exchange returned an invalid response",
+        "invalid grant",
+        "invalid client",
+      ])
+    ) {
+      return "Google Drive token exchange failed. Check the client ID and reconnect Google Drive workspace.";
+    }
+
+    if (isGoogleDrivePathUnavailable(normalized)) {
+      return "Google Drive workspace path is no longer available. Check the Google Drive root setting, then reconnect Google Drive workspace.";
+    }
+  }
 
   if (isOneDriveError(normalized)) {
     if (matchesAny(normalized, ["popup was blocked", "popup blocked"])) {
@@ -131,6 +195,40 @@ export function workspaceErrorMessage(error: unknown) {
   return message;
 }
 
+function isGoogleDriveError(normalized: string) {
+  return matchesAny(normalized, [
+    "google drive",
+    "gdrive",
+    "googleapis.com",
+    "accounts.google.com",
+    "oauth2.googleapis.com",
+    "drive.google.com",
+    "google api",
+  ]);
+}
+
+function isGoogleDrivePathUnavailable(normalized: string) {
+  return (
+    matchesAny(normalized, [
+      "google drive",
+      "gdrive",
+      "googleapis.com",
+      "drive.google.com",
+      "google api",
+      "opendal",
+    ]) &&
+    matchesAny(normalized, [
+      "404",
+      "file not found",
+      "filenotfound",
+      "not found",
+      "not_found",
+      "path not found",
+      "path_not_found",
+    ])
+  );
+}
+
 function isDropboxPathUnavailable(normalized: string) {
   return (
     matchesAny(normalized, [
@@ -201,6 +299,14 @@ function isOneDriveMissingScope(message: string) {
   return (
     matchesAny(normalized, ["missing scope", "insufficient privileges", "insufficient scope"]) ||
     ONEDRIVE_REQUIRED_SCOPES.some((scope) => normalized.includes(scope.toLowerCase()))
+  );
+}
+
+function isGoogleDriveMissingScope(message: string) {
+  let normalized = normalizeErrorText(message);
+  return (
+    matchesAny(normalized, ["missing scope", "insufficient permissions", "insufficient scope"]) ||
+    GOOGLE_DRIVE_REQUIRED_SCOPES.some((scope) => normalized.includes(scope.toLowerCase()))
   );
 }
 
