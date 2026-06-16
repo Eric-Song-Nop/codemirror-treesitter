@@ -1,5 +1,5 @@
 import { liveMdLoroCollaborationPlugin } from "@codemirror-treesitter/live-md-loro";
-import type { LiveMdPlugin } from "@codemirror-treesitter/live-md";
+import type { LiveMdConfig } from "@codemirror-treesitter/live-md";
 import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import type { Frontiers } from "loro-crdt";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
@@ -21,6 +21,7 @@ const maxDocumentUpdateLogBytes = 64 * 1024;
 
 export type CollabDocumentState = {
   cleanValue: string;
+  config: LiveMdConfig;
   doc: LoroDoc;
   docId: string;
   dispose: () => void;
@@ -29,7 +30,6 @@ export type CollabDocumentState = {
   path: string;
   pendingUpdates: Uint8Array[];
   persistence: Promise<void>;
-  plugins: readonly LiveMdPlugin[];
   sourceState: CollabSourceState;
   undoManager: UndoManager;
   value: string;
@@ -142,6 +142,7 @@ export async function openMarkdownCollabDocument(
 
   return {
     cleanValue: value,
+    config: { plugins: [liveMdLoroCollaborationPlugin({ doc, undoManager, text: textKey })] },
     doc,
     docId,
     dispose: unsubscribeLocalUpdates,
@@ -150,7 +151,6 @@ export async function openMarkdownCollabDocument(
     path,
     pendingUpdates,
     persistence: Promise.resolve(),
-    plugins: [liveMdLoroCollaborationPlugin({ doc, undoManager, text: textKey })],
     sourceState,
     undoManager,
     value,

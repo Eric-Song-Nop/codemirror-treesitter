@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { LiveMdEditorElement, LiveMdPlugin } from "@codemirror-treesitter/live-md";
+import type { LiveMdConfig, LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { WorkspaceDialogs } from "@/components/workspace/WorkspaceDialogs";
@@ -50,7 +50,8 @@ import {
   type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
 
-const emptyEditorPlugins: readonly LiveMdPlugin[] = [];
+const emptyLiveMdConfig: LiveMdConfig = {};
+const emptyLiveMdPlugins: NonNullable<LiveMdConfig["plugins"]> = [];
 
 export function LocalWorkspaceApp() {
   let { locale, t, toggleLocale } = useI18n();
@@ -188,9 +189,12 @@ export function LocalWorkspaceApp() {
     workspaceBackend,
     workspaceBackendRef,
   });
-  let editorPlugins = useMemo(
-    () => [imagePlugin, ...(collabDocument?.plugins ?? emptyEditorPlugins)],
-    [collabDocument?.plugins, imagePlugin],
+  let editorConfig = useMemo<LiveMdConfig>(
+    () => ({
+      markdown: collabDocument?.config.markdown,
+      plugins: [imagePlugin, ...(collabDocument?.config.plugins ?? emptyLiveMdPlugins)],
+    }),
+    [collabDocument?.config.markdown, collabDocument?.config.plugins, imagePlugin],
   );
   let { clearDropboxAccessToken, createDropboxBackend, setDropboxRedirectAccessToken } =
     useDropboxWorkspaceBackend({
@@ -476,6 +480,7 @@ export function LocalWorkspaceApp() {
     editorValueRef,
     loadTree,
     localFileHandleRef,
+    markdownConfig: editorConfig.markdown,
     refreshWorkspaceForCurrentEditor,
     resolveImageAssetFile,
     saveCurrentFile,
@@ -581,9 +586,9 @@ export function LocalWorkspaceApp() {
           />
 
           <WorkspaceEditorPane
+            config={selectedFile ? editorConfig : emptyLiveMdConfig}
             document={editorDocument}
             placeholder={t("workspace.placeholder")}
-            plugins={editorPlugins}
             selected={Boolean(selectedFile) && fileDialogMode == null}
             onEditorReady={handleEditorReady}
             onInput={handleEditorInput}

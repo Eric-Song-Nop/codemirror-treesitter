@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { liveMdMarkdownFeature } from "@codemirror-treesitter/live-md";
 import {
   createStandaloneMarkdownHtml,
   snapshotMarkdownHtmlExportTheme,
@@ -76,6 +77,28 @@ describe("Markdown HTML export", () => {
     expect(result.html).toContain("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;");
     expect(result.html).toContain("&lt;span&gt;inline&lt;/span&gt;");
     expect(result.html).not.toContain("<script>");
+  });
+
+  it("uses the shared markdown feature config during export", async () => {
+    let result = await createStandaloneMarkdownHtml({
+      documentPath: "notes/today.md",
+      markdown: ":::note Export **feature**",
+      markdownConfig: {
+        features: [
+          liveMdMarkdownFeature({
+            name: "export-note",
+            query: "(paragraph) @html",
+            async renderHtml({ renderInline, slice, target }) {
+              let source = slice(target).trim();
+              if (!source.startsWith(":::note")) return null;
+              return `<aside>${await renderInline(source.slice(":::note".length).trim())}</aside>`;
+            },
+          }),
+        ],
+      },
+    });
+
+    expect(result.html).toContain("<aside>Export <strong>feature</strong></aside>");
   });
 
   it("reports image warnings without failing the export", async () => {

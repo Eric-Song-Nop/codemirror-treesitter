@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { Extension } from "@codemirror/state";
 import {
   liveMdTheme,
+  type LiveMdConfig,
   type LiveMdEditorElement,
-  type LiveMdPlugin,
 } from "@codemirror-treesitter/live-md";
 import type { LiveMdThemeSpec } from "@codemirror-treesitter/live-md-theme";
 import { gruvboxDark, gruvboxLight } from "@codemirror-treesitter/theme-gruvbox";
@@ -22,20 +22,21 @@ import { useTheme, type Theme } from "@/theme";
 
 type LiveMdEditorProps = {
   documentKey: string;
+  config?: LiveMdConfig;
   initialValue: string;
   placeholder: string;
-  plugins?: readonly LiveMdPlugin[];
   onEditorReady?: (editor: LiveMdEditorElement | null) => void;
   onInput: (value: string) => void;
 };
 
-const emptyLiveMdEditorPlugins: readonly LiveMdPlugin[] = [];
+const emptyLiveMdEditorConfig: LiveMdConfig = {};
+const emptyLiveMdEditorPlugins: NonNullable<LiveMdConfig["plugins"]> = [];
 
 export function LiveMdEditor({
   documentKey,
+  config = emptyLiveMdEditorConfig,
   initialValue,
   placeholder,
-  plugins: extraPlugins = emptyLiveMdEditorPlugins,
   onEditorReady,
   onInput,
 }: LiveMdEditorProps) {
@@ -69,14 +70,17 @@ export function LiveMdEditor({
     if (!editor) return;
 
     let themeDefinition = liveMdThemeDefinition(theme);
-    editor.plugins = [
-      liveMdTheme({
-        editor: themeDefinition.codeMirrorTheme,
-        target: editor,
-        theme: themeDefinition.liveMdTheme,
-      }),
-      ...extraPlugins,
-    ];
+    editor.config = {
+      ...config,
+      plugins: [
+        liveMdTheme({
+          editor: themeDefinition.codeMirrorTheme,
+          target: editor,
+          theme: themeDefinition.liveMdTheme,
+        }),
+        ...(config.plugins ?? emptyLiveMdEditorPlugins),
+      ],
+    };
 
     let handleInput = () => onInputRef.current(editor.value);
     editor.addEventListener("input", handleInput);
@@ -84,9 +88,9 @@ export function LiveMdEditor({
     return () => {
       editor.removeEventListener("input", handleInput);
       onEditorReady?.(null);
-      editor.plugins = [];
+      editor.config = {};
     };
-  }, [extraPlugins, onEditorReady, theme]);
+  }, [config, onEditorReady, theme]);
 
   return (
     <live-md-editor

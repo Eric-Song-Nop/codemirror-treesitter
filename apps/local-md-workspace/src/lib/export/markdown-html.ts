@@ -3,6 +3,7 @@ import {
   liveMdMarkdownDocumentCss,
   liveMdMarkdownDocumentCssVariables,
   renderMarkdownToHtml,
+  type LiveMdMarkdownConfig,
 } from "@codemirror-treesitter/live-md";
 import { resolveMarkdownImagePath } from "@/lib/workspace/markdown-images";
 
@@ -36,6 +37,7 @@ export type MarkdownHtmlExportTheme = {
 export type MarkdownHtmlExportOptions = {
   documentPath: string;
   markdown: string;
+  markdownConfig?: LiveMdMarkdownConfig | null;
   resolveAsset?: (
     path: string,
     source: string,
@@ -53,12 +55,14 @@ const defaultExportTitle = "Markdown export";
 export async function createStandaloneMarkdownHtml({
   documentPath,
   markdown,
+  markdownConfig,
   resolveAsset,
   theme,
   title = defaultExportTitle,
 }: MarkdownHtmlExportOptions): Promise<MarkdownHtmlExportResult> {
   let warnings: MarkdownHtmlExportWarning[] = [];
   let body = await renderMarkdownToHtml(markdown, {
+    markdown: markdownConfig,
     resolveImageSource: async ({ source }) =>
       embedImageSource(source, {
         documentPath,
