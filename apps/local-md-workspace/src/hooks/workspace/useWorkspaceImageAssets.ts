@@ -15,7 +15,6 @@ import {
   type LiveMdImageSourceResolver,
   type LiveMdPlugin,
 } from "@codemirror-treesitter/live-md";
-import { resolveMarkdownImagePath } from "@/lib/export/markdown-html";
 import { errorToMessage } from "@/lib/workspace/errors";
 import {
   createWorkspaceImageAssetFromBytes,
@@ -24,6 +23,7 @@ import {
   isImageFileName,
   revokeImageAssetUrls,
 } from "@/lib/workspace/images";
+import { resolveMarkdownImagePath } from "@/lib/workspace/markdown-images";
 import type { EditorDocument, SingleFileSource, WorkspaceImageAsset } from "@/lib/workspace/types";
 import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
 
