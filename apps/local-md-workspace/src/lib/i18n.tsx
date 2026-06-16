@@ -88,6 +88,15 @@ export function translateKnownMessage(message: string, t: TFunction) {
     return t("errors.dropboxMissingScopes", { scopes: missingScopes.groups.scopes });
   }
 
+  let missingGoogleDriveScopes = message.match(
+    /^Google Drive app is missing required file permissions: (?<scopes>.+)\. Enable those scopes and reconnect Google Drive workspace\.$/,
+  );
+  if (missingGoogleDriveScopes?.groups) {
+    return t("errors.googleDriveMissingScopes", {
+      scopes: missingGoogleDriveScopes.groups.scopes,
+    });
+  }
+
   let missingOneDriveScopes = message.match(
     /^OneDrive app is missing required file permissions: (?<scopes>.+)\. Enable those scopes and reconnect OneDrive workspace\.$/,
   );
@@ -201,6 +210,28 @@ const exactMessageKeys: Readonly<Record<string, TranslationKey>> = {
     "errors.dropboxTokenExchangeFailed",
   "Dropbox workspace is not configured. Set VITE_DROPBOX_APP_KEY for this app.":
     "errors.dropboxNotConfigured",
+  "Google Drive access token expired. Reconnect Google Drive workspace to continue.":
+    "errors.googleDriveAccessTokenExpired",
+  "Google Drive authorization did not return a code.":
+    "errors.googleDriveAuthorizationCodeMissing",
+  "Google Drive authorization is invalid or was revoked. Reconnect Google Drive workspace to continue.":
+    "errors.googleDriveAuthorizationInvalid",
+  "Google Drive authorization popup was blocked. Allow popups for this site and try again.":
+    "errors.googleDrivePopupBlocked",
+  "Google Drive authorization state did not match.":
+    "errors.googleDriveAuthorizationStateMismatch",
+  "Google Drive authorization state was not found.":
+    "errors.googleDriveAuthorizationStateMissing",
+  "Google Drive authorization was closed before it completed. Reconnect Google Drive workspace to continue.":
+    "errors.googleDriveAuthorizationClosed",
+  "Google Drive authorization was denied.": "errors.googleDriveAuthorizationDenied",
+  "Google Drive client ID is required.": "errors.googleDriveClientIdRequired",
+  "Google Drive token exchange failed. Check the client ID and reconnect Google Drive workspace.":
+    "errors.googleDriveTokenExchangeFailed",
+  "Google Drive workspace is not configured. Set VITE_GOOGLE_DRIVE_CLIENT_ID for this app.":
+    "errors.googleDriveNotConfigured",
+  "Google Drive workspace path is no longer available. Check the Google Drive root setting, then reconnect Google Drive workspace.":
+    "errors.googleDrivePathUnavailable",
   "OneDrive access token expired. Reconnect OneDrive workspace to continue.":
     "errors.onedriveAccessTokenExpired",
   "OneDrive authorization did not return a code.": "errors.onedriveAuthorizationCodeMissing",
