@@ -3,12 +3,14 @@ import type { AccessDirectoryHandle } from "./file-system.ts";
 import {
   clearStoredWorkspaceSelectedPath,
   loadStoredDropboxWorkspaceConfig,
+  loadStoredGoogleDriveWorkspaceConfig,
   loadStoredLocalWorkspaceRecord,
   loadStoredOneDriveWorkspaceConfig,
   loadStoredWorkspaceSelectedPath,
   loadStoredWorkspaceKind,
   rememberStoredLocalWorkspace,
   saveStoredDropboxWorkspaceConfig,
+  saveStoredGoogleDriveWorkspaceConfig,
   saveStoredOneDriveWorkspaceConfig,
   saveStoredWorkspaceSelectedPath,
   saveStoredWorkspaceKind,
@@ -18,6 +20,7 @@ const DB_NAME = "local-md-workspace";
 const STORE_NAME = "workspace";
 const HANDLE_KEY = "directory-handle";
 const DROPBOX_CONFIG_KEY = "local-md-workspace:dropbox-config";
+const GOOGLE_DRIVE_CONFIG_KEY = "local-md-workspace:google-drive-config";
 const ONEDRIVE_CONFIG_KEY = "local-md-workspace:onedrive-config";
 const WORKSPACE_KIND_KEY = "local-md-workspace:workspace-kind";
 const SELECTED_PATH_KEY_PREFIX = "local-md-workspace:selected-path";
@@ -72,6 +75,38 @@ describe("Dropbox workspace config storage", () => {
     expect(values.has(DROPBOX_CONFIG_KEY)).toBe(false);
   });
 
+  it("saves and restores normalized non-secret Google Drive config", () => {
+    saveStoredGoogleDriveWorkspaceConfig({
+      clientId: " test-client-id ",
+      root: " \\notes\\daily/ ",
+    });
+
+    expect(values.get(GOOGLE_DRIVE_CONFIG_KEY)).toBe(
+      JSON.stringify({
+        clientId: "test-client-id",
+        root: "notes/daily",
+      }),
+    );
+    expect(loadStoredGoogleDriveWorkspaceConfig()).toEqual({
+      clientId: "test-client-id",
+      root: "notes/daily",
+    });
+  });
+
+  it("ignores malformed or empty stored Google Drive config", () => {
+    values.set(GOOGLE_DRIVE_CONFIG_KEY, JSON.stringify({ clientId: " " }));
+    expect(loadStoredGoogleDriveWorkspaceConfig()).toBeNull();
+
+    values.set(GOOGLE_DRIVE_CONFIG_KEY, "{");
+    expect(loadStoredGoogleDriveWorkspaceConfig()).toBeNull();
+  });
+
+  it("does not persist invalid Google Drive client IDs", () => {
+    saveStoredGoogleDriveWorkspaceConfig({ clientId: " " });
+
+    expect(values.has(GOOGLE_DRIVE_CONFIG_KEY)).toBe(false);
+  });
+
   it("saves and restores normalized non-secret OneDrive config", () => {
     saveStoredOneDriveWorkspaceConfig({
       clientId: " test-client-id ",
@@ -113,6 +148,10 @@ describe("Dropbox workspace config storage", () => {
     expect(values.get(WORKSPACE_KIND_KEY)).toBe("local");
     expect(loadStoredWorkspaceKind()).toBe("local");
 
+    saveStoredWorkspaceKind("gdrive");
+    expect(values.get(WORKSPACE_KIND_KEY)).toBe("gdrive");
+    expect(loadStoredWorkspaceKind()).toBe("gdrive");
+
     saveStoredWorkspaceKind("onedrive");
     expect(values.get(WORKSPACE_KIND_KEY)).toBe("onedrive");
     expect(loadStoredWorkspaceKind()).toBe("onedrive");
@@ -146,14 +185,17 @@ describe("workspace selected path storage", () => {
   it("isolates selected paths between local and cloud workspace contexts", () => {
     let localContext = { kind: "local" as const, workspaceId: "/Users/test/notes" };
     let dropboxContext = { kind: "dropbox" as const, workspaceId: "/Users/test/notes" };
+    let googleDriveContext = { kind: "gdrive" as const, workspaceId: "/Users/test/notes" };
     let oneDriveContext = { kind: "onedrive" as const, workspaceId: "/Users/test/notes" };
 
     saveStoredWorkspaceSelectedPath(localContext, "local.md");
     saveStoredWorkspaceSelectedPath(dropboxContext, "dropbox.md");
+    saveStoredWorkspaceSelectedPath(googleDriveContext, "google-drive.md");
     saveStoredWorkspaceSelectedPath(oneDriveContext, "onedrive.md");
 
     expect(loadStoredWorkspaceSelectedPath(localContext)).toBe("local.md");
     expect(loadStoredWorkspaceSelectedPath(dropboxContext)).toBe("dropbox.md");
+    expect(loadStoredWorkspaceSelectedPath(googleDriveContext)).toBe("google-drive.md");
     expect(loadStoredWorkspaceSelectedPath(oneDriveContext)).toBe("onedrive.md");
   });
 
@@ -307,7 +349,7 @@ describe("local workspace record storage", () => {
   });
 });
 
-function selectedPathKey(kind: "local" | "dropbox" | "onedrive", workspaceId: string) {
+function selectedPathKey(kind: "local" | "dropbox" | "gdrive" | "onedrive", workspaceId: string) {
   return `${SELECTED_PATH_KEY_PREFIX}:${kind}:${encodeURIComponent(workspaceId)}`;
 }
 

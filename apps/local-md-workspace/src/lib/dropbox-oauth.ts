@@ -70,6 +70,23 @@ export function hasDropboxRedirectTransaction(storage = window.sessionStorage) {
   }
 }
 
+export function hasDropboxRedirectCallbackForStoredTransaction(
+  search: string | URLSearchParams = window.location.search,
+  storage = window.sessionStorage,
+) {
+  let callback = parseDropboxOAuthCallback(search);
+  if (!callback) return false;
+
+  try {
+    let raw = storage.getItem(DROPBOX_REDIRECT_TRANSACTION_KEY);
+    if (!raw) return false;
+    let transaction = parseDropboxRedirectTransaction(JSON.parse(raw));
+    return transaction?.state == callback.state;
+  } catch {
+    return false;
+  }
+}
+
 export function completeDropboxPopupOAuthIfPresent() {
   let callback = parseDropboxOAuthCallback(window.location.search);
   if (!callback || !window.opener) return false;

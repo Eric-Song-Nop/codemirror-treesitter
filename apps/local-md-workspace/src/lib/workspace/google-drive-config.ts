@@ -1,7 +1,4 @@
-import {
-  hasGoogleDriveOAuthCallback,
-  hasGoogleDriveRedirectTransaction,
-} from "@/lib/google-drive-oauth";
+import { hasGoogleDriveRedirectCallbackForStoredTransaction } from "@/lib/google-drive-oauth";
 
 export function defaultGoogleDriveClientId() {
   let configured = import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID;
@@ -33,7 +30,6 @@ export function isGoogleDriveRedirectCallbackWindow() {
   return (
     typeof window != "undefined" &&
     !window.opener &&
-    hasGoogleDriveOAuthCallback() &&
-    hasGoogleDriveRedirectTransaction()
+    hasGoogleDriveRedirectCallbackForStoredTransaction()
   );
 }

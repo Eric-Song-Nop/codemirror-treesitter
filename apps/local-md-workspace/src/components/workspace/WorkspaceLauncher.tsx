@@ -88,7 +88,11 @@ export function WorkspaceLauncher({
         <Button
           className="justify-start"
           disabled={busy || googleDriveConnecting}
-          variant={restoreAvailable || dropboxRestoreAvailable || oneDriveRestoreAvailable ? "outline" : "default"}
+          variant={
+            restoreAvailable || dropboxRestoreAvailable || oneDriveRestoreAvailable
+              ? "outline"
+              : "default"
+          }
           onClick={onRestoreGoogleDrive}
         >
           <CloudIcon data-icon="inline-start" />

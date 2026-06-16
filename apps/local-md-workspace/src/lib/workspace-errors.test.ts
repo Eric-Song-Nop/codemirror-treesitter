@@ -30,6 +30,22 @@ describe("workspace error messages", () => {
     );
   });
 
+  it("classifies Google Drive OAuth failures", () => {
+    expect(workspaceErrorMessage(new Error("Google Drive authorization popup was blocked."))).toBe(
+      "Google Drive authorization popup was blocked. Allow popups for this site and try again.",
+    );
+    expect(
+      workspaceErrorMessage(
+        new Error("Google Drive authorization timed out. Reconnect Google Drive workspace."),
+      ),
+    ).toBe(
+      "Google Drive authorization was closed before it completed. Reconnect Google Drive workspace to continue.",
+    );
+    expect(
+      workspaceErrorMessage(new Error("Google Drive authorization failed: access_denied")),
+    ).toBe("Google Drive authorization was denied.");
+  });
+
   it("classifies Dropbox expired-token and revoked-token failures", () => {
     expect(workspaceErrorMessage(new Error("expired_access_token"))).toBe(
       "Dropbox access token expired. Reconnect Dropbox workspace to continue.",
@@ -45,6 +61,15 @@ describe("workspace error messages", () => {
     );
     expect(workspaceErrorMessage(new Error("OneDrive InvalidAuthenticationToken"))).toBe(
       "OneDrive authorization is invalid or was revoked. Reconnect OneDrive workspace to continue.",
+    );
+  });
+
+  it("classifies Google Drive expired-token and revoked-token failures", () => {
+    expect(workspaceErrorMessage(new Error("Google Drive expired_access_token"))).toBe(
+      "Google Drive access token expired. Reconnect Google Drive workspace to continue.",
+    );
+    expect(workspaceErrorMessage(new Error("Google Drive invalid_token"))).toBe(
+      "Google Drive authorization is invalid or was revoked. Reconnect Google Drive workspace to continue.",
     );
   });
 
@@ -66,6 +91,19 @@ describe("workspace error messages", () => {
     );
   });
 
+  it("classifies missing Google Drive file scopes", () => {
+    expect(
+      workspaceErrorMessage(
+        new Error("Google Drive missing scope https://www.googleapis.com/auth/drive"),
+      ),
+    ).toBe(
+      "Google Drive app is missing required file permissions: https://www.googleapis.com/auth/drive. Enable those scopes and reconnect Google Drive workspace.",
+    );
+    expect(workspaceErrorMessage(new Error("Google Drive insufficient permissions"))).toBe(
+      "Google Drive app is missing required file permissions: https://www.googleapis.com/auth/drive. Enable those scopes and reconnect Google Drive workspace.",
+    );
+  });
+
   it("classifies Dropbox token exchange failures", () => {
     expect(workspaceErrorMessage(new Error("invalid_grant"))).toBe(
       "Dropbox token exchange failed. Check the app key and reconnect Dropbox workspace.",
@@ -81,6 +119,17 @@ describe("workspace error messages", () => {
     );
     expect(workspaceErrorMessage(new Error("OneDrive token exchange failed (400)."))).toBe(
       "OneDrive token exchange failed. Check the client ID and reconnect OneDrive workspace.",
+    );
+  });
+
+  it("classifies Google Drive token exchange failures", () => {
+    expect(
+      workspaceErrorMessage(new Error("Google Drive token exchange failed: invalid_grant")),
+    ).toBe(
+      "Google Drive token exchange failed. Check the client ID and reconnect Google Drive workspace.",
+    );
+    expect(workspaceErrorMessage(new Error("Google Drive token exchange failed (400)."))).toBe(
+      "Google Drive token exchange failed. Check the client ID and reconnect Google Drive workspace.",
     );
   });
 
@@ -107,6 +156,19 @@ describe("workspace error messages", () => {
       workspaceErrorMessage(new Error("GET https://graph.microsoft.com/v1.0/me/drive 404")),
     ).toBe(
       "OneDrive workspace path is no longer available. Check the OneDrive root setting, then reconnect OneDrive workspace.",
+    );
+  });
+
+  it("classifies unavailable Google Drive workspace paths", () => {
+    expect(
+      workspaceErrorMessage(new Error("OpenDAL Google Drive API error 404 file not found")),
+    ).toBe(
+      "Google Drive workspace path is no longer available. Check the Google Drive root setting, then reconnect Google Drive workspace.",
+    );
+    expect(
+      workspaceErrorMessage(new Error("GET https://www.googleapis.com/drive/v3/files/root 404")),
+    ).toBe(
+      "Google Drive workspace path is no longer available. Check the Google Drive root setting, then reconnect Google Drive workspace.",
     );
   });
 

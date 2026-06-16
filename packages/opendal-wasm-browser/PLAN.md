@@ -651,10 +651,10 @@ Next OneDrive work:
 - Decide separately whether any future refresh-token mode is acceptable in the
   browser product.
 
-## Phase 8: Google Drive Backend Foundation
+## Phase 8: Google Drive Backend and OAuth/UI
 
-Status: wrapper and app backend foundation implemented; Google Drive OAuth/UI
-and real provider smoke are pending.
+Status: wrapper, app backend, OAuth PKCE, redirect recovery, and user-facing UI
+implemented; real provider smoke is pending.
 
 Implementation order:
 
@@ -674,6 +674,16 @@ Current implementation:
   returns normalized metadata when OpenDAL provides it.
 - `apps/local-md-workspace/src/lib/google-drive-workspace-backend.ts` creates an
   `opendal-gdrive` workspace backend over the shared OpenDAL backend.
+- `apps/local-md-workspace/src/lib/google-drive-oauth.ts` implements
+  popup-first OAuth PKCE with full-page redirect fallback and tab-scoped
+  transaction recovery.
+- `apps/local-md-workspace` stores only non-secret Google Drive config
+  (`clientId` and optional root), keeps access tokens in memory, and
+  re-authorizes when the short-lived token is missing or expiring.
+- The app exposes Connect/Continue Google Drive and Save As Google Drive actions
+  in the launcher, sidebar, header menu, command palette, and save-as dialog.
+- Redirect recovery keeps a tab-scoped Google Drive dirty-editor draft for the
+  selected Google Drive file and restores it after OAuth returns.
 - `apps/local-md-workspace/src/lib/opendal-workspace-backend.ts` supports
   Dropbox, Google Drive, and OneDrive with the same token refresh, write queue,
   parent-directory creation, tree synthesis, rename/delete/stat, and metadata
@@ -683,17 +693,12 @@ Current implementation:
 
 Next Google Drive work:
 
-- Add Google OAuth PKCE helpers and non-secret config storage in
-  `apps/local-md-workspace`.
-- Add user-facing Connect/Reconnect Google Drive UI without refresh-token or
-  client-secret storage.
-- Add Google Drive-specific user-facing error messages for denied consent,
-  missing Drive API/scope, expired token, duplicate-name ambiguity, and provider
-  throttling/conflict responses.
 - Add credential-gated wrapper and app smoke tasks for real Google Drive file IO.
 - Decide whether Google Drive should use the broad
   `https://www.googleapis.com/auth/drive` scope required by OpenDAL or wait for a
   narrower app-folder style path before becoming visible.
+- Revisit Google Drive conflict behavior if OpenDAL exposes a native
+  `write_with_if_match` capability for `gdrive`.
 
 ## Deferred S3-Compatible Track
 

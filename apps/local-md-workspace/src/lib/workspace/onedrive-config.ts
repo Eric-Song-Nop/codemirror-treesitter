@@ -1,4 +1,4 @@
-import { hasOneDriveOAuthCallback, hasOneDriveRedirectTransaction } from "@/lib/onedrive-oauth";
+import { hasOneDriveRedirectCallbackForStoredTransaction } from "@/lib/onedrive-oauth";
 
 export function defaultOneDriveClientId() {
   let configured = import.meta.env.VITE_ONEDRIVE_CLIENT_ID;
@@ -30,7 +30,6 @@ export function isOneDriveRedirectCallbackWindow() {
   return (
     typeof window != "undefined" &&
     !window.opener &&
-    hasOneDriveOAuthCallback() &&
-    hasOneDriveRedirectTransaction()
+    hasOneDriveRedirectCallbackForStoredTransaction()
   );
 }

@@ -212,16 +212,13 @@ const exactMessageKeys: Readonly<Record<string, TranslationKey>> = {
     "errors.dropboxNotConfigured",
   "Google Drive access token expired. Reconnect Google Drive workspace to continue.":
     "errors.googleDriveAccessTokenExpired",
-  "Google Drive authorization did not return a code.":
-    "errors.googleDriveAuthorizationCodeMissing",
+  "Google Drive authorization did not return a code.": "errors.googleDriveAuthorizationCodeMissing",
   "Google Drive authorization is invalid or was revoked. Reconnect Google Drive workspace to continue.":
     "errors.googleDriveAuthorizationInvalid",
   "Google Drive authorization popup was blocked. Allow popups for this site and try again.":
     "errors.googleDrivePopupBlocked",
-  "Google Drive authorization state did not match.":
-    "errors.googleDriveAuthorizationStateMismatch",
-  "Google Drive authorization state was not found.":
-    "errors.googleDriveAuthorizationStateMissing",
+  "Google Drive authorization state did not match.": "errors.googleDriveAuthorizationStateMismatch",
+  "Google Drive authorization state was not found.": "errors.googleDriveAuthorizationStateMissing",
   "Google Drive authorization was closed before it completed. Reconnect Google Drive workspace to continue.":
     "errors.googleDriveAuthorizationClosed",
   "Google Drive authorization was denied.": "errors.googleDriveAuthorizationDenied",

@@ -69,6 +69,23 @@ export function hasGoogleDriveRedirectTransaction(storage = window.sessionStorag
   }
 }
 
+export function hasGoogleDriveRedirectCallbackForStoredTransaction(
+  search: string | URLSearchParams = window.location.search,
+  storage = window.sessionStorage,
+) {
+  let callback = parseGoogleDriveOAuthCallback(search);
+  if (!callback) return false;
+
+  try {
+    let raw = storage.getItem(GOOGLE_DRIVE_REDIRECT_TRANSACTION_KEY);
+    if (!raw) return false;
+    let transaction = parseGoogleDriveRedirectTransaction(JSON.parse(raw));
+    return transaction?.state == callback.state;
+  } catch {
+    return false;
+  }
+}
+
 export function completeGoogleDrivePopupOAuthIfPresent() {
   let callback = parseGoogleDriveOAuthCallback(window.location.search);
   if (!callback || !window.opener) return false;

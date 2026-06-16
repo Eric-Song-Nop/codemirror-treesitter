@@ -221,19 +221,16 @@ export function LocalWorkspaceApp() {
       t,
       workspaceBackendRef,
     });
-  let {
-    clearGoogleDriveAccessToken,
-    createGoogleDriveBackend,
-    setGoogleDriveRedirectAccessToken,
-  } = useGoogleDriveWorkspaceBackend({
-    dirtyRef,
-    editorValueRef,
-    selectedFileRef,
-    setStoredGoogleDriveConfig,
-    setStoredWorkspaceKind,
-    t,
-    workspaceBackendRef,
-  });
+  let { clearGoogleDriveAccessToken, createGoogleDriveBackend, setGoogleDriveRedirectAccessToken } =
+    useGoogleDriveWorkspaceBackend({
+      dirtyRef,
+      editorValueRef,
+      selectedFileRef,
+      setStoredGoogleDriveConfig,
+      setStoredWorkspaceKind,
+      t,
+      workspaceBackendRef,
+    });
   let { clearOneDriveAccessToken, createOneDriveBackend, setOneDriveRedirectAccessToken } =
     useOneDriveWorkspaceBackend({
       dirtyRef,

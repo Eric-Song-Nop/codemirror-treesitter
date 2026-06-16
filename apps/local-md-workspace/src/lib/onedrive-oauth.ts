@@ -69,6 +69,23 @@ export function hasOneDriveRedirectTransaction(storage = window.sessionStorage) 
   }
 }
 
+export function hasOneDriveRedirectCallbackForStoredTransaction(
+  search: string | URLSearchParams = window.location.search,
+  storage = window.sessionStorage,
+) {
+  let callback = parseOneDriveOAuthCallback(search);
+  if (!callback) return false;
+
+  try {
+    let raw = storage.getItem(ONEDRIVE_REDIRECT_TRANSACTION_KEY);
+    if (!raw) return false;
+    let transaction = parseOneDriveRedirectTransaction(JSON.parse(raw));
+    return transaction?.state == callback.state;
+  } catch {
+    return false;
+  }
+}
+
 export function completeOneDrivePopupOAuthIfPresent() {
   let callback = parseOneDriveOAuthCallback(window.location.search);
   if (!callback || !window.opener) return false;

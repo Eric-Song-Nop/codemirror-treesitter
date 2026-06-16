@@ -1,4 +1,4 @@
-import { hasDropboxOAuthCallback, hasDropboxRedirectTransaction } from "@/lib/dropbox-oauth";
+import { hasDropboxRedirectCallbackForStoredTransaction } from "@/lib/dropbox-oauth";
 
 export function defaultDropboxAppKey() {
   let configured = import.meta.env.VITE_DROPBOX_APP_KEY;
@@ -30,7 +30,6 @@ export function isDropboxRedirectCallbackWindow() {
   return (
     typeof window != "undefined" &&
     !window.opener &&
-    hasDropboxOAuthCallback() &&
-    hasDropboxRedirectTransaction()
+    hasDropboxRedirectCallbackForStoredTransaction()
   );
 }
