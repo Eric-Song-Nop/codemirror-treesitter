@@ -51,6 +51,10 @@ describe("Google Drive OAuth PKCE helpers", () => {
     expect(url.searchParams.get("state")).toBe("state");
   });
 
+  it("defaults to app-created Google Drive file access", () => {
+    expect(DEFAULT_GOOGLE_DRIVE_SCOPES).toEqual(["https://www.googleapis.com/auth/drive.file"]);
+  });
+
   it("parses callback codes and errors", () => {
     expect(parseGoogleDriveOAuthCallback("?state=s1&code=c1")).toEqual({
       code: "c1",
@@ -127,6 +131,38 @@ describe("Google Drive OAuth PKCE helpers", () => {
     expect(transaction.state).toBe(redirectContext.state);
     expect(transaction.codeVerifier).toEqual(expect.any(String));
     expect(authUrl.searchParams.get("code_challenge")).toEqual(expect.any(String));
+  });
+
+  it("rejects when the Google Drive authorization popup closes without a callback", async () => {
+    let popup = {
+      closed: false,
+      close: vi.fn(() => {
+        popup.closed = true;
+      }),
+      document: { title: "" },
+      focus: vi.fn(),
+      location: { href: "" },
+    };
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      clearInterval: globalThis.clearInterval,
+      clearTimeout: globalThis.clearTimeout,
+      open: vi.fn(() => popup),
+      removeEventListener: vi.fn(),
+      setInterval: globalThis.setInterval,
+      setTimeout: globalThis.setTimeout,
+    });
+
+    let promise = authorizeGoogleDriveWithPkce({
+      clientId: "client-id",
+      redirectUri: "http://127.0.0.1:5173/",
+    });
+    await waitFor(() => Boolean(popup.location.href));
+    popup.closed = true;
+
+    await expect(promise).rejects.toThrow(
+      "Google Drive authorization was closed before it completed.",
+    );
   });
 
   it("completes full-page redirect OAuth from a stored PKCE transaction", async () => {

@@ -230,7 +230,8 @@ const exactMessageKeys: Readonly<Record<string, TranslationKey>> = {
   "Google Drive authorization state was not found.": "errors.googleDriveAuthorizationStateMissing",
   "Google Drive authorization was closed before it completed. Reconnect Google Drive workspace to continue.":
     "errors.googleDriveAuthorizationClosed",
-  "Google Drive authorization was denied.": "errors.googleDriveAuthorizationDenied",
+  "Google Drive authorization was denied or blocked by Google OAuth app settings. If this is a development app, add your Google account as a test user and check the Drive scope before reconnecting.":
+    "errors.googleDriveAuthorizationDenied",
   "Google Drive client ID is required.": "errors.googleDriveClientIdRequired",
   "Google Drive token exchange failed. Check the client ID and reconnect Google Drive workspace.":
     "errors.googleDriveTokenExchangeFailed",

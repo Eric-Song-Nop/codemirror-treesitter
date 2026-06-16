@@ -43,7 +43,14 @@ describe("workspace error messages", () => {
     );
     expect(
       workspaceErrorMessage(new Error("Google Drive authorization failed: access_denied")),
-    ).toBe("Google Drive authorization was denied.");
+    ).toBe(
+      "Google Drive authorization was denied or blocked by Google OAuth app settings. If this is a development app, add your Google account as a test user and check the Drive scope before reconnecting.",
+    );
+    expect(
+      workspaceErrorMessage(new Error("Google Drive authorization failed: org_internal")),
+    ).toBe(
+      "Google Drive authorization was denied or blocked by Google OAuth app settings. If this is a development app, add your Google account as a test user and check the Drive scope before reconnecting.",
+    );
   });
 
   it("classifies Dropbox expired-token and revoked-token failures", () => {
@@ -94,13 +101,13 @@ describe("workspace error messages", () => {
   it("classifies missing Google Drive file scopes", () => {
     expect(
       workspaceErrorMessage(
-        new Error("Google Drive missing scope https://www.googleapis.com/auth/drive"),
+        new Error("Google Drive missing scope https://www.googleapis.com/auth/drive.file"),
       ),
     ).toBe(
-      "Google Drive app is missing required file permissions: https://www.googleapis.com/auth/drive. Enable those scopes and reconnect Google Drive workspace.",
+      "Google Drive app is missing required file permissions: https://www.googleapis.com/auth/drive.file. Enable those scopes and reconnect Google Drive workspace.",
     );
     expect(workspaceErrorMessage(new Error("Google Drive insufficient permissions"))).toBe(
-      "Google Drive app is missing required file permissions: https://www.googleapis.com/auth/drive. Enable those scopes and reconnect Google Drive workspace.",
+      "Google Drive app is missing required file permissions: https://www.googleapis.com/auth/drive.file. Enable those scopes and reconnect Google Drive workspace.",
     );
   });
 

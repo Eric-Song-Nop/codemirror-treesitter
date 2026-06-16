@@ -44,8 +44,10 @@ Google Drive is also available as a backend foundation through OpenDAL's
 supports the same narrow workspace operation set. OpenDAL's Google Drive service
 does not currently advertise native conditional writes, so `{ ifMatch }` is not
 forwarded for Google Drive even though the shared wrapper API accepts it.
-Google Drive OAuth/UI wiring belongs in `apps/local-md-workspace`, not this
-package.
+The local workspace app requests `https://www.googleapis.com/auth/drive.file` so
+Google Drive access stays limited to files and folders created or opened through
+the app. Google Drive OAuth/UI wiring belongs in `apps/local-md-workspace`, not
+this package.
 
 S3-compatible object storage remains available as a secondary provider track for
 MinIO, Cloudflare R2, AWS S3, and similar services.

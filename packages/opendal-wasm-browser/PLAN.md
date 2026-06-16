@@ -44,8 +44,10 @@ is no longer the first user-facing cloud workspace target.
   tokens. OpenDAL's Google Drive refresh-token flow requires `client_id`,
   `client_secret`, and `refresh_token`, so it is not appropriate for the first
   frontend-only product path.
-- OpenDAL Google Drive requires the Google Drive API to be enabled and an OAuth
-  scope containing `https://www.googleapis.com/auth/drive`.
+- OpenDAL Google Drive requires the Google Drive API to be enabled. The browser
+  product path should default to `https://www.googleapis.com/auth/drive.file` so
+  it can access files and folders created or opened through the app without
+  requesting full-drive access.
 - The user-facing Dropbox flow is a normal browser OAuth login: the user clicks
   Connect Dropbox, signs in and approves access on Dropbox, and the app exchanges
   the returned authorization code for a short-lived access token with PKCE.
@@ -694,9 +696,8 @@ Current implementation:
 Next Google Drive work:
 
 - Add credential-gated wrapper and app smoke tasks for real Google Drive file IO.
-- Decide whether Google Drive should use the broad
-  `https://www.googleapis.com/auth/drive` scope required by OpenDAL or wait for a
-  narrower app-folder style path before becoming visible.
+- Keep Google Drive on `https://www.googleapis.com/auth/drive.file` unless a
+  future product decision explicitly needs full-drive indexing.
 - Revisit Google Drive conflict behavior if OpenDAL exposes a native
   `write_with_if_match` capability for `gdrive`.
 

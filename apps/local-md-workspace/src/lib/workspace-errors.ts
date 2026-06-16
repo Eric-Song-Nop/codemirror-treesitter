@@ -5,7 +5,7 @@ const DROPBOX_REQUIRED_SCOPES = [
 ];
 
 const ONEDRIVE_REQUIRED_SCOPES = ["Files.ReadWrite"];
-const GOOGLE_DRIVE_REQUIRED_SCOPES = ["https://www.googleapis.com/auth/drive"];
+const GOOGLE_DRIVE_REQUIRED_SCOPES = ["https://www.googleapis.com/auth/drive.file"];
 
 export function workspaceErrorMessage(error: unknown) {
   let message = error instanceof Error ? error.message : String(error);
@@ -26,8 +26,16 @@ export function workspaceErrorMessage(error: unknown) {
       return "Google Drive authorization was closed before it completed. Reconnect Google Drive workspace to continue.";
     }
 
-    if (matchesAny(normalized, ["authorization was denied", "access denied"])) {
-      return "Google Drive authorization was denied.";
+    if (
+      matchesAny(normalized, [
+        "authorization was denied",
+        "access denied",
+        "access_denied",
+        "org internal",
+        "org_internal",
+      ])
+    ) {
+      return "Google Drive authorization was denied or blocked by Google OAuth app settings. If this is a development app, add your Google account as a test user and check the Drive scope before reconnecting.";
     }
 
     if (

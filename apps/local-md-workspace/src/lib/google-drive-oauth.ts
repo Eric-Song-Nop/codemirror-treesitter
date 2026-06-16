@@ -3,7 +3,8 @@ const GOOGLE_DRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const GOOGLE_DRIVE_OAUTH_MESSAGE = "local-md-workspace:google-drive-oauth";
 export const GOOGLE_DRIVE_REDIRECT_TRANSACTION_KEY =
   "local-md-workspace:google-drive-oauth-redirect";
-export const DEFAULT_GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"];
+export const DEFAULT_GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"];
+const GOOGLE_DRIVE_POPUP_CLOSED_POLL_MS = 500;
 
 export type GoogleDriveAccessToken = {
   accessToken: string;
@@ -272,8 +273,11 @@ async function startGoogleDrivePkceRedirect(options: {
 
 function waitForGoogleDrivePopupCode(popup: Window, authUrl: URL, expectedState: string) {
   return new Promise<string>((resolve, reject) => {
+    let closedPoll = 0;
+    let timeout = 0;
     let cleanup = () => {
       window.removeEventListener("message", handleMessage);
+      window.clearInterval(closedPoll);
       window.clearTimeout(timeout);
     };
 
@@ -295,7 +299,7 @@ function waitForGoogleDrivePopupCode(popup: Window, authUrl: URL, expectedState:
       }
     };
 
-    let timeout = window.setTimeout(
+    timeout = window.setTimeout(
       () => {
         cleanup();
         closeGoogleDrivePopup(popup);
@@ -308,6 +312,17 @@ function waitForGoogleDrivePopupCode(popup: Window, authUrl: URL, expectedState:
       5 * 60 * 1000,
     );
 
+    closedPoll = window.setInterval(() => {
+      if (!googleDrivePopupClosed(popup)) return;
+
+      cleanup();
+      reject(
+        new Error(
+          "Google Drive authorization was closed before it completed. Reconnect Google Drive workspace to continue.",
+        ),
+      );
+    }, GOOGLE_DRIVE_POPUP_CLOSED_POLL_MS);
+
     window.addEventListener("message", handleMessage);
     popup.location.href = authUrl.href;
   });
@@ -317,6 +332,14 @@ function closeGoogleDrivePopup(popup: Window) {
   try {
     popup.close();
   } catch {}
+}
+
+function googleDrivePopupClosed(popup: Window) {
+  try {
+    return popup.closed;
+  } catch {
+    return true;
+  }
 }
 
 async function exchangeGoogleDriveCodeForToken(options: {
@@ -401,7 +424,9 @@ function googleDriveTokenError(value: unknown) {
 }
 
 function googleDriveOAuthCallbackError(error: string, description: string | undefined) {
-  if (error == "access_denied") return "Google Drive authorization was denied.";
+  if (error == "access_denied") {
+    return "Google Drive authorization was denied or blocked by Google OAuth app settings. If this is a development app, add your Google account as a test user and check the Drive scope before reconnecting.";
+  }
   return description
     ? `Google Drive authorization failed: ${description}`
     : `Google Drive authorization failed: ${error}`;

@@ -84,23 +84,27 @@ Optional Dropbox configuration:
 
 ```env
 VITE_DROPBOX_APP_KEY="your-public-dropbox-app-key"
-VITE_DROPBOX_REDIRECT_URI="http://localhost:5173"
+VITE_DROPBOX_REDIRECT_URI="http://localhost:5173/"
 ```
 
 Optional OneDrive configuration:
 
 ```env
 VITE_ONEDRIVE_CLIENT_ID="your-public-onedrive-client-id"
-VITE_ONEDRIVE_REDIRECT_URI="http://localhost:5173"
+VITE_ONEDRIVE_REDIRECT_URI="http://localhost:5173/"
 ```
 
 Optional Google Drive configuration:
 
 ```env
 VITE_GOOGLE_DRIVE_CLIENT_ID="your-public-google-oauth-client-id"
-VITE_GOOGLE_DRIVE_REDIRECT_URI="http://localhost:5173"
+VITE_GOOGLE_DRIVE_REDIRECT_URI="http://localhost:5173/"
 VITE_GOOGLE_DRIVE_ROOT="optional/root"
 ```
+
+Google Drive requests `https://www.googleapis.com/auth/drive.file` by default,
+so it can work with files and folders created or opened through the app without
+requesting full-drive access.
 
 Optional relay configuration:
 
