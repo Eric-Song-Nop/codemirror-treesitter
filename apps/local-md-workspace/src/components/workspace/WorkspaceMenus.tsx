@@ -31,6 +31,7 @@ type WorkspaceDocumentActionsMenuProps = {
   canShare: boolean;
   className?: string;
   dropboxConnecting: boolean;
+  googleDriveConnecting: boolean;
   oneDriveConnecting: boolean;
   onDownloadCopy: () => void;
   onExportHtml: () => void;
@@ -38,6 +39,7 @@ type WorkspaceDocumentActionsMenuProps = {
   onInsertImage: () => void;
   onSaveToDevice: () => void;
   onSaveToDropbox: () => void;
+  onSaveToGoogleDrive: () => void;
   onSaveToOneDrive: () => void;
   onShareFile: () => void;
 };
@@ -52,6 +54,7 @@ export function WorkspaceDocumentActionsMenu({
   canShare,
   className,
   dropboxConnecting,
+  googleDriveConnecting,
   oneDriveConnecting,
   onDownloadCopy,
   onExportHtml,
@@ -59,6 +62,7 @@ export function WorkspaceDocumentActionsMenu({
   onInsertImage,
   onSaveToDevice,
   onSaveToDropbox,
+  onSaveToGoogleDrive,
   onSaveToOneDrive,
   onShareFile,
 }: WorkspaceDocumentActionsMenuProps) {
@@ -94,6 +98,13 @@ export function WorkspaceDocumentActionsMenu({
               >
                 <CloudIcon />
                 Dropbox
+              </WorkspaceDropdownItem>
+              <WorkspaceDropdownItem
+                disabled={busy || googleDriveConnecting}
+                onSelect={onSaveToGoogleDrive}
+              >
+                <CloudIcon />
+                Google Drive
               </WorkspaceDropdownItem>
               <WorkspaceDropdownItem
                 disabled={busy || oneDriveConnecting}

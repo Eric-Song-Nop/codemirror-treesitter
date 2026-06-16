@@ -14,6 +14,7 @@ type WorkspaceHeaderProps = {
   canSaveToDevice: boolean;
   canShare: boolean;
   dropboxConnecting: boolean;
+  googleDriveConnecting: boolean;
   oneDriveConnecting: boolean;
   saveLabel: string;
   saveState: SaveState;
@@ -25,6 +26,7 @@ type WorkspaceHeaderProps = {
   onInsertImage: () => void;
   onPrintPdf: () => void;
   onSaveAsDropbox: () => void;
+  onSaveAsGoogleDrive: () => void;
   onSaveAsOneDrive: () => void;
   onSaveAsLocal: () => void;
   onShareFile: () => void;
@@ -40,6 +42,7 @@ export function WorkspaceHeader({
   canSaveToDevice,
   canShare,
   dropboxConnecting,
+  googleDriveConnecting,
   oneDriveConnecting,
   saveLabel,
   saveState,
@@ -51,6 +54,7 @@ export function WorkspaceHeader({
   onInsertImage,
   onPrintPdf,
   onSaveAsDropbox,
+  onSaveAsGoogleDrive,
   onSaveAsOneDrive,
   onSaveAsLocal,
   onShareFile,
@@ -91,6 +95,7 @@ export function WorkspaceHeader({
         canSaveToDevice={canSaveToDevice}
         canShare={canShare}
         dropboxConnecting={dropboxConnecting}
+        googleDriveConnecting={googleDriveConnecting}
         oneDriveConnecting={oneDriveConnecting}
         onDownloadCopy={onDownloadCopy}
         onExportHtml={onExportHtml}
@@ -98,6 +103,7 @@ export function WorkspaceHeader({
         onInsertImage={onInsertImage}
         onSaveToDevice={onSaveAsLocal}
         onSaveToDropbox={onSaveAsDropbox}
+        onSaveToGoogleDrive={onSaveAsGoogleDrive}
         onSaveToOneDrive={onSaveAsOneDrive}
         onShareFile={onShareFile}
       />

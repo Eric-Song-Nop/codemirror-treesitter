@@ -22,6 +22,8 @@ type WorkspaceSidebarProps = {
   canRefresh: boolean;
   dropboxConnecting: boolean;
   dropboxRestoreAvailable: boolean;
+  googleDriveConnecting: boolean;
+  googleDriveRestoreAvailable: boolean;
   oneDriveConnecting: boolean;
   oneDriveRestoreAvailable: boolean;
   languageToggleLabel: string;
@@ -36,11 +38,13 @@ type WorkspaceSidebarProps = {
   onDeleteEntry: (target: FileTreeDeleteTarget) => void;
   onLoadDirectory: (path: string) => Promise<void>;
   onOpenDropbox: () => void;
+  onOpenGoogleDrive: () => void;
   onOpenOneDrive: () => void;
   onOpenFolder: () => void;
   onRefresh: () => void;
   onRenameEntry: (target?: FileTreeDeleteTarget) => void;
   onRestoreDropbox: () => void;
+  onRestoreGoogleDrive: () => void;
   onRestoreOneDrive: () => void;
   onRestoreFolder: () => void;
   onSelectEntry: (target: FileTreeDeleteTarget | null) => void;
@@ -54,6 +58,8 @@ export function WorkspaceSidebar({
   canRefresh,
   dropboxConnecting,
   dropboxRestoreAvailable,
+  googleDriveConnecting,
+  googleDriveRestoreAvailable,
   oneDriveConnecting,
   oneDriveRestoreAvailable,
   languageToggleLabel,
@@ -68,11 +74,13 @@ export function WorkspaceSidebar({
   onDeleteEntry,
   onLoadDirectory,
   onOpenDropbox,
+  onOpenGoogleDrive,
   onOpenOneDrive,
   onOpenFolder,
   onRefresh,
   onRenameEntry,
   onRestoreDropbox,
+  onRestoreGoogleDrive,
   onRestoreOneDrive,
   onRestoreFolder,
   onSelectEntry,
@@ -121,6 +129,15 @@ export function WorkspaceSidebar({
           <CloudIcon data-icon="inline-start" />
         </TooltipIconButton>
         <TooltipIconButton
+          label={t("actions.connectGoogleDrive")}
+          size="icon-sm"
+          variant="ghost"
+          onClick={onOpenGoogleDrive}
+          disabled={busy || googleDriveConnecting}
+        >
+          <CloudIcon data-icon="inline-start" />
+        </TooltipIconButton>
+        <TooltipIconButton
           label={t("actions.newFile")}
           size="icon-sm"
           variant="ghost"
@@ -147,14 +164,18 @@ export function WorkspaceSidebar({
           busy={busy}
           dropboxConnecting={dropboxConnecting}
           dropboxRestoreAvailable={dropboxRestoreAvailable}
+          googleDriveConnecting={googleDriveConnecting}
+          googleDriveRestoreAvailable={googleDriveRestoreAvailable}
           oneDriveConnecting={oneDriveConnecting}
           oneDriveRestoreAvailable={oneDriveRestoreAvailable}
           restoreAvailable={restoreAvailable}
           restoreChecking={restoreChecking}
           onOpenDropbox={onOpenDropbox}
+          onOpenGoogleDrive={onOpenGoogleDrive}
           onOpenOneDrive={onOpenOneDrive}
           onOpenFolder={onOpenFolder}
           onRestoreDropbox={onRestoreDropbox}
+          onRestoreGoogleDrive={onRestoreGoogleDrive}
           onRestoreOneDrive={onRestoreOneDrive}
           onRestoreFolder={onRestoreFolder}
         />

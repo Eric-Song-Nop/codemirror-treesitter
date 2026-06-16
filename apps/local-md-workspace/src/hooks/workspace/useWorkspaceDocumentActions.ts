@@ -13,6 +13,7 @@ import {
   type OwnerShareRecord,
 } from "@/lib/collaboration/share-storage";
 import type { DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
+import type { GoogleDriveRedirectDraft } from "@/lib/google-drive-redirect-draft";
 import type { OneDriveRedirectDraft } from "@/lib/onedrive-redirect-draft";
 import { type AccessFileHandle } from "@/lib/file-system";
 import {
@@ -38,7 +39,7 @@ type MutableRef<T> = {
   current: T;
 };
 
-type CloudRedirectDraft = DropboxRedirectDraft | OneDriveRedirectDraft;
+type CloudRedirectDraft = DropboxRedirectDraft | GoogleDriveRedirectDraft | OneDriveRedirectDraft;
 
 type StartOwnerShareHost = (
   record: OwnerShareRecord,

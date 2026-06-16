@@ -186,6 +186,19 @@ export function SaveAsDropboxDialog(props: SaveAsProviderDialogProps) {
   );
 }
 
+export function SaveAsGoogleDriveDialog(props: SaveAsProviderDialogProps) {
+  let { t } = useI18n();
+  return (
+    <SaveAsCloudDialog
+      {...props}
+      description={t("dialog.saveAsGoogleDrive.description")}
+      inputId="google-drive-save-as-path"
+      placeholder={t("dialog.saveAsGoogleDrive.placeholder")}
+      title={t("dialog.saveAsGoogleDrive.title")}
+    />
+  );
+}
+
 export function SaveAsOneDriveDialog(props: SaveAsProviderDialogProps) {
   let { t } = useI18n();
   return (

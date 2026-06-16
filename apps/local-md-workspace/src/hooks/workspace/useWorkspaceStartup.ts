@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { completeDropboxRedirectOAuthIfPresent } from "@/lib/dropbox-oauth";
 import { takeDropboxRedirectDraft, type DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
+import { completeGoogleDriveRedirectOAuthIfPresent } from "@/lib/google-drive-oauth";
+import {
+  takeGoogleDriveRedirectDraft,
+  type GoogleDriveRedirectDraft,
+} from "@/lib/google-drive-redirect-draft";
 import { completeOneDriveRedirectOAuthIfPresent } from "@/lib/onedrive-oauth";
 import {
   takeOneDriveRedirectDraft,
@@ -9,12 +14,14 @@ import {
 import { createLocalWorkspaceBackend, queryReadWritePermission } from "@/lib/file-system";
 import { defaultSidebarOpen } from "@/lib/workspace/constants";
 import { isDropboxRedirectCallbackWindow } from "@/lib/workspace/dropbox-config";
+import { isGoogleDriveRedirectCallbackWindow } from "@/lib/workspace/google-drive-config";
 import { isOneDriveRedirectCallbackWindow } from "@/lib/workspace/onedrive-config";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { loadWorkspaceSelectedPath } from "@/lib/workspace/state";
 import {
   loadStoredLocalWorkspaceRecord,
   type StoredDropboxWorkspaceConfig,
+  type StoredGoogleDriveWorkspaceConfig,
   type StoredLocalWorkspaceRecord,
   type StoredOneDriveWorkspaceConfig,
   type StoredWorkspaceKind,
@@ -34,6 +41,7 @@ type OpenSingleFileDraft = (options?: {
 type UseWorkspaceStartupOptions = {
   browserSupported: boolean;
   clearDropboxAccessToken: () => void;
+  clearGoogleDriveAccessToken: () => void;
   clearOneDriveAccessToken: () => void;
   loadTree: (
     backend: WorkspaceBackend,
@@ -43,6 +51,10 @@ type UseWorkspaceStartupOptions = {
   openDropboxWorkspace: (
     config: StoredDropboxWorkspaceConfig,
     options?: { restoreDraft?: DropboxRedirectDraft | null; skipSaveCurrent?: boolean },
+  ) => Promise<boolean>;
+  openGoogleDriveWorkspace: (
+    config: StoredGoogleDriveWorkspaceConfig,
+    options?: { restoreDraft?: GoogleDriveRedirectDraft | null; skipSaveCurrent?: boolean },
   ) => Promise<boolean>;
   openOneDriveWorkspace: (
     config: StoredOneDriveWorkspaceConfig,
@@ -59,6 +71,12 @@ type UseWorkspaceStartupOptions = {
     expiresAt: number;
   }) => void;
   setErrorMessage: (message: string) => void;
+  setGoogleDriveConnecting: (connecting: boolean) => void;
+  setGoogleDriveRedirectAccessToken: (token: {
+    accessToken: string;
+    clientId: string;
+    expiresAt: number;
+  }) => void;
   setOneDriveConnecting: (connecting: boolean) => void;
   setOneDriveRedirectAccessToken: (token: {
     accessToken: string;
@@ -71,6 +89,7 @@ type UseWorkspaceStartupOptions = {
   setStoredLocalWorkspace: (record: StoredLocalWorkspaceRecord | null) => void;
   setWorkspaceBackend: (backend: WorkspaceBackend) => void;
   storedDropboxConfig: StoredDropboxWorkspaceConfig | null;
+  storedGoogleDriveConfig: StoredGoogleDriveWorkspaceConfig | null;
   storedLocalWorkspace: StoredLocalWorkspaceRecord | null;
   storedOneDriveConfig: StoredOneDriveWorkspaceConfig | null;
   storedWorkspaceKind: StoredWorkspaceKind | null;
@@ -80,9 +99,11 @@ type UseWorkspaceStartupOptions = {
 export function useWorkspaceStartup({
   browserSupported,
   clearDropboxAccessToken,
+  clearGoogleDriveAccessToken,
   clearOneDriveAccessToken,
   loadTree,
   openDropboxWorkspace,
+  openGoogleDriveWorkspace,
   openOneDriveWorkspace,
   openSingleFileDraft,
   selectedFile,
@@ -91,6 +112,8 @@ export function useWorkspaceStartup({
   setDropboxConnecting,
   setDropboxRedirectAccessToken,
   setErrorMessage,
+  setGoogleDriveConnecting,
+  setGoogleDriveRedirectAccessToken,
   setOneDriveConnecting,
   setOneDriveRedirectAccessToken,
   setRestoreChecking,
@@ -99,6 +122,7 @@ export function useWorkspaceStartup({
   setStoredLocalWorkspace,
   setWorkspaceBackend,
   storedDropboxConfig,
+  storedGoogleDriveConfig,
   storedLocalWorkspace,
   storedOneDriveConfig,
   storedWorkspaceKind,
@@ -106,10 +130,13 @@ export function useWorkspaceStartup({
 }: UseWorkspaceStartupOptions) {
   let dropboxAutoRestoreAttemptedRef = useRef(false);
   let dropboxRedirectPendingRef = useRef(isDropboxRedirectCallbackWindow());
+  let googleDriveAutoRestoreAttemptedRef = useRef(false);
+  let googleDriveRedirectPendingRef = useRef(isGoogleDriveRedirectCallbackWindow());
   let oneDriveAutoRestoreAttemptedRef = useRef(false);
   let oneDriveRedirectPendingRef = useRef(isOneDriveRedirectCallbackWindow());
   let [localRestoreChecked, setLocalRestoreChecked] = useState(false);
   let [dropboxAutoRestoreChecked, setDropboxAutoRestoreChecked] = useState(false);
+  let [googleDriveAutoRestoreChecked, setGoogleDriveAutoRestoreChecked] = useState(false);
   let [oneDriveAutoRestoreChecked, setOneDriveAutoRestoreChecked] = useState(false);
 
   useEffect(() => {
@@ -148,6 +175,7 @@ export function useWorkspaceStartup({
         dropboxRedirectPendingRef.current = false;
         if (!canceled) {
           setDropboxAutoRestoreChecked(true);
+          setGoogleDriveAutoRestoreChecked(true);
           setOneDriveAutoRestoreChecked(true);
           setDropboxConnecting(false);
           setBusy(false);
@@ -164,6 +192,62 @@ export function useWorkspaceStartup({
     setDropboxConnecting,
     setDropboxRedirectAccessToken,
     setErrorMessage,
+    setRetryLoadPath,
+  ]);
+
+  useEffect(() => {
+    if (!googleDriveRedirectPendingRef.current) return;
+
+    let canceled = false;
+    setBusy(true);
+    setGoogleDriveConnecting(true);
+    setErrorMessage("");
+
+    void (async () => {
+      try {
+        let token = await completeGoogleDriveRedirectOAuthIfPresent();
+        if (canceled || !token) return;
+
+        let draft = takeGoogleDriveRedirectDraft();
+        let restoreDraft = draft?.clientId == token.clientId ? draft : null;
+        setGoogleDriveRedirectAccessToken(token);
+
+        await openGoogleDriveWorkspace(
+          {
+            clientId: token.clientId,
+            root: restoreDraft?.root,
+          },
+          {
+            restoreDraft,
+            skipSaveCurrent: true,
+          },
+        );
+      } catch (error) {
+        if (!canceled) {
+          setErrorMessage(errorToMessage(error));
+          setRetryLoadPath(null);
+        }
+      } finally {
+        googleDriveRedirectPendingRef.current = false;
+        if (!canceled) {
+          setDropboxAutoRestoreChecked(true);
+          setGoogleDriveAutoRestoreChecked(true);
+          setOneDriveAutoRestoreChecked(true);
+          setGoogleDriveConnecting(false);
+          setBusy(false);
+        }
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [
+    openGoogleDriveWorkspace,
+    setBusy,
+    setErrorMessage,
+    setGoogleDriveConnecting,
+    setGoogleDriveRedirectAccessToken,
     setRetryLoadPath,
   ]);
 
@@ -203,6 +287,7 @@ export function useWorkspaceStartup({
         oneDriveRedirectPendingRef.current = false;
         if (!canceled) {
           setDropboxAutoRestoreChecked(true);
+          setGoogleDriveAutoRestoreChecked(true);
           setOneDriveAutoRestoreChecked(true);
           setOneDriveConnecting(false);
           setBusy(false);
@@ -223,7 +308,11 @@ export function useWorkspaceStartup({
   ]);
 
   useEffect(() => {
-    if (dropboxRedirectPendingRef.current || oneDriveRedirectPendingRef.current) {
+    if (
+      dropboxRedirectPendingRef.current ||
+      googleDriveRedirectPendingRef.current ||
+      oneDriveRedirectPendingRef.current
+    ) {
       setLocalRestoreChecked(true);
       return;
     }
@@ -237,6 +326,7 @@ export function useWorkspaceStartup({
     }
     if (
       (storedWorkspaceKind == "dropbox" && storedDropboxConfig) ||
+      (storedWorkspaceKind == "gdrive" && storedGoogleDriveConfig) ||
       (storedWorkspaceKind == "onedrive" && storedOneDriveConfig)
     ) {
       setLocalRestoreChecked(true);
@@ -260,6 +350,7 @@ export function useWorkspaceStartup({
 
         let backend = createLocalWorkspaceBackend(record.handle, record.id);
         clearDropboxAccessToken();
+        clearGoogleDriveAccessToken();
         clearOneDriveAccessToken();
         setWorkspaceBackend(backend);
         setSidebarOpen(defaultSidebarOpen());
@@ -280,6 +371,7 @@ export function useWorkspaceStartup({
   }, [
     browserSupported,
     clearDropboxAccessToken,
+    clearGoogleDriveAccessToken,
     clearOneDriveAccessToken,
     loadTree,
     setErrorMessage,
@@ -288,6 +380,7 @@ export function useWorkspaceStartup({
     setStoredLocalWorkspace,
     setWorkspaceBackend,
     storedDropboxConfig,
+    storedGoogleDriveConfig,
     storedOneDriveConfig,
     storedWorkspaceKind,
     workspaceBackend,
@@ -297,6 +390,7 @@ export function useWorkspaceStartup({
     if (
       !localRestoreChecked ||
       dropboxRedirectPendingRef.current ||
+      googleDriveRedirectPendingRef.current ||
       oneDriveRedirectPendingRef.current
     ) {
       return;
@@ -331,7 +425,51 @@ export function useWorkspaceStartup({
   ]);
 
   useEffect(() => {
-    if (!localRestoreChecked || !dropboxAutoRestoreChecked || oneDriveRedirectPendingRef.current) {
+    if (
+      !localRestoreChecked ||
+      !dropboxAutoRestoreChecked ||
+      googleDriveRedirectPendingRef.current ||
+      oneDriveRedirectPendingRef.current
+    ) {
+      return;
+    }
+    if (googleDriveAutoRestoreAttemptedRef.current) return;
+    if (
+      workspaceBackend ||
+      !storedGoogleDriveConfig ||
+      (storedWorkspaceKind && storedWorkspaceKind != "gdrive") ||
+      (!storedWorkspaceKind && storedLocalWorkspace)
+    ) {
+      setGoogleDriveAutoRestoreChecked(true);
+      return;
+    }
+
+    googleDriveAutoRestoreAttemptedRef.current = true;
+    setGoogleDriveAutoRestoreChecked(false);
+    void (async () => {
+      try {
+        await openGoogleDriveWorkspace(storedGoogleDriveConfig, { skipSaveCurrent: true });
+      } finally {
+        setGoogleDriveAutoRestoreChecked(true);
+      }
+    })();
+  }, [
+    dropboxAutoRestoreChecked,
+    localRestoreChecked,
+    openGoogleDriveWorkspace,
+    storedGoogleDriveConfig,
+    storedLocalWorkspace,
+    storedWorkspaceKind,
+    workspaceBackend,
+  ]);
+
+  useEffect(() => {
+    if (
+      !localRestoreChecked ||
+      !dropboxAutoRestoreChecked ||
+      !googleDriveAutoRestoreChecked ||
+      oneDriveRedirectPendingRef.current
+    ) {
       return;
     }
     if (oneDriveAutoRestoreAttemptedRef.current) return;
@@ -356,6 +494,7 @@ export function useWorkspaceStartup({
     })();
   }, [
     dropboxAutoRestoreChecked,
+    googleDriveAutoRestoreChecked,
     localRestoreChecked,
     openOneDriveWorkspace,
     storedLocalWorkspace,
@@ -368,8 +507,10 @@ export function useWorkspaceStartup({
     if (
       !localRestoreChecked ||
       !dropboxAutoRestoreChecked ||
+      !googleDriveAutoRestoreChecked ||
       !oneDriveAutoRestoreChecked ||
       dropboxRedirectPendingRef.current ||
+      googleDriveRedirectPendingRef.current ||
       oneDriveRedirectPendingRef.current ||
       workspaceBackend ||
       selectedFile
@@ -384,6 +525,7 @@ export function useWorkspaceStartup({
     });
   }, [
     dropboxAutoRestoreChecked,
+    googleDriveAutoRestoreChecked,
     localRestoreChecked,
     oneDriveAutoRestoreChecked,
     openSingleFileDraft,

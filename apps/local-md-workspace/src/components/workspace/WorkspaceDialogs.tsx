@@ -4,6 +4,7 @@ import { DeleteEntryDialog } from "@/components/workspace/DeleteEntryDialog";
 import {
   FileNameDialog,
   SaveAsDropboxDialog,
+  SaveAsGoogleDriveDialog,
   SaveAsOneDriveDialog,
 } from "@/components/workspace/FileDialogs";
 import { ShareFileDialog } from "@/components/workspace/ShareFileDialog";
@@ -59,6 +60,8 @@ type SaveAsOneDriveDialogState = {
   onValueChange: (value: string) => void;
 };
 
+type SaveAsGoogleDriveDialogState = SaveAsOneDriveDialogState;
+
 type CommandPaletteState = {
   browserSupported: boolean;
   busy: boolean;
@@ -67,17 +70,20 @@ type CommandPaletteState = {
   canSaveAsLocal: boolean;
   disabled: boolean;
   dropboxConnecting: boolean;
+  googleDriveConnecting: boolean;
   oneDriveConnecting: boolean;
   selectedPath: string | null;
   sidebarOpen: boolean;
   tree: MarkdownDirectoryNode | null;
   onConnectDropbox: () => void;
+  onConnectGoogleDrive: () => void;
   onConnectOneDrive: () => void;
   onDownloadCopy: () => void;
   onInsertImage: () => void;
   onNewDraft: () => void;
   onOpenFolder: () => void;
   onSaveAsDropbox: () => void;
+  onSaveAsGoogleDrive: () => void;
   onSaveAsOneDrive: () => void;
   onSaveAsLocal: () => void;
   onSelectFile: (file: MarkdownFileNode) => void;
@@ -96,6 +102,7 @@ type WorkspaceDialogsProps = {
   deleteDialog: DeleteDialogState;
   fileNameDialog: FileNameDialogState;
   saveAsDropboxDialog: SaveAsDropboxDialogState;
+  saveAsGoogleDriveDialog: SaveAsGoogleDriveDialogState;
   saveAsOneDriveDialog: SaveAsOneDriveDialogState;
   shareDialog: ShareDialogState;
 };
@@ -105,6 +112,7 @@ export function WorkspaceDialogs({
   deleteDialog,
   fileNameDialog,
   saveAsDropboxDialog,
+  saveAsGoogleDriveDialog,
   saveAsOneDriveDialog,
   shareDialog,
 }: WorkspaceDialogsProps) {
@@ -159,6 +167,16 @@ export function WorkspaceDialogs({
         onValueChange={saveAsOneDriveDialog.onValueChange}
       />
 
+      <SaveAsGoogleDriveDialog
+        busy={saveAsGoogleDriveDialog.busy}
+        error={saveAsGoogleDriveDialog.error}
+        open={saveAsGoogleDriveDialog.open}
+        value={saveAsGoogleDriveDialog.value}
+        onOpenChange={saveAsGoogleDriveDialog.onOpenChange}
+        onSubmit={saveAsGoogleDriveDialog.onSubmit}
+        onValueChange={saveAsGoogleDriveDialog.onValueChange}
+      />
+
       <WorkspaceCommandPalette
         browserSupported={commandPalette.browserSupported}
         busy={commandPalette.busy}
@@ -167,17 +185,20 @@ export function WorkspaceDialogs({
         canSaveAsLocal={commandPalette.canSaveAsLocal}
         disabled={commandPalette.disabled}
         dropboxConnecting={commandPalette.dropboxConnecting}
+        googleDriveConnecting={commandPalette.googleDriveConnecting}
         oneDriveConnecting={commandPalette.oneDriveConnecting}
         selectedPath={commandPalette.selectedPath}
         sidebarOpen={commandPalette.sidebarOpen}
         tree={commandPalette.tree}
         onConnectDropbox={commandPalette.onConnectDropbox}
+        onConnectGoogleDrive={commandPalette.onConnectGoogleDrive}
         onConnectOneDrive={commandPalette.onConnectOneDrive}
         onDownloadCopy={commandPalette.onDownloadCopy}
         onInsertImage={commandPalette.onInsertImage}
         onNewDraft={commandPalette.onNewDraft}
         onOpenFolder={commandPalette.onOpenFolder}
         onSaveAsDropbox={commandPalette.onSaveAsDropbox}
+        onSaveAsGoogleDrive={commandPalette.onSaveAsGoogleDrive}
         onSaveAsOneDrive={commandPalette.onSaveAsOneDrive}
         onSaveAsLocal={commandPalette.onSaveAsLocal}
         onSelectFile={commandPalette.onSelectFile}

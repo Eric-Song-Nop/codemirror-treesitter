@@ -7,14 +7,18 @@ type WorkspaceLauncherProps = {
   busy: boolean;
   dropboxConnecting: boolean;
   dropboxRestoreAvailable: boolean;
+  googleDriveConnecting: boolean;
+  googleDriveRestoreAvailable: boolean;
   oneDriveConnecting: boolean;
   oneDriveRestoreAvailable: boolean;
   restoreAvailable: boolean;
   restoreChecking: boolean;
   onOpenDropbox: () => void;
+  onOpenGoogleDrive: () => void;
   onOpenOneDrive: () => void;
   onOpenFolder: () => void;
   onRestoreDropbox: () => void;
+  onRestoreGoogleDrive: () => void;
   onRestoreOneDrive: () => void;
   onRestoreFolder: () => void;
 };
@@ -24,19 +28,27 @@ export function WorkspaceLauncher({
   busy,
   dropboxConnecting,
   dropboxRestoreAvailable,
+  googleDriveConnecting,
+  googleDriveRestoreAvailable,
   oneDriveConnecting,
   oneDriveRestoreAvailable,
   restoreAvailable,
   restoreChecking,
   onOpenDropbox,
+  onOpenGoogleDrive,
   onOpenOneDrive,
   onOpenFolder,
   onRestoreDropbox,
+  onRestoreGoogleDrive,
   onRestoreOneDrive,
   onRestoreFolder,
 }: WorkspaceLauncherProps) {
   let { t } = useI18n();
-  let hasPrimaryRestore = restoreAvailable || dropboxRestoreAvailable || oneDriveRestoreAvailable;
+  let hasPrimaryRestore =
+    restoreAvailable ||
+    dropboxRestoreAvailable ||
+    googleDriveRestoreAvailable ||
+    oneDriveRestoreAvailable;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
@@ -72,6 +84,17 @@ export function WorkspaceLauncher({
           {t("actions.continueOneDrive")}
         </Button>
       )}
+      {googleDriveRestoreAvailable && (
+        <Button
+          className="justify-start"
+          disabled={busy || googleDriveConnecting}
+          variant={restoreAvailable || dropboxRestoreAvailable || oneDriveRestoreAvailable ? "outline" : "default"}
+          onClick={onRestoreGoogleDrive}
+        >
+          <CloudIcon data-icon="inline-start" />
+          {t("actions.continueGoogleDrive")}
+        </Button>
+      )}
       <Button
         className="justify-start"
         disabled={!browserSupported || busy}
@@ -98,6 +121,15 @@ export function WorkspaceLauncher({
       >
         <CloudIcon data-icon="inline-start" />
         {t("actions.connectOneDrive")}
+      </Button>
+      <Button
+        className="justify-start"
+        disabled={busy || googleDriveConnecting}
+        variant="outline"
+        onClick={onOpenGoogleDrive}
+      >
+        <CloudIcon data-icon="inline-start" />
+        {t("actions.connectGoogleDrive")}
       </Button>
     </div>
   );
