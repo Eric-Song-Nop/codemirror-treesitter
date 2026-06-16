@@ -1,30 +1,22 @@
-import type { Extension } from "@codemirror/state";
-import type {
-  LiveMdEditorElement,
-  LiveMdImageSourceResolver,
-} from "@codemirror-treesitter/live-md";
-import { LiveMdEditor, type LiveMdImageFilesInput } from "@/components/LiveMdEditor";
+import type { LiveMdEditorElement, LiveMdPlugin } from "@codemirror-treesitter/live-md";
+import { LiveMdEditor } from "@/components/LiveMdEditor";
 import type { EditorDocument } from "@/lib/workspace/types";
 
 type WorkspaceEditorPaneProps = {
   document: EditorDocument;
-  extensions: Extension[];
-  imageSource: LiveMdImageSourceResolver;
   placeholder: string;
+  plugins: readonly LiveMdPlugin[];
   selected: boolean;
   onEditorReady: (editor: LiveMdEditorElement | null) => void;
-  onImageFiles: (input: LiveMdImageFilesInput) => void;
   onInput: (value: string) => void;
 };
 
 export function WorkspaceEditorPane({
   document,
-  extensions,
-  imageSource,
   placeholder,
+  plugins,
   selected,
   onEditorReady,
-  onImageFiles,
   onInput,
 }: WorkspaceEditorPaneProps) {
   return (
@@ -32,12 +24,10 @@ export function WorkspaceEditorPane({
       {selected ? (
         <LiveMdEditor
           documentKey={`${document.path}:${document.version}`}
-          extensions={extensions}
-          imageSource={imageSource}
           initialValue={document.value}
           placeholder={placeholder}
+          plugins={plugins}
           onEditorReady={onEditorReady}
-          onImageFiles={onImageFiles}
           onInput={onInput}
         />
       ) : (

@@ -1,16 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
 import {
-  liveMdImageSource,
+  liveMdTheme,
   type LiveMdEditorElement,
-  type LiveMdImageSourceResolver,
+  type LiveMdPlugin,
 } from "@codemirror-treesitter/live-md";
-import {
-  clearLiveMdThemeVariables,
-  setLiveMdThemeVariables,
-  type LiveMdThemeSpec,
-} from "@codemirror-treesitter/live-md-theme";
+import type { LiveMdThemeSpec } from "@codemirror-treesitter/live-md-theme";
 import { gruvboxDark, gruvboxLight } from "@codemirror-treesitter/theme-gruvbox";
 import { catppuccinLatte, catppuccinMacchiato } from "@codemirror-treesitter/theme-catppuccin";
 import { githubLight } from "@codemirror-treesitter/theme-github";
@@ -25,39 +20,28 @@ import {
 import { githubLightLiveMdTheme } from "@codemirror-treesitter/live-md-theme-github";
 import { useTheme, type Theme } from "@/theme";
 
-export type LiveMdImageFilesInput = {
-  files: File[];
-  position?: number;
-  view: EditorView;
-};
-
 type LiveMdEditorProps = {
   documentKey: string;
-  extensions?: Extension[];
-  imageSource?: LiveMdImageSourceResolver | null;
   initialValue: string;
   placeholder: string;
+  plugins?: readonly LiveMdPlugin[];
   onEditorReady?: (editor: LiveMdEditorElement | null) => void;
-  onImageFiles?: (input: LiveMdImageFilesInput) => void;
   onInput: (value: string) => void;
 };
 
-const emptyLiveMdEditorExtensions: Extension[] = [];
+const emptyLiveMdEditorPlugins: readonly LiveMdPlugin[] = [];
 
 export function LiveMdEditor({
   documentKey,
-  extensions: extraExtensions = emptyLiveMdEditorExtensions,
-  imageSource,
   initialValue,
   placeholder,
+  plugins: extraPlugins = emptyLiveMdEditorPlugins,
   onEditorReady,
-  onImageFiles,
   onInput,
 }: LiveMdEditorProps) {
   let { theme } = useTheme();
   let editorRef = useRef<LiveMdEditorElement | null>(null);
   let initialValueRef = useRef(initialValue);
-  let onImageFilesRef = useRef(onImageFiles);
   let onInputRef = useRef(onInput);
 
   initialValueRef.current = initialValue;
@@ -73,10 +57,6 @@ export function LiveMdEditor({
     onInputRef.current = onInput;
   }, [onInput]);
 
-  useEffect(() => {
-    onImageFilesRef.current = onImageFiles;
-  }, [onImageFiles]);
-
   useLayoutEffect(() => {
     let editor = editorRef.current;
     if (!editor) return;
@@ -89,15 +69,14 @@ export function LiveMdEditor({
     if (!editor) return;
 
     let themeDefinition = liveMdThemeDefinition(theme);
-    setLiveMdThemeVariables(editor, themeDefinition.liveMdTheme);
-
-    let extensions: Extension[] = [
-      themeDefinition.codeMirrorTheme,
-      liveMdImageSource(imageSource),
-      ...extraExtensions,
+    editor.plugins = [
+      liveMdTheme({
+        editor: themeDefinition.codeMirrorTheme,
+        target: editor,
+        theme: themeDefinition.liveMdTheme,
+      }),
+      ...extraPlugins,
     ];
-    if (onImageFiles) extensions.push(imageInputExtension(onImageFilesRef));
-    editor.extensions = extensions;
 
     let handleInput = () => onInputRef.current(editor.value);
     editor.addEventListener("input", handleInput);
@@ -105,10 +84,9 @@ export function LiveMdEditor({
     return () => {
       editor.removeEventListener("input", handleInput);
       onEditorReady?.(null);
-      editor.extensions = [];
-      clearLiveMdThemeVariables(editor);
+      editor.plugins = [];
     };
-  }, [extraExtensions, imageSource, onEditorReady, onImageFiles, theme]);
+  }, [extraPlugins, onEditorReady, theme]);
 
   return (
     <live-md-editor
@@ -150,47 +128,4 @@ const liveMdThemeDefinitionMap = {
 
 function liveMdThemeDefinition(theme: Theme) {
   return liveMdThemeDefinitionMap[theme];
-}
-
-function imageInputExtension(onImageFilesRef: RefObject<LiveMdEditorProps["onImageFiles"]>) {
-  return EditorView.domEventHandlers({
-    dragover(event) {
-      if (!hasImageItem(event.dataTransfer?.items)) return false;
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
-      return true;
-    },
-    drop(event, view) {
-      let files = imageFilesFromList(event.dataTransfer?.files);
-      if (!files.length) return false;
-      event.preventDefault();
-      let position =
-        view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.head;
-      onImageFilesRef.current?.({ files, position, view });
-      return true;
-    },
-    paste(event, view) {
-      let files = imageFilesFromList(event.clipboardData?.files);
-      if (!files.length) return false;
-      event.preventDefault();
-      onImageFilesRef.current?.({ files, view });
-      return true;
-    },
-  });
-}
-
-function hasImageItem(items: DataTransferItemList | null | undefined) {
-  if (!items) return false;
-  for (let index = 0; index < items.length; index++) {
-    let item = items[index];
-    if (item?.kind == "file" && item.type.startsWith("image/")) return true;
-  }
-  return false;
-}
-
-function imageFilesFromList(files: FileList | null | undefined) {
-  return Array.from(files ?? []).filter(
-    (file) =>
-      file.type.startsWith("image/") || /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(file.name),
-  );
 }

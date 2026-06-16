@@ -8,11 +8,13 @@ import {
   type RefObject,
 } from "react";
 import type { EditorView } from "@codemirror/view";
-import type {
-  LiveMdEditorElement,
-  LiveMdImageSourceResolver,
+import {
+  liveMdImageAssets,
+  type LiveMdEditorElement,
+  type LiveMdImageFilesInput,
+  type LiveMdImageSourceResolver,
+  type LiveMdPlugin,
 } from "@codemirror-treesitter/live-md";
-import type { LiveMdImageFilesInput } from "@/components/LiveMdEditor";
 import { resolveMarkdownImagePath } from "@/lib/export/markdown-html";
 import { errorToMessage } from "@/lib/workspace/errors";
 import {
@@ -183,6 +185,15 @@ export function useWorkspaceImageAssets({
     [insertImageFiles],
   );
 
+  let imagePlugin = useMemo<LiveMdPlugin>(
+    () =>
+      liveMdImageAssets({
+        onFiles: handleEditorImageFiles,
+        resolve: resolveImageSource,
+      }),
+    [handleEditorImageFiles, resolveImageSource],
+  );
+
   let handleImageInputChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
       let files = Array.from(event.currentTarget.files ?? []);
@@ -207,8 +218,7 @@ export function useWorkspaceImageAssets({
       !singleFileSource && workspaceBackend?.createImageAsset && selectedFile,
     ),
     imageInputRef,
-    resolveImageSource,
-    handleEditorImageFiles,
+    imagePlugin,
     handleImageInputChange,
     resolveImageAssetFile,
   };

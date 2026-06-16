@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { liveMdLoroCollaboration } from "@codemirror-treesitter/live-md-loro";
+import { liveMdLoroCollaborationPlugin } from "@codemirror-treesitter/live-md-loro";
 import { AlertCircleIcon, CloudIcon, RefreshCwIcon, WifiIcon, WifiOffIcon } from "lucide-react";
 import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import { Badge } from "@/components/ui/badge";
@@ -52,8 +52,8 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
   let [lastHostSavedAt, setLastHostSavedAt] = useState<number | null>(null);
   let [errorMessage, setErrorMessage] = useState("");
   let connectionRef = useRef<ShareRelayConnection | null>(null);
-  let extensions = useMemo(
-    () => [liveMdLoroCollaboration({ doc, undoManager })],
+  let plugins = useMemo(
+    () => [liveMdLoroCollaborationPlugin({ doc, undoManager })],
     [doc, undoManager],
   );
 
@@ -222,9 +222,9 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
           <section className="min-h-0 flex-1 overflow-hidden">
             <LiveMdEditor
               documentKey={route.kind == "share" ? route.parts.shareId : "shared-file"}
-              extensions={extensions}
               initialValue=""
               placeholder={t("workspace.placeholder")}
+              plugins={plugins}
               onInput={() => {}}
             />
           </section>

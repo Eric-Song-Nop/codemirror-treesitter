@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Extension } from "@codemirror/state";
-import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
+import type { LiveMdEditorElement, LiveMdPlugin } from "@codemirror-treesitter/live-md";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { WorkspaceDialogs } from "@/components/workspace/WorkspaceDialogs";
@@ -51,7 +50,7 @@ import {
   type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
 
-const emptyEditorExtensions: Extension[] = [];
+const emptyEditorPlugins: readonly LiveMdPlugin[] = [];
 
 export function LocalWorkspaceApp() {
   let { locale, t, toggleLocale } = useI18n();
@@ -173,11 +172,10 @@ export function LocalWorkspaceApp() {
   let visibleErrorMessage = errorMessage || liveMdPreloadError;
   let {
     canInsertImage,
-    handleEditorImageFiles,
     handleImageInputChange,
+    imagePlugin,
     imageInputRef,
     resolveImageAssetFile,
-    resolveImageSource,
   } = useWorkspaceImageAssets({
     editorDocument,
     editorElementRef,
@@ -190,6 +188,10 @@ export function LocalWorkspaceApp() {
     workspaceBackend,
     workspaceBackendRef,
   });
+  let editorPlugins = useMemo(
+    () => [imagePlugin, ...(collabDocument?.plugins ?? emptyEditorPlugins)],
+    [collabDocument?.plugins, imagePlugin],
+  );
   let { clearDropboxAccessToken, createDropboxBackend, setDropboxRedirectAccessToken } =
     useDropboxWorkspaceBackend({
       dirtyRef,
@@ -580,12 +582,10 @@ export function LocalWorkspaceApp() {
 
           <WorkspaceEditorPane
             document={editorDocument}
-            extensions={collabDocument?.extensions ?? emptyEditorExtensions}
-            imageSource={resolveImageSource}
             placeholder={t("workspace.placeholder")}
+            plugins={editorPlugins}
             selected={Boolean(selectedFile) && fileDialogMode == null}
             onEditorReady={handleEditorReady}
-            onImageFiles={handleEditorImageFiles}
             onInput={handleEditorInput}
           />
         </main>
