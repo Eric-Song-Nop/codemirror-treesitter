@@ -179,8 +179,27 @@ code-fence language parsers during startup.
 
 `renderMarkdownToHtml(markdown, options?)` converts Markdown source to escaped
 HTML with the package Tree-sitter Markdown parser. Hosts can pass the same
-`markdown` feature config used by the editor, plus `resolveImageSource` to
-rewrite image destinations during export:
+`markdown` feature config used by the editor so query-driven features can
+customize block-level export output with `renderHtml(...)`. The export hook is
+separate from editor-only `decorate(...)` callbacks:
+
+```ts
+const callouts = liveMdMarkdownFeature({
+  name: "callouts",
+  query: "(block_quote) @html",
+  async renderHtml({ renderDefault, slice, target }) {
+    if (!slice(target).startsWith("> [!")) return null;
+    return `<aside class="callout">${await renderDefault()}</aside>`;
+  },
+});
+
+const html = await renderMarkdownToHtml(markdown, {
+  markdown: { features: [callouts] },
+});
+```
+
+Hosts can also pass `resolveImageSource` to rewrite image destinations during
+export:
 
 ```ts
 const html = await renderMarkdownToHtml(markdown, {

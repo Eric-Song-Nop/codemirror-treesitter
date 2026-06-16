@@ -1,10 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
+  liveMdMarkdownFeature,
   liveMdMarkdownDocumentClass,
   liveMdMarkdownDocumentCss,
   liveMdMarkdownDocumentCssVariables,
   renderMarkdownToHtml,
+  type LiveMdMarkdownFeature,
 } from "../src/index.js";
 
 describe("Tree-sitter Markdown HTML rendering", () => {
@@ -108,6 +110,70 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     expect(html).not.toContain("\r");
   });
 
+  it("lets markdown features render matched blocks to HTML", async () => {
+    let callout = liveMdMarkdownFeature({
+      name: "callout-html",
+      query: "(paragraph) @html",
+      async renderHtml({ renderInline, slice, target }) {
+        let source = slice(target).trim();
+        if (!source.startsWith(":::note")) return null;
+        let body = source.slice(":::note".length).trim();
+        return `<aside class="live-md-callout">${await renderInline(body)}</aside>`;
+      },
+    });
+
+    let html = await renderMarkdownToHtml(":::note **Heads up**\n\nPlain paragraph", {
+      markdown: { features: [callout] },
+    });
+
+    expect(html).toBe(
+      '<aside class="live-md-callout"><strong>Heads up</strong></aside>\n<p>Plain paragraph</p>',
+    );
+  });
+
+  it("gives HTML feature hooks access to the default block renderer", async () => {
+    let wrapper = liveMdMarkdownFeature({
+      name: "heading-wrapper",
+      query: "(atx_heading) @html",
+      async renderHtml({ renderDefault }) {
+        return `<section class="heading-frame">${await renderDefault()}</section>`;
+      },
+    });
+
+    let html = await renderMarkdownToHtml("# Exported", {
+      markdown: { features: [wrapper] },
+    });
+
+    expect(html).toBe('<section class="heading-frame"><h1>Exported</h1></section>');
+  });
+
+  it("applies HTML features in markdown feature priority order", async () => {
+    let late = htmlHeadingFeature("late", 10);
+    let early = htmlHeadingFeature("early", -1);
+
+    let html = await renderMarkdownToHtml("# Priority", {
+      markdown: { features: [late, early] },
+    });
+
+    expect(html).toBe('<h1 data-feature="early">Priority</h1>');
+  });
+
+  it("does not use editor-only decorate hooks during HTML rendering", async () => {
+    let decorate = vi.fn();
+    let feature: LiveMdMarkdownFeature = {
+      decorate,
+      name: "editor-only",
+      query: "(paragraph) @html",
+    };
+
+    let html = await renderMarkdownToHtml("Only HTML", {
+      markdown: { features: [feature] },
+    });
+
+    expect(html).toBe("<p>Only HTML</p>");
+    expect(decorate).not.toHaveBeenCalled();
+  });
+
   it("exports scoped document CSS driven by LiveMD variables", () => {
     let css = liveMdMarkdownDocumentCss();
 
@@ -135,3 +201,15 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     expect(liveMdMarkdownDocumentCssVariables).toEqual(publicVariables);
   });
 });
+
+function htmlHeadingFeature(name: string, priority: number): LiveMdMarkdownFeature {
+  return liveMdMarkdownFeature({
+    name,
+    priority,
+    query: "(atx_heading heading_content: (inline) @content) @html",
+    async renderHtml({ node, renderInline }) {
+      let content = node("content");
+      return `<h1 data-feature="${name}">${content ? await renderInline(content) : ""}</h1>`;
+    },
+  });
+}

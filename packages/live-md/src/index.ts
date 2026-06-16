@@ -11,6 +11,8 @@ export {
   type LiveMdFeatureDecorateContext,
   type LiveMdFeatureDecoration,
   type LiveMdFeatureDocRange,
+  type LiveMdFeatureHtmlRenderContext,
+  type LiveMdFeatureHtmlRenderResult,
   type LiveMdFeatureReplaceOptions,
   liveMdMarkdownFeature,
   liveMdMarkdownFeatures,

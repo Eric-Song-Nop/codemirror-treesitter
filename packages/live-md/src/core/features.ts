@@ -46,12 +46,33 @@ export type LiveMdFeatureDecorateContext = {
   state: EditorState;
 };
 
+export type LiveMdFeatureHtmlRenderResult =
+  | Promise<string | null | undefined>
+  | string
+  | null
+  | undefined;
+
+export type LiveMdFeatureHtmlRenderContext = {
+  capture: (name: string) => TreeSitterQueryCapture | null;
+  captures: (name: string) => readonly TreeSitterQueryCapture[];
+  match: TreeSitterQueryMatch;
+  node: (name: string) => SyntaxNode | null;
+  nodes: (name: string) => readonly SyntaxNode[];
+  renderChildren: (node?: SyntaxNode) => Promise<string>;
+  renderDefault: () => Promise<string>;
+  renderInline: (sourceOrNode: string | SyntaxNode) => Promise<string>;
+  slice: (node: SyntaxNode) => string;
+  source: string;
+  target: SyntaxNode;
+};
+
 export type LiveMdMarkdownFeature = {
   decorate?: (context: LiveMdFeatureDecorateContext) => void;
   includeNested?: boolean;
   name: string;
   priority?: number;
   query?: TreeSitterQuerySource;
+  renderHtml?: (context: LiveMdFeatureHtmlRenderContext) => LiveMdFeatureHtmlRenderResult;
 };
 
 export const liveMdMarkdownFeatureFacet = Facet.define<
@@ -59,7 +80,7 @@ export const liveMdMarkdownFeatureFacet = Facet.define<
   readonly LiveMdMarkdownFeature[]
 >({
   combine(values) {
-    return values.slice().sort(compareLiveMdMarkdownFeatures);
+    return sortLiveMdMarkdownFeatures(values);
   },
 });
 
@@ -71,6 +92,10 @@ export function liveMdMarkdownFeatures(
   features: readonly LiveMdMarkdownFeature[] | null | undefined,
 ): Extension {
   return features?.map((feature) => liveMdMarkdownFeatureFacet.of(feature)) ?? [];
+}
+
+export function sortLiveMdMarkdownFeatures(features: readonly LiveMdMarkdownFeature[]) {
+  return features.slice().sort(compareLiveMdMarkdownFeatures);
 }
 
 function compareLiveMdMarkdownFeatures(left: LiveMdMarkdownFeature, right: LiveMdMarkdownFeature) {
