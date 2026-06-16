@@ -19,6 +19,15 @@ export {
   type LiveMdImageSourceResolver,
 } from "./core/images.js";
 export {
+  liveMdImageAssets,
+  liveMdLinkBehavior,
+  liveMdTheme,
+  type LiveMdImageAssetsPluginOptions,
+  type LiveMdImageFilesInput,
+  type LiveMdLinkBehaviorPluginOptions,
+  type LiveMdThemePluginOptions,
+} from "./core/plugins.js";
+export {
   liveMdCodeFenceHighlighting,
   prepareLiveMd,
   type PrepareLiveMdOptions,

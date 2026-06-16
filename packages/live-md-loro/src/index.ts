@@ -1,5 +1,6 @@
 import { StateEffect, type Extension } from "@codemirror/state";
 import { ViewPlugin, type EditorView } from "@codemirror/view";
+import type { LiveMdPlugin } from "@codemirror-treesitter/live-md";
 import { LoroExtensions, redo as loroRedo, undo as loroUndo } from "loro-codemirror";
 import type { EphemeralStore, LoroDoc, LoroText, UndoManager, Value } from "loro-crdt";
 
@@ -31,6 +32,15 @@ export function liveMdLoroCollaboration(options: LiveMdLoroCollaborationOptions)
     LoroExtensions(options.doc, options.presence, options.undoManager, getTextFromDoc),
     drainMatchingInitialLoroDispatch(options.doc, getTextFromDoc),
   ];
+}
+
+export function liveMdLoroCollaborationPlugin(
+  options: LiveMdLoroCollaborationOptions,
+): LiveMdPlugin {
+  return {
+    extension: liveMdLoroCollaboration(options),
+    name: "live-md-loro-collaboration",
+  };
 }
 
 export function createLiveMdLoroTextGetter(text: LiveMdLoroTextSource = "markdown") {

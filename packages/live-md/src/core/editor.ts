@@ -192,6 +192,8 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
     cleanupPlugins(activePluginCleanups);
     activePluginCleanups = mountPlugins(plugins, {
       markdown: markdownConfig,
+      parent: options.parent,
+      root: pluginRoot(options),
       view,
     });
   }
@@ -214,6 +216,16 @@ function readOnlyExtensions(readOnly: boolean): Extension {
 
 function placeholderValue(value: string | undefined): Extension {
   return value ? placeholderExtension(value) : [];
+}
+
+function pluginRoot(options: Pick<LiveMdEditorOptions, "parent" | "root">): Document | ShadowRoot {
+  if (options.root) return options.root;
+  if (typeof Element != "undefined" && options.parent instanceof Element) {
+    return options.parent.ownerDocument;
+  }
+  let root = options.parent.getRootNode();
+  if (typeof ShadowRoot != "undefined" && root instanceof ShadowRoot) return root;
+  return options.parent.ownerDocument;
 }
 
 function loadPersistedValue(storageKey: string, fallback: string) {

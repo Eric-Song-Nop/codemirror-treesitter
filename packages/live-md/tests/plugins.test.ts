@@ -2,7 +2,12 @@
 
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { createLiveMdEditor, type LiveMdPlugin } from "../src/index.js";
+import {
+  createLiveMdEditor,
+  liveMdLinkBehavior,
+  liveMdTheme,
+  type LiveMdPlugin,
+} from "../src/index.js";
 
 let locationDescriptor: PropertyDescriptor | undefined;
 
@@ -115,5 +120,49 @@ describe("LiveMD plugins", () => {
     editor.destroy();
 
     expect(events).toEqual(["mount first", "cleanup", "mount second", "cleanup"]);
+  });
+
+  it("applies and cleans theme variables through a plugin", () => {
+    let parent = document.createElement("div");
+    let editor = createLiveMdEditor({
+      doc: "doc",
+      focus: false,
+      parent,
+      plugins: [
+        liveMdTheme({
+          theme: {
+            appearance: "light",
+            id: "test-theme",
+            variables: {
+              "--live-md-bg": "#ffffff",
+              "--live-md-text": "#111111",
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(parent.style.getPropertyValue("--live-md-bg")).toBe("#ffffff");
+    expect(parent.style.getPropertyValue("--live-md-text")).toBe("#111111");
+
+    editor.destroy();
+
+    expect(parent.style.getPropertyValue("--live-md-bg")).toBe("");
+    expect(parent.style.getPropertyValue("--live-md-text")).toBe("");
+  });
+
+  it("allows link behavior to be installed as a plugin", async () => {
+    let parent = document.body.appendChild(document.createElement("div"));
+    let editor = createLiveMdEditor({
+      doc: "[Guide](guide)",
+      focus: false,
+      parent,
+      plugins: [liveMdLinkBehavior({ baseUrl: "https://docs.example/current.md" })],
+    });
+
+    await editor.ready;
+    let link = parent.querySelector<HTMLElement>(".cm-md-link[data-live-md-href]");
+    expect(link?.dataset.liveMdHref).toBe("https://docs.example/guide");
+    editor.destroy();
   });
 });

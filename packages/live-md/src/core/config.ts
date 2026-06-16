@@ -14,6 +14,8 @@ export type LiveMdPluginCleanup = () => void;
 
 export type LiveMdPluginContext = {
   markdown: LiveMdMarkdownConfig;
+  parent: Element | DocumentFragment;
+  root: Document | ShadowRoot;
   view: EditorView;
 };
 

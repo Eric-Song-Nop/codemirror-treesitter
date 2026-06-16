@@ -46,7 +46,10 @@ import {
   liveMdMarkdownDocumentClass,
   liveMdMarkdownDocumentCss,
   liveMdMarkdownDocumentCssVariables,
+  liveMdImageAssets,
   liveMdImageSource,
+  liveMdLinkBehavior,
+  liveMdTheme,
   liveMarkdown,
   prepareLiveMd,
   renderMarkdownToHtml,
@@ -66,30 +69,40 @@ and benchmark content.
 ## Programmatic API
 
 ```ts
-import { createLiveMdEditor, prepareLiveMd } from "@codemirror-treesitter/live-md";
+import {
+  createLiveMdEditor,
+  liveMdImageAssets,
+  liveMdLinkBehavior,
+  liveMdTheme,
+  prepareLiveMd,
+  type LiveMdMarkdownConfig,
+  type LiveMdPlugin,
+} from "@codemirror-treesitter/live-md";
+import { gruvboxDarkLiveMdTheme } from "@codemirror-treesitter/live-md-theme-gruvbox";
 import { gruvboxDark } from "@codemirror-treesitter/theme-gruvbox";
 
 await prepareLiveMd();
 
 const imageAssetUrlMap = new Map<string, string>();
 const plugins = [
-  {
-    mount({ view }) {
-      console.log("mounted", view);
-      return () => console.log("unmounted");
+  liveMdTheme({
+    editor: gruvboxDark,
+    theme: gruvboxDarkLiveMdTheme,
+  }),
+  liveMdImageAssets({
+    resolve(source) {
+      return imageAssetUrlMap.get(source) ?? source;
     },
-  },
+  }),
+  liveMdLinkBehavior({
+    baseUrl: "https://docs.example/notes/current.md",
+  }),
 ] satisfies LiveMdPlugin[];
 const editor = createLiveMdEditor({
   parent: document.body,
   defaultValue: "# Draft",
-  imageSource(source) {
-    return imageAssetUrlMap.get(source) ?? source;
-  },
-  linkBaseUrl: "https://docs.example/notes/current.md",
   placeholder: "Start writing...",
   persistKey: "draft",
-  extensions: [gruvboxDark],
   onChange({ value }) {
     console.log(value);
   },
@@ -112,6 +125,9 @@ query-driven Markdown syntax configuration; it does not change runtime parsing
 or decoration behavior yet. `plugins` is the host-behavior layer: each
 `LiveMdPlugin` can provide a CodeMirror `extension` and an optional `mount`
 hook that may return cleanup for `setPlugins(...)` and `destroy()`.
+`liveMdTheme(...)`, `liveMdImageAssets(...)`, and `liveMdLinkBehavior(...)`
+cover common host integrations while keeping storage, upload, and navigation
+policy in the host app.
 `extensions` remains the direct CodeMirror escape hatch and is applied after
 plugin extensions. `imageSource` maps normalized Markdown image destinations to
 preview URLs, which lets host apps serve local files through blob URLs.
