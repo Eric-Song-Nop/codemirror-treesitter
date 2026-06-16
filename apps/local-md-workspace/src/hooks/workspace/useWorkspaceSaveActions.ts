@@ -35,8 +35,17 @@ type UseWorkspaceSaveActionsOptions = {
   scheduleAutoSaveRef: MutableRef<() => void>;
   selectedFileBackendRef: MutableRef<WorkspaceBackend | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
-  sendHostDocumentUpdate: (path: string, update: Uint8Array | null) => void;
-  sendHostSaveAck: (path: string, value: string, savedVersion: VersionVector) => void;
+  sendHostDocumentUpdate: (
+    backend: WorkspaceBackend,
+    path: string,
+    update: Uint8Array | null,
+  ) => void;
+  sendHostSaveAck: (
+    backend: WorkspaceBackend,
+    path: string,
+    value: string,
+    savedVersion: VersionVector,
+  ) => void;
   setEditorDocument: Dispatch<SetStateAction<EditorDocument>>;
   setErrorMessage: (message: string) => void;
   setRetryLoadPath: (path: string | null) => void;
@@ -118,7 +127,7 @@ export function useWorkspaceSaveActions({
       if (document) {
         sourceImport = await ingestExternalMarkdownEdit(backend, document);
         if (sourceImport) {
-          sendHostDocumentUpdate(file.path, sourceImport.update);
+          sendHostDocumentUpdate(backend, file.path, sourceImport.update);
           value = applyCollabDocumentValue(document, sourceImport.value);
         } else {
           value = getCollabDocumentValue(document);
@@ -146,7 +155,7 @@ export function useWorkspaceSaveActions({
           frontiers: materialization.frontiers,
           versionVector: materialization.versionVector,
         });
-        sendHostSaveAck(file.path, materialization.value, materialization.version);
+        sendHostSaveAck(backend, file.path, materialization.value, materialization.version);
       } else {
         await backend.writeFile(file.path, value);
       }
@@ -166,7 +175,7 @@ export function useWorkspaceSaveActions({
             let sourceImport: CollabSourceImportResult | null = null;
             if (externalValue != value) {
               sourceImport = await ingestExternalMarkdownEdit(backend, document, externalValue);
-              if (sourceImport) sendHostDocumentUpdate(file.path, sourceImport.update);
+              if (sourceImport) sendHostDocumentUpdate(backend, file.path, sourceImport.update);
               value = applyCollabDocumentValue(document, getCollabDocumentValue(document));
             }
 
@@ -181,7 +190,7 @@ export function useWorkspaceSaveActions({
               frontiers: materialization.frontiers,
               versionVector: materialization.versionVector,
             });
-            sendHostSaveAck(file.path, materialization.value, materialization.version);
+            sendHostSaveAck(backend, file.path, materialization.value, materialization.version);
             if (isCurrentSaveTarget()) {
               cleanValueRef.current = value;
               if (editVersion == editVersionRef.current) {

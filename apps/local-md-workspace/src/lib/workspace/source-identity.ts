@@ -83,18 +83,19 @@ export function documentSourceRef(
 }
 
 export function documentSourceKey(ref: DocumentSourceRef) {
-  return [
-    "workspace",
-    ref.workspaceNamespace,
-    ref.fileId ? "file" : "path",
-    ref.fileId ?? ref.path,
-  ]
+  return ["workspace", ref.workspaceNamespace, ref.fileId ? "file" : "path", ref.fileId ?? ref.path]
     .map(encodeKeyPart)
     .join(":");
 }
 
 export function documentSourceDocumentIdInput(ref: DocumentSourceRef) {
   return `${ref.workspaceNamespace}:${ref.fileId ? `file:${ref.fileId}` : ref.path}`;
+}
+
+export function sameDocumentSourceRef(left: DocumentSourceRef, right: DocumentSourceRef) {
+  if (left.workspaceNamespace != right.workspaceNamespace) return false;
+  if (left.fileId && right.fileId) return left.fileId == right.fileId;
+  return left.path == right.path;
 }
 
 export function collabBroadcastChannelName(
@@ -134,7 +135,11 @@ function supportsStableFileIdKind(_kind: WorkspaceBackendKind) {
 }
 
 function normalizeSourcePath(path: string) {
-  return path.trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/{2,}/g, "/");
+  return path
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/\/{2,}/g, "/");
 }
 
 function encodeKeyPart(value: string) {

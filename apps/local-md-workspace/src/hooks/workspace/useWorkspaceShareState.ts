@@ -2,16 +2,19 @@ import { useCallback, useMemo, useState } from "react";
 import type { CreatedOwnerShare } from "@/lib/collaboration/share-storage";
 import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
 import type { ActiveOwnerShareRecord, SingleFileSource } from "@/lib/workspace/types";
-import type { MarkdownFileNode } from "@/lib/workspace-backend";
+import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import { documentSourceRef, sameDocumentSourceRef } from "@/lib/workspace/source-identity";
 
 type UseWorkspaceShareStateOptions = {
   selectedFile: MarkdownFileNode | null;
   singleFileSource: SingleFileSource | null;
+  workspaceBackend: WorkspaceBackend | null;
 };
 
 export function useWorkspaceShareState({
   selectedFile,
   singleFileSource,
+  workspaceBackend,
 }: UseWorkspaceShareStateOptions) {
   let [shareDialogOpen, setShareDialogOpen] = useState(false);
   let [shareExpiration, setShareExpiration] = useState<ShareExpirationOption>("7d");
@@ -21,15 +24,22 @@ export function useWorkspaceShareState({
   let [createdShare, setCreatedShare] = useState<CreatedOwnerShare | null>(null);
   let [activeShareRecord, setActiveShareRecord] = useState<ActiveOwnerShareRecord | null>(null);
 
+  let selectedSourceRef = useMemo(
+    () =>
+      !singleFileSource && workspaceBackend && selectedFile
+        ? documentSourceRef(workspaceBackend, selectedFile.path)
+        : null,
+    [selectedFile, singleFileSource, workspaceBackend],
+  );
   let activeShareForSelectedFile = useMemo(
     () =>
-      !singleFileSource &&
+      selectedSourceRef &&
       activeShareRecord &&
-      activeShareRecord.path == selectedFile?.path &&
+      sameDocumentSourceRef(activeShareRecord.sourceRef, selectedSourceRef) &&
       activeShareRecord.revokedAt == null
         ? activeShareRecord
         : null,
-    [activeShareRecord, selectedFile?.path, singleFileSource],
+    [activeShareRecord, selectedSourceRef],
   );
 
   let openShareDialog = useCallback(() => {

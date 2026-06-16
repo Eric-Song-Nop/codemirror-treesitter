@@ -21,6 +21,7 @@ import {
 } from "@/lib/workspace/share-host";
 import type { ActiveOwnerShareRecord, SaveState } from "@/lib/workspace/types";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
+import { documentSourceRef, sameDocumentSourceRef } from "@/lib/workspace/source-identity";
 
 type MutableRef<T> = {
   current: T;
@@ -66,10 +67,10 @@ export function useOwnerShareHost({
   );
 
   let sendHostSaveAck = useCallback(
-    (path: string, value: string, savedVersion: VersionVector) => {
+    (backend: WorkspaceBackend, path: string, value: string, savedVersion: VersionVector) => {
       let record = shareHostRecordRef.current;
       let connection = shareHostConnectionRef.current;
-      if (!record || !connection || record.path != path) return;
+      if (!record || !connection || !isOwnerShareSource(record, backend, path)) return;
 
       let materializedHash = hashMarkdownText(value);
       connection.enqueueHostSaveAck(
@@ -91,16 +92,20 @@ export function useOwnerShareHost({
     [setActiveShareRecord],
   );
 
-  let sendHostDocumentUpdate = useCallback((path: string, update: Uint8Array | null) => {
-    if (!update?.byteLength) return;
-    let record = shareHostRecordRef.current;
-    let connection = shareHostConnectionRef.current;
-    if (!record || !connection || record.path != path) return;
-    connection.enqueueDocumentUpdate(update);
-  }, []);
+  let sendHostDocumentUpdate = useCallback(
+    (backend: WorkspaceBackend, path: string, update: Uint8Array | null) => {
+      if (!update?.byteLength) return;
+      let record = shareHostRecordRef.current;
+      let connection = shareHostConnectionRef.current;
+      if (!record || !connection || !isOwnerShareSource(record, backend, path)) return;
+      connection.enqueueDocumentUpdate(update);
+    },
+    [],
+  );
 
-  let isOwnerShareHostPath = useCallback((path: string) => {
-    return shareHostRecordRef.current?.path == path;
+  let isOwnerShareHostPath = useCallback((backend: WorkspaceBackend, path: string) => {
+    let record = shareHostRecordRef.current;
+    return record ? isOwnerShareSource(record, backend, path) : false;
   }, []);
 
   let startOwnerShareHost = useCallback(
@@ -114,6 +119,10 @@ export function useOwnerShareHost({
       stopOwnerShareHost();
 
       let actionLabel = options.actionLabel ?? "Link created";
+      if (!isOwnerShareSource(record, backend, document.path)) {
+        setShareError(`${actionLabel}, but this file is no longer the shared source.`);
+        return;
+      }
       let hostSecret = readHostSecret(record);
       if (!hostSecret) {
         setShareError(`${actionLabel}, but this browser cannot host it without the host key.`);
@@ -191,4 +200,8 @@ export function useOwnerShareHost({
     startOwnerShareHost,
     stopOwnerShareHost,
   };
+}
+
+function isOwnerShareSource(record: OwnerShareRecord, backend: WorkspaceBackend, path: string) {
+  return sameDocumentSourceRef(record.sourceRef, documentSourceRef(backend, path));
 }

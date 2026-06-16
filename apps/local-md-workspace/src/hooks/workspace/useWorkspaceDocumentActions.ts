@@ -56,7 +56,7 @@ type UseWorkspaceDocumentActionsOptions = {
   dirtyRef: MutableRef<boolean>;
   editVersionRef: MutableRef<number>;
   editorValueRef: MutableRef<string>;
-  isOwnerShareHostPath: (path: string) => boolean;
+  isOwnerShareHostPath: (backend: WorkspaceBackend, path: string) => boolean;
   loadFileRequestRef: MutableRef<number>;
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
   saveOperationRef: MutableRef<number>;
@@ -65,8 +65,17 @@ type UseWorkspaceDocumentActionsOptions = {
   scheduleAutoSaveRef: MutableRef<() => void>;
   selectedFileBackendRef: MutableRef<WorkspaceBackend | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
-  sendHostDocumentUpdate: (path: string, update: Uint8Array | null) => void;
-  sendHostSaveAck: (path: string, value: string, savedVersion: VersionVector) => void;
+  sendHostDocumentUpdate: (
+    backend: WorkspaceBackend,
+    path: string,
+    update: Uint8Array | null,
+  ) => void;
+  sendHostSaveAck: (
+    backend: WorkspaceBackend,
+    path: string,
+    value: string,
+    savedVersion: VersionVector,
+  ) => void;
   setActiveShareRecord: Dispatch<SetStateAction<ActiveOwnerShareRecord | null>>;
   setBusy: (busy: boolean) => void;
   setCollabDocument: Dispatch<SetStateAction<CollabDocumentState | null>>;
@@ -359,7 +368,7 @@ export function useWorkspaceDocumentActions({
           return;
         }
         let value = document.value;
-        if (!isOwnerShareHostPath(file.path)) stopOwnerShareHost();
+        if (!isOwnerShareHostPath(backend, file.path)) stopOwnerShareHost();
         disposeActiveCollabDocument();
         invalidateActiveDocumentSave();
         selectedFileRef.current = file;

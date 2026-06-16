@@ -73,10 +73,14 @@ describe("workspace source identity", () => {
   });
 
   it("carries optional source revision and file id metadata", () => {
-    let ref = documentSourceRef(fakeBackend("opendal-onedrive", "onedrive:workspace-1"), "daily.md", {
-      fileId: "file-123",
-      revision: { etag: "etag-1", version: "v1" },
-    });
+    let ref = documentSourceRef(
+      fakeBackend("opendal-onedrive", "onedrive:workspace-1"),
+      "daily.md",
+      {
+        fileId: "file-123",
+        revision: { etag: "etag-1", version: "v1" },
+      },
+    );
 
     expect(ref).toMatchObject({
       backendKind: "opendal-onedrive",
@@ -91,11 +95,7 @@ describe("workspace source identity", () => {
   });
 });
 
-function fakeBackend(
-  kind: WorkspaceBackendKind,
-  id: string,
-  name = "Workspace",
-): WorkspaceBackend {
+function fakeBackend(kind: WorkspaceBackendKind, id: string, name = "Workspace"): WorkspaceBackend {
   return {
     id,
     kind,

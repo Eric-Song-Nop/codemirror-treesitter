@@ -142,6 +142,7 @@ export function LocalWorkspaceApp() {
   } = useWorkspaceShareState({
     selectedFile,
     singleFileSource,
+    workspaceBackend,
   });
 
   useEffect(() => {

@@ -114,6 +114,12 @@ describe("owner shared file metadata", () => {
       materializedHash: "420eb45a",
       path: "note.md",
       schemaVersion: 2,
+      sourceRef: {
+        backendKind: "local",
+        path: "note.md",
+        workspaceId: "memory:test",
+        workspaceNamespace: "local:memory:test",
+      },
       workspaceId: "local:memory:test",
     });
     expect(relayRequests).toEqual([
@@ -166,6 +172,59 @@ describe("owner shared file metadata", () => {
     expect(hasLiveMdFiles(backend)).toBe(false);
     expect(window.localStorage.getItem(ownerShareRecordPath("missing-share-id"))).toBeNull();
     expect(hostSecrets.size).toBe(0);
+  });
+
+  it("creates owner-host shares for writable remote sources", async () => {
+    let backend = createMemoryBackend(
+      [["note.md", "# First\n"]],
+      "opendal-gdrive",
+      "gdrive:workspace-1",
+    );
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+
+    let share = await createOwnerShare({
+      backend,
+      baseUrl: "https://example.test/workspace",
+      createRelayShare: async () => {},
+      document,
+      expiration: "7d",
+      file: { kind: "file", name: "note.md", path: "note.md" },
+      hostSecretStore: { setItem() {} },
+      now: Date.UTC(2026, 5, 6),
+      relayOrigin: "https://relay.example",
+    });
+
+    expect(share.record).toMatchObject({
+      backendKind: "opendal-gdrive",
+      path: "note.md",
+      sourceRef: {
+        backendKind: "opendal-gdrive",
+        path: "note.md",
+        workspaceId: "gdrive:workspace-1",
+        workspaceNamespace: "opendal-gdrive:gdrive:workspace-1",
+      },
+      workspaceId: "opendal-gdrive:gdrive:workspace-1",
+    });
+    await expect(findOwnerShareRecordForPath(backend, "note.md")).resolves.toEqual(share.record);
+  });
+
+  it("rejects owner-host shares for sources without the share capability", async () => {
+    let backend = createMemoryBackend([["note.md", "# First\n"]], "opendal-s3", "s3:workspace-1");
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+
+    await expect(
+      createOwnerShare({
+        backend,
+        baseUrl: "https://example.test/workspace",
+        createRelayShare: async () => {},
+        document,
+        expiration: "7d",
+        file: { kind: "file", name: "note.md", path: "note.md" },
+        hostSecretStore: { setItem() {} },
+        now: Date.UTC(2026, 5, 6),
+        relayOrigin: "https://relay.example",
+      }),
+    ).rejects.toThrow("This workspace cannot host shared files.");
   });
 
   it("rotates the guest capability while keeping the same share id", async () => {
@@ -302,19 +361,66 @@ describe("owner shared file metadata", () => {
 
     await expect(findOwnerShareRecordForPath(backend, "note.md")).resolves.toEqual(second.record);
   });
+
+  it("normalizes legacy owner share metadata without source refs", async () => {
+    let backend = createMemoryBackend(
+      [["note.md", "# First\n"]],
+      "opendal-dropbox",
+      "dropbox:/workspace",
+    );
+    let legacyRecord = {
+      backendKind: "opendal-dropbox",
+      createdAt: Date.UTC(2026, 5, 6),
+      displayName: "note.md",
+      expiresAt: Date.UTC(2026, 5, 13),
+      guestSecretHash: "guest-hash",
+      hostSecretHash: "host-hash",
+      hostSecretRef: hostSecretStorageKey("legacy-share-id"),
+      localFileId: "doc-legacy",
+      materializedHash: "420eb45a",
+      path: "note.md",
+      schemaVersion: 2,
+      shareId: "legacy-share-id",
+      workspaceId: "opendal-dropbox:dropbox:/workspace",
+    };
+    window.localStorage.setItem(
+      ownerShareRecordPath(legacyRecord.shareId),
+      JSON.stringify(legacyRecord),
+    );
+
+    await expect(readOwnerShareRecord(backend, legacyRecord.shareId)).resolves.toMatchObject({
+      ...legacyRecord,
+      sourceRef: {
+        backendKind: "opendal-dropbox",
+        path: "note.md",
+        workspaceId: "dropbox:/workspace",
+        workspaceNamespace: "opendal-dropbox:dropbox:/workspace",
+      },
+    });
+    await expect(findOwnerShareRecordForPath(backend, "note.md")).resolves.toMatchObject({
+      shareId: legacyRecord.shareId,
+      sourceRef: {
+        workspaceNamespace: "opendal-dropbox:dropbox:/workspace",
+      },
+    });
+  });
 });
 
 type MemoryBackend = WorkspaceBackend & {
   files: Map<string, string>;
 };
 
-function createMemoryBackend(entries: Array<[string, string]>): MemoryBackend {
+function createMemoryBackend(
+  entries: Array<[string, string]>,
+  kind: WorkspaceBackend["kind"] = "local",
+  id = "memory:test",
+): MemoryBackend {
   let files = new Map(entries);
 
   return {
     files,
-    id: "memory:test",
-    kind: "local",
+    id,
+    kind,
     name: "Memory",
     async createDirectory() {},
     async createFile(path) {

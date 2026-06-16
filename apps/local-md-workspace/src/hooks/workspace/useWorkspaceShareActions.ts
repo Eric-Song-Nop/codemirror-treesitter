@@ -13,6 +13,7 @@ import { errorToMessage } from "@/lib/workspace/errors";
 import { readHostSecret } from "@/lib/workspace/share-host";
 import type { ActiveOwnerShareRecord } from "@/lib/workspace/types";
 import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import { documentSourceRef, sameDocumentSourceRef } from "@/lib/workspace/source-identity";
 
 type MutableRef<T> = {
   current: T;
@@ -108,7 +109,9 @@ export function useWorkspaceShareActions({
     if (!backend || !record || record.revokedAt != null) return;
 
     let document = collabDocumentRef.current;
-    let shouldRestartHost = document?.path == record.path;
+    let shouldRestartHost =
+      document != null &&
+      sameDocumentSourceRef(record.sourceRef, documentSourceRef(backend, document.path));
     let hostSecret = readHostSecret(record);
     if (!hostSecret) {
       setShareError("This browser cannot rotate the link without the host key.");
