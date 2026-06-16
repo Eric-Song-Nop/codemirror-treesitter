@@ -5,6 +5,13 @@ export {
   type LiveMdEditorHandle,
   type LiveMdEditorOptions,
 } from "./core/editor.js";
+export {
+  type LiveMdMarkdownConfig,
+  type LiveMdMarkdownFeature,
+  type LiveMdPlugin,
+  type LiveMdPluginCleanup,
+  type LiveMdPluginContext,
+} from "./core/config.js";
 export { liveMarkdown, type LiveMarkdownOptions } from "./core/extension.js";
 export {
   liveMdImageSource,

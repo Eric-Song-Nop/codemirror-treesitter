@@ -50,6 +50,8 @@ import {
   liveMarkdown,
   prepareLiveMd,
   renderMarkdownToHtml,
+  type LiveMdMarkdownConfig,
+  type LiveMdPlugin,
 } from "@codemirror-treesitter/live-md";
 ```
 
@@ -70,6 +72,14 @@ import { gruvboxDark } from "@codemirror-treesitter/theme-gruvbox";
 await prepareLiveMd();
 
 const imageAssetUrlMap = new Map<string, string>();
+const plugins = [
+  {
+    mount({ view }) {
+      console.log("mounted", view);
+      return () => console.log("unmounted");
+    },
+  },
+] satisfies LiveMdPlugin[];
 const editor = createLiveMdEditor({
   parent: document.body,
   defaultValue: "# Draft",
@@ -83,6 +93,10 @@ const editor = createLiveMdEditor({
   onChange({ value }) {
     console.log(value);
   },
+  markdown: {
+    features: [],
+  } satisfies LiveMdMarkdownConfig,
+  plugins,
 });
 
 await editor.ready;
@@ -91,16 +105,23 @@ editor.destroy();
 ```
 
 `createLiveMdEditor()` accepts `value`, `doc`, `defaultValue`, `persistKey`,
-`placeholder`, `readOnly`, `autofocus`, `focus`, `root`, `extensions`,
-`imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`. `imageSource` maps
-normalized Markdown image destinations to preview URLs, which lets host apps
-serve local files through blob URLs. `linkBaseUrl` is used to resolve relative
-Markdown links for Shift-click link jumps. Fenced code token colors reuse the
-active CodeMirror syntax highlighters installed through `extensions`.
+`placeholder`, `readOnly`, `autofocus`, `focus`, `root`, `markdown`, `plugins`,
+`extensions`, `imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`.
+`markdown` currently carries typed `features` placeholders for future
+query-driven Markdown syntax configuration; it does not change runtime parsing
+or decoration behavior yet. `plugins` is the host-behavior layer: each
+`LiveMdPlugin` can provide a CodeMirror `extension` and an optional `mount`
+hook that may return cleanup for `setPlugins(...)` and `destroy()`.
+`extensions` remains the direct CodeMirror escape hatch and is applied after
+plugin extensions. `imageSource` maps normalized Markdown image destinations to
+preview URLs, which lets host apps serve local files through blob URLs.
+`linkBaseUrl` is used to resolve relative Markdown links for Shift-click link
+jumps. Fenced code token colors reuse the active CodeMirror syntax highlighters
+installed through `extensions`.
 `liveMdCodeFenceHighlighting(...)` is still available for advanced hosts that
 need to override fenced-code highlighting explicitly. The controller exposes `view`, `value`,
-`ready`, `setValue()`, `setExtensions()`, `setPersistKey()`, `setPlaceholder()`,
-`setReadOnly()`, and `destroy()`.
+`ready`, `setValue()`, `setPlugins()`, `setExtensions()`, `setPersistKey()`,
+`setPlaceholder()`, `setReadOnly()`, and `destroy()`.
 
 `prepareLiveMd(options?)` preloads Markdown language support and warms the
 LiveMD Markdown decoration queries before the first editor render. Pass
@@ -142,14 +163,16 @@ HTML exports without leaking workspace, reset, or component-library CSS.
 
 The element reflects the runtime API through `value`, `defaultValue`,
 `persistKey`, `placeholder`, `readOnly`, `dirty`, `selectionStart`,
-`selectionEnd`, `view`, `extensions`, `ready`, `markClean()`,
+`selectionEnd`, `view`, `markdown`, `plugins`, `extensions`, `ready`, `markClean()`,
 `setSelectionRange(...)`, and `select()`.
 
 JavaScript hosts can add `liveMdImageSource(...)` and
 ordinary CodeMirror theme extensions to the `extensions` property when a web
 component needs custom image preview URL resolution or themed code-fence token
-highlighting. `liveMdCodeFenceHighlighting(...)` can override the active syntax
-highlighters for specialized fenced-code rendering.
+highlighting. They can assign `plugins` for host behavior and assign
+`markdown` to carry future query-feature configuration. `liveMdCodeFenceHighlighting(...)`
+can override the active syntax highlighters for specialized fenced-code
+rendering.
 
 The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 `select`. Styling is installed into Shadow DOM and can be themed with

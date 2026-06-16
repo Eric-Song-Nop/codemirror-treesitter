@@ -7,6 +7,7 @@ import {
   LiveMdEditorElement,
   liveMarkdown,
   type LiveMdEditorElement as LiveMdEditorElementType,
+  type LiveMdPlugin,
 } from "../src/index.js";
 
 let tagId = 0;
@@ -428,6 +429,58 @@ describe("liveMd editor web component", () => {
 
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts markdown and plugins from properties", async () => {
+    let tag = defineTestElement();
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
+    let observed = vi.fn();
+    let cleanup = vi.fn();
+    let plugin: LiveMdPlugin = {
+      extension: EditorView.updateListener.of((update) => {
+        if (update.docChanged) observed(update.state.doc.toString());
+      }),
+      mount({ markdown }) {
+        observed(markdown.features?.[0]?.name);
+        return cleanup;
+      },
+    };
+    editor.defaultValue = "doc";
+    editor.markdown = { features: [{ name: "frontmatter" }] };
+    editor.plugins = [plugin];
+
+    document.body.append(editor);
+    await editor.ready;
+    editor.view?.dispatch({
+      changes: { from: editor.value.length, insert: "!" },
+      userEvent: "input.test",
+    });
+    editor.plugins = [];
+
+    expect(observed).toHaveBeenCalledWith("frontmatter");
+    expect(observed).toHaveBeenCalledWith("doc!");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("remounts plugins when markdown changes after connection", async () => {
+    let tag = defineTestElement();
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
+    let observed: string[] = [];
+    editor.plugins = [
+      {
+        mount({ markdown }) {
+          observed.push(markdown.features?.[0]?.name ?? "none");
+          return () => observed.push("cleanup");
+        },
+      },
+    ];
+
+    document.body.append(editor);
+    await editor.ready;
+    editor.markdown = { features: [{ name: "callouts" }] };
+    editor.plugins = [];
+
+    expect(observed).toEqual(["none", "cleanup", "callouts", "cleanup"]);
   });
 
   it("cleans up on disconnect and remounts with the current value", async () => {
