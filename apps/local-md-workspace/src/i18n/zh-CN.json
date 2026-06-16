@@ -149,6 +149,7 @@
   "errors.dropboxTokenExchangeFailed": "Dropbox 令牌交换失败。请检查 app key 并重新连接 Dropbox 工作区。",
   "errors.googleDriveAccessTokenExpired": "Google Drive 访问令牌已过期。请重新连接 Google Drive 工作区。",
   "errors.googleDriveAuthorizationClosed": "Google Drive 授权在完成前已关闭。请重新连接 Google Drive 工作区。",
+  "errors.googleDriveAuthorizationConfig": "Google Drive 授权失败。请检查 Web client ID、已获授权的 JavaScript 来源和 OAuth 同意屏幕，然后重新连接 Google Drive 工作区。",
   "errors.googleDriveAuthorizationDenied": "Google Drive 授权被拒绝，或被 Google OAuth 应用设置阻止。如果这是开发应用，请先把当前 Google 账号加入测试用户并检查 Drive 权限范围，然后重新连接。",
   "errors.googleDriveAuthorizationInvalid": "Google Drive 授权无效或已撤销。请重新连接 Google Drive 工作区。",
   "errors.googleDriveAuthorizationCodeMissing": "Google Drive 授权未返回授权码。",

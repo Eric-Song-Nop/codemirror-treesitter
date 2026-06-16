@@ -12,6 +12,18 @@ import {
   parseGoogleDriveOAuthCallback,
 } from "./google-drive-oauth.ts";
 
+type TestGoogleDriveTokenClientConfig = {
+  callback: (response: {
+    access_token?: string;
+    error?: string;
+    expires_in?: number | string;
+  }) => void;
+  client_id: string;
+  error_callback?: (error: { type?: string }) => void;
+  include_granted_scopes?: boolean;
+  scope: string;
+};
+
 describe("Google Drive OAuth PKCE helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -91,78 +103,67 @@ describe("Google Drive OAuth PKCE helpers", () => {
     expect(hasGoogleDriveRedirectTransaction(storage)).toBe(true);
   });
 
-  it("falls back to a full-page PKCE redirect when the popup is blocked", async () => {
-    let values = new Map<string, string>();
-    let assign = vi.fn();
-    let onBeforeRedirect = vi.fn();
-    vi.stubGlobal("window", {
-      location: { assign },
-      open: vi.fn(() => null),
-      sessionStorage: memoryStorage(values),
+  it("requests Google Drive access tokens through Google Identity Services", async () => {
+    let tokenClientConfig: TestGoogleDriveTokenClientConfig | null = null;
+    let requestAccessToken = vi.fn();
+    let initTokenClient = vi.fn((config) => {
+      tokenClientConfig = config;
+      return { requestAccessToken };
     });
-
-    void authorizeGoogleDriveWithPkce({
-      allowFullPageRedirect: true,
-      clientId: " client-id ",
-      onBeforeFullPageRedirect: onBeforeRedirect,
-      redirectUri: "http://127.0.0.1:5173/",
-      scopes: ["https://www.googleapis.com/auth/drive.file"],
-    }).catch(() => {});
-    await waitFor(() => assign.mock.calls.length == 1);
-
-    expect(onBeforeRedirect).toHaveBeenCalledTimes(1);
-    expect(assign).toHaveBeenCalledTimes(1);
-
-    let authUrl = new URL(assign.mock.calls[0]![0]);
-    expect(authUrl.origin).toBe("https://accounts.google.com");
-    expect(authUrl.searchParams.get("client_id")).toBe("client-id");
-    expect(authUrl.searchParams.get("include_granted_scopes")).toBe("true");
-    expect(authUrl.searchParams.get("redirect_uri")).toBe("http://127.0.0.1:5173/");
-    expect(authUrl.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/drive.file");
-    expect(authUrl.searchParams.get("response_type")).toBe("code");
-    expect(authUrl.searchParams.get("code_challenge_method")).toBe("S256");
-
-    let transaction = JSON.parse(values.get(GOOGLE_DRIVE_REDIRECT_TRANSACTION_KEY)!);
-    let redirectContext = onBeforeRedirect.mock.calls[0]![0];
-    expect(transaction.clientId).toBe("client-id");
-    expect(transaction.redirectUri).toBe("http://127.0.0.1:5173/");
-    expect(transaction.scopes).toEqual(["https://www.googleapis.com/auth/drive.file"]);
-    expect(transaction.state).toBe(authUrl.searchParams.get("state"));
-    expect(transaction.state).toBe(redirectContext.state);
-    expect(transaction.codeVerifier).toEqual(expect.any(String));
-    expect(authUrl.searchParams.get("code_challenge")).toEqual(expect.any(String));
-  });
-
-  it("rejects when the Google Drive authorization popup closes without a callback", async () => {
-    let popup = {
-      closed: false,
-      close: vi.fn(() => {
-        popup.closed = true;
-      }),
-      document: { title: "" },
-      focus: vi.fn(),
-      location: { href: "" },
-    };
     vi.stubGlobal("window", {
-      addEventListener: vi.fn(),
-      clearInterval: globalThis.clearInterval,
-      clearTimeout: globalThis.clearTimeout,
-      open: vi.fn(() => popup),
-      removeEventListener: vi.fn(),
-      setInterval: globalThis.setInterval,
-      setTimeout: globalThis.setTimeout,
+      google: {
+        accounts: {
+          oauth2: { initTokenClient },
+        },
+      },
     });
 
     let promise = authorizeGoogleDriveWithPkce({
-      clientId: "client-id",
+      clientId: " client-id ",
       redirectUri: "http://127.0.0.1:5173/",
+      scopes: ["https://www.googleapis.com/auth/drive.file"],
     });
-    await waitFor(() => Boolean(popup.location.href));
-    popup.closed = true;
+    await waitFor(() => requestAccessToken.mock.calls.length == 1);
+    let config = requireTokenClientConfig(tokenClientConfig);
+    config.callback({ access_token: "access-token", expires_in: "60" });
 
-    await expect(promise).rejects.toThrow(
-      "Google Drive authorization was closed before it completed.",
-    );
+    await expect(promise).resolves.toMatchObject({
+      accessToken: "access-token",
+      expiresAt: expect.any(Number),
+    });
+    expect(initTokenClient).toHaveBeenCalledTimes(1);
+    expect(config).toMatchObject({
+      client_id: "client-id",
+      include_granted_scopes: true,
+      scope: "https://www.googleapis.com/auth/drive.file",
+    });
+  });
+
+  it("maps Google Identity Services popup and denied errors", async () => {
+    let tokenClientConfig: TestGoogleDriveTokenClientConfig | null = null;
+    vi.stubGlobal("window", {
+      google: {
+        accounts: {
+          oauth2: {
+            initTokenClient: vi.fn((config) => {
+              tokenClientConfig = config;
+              return { requestAccessToken: vi.fn() };
+            }),
+          },
+        },
+      },
+    });
+
+    let popupBlocked = authorizeGoogleDriveWithPkce({ clientId: "client-id" });
+    await waitFor(() => Boolean(tokenClientConfig));
+    requireTokenClientConfig(tokenClientConfig).error_callback?.({ type: "popup_failed_to_open" });
+    await expect(popupBlocked).rejects.toThrow("Google Drive authorization popup was blocked.");
+
+    tokenClientConfig = null;
+    let denied = authorizeGoogleDriveWithPkce({ clientId: "client-id" });
+    await waitFor(() => Boolean(tokenClientConfig));
+    requireTokenClientConfig(tokenClientConfig).callback({ error: "access_denied" });
+    await expect(denied).rejects.toThrow("Google Drive authorization was denied");
   });
 
   it("completes full-page redirect OAuth from a stored PKCE transaction", async () => {
@@ -301,6 +302,13 @@ function tokenResponse(payload: unknown) {
     headers: { "Content-Type": "application/json" },
     status: 200,
   });
+}
+
+function requireTokenClientConfig(
+  config: TestGoogleDriveTokenClientConfig | null,
+): TestGoogleDriveTokenClientConfig {
+  if (!config) throw new Error("Google Drive token client was not initialized.");
+  return config;
 }
 
 async function waitFor(predicate: () => boolean) {

@@ -140,6 +140,17 @@ describe("workspace error messages", () => {
     );
   });
 
+  it("classifies Google Drive token client configuration failures", () => {
+    expect(
+      workspaceErrorMessage(new Error("Google Drive token request failed: invalid_client")),
+    ).toBe(
+      "Google Drive authorization failed. Check the Web client ID, authorized JavaScript origin, and OAuth consent screen, then reconnect Google Drive workspace.",
+    );
+    expect(workspaceErrorMessage(new Error("Google Drive Identity Services failed to load."))).toBe(
+      "Google Drive authorization failed. Check the Web client ID, authorized JavaScript origin, and OAuth consent screen, then reconnect Google Drive workspace.",
+    );
+  });
+
   it("classifies unavailable Dropbox app folders and workspace paths", () => {
     expect(
       workspaceErrorMessage(new Error("OpenDAL Dropbox API error 409 Conflict: path/not_found")),

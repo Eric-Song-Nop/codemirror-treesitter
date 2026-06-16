@@ -68,6 +68,16 @@ export function workspaceErrorMessage(error: unknown) {
 
     if (
       matchesAny(normalized, [
+        "token request failed",
+        "token request returned an invalid response",
+        "identity services",
+      ])
+    ) {
+      return "Google Drive authorization failed. Check the Web client ID, authorized JavaScript origin, and OAuth consent screen, then reconnect Google Drive workspace.";
+    }
+
+    if (
+      matchesAny(normalized, [
         "token exchange failed",
         "token exchange returned an invalid response",
         "invalid grant",

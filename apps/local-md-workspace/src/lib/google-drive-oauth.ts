@@ -1,10 +1,12 @@
 export const GOOGLE_DRIVE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_DRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_IDENTITY_SERVICES_URL = "https://accounts.google.com/gsi/client";
 export const GOOGLE_DRIVE_OAUTH_MESSAGE = "local-md-workspace:google-drive-oauth";
 export const GOOGLE_DRIVE_REDIRECT_TRANSACTION_KEY =
   "local-md-workspace:google-drive-oauth-redirect";
 export const DEFAULT_GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"];
-const GOOGLE_DRIVE_POPUP_CLOSED_POLL_MS = 500;
+
+let googleDriveIdentityServicesPromise: Promise<void> | null = null;
 
 export type GoogleDriveAccessToken = {
   accessToken: string;
@@ -12,18 +14,9 @@ export type GoogleDriveAccessToken = {
 };
 
 export type GoogleDrivePkceOptions = {
-  allowFullPageRedirect?: boolean;
   clientId: string;
-  onBeforeFullPageRedirect?: (context: GoogleDriveFullPageRedirectContext) => void;
   redirectUri?: string;
   scopes?: string[];
-};
-
-export type GoogleDriveFullPageRedirectContext = {
-  clientId: string;
-  redirectUri: string;
-  scopes: string[];
-  state: string;
 };
 
 export type GoogleDriveRedirectAccessToken = GoogleDriveAccessToken & {
@@ -50,6 +43,43 @@ type GoogleDriveRedirectTransaction = {
   redirectUri: string;
   scopes: string[];
   state: string;
+};
+
+type GoogleDriveIdentityServicesWindow = Window & {
+  google?: {
+    accounts?: {
+      oauth2?: {
+        initTokenClient(config: GoogleDriveTokenClientConfig): GoogleDriveTokenClient;
+      };
+    };
+  };
+};
+
+type GoogleDriveTokenClientConfig = {
+  callback: (response: GoogleDriveTokenResponse) => void;
+  client_id: string;
+  error_callback?: (error: GoogleDriveTokenError) => void;
+  include_granted_scopes?: boolean;
+  scope: string;
+};
+
+type GoogleDriveTokenClient = {
+  requestAccessToken(options?: { prompt?: string }): void;
+};
+
+type GoogleDriveTokenResponse = {
+  access_token?: string;
+  error?: string;
+  error_description?: string;
+  expires_in?: number | string;
+  scope?: string;
+};
+
+type GoogleDriveTokenError = {
+  error?: string;
+  error_description?: string;
+  message?: string;
+  type?: string;
 };
 
 export function defaultGoogleDriveRedirectUri() {
@@ -101,46 +131,16 @@ export function completeGoogleDrivePopupOAuthIfPresent() {
   return true;
 }
 
+export function preloadGoogleDriveIdentityServices() {
+  void loadGoogleDriveIdentityServices().catch(() => {});
+}
+
 export async function authorizeGoogleDriveWithPkce(options: GoogleDrivePkceOptions) {
   let clientId = requireGoogleDriveClientId(options.clientId);
-  let redirectUri = options.redirectUri ?? defaultGoogleDriveRedirectUri();
   let scopes = options.scopes ?? DEFAULT_GOOGLE_DRIVE_SCOPES;
-  let popup = openGoogleDrivePopup();
-  if (!popup) {
-    if (options.allowFullPageRedirect) {
-      return startGoogleDrivePkceRedirect({
-        clientId,
-        onBeforeRedirect: options.onBeforeFullPageRedirect,
-        redirectUri,
-        scopes,
-      });
-    }
-    throw new Error("Google Drive authorization popup was blocked.");
-  }
 
-  try {
-    let codeVerifier = randomGoogleDrivePkceVerifier();
-    let state = randomGoogleDrivePkceVerifier();
-    let codeChallenge = await createGoogleDrivePkceChallenge(codeVerifier);
-    let authUrl = createGoogleDriveAuthorizeUrl({
-      clientId,
-      codeChallenge,
-      redirectUri,
-      scopes,
-      state,
-    });
-
-    let code = await waitForGoogleDrivePopupCode(popup, authUrl, state);
-    return exchangeGoogleDriveCodeForToken({
-      clientId,
-      code,
-      codeVerifier,
-      redirectUri,
-    });
-  } catch (error) {
-    closeGoogleDrivePopup(popup);
-    throw error;
-  }
+  await loadGoogleDriveIdentityServices();
+  return requestGoogleDriveAccessToken({ clientId, scopes });
 }
 
 export async function completeGoogleDriveRedirectOAuthIfPresent(
@@ -227,119 +227,88 @@ export async function createGoogleDrivePkceChallenge(verifier: string) {
   return base64Url(new Uint8Array(digest));
 }
 
-function openGoogleDrivePopup() {
-  let popup = window.open("about:blank", "google-drive-oauth", "popup,width=520,height=720");
-  if (!popup) return null;
-  popup.document.title = "Google Drive authorization";
-  popup.focus();
-  return popup;
-}
+async function loadGoogleDriveIdentityServices() {
+  if (googleDriveTokenClientFactory()) return;
+  if (typeof document == "undefined") {
+    throw new Error("Google Drive Identity Services is not available.");
+  }
+  if (googleDriveIdentityServicesPromise) return googleDriveIdentityServicesPromise;
 
-async function startGoogleDrivePkceRedirect(options: {
-  clientId: string;
-  onBeforeRedirect?: (context: GoogleDriveFullPageRedirectContext) => void;
-  redirectUri: string;
-  scopes: string[];
-}): Promise<never> {
-  let codeVerifier = randomGoogleDrivePkceVerifier();
-  let state = randomGoogleDrivePkceVerifier();
-  let codeChallenge = await createGoogleDrivePkceChallenge(codeVerifier);
-  let authUrl = createGoogleDriveAuthorizeUrl({
-    clientId: options.clientId,
-    codeChallenge,
-    redirectUri: options.redirectUri,
-    scopes: options.scopes,
-    state,
-  });
+  googleDriveIdentityServicesPromise = new Promise<void>((resolve, reject) => {
+    let existing = document.querySelector<HTMLScriptElement>(
+      `script[src="${GOOGLE_IDENTITY_SERVICES_URL}"]`,
+    );
+    let script = existing ?? document.createElement("script");
 
-  options.onBeforeRedirect?.({
-    clientId: options.clientId,
-    redirectUri: options.redirectUri,
-    scopes: options.scopes,
-    state,
-  });
-  saveGoogleDriveRedirectTransaction({
-    clientId: options.clientId,
-    codeVerifier,
-    createdAt: Date.now(),
-    redirectUri: options.redirectUri,
-    scopes: options.scopes,
-    state,
-  });
-
-  window.location.assign(authUrl.href);
-  return new Promise<never>(() => {});
-}
-
-function waitForGoogleDrivePopupCode(popup: Window, authUrl: URL, expectedState: string) {
-  return new Promise<string>((resolve, reject) => {
-    let closedPoll = 0;
-    let timeout = 0;
     let cleanup = () => {
-      window.removeEventListener("message", handleMessage);
-      window.clearInterval(closedPoll);
-      window.clearTimeout(timeout);
+      script.removeEventListener("load", handleLoad);
+      script.removeEventListener("error", handleError);
     };
-
-    let handleMessage = (event: MessageEvent<unknown>) => {
-      if (event.origin != window.location.origin || !isGoogleDriveOAuthMessage(event.data)) return;
-      if (event.data.state != expectedState) return;
-
+    let handleLoad = () => {
       cleanup();
-      closeGoogleDrivePopup(popup);
-
-      if (event.data.error) {
-        reject(
-          new Error(googleDriveOAuthCallbackError(event.data.error, event.data.errorDescription)),
-        );
-      } else if (event.data.code) {
-        resolve(event.data.code);
+      if (googleDriveTokenClientFactory()) {
+        resolve();
       } else {
-        reject(new Error("Google Drive authorization did not return a code."));
+        reject(new Error("Google Drive Identity Services did not initialize."));
       }
     };
-
-    timeout = window.setTimeout(
-      () => {
-        cleanup();
-        closeGoogleDrivePopup(popup);
-        reject(
-          new Error(
-            "Google Drive authorization timed out. Reconnect Google Drive workspace to continue.",
-          ),
-        );
-      },
-      5 * 60 * 1000,
-    );
-
-    closedPoll = window.setInterval(() => {
-      if (!googleDrivePopupClosed(popup)) return;
-
+    let handleError = () => {
       cleanup();
-      reject(
-        new Error(
-          "Google Drive authorization was closed before it completed. Reconnect Google Drive workspace to continue.",
-        ),
-      );
-    }, GOOGLE_DRIVE_POPUP_CLOSED_POLL_MS);
+      googleDriveIdentityServicesPromise = null;
+      reject(new Error("Google Drive Identity Services failed to load."));
+    };
 
-    window.addEventListener("message", handleMessage);
-    popup.location.href = authUrl.href;
+    script.addEventListener("load", handleLoad, { once: true });
+    script.addEventListener("error", handleError, { once: true });
+
+    if (!existing) {
+      script.async = true;
+      script.defer = true;
+      script.src = GOOGLE_IDENTITY_SERVICES_URL;
+      document.head.append(script);
+    }
+  });
+
+  return googleDriveIdentityServicesPromise;
+}
+
+function requestGoogleDriveAccessToken(options: { clientId: string; scopes: string[] }) {
+  let initTokenClient = googleDriveTokenClientFactory();
+  if (!initTokenClient) throw new Error("Google Drive Identity Services is not available.");
+
+  return new Promise<GoogleDriveAccessToken>((resolve, reject) => {
+    let client = initTokenClient({
+      callback: (response) => {
+        if (response.error) {
+          reject(new Error(googleDriveTokenRequestError(response)));
+          return;
+        }
+
+        let token = parseGoogleDriveTokenResponse(response);
+        if (!token) {
+          reject(new Error("Google Drive token request returned an invalid response."));
+          return;
+        }
+
+        resolve({
+          accessToken: token.accessToken,
+          expiresAt: Date.now() + token.expiresIn * 1000,
+        });
+      },
+      client_id: options.clientId,
+      error_callback: (error) => reject(new Error(googleDriveTokenRequestError(error))),
+      include_granted_scopes: true,
+      scope: options.scopes.join(" "),
+    });
+
+    client.requestAccessToken();
   });
 }
 
-function closeGoogleDrivePopup(popup: Window) {
-  try {
-    popup.close();
-  } catch {}
-}
-
-function googleDrivePopupClosed(popup: Window) {
-  try {
-    return popup.closed;
-  } catch {
-    return true;
-  }
+function googleDriveTokenClientFactory() {
+  let oauth2 = (window as GoogleDriveIdentityServicesWindow).google?.accounts?.oauth2;
+  if (!oauth2?.initTokenClient) return undefined;
+  return (config: GoogleDriveTokenClientConfig) => oauth2.initTokenClient(config);
 }
 
 async function exchangeGoogleDriveCodeForToken(options: {
@@ -387,12 +356,6 @@ function requireGoogleDriveClientId(value: string) {
   return clientId;
 }
 
-function isGoogleDriveOAuthMessage(value: unknown): value is GoogleDriveOAuthMessage {
-  if (!value || typeof value != "object") return false;
-  let record = value as Record<string, unknown>;
-  return record.type == GOOGLE_DRIVE_OAUTH_MESSAGE && typeof record.state == "string";
-}
-
 function parseGoogleDriveTokenResponse(value: unknown) {
   if (!value || typeof value != "object") return null;
   let record = value as Record<string, unknown>;
@@ -413,6 +376,24 @@ function parseGoogleDriveTokenResponse(value: unknown) {
   };
 }
 
+function googleDriveTokenRequestError(value: GoogleDriveTokenError | GoogleDriveTokenResponse) {
+  let record = value as GoogleDriveTokenError & GoogleDriveTokenResponse;
+  if (record.error == "access_denied") {
+    return "Google Drive authorization was denied or blocked by Google OAuth app settings. If this is a development app, add your Google account as a test user and check the Drive scope before reconnecting.";
+  }
+  if (record.type == "popup_failed_to_open") {
+    return "Google Drive authorization popup was blocked. Allow popups for this site and try again.";
+  }
+  if (record.type == "popup_closed") {
+    return "Google Drive authorization was closed before it completed. Reconnect Google Drive workspace to continue.";
+  }
+
+  let reason = record.error_description ?? record.message ?? record.error ?? record.type;
+  return reason
+    ? `Google Drive token request failed: ${reason}`
+    : "Google Drive token request failed.";
+}
+
 function googleDriveTokenError(value: unknown) {
   if (!value || typeof value != "object") return null;
   let record = value as Record<string, unknown>;
@@ -430,15 +411,6 @@ function googleDriveOAuthCallbackError(error: string, description: string | unde
   return description
     ? `Google Drive authorization failed: ${description}`
     : `Google Drive authorization failed: ${error}`;
-}
-
-function saveGoogleDriveRedirectTransaction(transaction: GoogleDriveRedirectTransaction) {
-  try {
-    window.sessionStorage.setItem(
-      GOOGLE_DRIVE_REDIRECT_TRANSACTION_KEY,
-      JSON.stringify(transaction),
-    );
-  } catch {}
 }
 
 function takeGoogleDriveRedirectTransaction(storage = window.sessionStorage) {
@@ -492,12 +464,6 @@ function clearGoogleDriveOAuthCallbackFromUrl() {
   url.searchParams.delete("error_description");
   url.searchParams.delete("state");
   window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
-}
-
-function randomGoogleDrivePkceVerifier() {
-  let bytes = new Uint8Array(64);
-  globalThis.crypto.getRandomValues(bytes);
-  return createGoogleDrivePkceVerifier(bytes);
 }
 
 function base64Url(bytes: Uint8Array) {

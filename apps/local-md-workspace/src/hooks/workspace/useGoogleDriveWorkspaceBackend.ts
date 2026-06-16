@@ -1,52 +1,40 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   authorizeGoogleDriveWithPkce,
+  preloadGoogleDriveIdentityServices,
   type GoogleDriveAccessToken,
 } from "@/lib/google-drive-oauth";
-import { saveGoogleDriveRedirectDraft } from "@/lib/google-drive-redirect-draft";
 import type { TFunction } from "@/lib/i18n";
 import {
   ensureGoogleDriveAppWorkspaceManifest,
   ensureGoogleDriveAppWorkspaceRoot,
 } from "@/lib/workspace/google-drive-app-workspace";
-import {
-  defaultGoogleDriveRedirectUri,
-  defaultGoogleDriveRoot,
-} from "@/lib/workspace/google-drive-config";
+import { defaultGoogleDriveRoot } from "@/lib/workspace/google-drive-config";
 import {
   saveStoredGoogleDriveWorkspaceConfig,
   saveStoredWorkspaceKind,
   type StoredGoogleDriveWorkspaceConfig,
   type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
-import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
-
-type MutableRef<T> = {
-  current: T;
-};
 
 type UseGoogleDriveWorkspaceBackendOptions = {
-  dirtyRef: MutableRef<boolean>;
-  editorValueRef: MutableRef<string>;
-  selectedFileRef: MutableRef<MarkdownFileNode | null>;
   setStoredGoogleDriveConfig: (config: StoredGoogleDriveWorkspaceConfig | null) => void;
   setStoredWorkspaceKind: (kind: StoredWorkspaceKind | null) => void;
   t: TFunction;
-  workspaceBackendRef: MutableRef<WorkspaceBackend | null>;
 };
 
 export function useGoogleDriveWorkspaceBackend({
-  dirtyRef,
-  editorValueRef,
-  selectedFileRef,
   setStoredGoogleDriveConfig,
   setStoredWorkspaceKind,
   t,
-  workspaceBackendRef,
 }: UseGoogleDriveWorkspaceBackendOptions) {
   let googleDriveTokenRef = useRef<GoogleDriveAccessToken | null>(null);
   let googleDriveTokenClientIdRef = useRef("");
   let googleDriveAuthPromiseRef = useRef<Promise<GoogleDriveAccessToken> | null>(null);
+
+  useEffect(() => {
+    preloadGoogleDriveIdentityServices();
+  }, []);
 
   let clearGoogleDriveAccessToken = useCallback(() => {
     googleDriveTokenRef.current = null;
@@ -64,44 +52,26 @@ export function useGoogleDriveWorkspaceBackend({
     [],
   );
 
-  let authorizeGoogleDriveAccess = useCallback(
-    async (clientId: string) => {
-      let normalizedClientId = clientId.trim();
-      if (googleDriveAuthPromiseRef.current) return googleDriveAuthPromiseRef.current;
+  let authorizeGoogleDriveAccess = useCallback(async (clientId: string) => {
+    let normalizedClientId = clientId.trim();
+    if (googleDriveAuthPromiseRef.current) return googleDriveAuthPromiseRef.current;
 
-      let redirectUri = defaultGoogleDriveRedirectUri();
-      let promise = authorizeGoogleDriveWithPkce({
-        allowFullPageRedirect: true,
-        clientId: normalizedClientId,
-        ...(redirectUri ? { redirectUri } : {}),
-        onBeforeFullPageRedirect: () => {
-          let backend = workspaceBackendRef.current;
-          let file = selectedFileRef.current;
-          let shouldRestoreDirtyEditor =
-            backend?.kind == "opendal-gdrive" && Boolean(file) && dirtyRef.current;
+    let promise = authorizeGoogleDriveWithPkce({
+      clientId: normalizedClientId,
+    });
+    googleDriveAuthPromiseRef.current = promise;
 
-          saveGoogleDriveRedirectDraft({
-            clientId: normalizedClientId,
-            dirtyValue: shouldRestoreDirtyEditor ? editorValueRef.current : undefined,
-            selectedPath: shouldRestoreDirtyEditor ? file?.path : undefined,
-          });
-        },
-      });
-      googleDriveAuthPromiseRef.current = promise;
-
-      try {
-        let token = await promise;
-        googleDriveTokenRef.current = token;
-        googleDriveTokenClientIdRef.current = normalizedClientId;
-        return token;
-      } finally {
-        if (googleDriveAuthPromiseRef.current == promise) {
-          googleDriveAuthPromiseRef.current = null;
-        }
+    try {
+      let token = await promise;
+      googleDriveTokenRef.current = token;
+      googleDriveTokenClientIdRef.current = normalizedClientId;
+      return token;
+    } finally {
+      if (googleDriveAuthPromiseRef.current == promise) {
+        googleDriveAuthPromiseRef.current = null;
       }
-    },
-    [dirtyRef, editorValueRef, selectedFileRef, workspaceBackendRef],
-  );
+    }
+  }, []);
 
   let createGoogleDriveBackend = useCallback(
     async (config: StoredGoogleDriveWorkspaceConfig) => {

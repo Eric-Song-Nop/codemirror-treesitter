@@ -9,9 +9,9 @@ through `apps/grove-relay`.
 
 - Open a browser-granted local directory and edit `.md` files with LiveMD.
 - Restore previously granted local handles when browser permissions allow it.
-- Connect to Dropbox, Google Drive, or OneDrive with OAuth PKCE and use
-  `@codemirror-treesitter/opendal-wasm-browser` for browser-side file
-  operations.
+- Connect to Dropbox and OneDrive with OAuth PKCE, connect to Google Drive with
+  Google Identity Services, and use `@codemirror-treesitter/opendal-wasm-browser`
+  for browser-side file operations.
 - Provide a reusable OpenDAL workspace backend for Dropbox, OneDrive, and Google Drive,
   including cloud-save serialization, token refresh retry, metadata tracking,
   and ETag-based conditional writes when supported by the provider. Google Drive
@@ -98,14 +98,14 @@ Optional Google Drive configuration:
 
 ```env
 VITE_GOOGLE_DRIVE_CLIENT_ID="your-public-google-oauth-client-id"
-VITE_GOOGLE_DRIVE_REDIRECT_URI="http://localhost:5173/"
 ```
 
 Google Drive requests `https://www.googleapis.com/auth/drive.file` and uses a
 fixed Grove app-owned workspace. Markdown save paths are resolved inside that
 workspace. The app can only access files it creates or that Google Drive grants
 to it; opening arbitrary existing Drive folders would require Google Picker or a
-broader Drive scope.
+broader Drive scope. Configure the Google OAuth web client with
+`http://localhost:5173` as an authorized JavaScript origin for local dev.
 
 Optional relay configuration:
 

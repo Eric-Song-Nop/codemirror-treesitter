@@ -12,12 +12,6 @@ export function defaultGoogleDriveRoot() {
   return GOOGLE_DRIVE_WORKSPACE_ROOT;
 }
 
-export function defaultGoogleDriveRedirectUri() {
-  let configured = import.meta.env.VITE_GOOGLE_DRIVE_REDIRECT_URI;
-  if (typeof configured == "string" && configured.trim()) return configured.trim();
-  return undefined;
-}
-
 export function isGoogleDriveRedirectCallbackWindow() {
   return (
     typeof window != "undefined" &&

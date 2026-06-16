@@ -494,12 +494,12 @@ Production Grove deploys use the Cloudflare Pages project `grove` at
 origin, and the `grove-relay` Worker custom domain at
 `https://relay.grovemd.net`. The Grove CI/CD workflow enforces
 `VITE_DROPBOX_REDIRECT_URI=https://app.grovemd.net/` for Dropbox OAuth,
-`VITE_GOOGLE_DRIVE_REDIRECT_URI=https://app.grovemd.net/` for Google Drive
-OAuth, `VITE_ONEDRIVE_REDIRECT_URI=https://app.grovemd.net/` for OneDrive OAuth,
-and builds the frontend against the relay custom domain. Google Drive uses
-`drive.file` and the fixed Grove app-owned workspace; `VITE_GOOGLE_DRIVE_ROOT`
-is not a configuration option. Opening arbitrary existing Drive folders would
-require Google Picker or a broader Drive scope. It also runs
+`VITE_ONEDRIVE_REDIRECT_URI=https://app.grovemd.net/` for OneDrive OAuth, and
+builds the frontend against the relay custom domain. Google Drive uses Google
+Identity Services, `drive.file`, and the fixed Grove app-owned workspace;
+`VITE_GOOGLE_DRIVE_ROOT` and `VITE_GOOGLE_DRIVE_REDIRECT_URI` are not
+configuration options. Opening arbitrary existing Drive folders would require
+Google Picker or a broader Drive scope. It also runs
 `vp run local-md-workspace#i18n:check` to verify English/Chinese message keys and
 placeholders before tests. CI deploys the relay Worker with
 `apps/grove-relay/wrangler.worker.ci.jsonc`; the custom-domain route is kept in
