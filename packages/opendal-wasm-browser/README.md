@@ -120,16 +120,18 @@ The wrapper currently exposes:
 - `capabilities()`
 - `list(prefix)`
 - `readText(path)`
+- `readBytes(path)`
 - `createDir(path)`
 - `writeText(path, value, options?)`
+- `writeBytes(path, bytes, options?)`
 - `delete(path)`
 - `rename(from, to)`
 - `stat(path)`
 
-`list`, `stat`, and `writeText` return normalized entry metadata when OpenDAL
-provides it, including `etag`, `version`, `lastModified`, and `size`.
-`writeText` accepts `{ ifMatch }`; the wrapper forwards it only when the backend
-advertises `nativeWriteWithIfMatch`.
+`list`, `stat`, `writeText`, and `writeBytes` return normalized entry metadata
+when OpenDAL provides it, including `etag`, `version`, `lastModified`, and
+`size`. `writeText` and `writeBytes` accept `{ ifMatch }`; the wrapper forwards
+it only when the backend advertises `nativeWriteWithIfMatch`.
 
 `createDir` normalizes directory paths and delegates to OpenDAL's recursive
 `create_dir` behavior when the backend advertises `nativeCreateDir`.

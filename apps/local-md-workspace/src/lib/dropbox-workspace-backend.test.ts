@@ -114,8 +114,8 @@ describe("Dropbox workspace backend", () => {
     });
   });
 
-  it("stores bytes as base64 text files", async () => {
-    let files = new Map<string, string>();
+  it("keeps .b64 bytes compatible with base64 text files", async () => {
+    let files = new Map<string, string | Uint8Array>();
     let backend = createDropboxWorkspaceBackend({
       createOperator: async () => fakeMapOperator(files),
       getAccessToken: async () => token("token"),
@@ -133,6 +133,46 @@ describe("Dropbox workspace backend", () => {
       path: "state/missing.snapshot.b64",
     });
     expect([...files.keys()].filter((path) => path.includes(".next."))).toEqual([]);
+  });
+
+  it("stores ordinary bytes through OpenDAL binary IO", async () => {
+    let files = new Map<string, string | Uint8Array>();
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () => fakeMapOperator(files),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+    let pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 255]);
+
+    await backend.writeBytes!("images/pixel.png", pngBytes);
+
+    expect(files.get("images/pixel.png")).toEqual(pngBytes);
+    await expect(backend.readBytes!("images/pixel.png")).resolves.toEqual(pngBytes);
+    expect(files.get("images/pixel.png")).not.toBe("iVBORwD/");
+  });
+
+  it("creates image assets as sibling binary files", async () => {
+    let files = new Map<string, string | Uint8Array>([
+      ["notes/assets/photo.png", new Uint8Array([1])],
+    ]);
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () => fakeMapOperator(files),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+    let pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10]);
+    let imageFile = new File([pngBytes], "Photo.PNG", { type: "image/png" });
+
+    let asset = await backend.createImageAsset!("notes/today.md", imageFile);
+
+    expect(asset).toMatchObject({
+      file: imageFile,
+      markdownReference: "assets/photo-2.png",
+      name: "photo-2.png",
+      path: "notes/assets/photo-2.png",
+    });
+    expect(files.get("notes/assets/photo-2.png")).toEqual(pngBytes);
+    await expect(backend.readBytes!("notes/assets/photo-2.png")).resolves.toEqual(pngBytes);
   });
 
   it("treats Dropbox 409 path-not-found responses as missing entries", async () => {
@@ -282,7 +322,7 @@ function token(accessToken: string) {
   };
 }
 
-function fakeMapOperator(files: Map<string, string>, operations: string[] = []) {
+function fakeMapOperator(files: Map<string, string | Uint8Array>, operations: string[] = []) {
   return fakeOperator({
     async createDir(path) {
       operations.push(`createDir ${path}`);
@@ -294,7 +334,14 @@ function fakeMapOperator(files: Map<string, string>, operations: string[] = []) 
     async readText(path) {
       let value = files.get(path);
       if (value == null) throw new Error("not_found");
+      if (typeof value != "string") throw new Error("not_text");
       return value;
+    },
+    async readBytes(path) {
+      let value = files.get(path);
+      if (value == null) throw new Error("not_found");
+      if (typeof value == "string") return new TextEncoder().encode(value);
+      return new Uint8Array(value);
     },
     async rename(from, to) {
       operations.push(`rename ${from} ${to}`);
@@ -304,8 +351,18 @@ function fakeMapOperator(files: Map<string, string>, operations: string[] = []) 
       files.set(to, value);
     },
     async stat(path) {
-      if (!files.has(path)) throw new Error("not_found");
-      return { isDirectory: false, isFile: true, path };
+      let value = files.get(path);
+      if (value == null) throw new Error("not_found");
+      return {
+        isDirectory: false,
+        isFile: true,
+        path,
+        size: typeof value == "string" ? value.length : value.byteLength,
+      };
+    },
+    async writeBytes(path, bytes) {
+      operations.push(`writeBytes ${path}`);
+      files.set(path, new Uint8Array(bytes));
     },
     async writeText(path, value) {
       operations.push(`write ${path}`);
@@ -330,9 +387,11 @@ function fakeOperator(overrides: Partial<OpendalBrowserOperator>): OpendalBrowse
     createDir: async () => {},
     delete: async () => {},
     list: async () => [],
+    readBytes: async () => new Uint8Array(),
     readText: async () => "",
     rename: async () => {},
     stat: async (path) => ({ isDirectory: false, isFile: true, path }),
+    writeBytes: async () => {},
     writeText: async () => {},
     ...overrides,
   };

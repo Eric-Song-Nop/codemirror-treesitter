@@ -8,10 +8,12 @@ import type {
 } from "@codemirror-treesitter/opendal-wasm-browser";
 import {
   buildMarkdownTreeFromEntries,
+  joinWorkspacePath,
   normalizeMarkdownFileName,
   normalizeWorkspaceDirectoryName,
   normalizeWorkspaceCreateTarget,
   starterMarkdown,
+  type CreatedWorkspaceImageNode,
   type WorkspaceBackend,
   type WorkspaceBackendKind,
   type WorkspaceEntry,
@@ -161,6 +163,73 @@ export function createOpendalWorkspaceBackend(
     return writeText(path, value, writeOptions);
   }
 
+  async function readBinaryBytes(path: string) {
+    let revision = await readRevision(path);
+    if (isBase64StatePath(path)) {
+      let value = await withOpendalRetry((operator) => operator.readText(path));
+      if (revision) rememberRevision(path, revision, knownRevisions);
+      return decodeBase64(value);
+    }
+
+    let bytes = await withOpendalRetry((operator) => operator.readBytes(path));
+    if (revision) rememberRevision(path, revision, knownRevisions);
+    return bytes;
+  }
+
+  async function writeBinaryBytes(path: string, bytes: Uint8Array) {
+    if (isBase64StatePath(path)) {
+      await queueWrite(path, encodeBase64(bytes));
+      return;
+    }
+
+    await ensureParentDirectory(path);
+    let entry = await withOpendalRetry((operator) => operator.writeBytes(path, bytes));
+    if (entry) {
+      rememberEntry(entry, knownRevisions);
+    } else {
+      knownRevisions.delete(path);
+    }
+  }
+
+  async function pathExists(path: string) {
+    try {
+      let entry = await withOpendalRetry((operator) => operator.stat(path));
+      rememberEntry(entry, knownRevisions);
+      return true;
+    } catch (error) {
+      if (isNotFoundError(error, options.notFoundPattern)) {
+        knownRevisions.delete(path);
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async function createImageAsset(
+    markdownFilePath: string,
+    imageFile: File,
+  ): Promise<CreatedWorkspaceImageNode> {
+    if (!isImageFile(imageFile)) {
+      throw new Error(`${imageFile.name || "Dropped file"} is not a supported image.`);
+    }
+
+    let parentPath = parentDirectory(markdownFilePath);
+    let assetsPath = joinWorkspacePath(parentPath, "assets");
+    await createDirectory(assetsPath);
+
+    let { baseName, extension } = imageAssetNameParts(imageFile);
+    let fileName = await nextAvailableImageFileName(assetsPath, baseName, extension, pathExists);
+    let path = joinWorkspacePath(assetsPath, fileName);
+    await writeBinaryBytes(path, new Uint8Array(await imageFile.arrayBuffer()));
+
+    return {
+      file: imageFile,
+      markdownReference: `assets/${fileName}`,
+      name: fileName,
+      path,
+    };
+  }
+
   async function renamePath(from: string, to: string) {
     await ensureParentDirectory(to);
     await withOpendalRetry((operator) => operator.rename(from, to));
@@ -263,6 +332,7 @@ export function createOpendalWorkspaceBackend(
       await queueWrite(nextPath, starterMarkdown(nextPath));
       return nextPath;
     },
+    createImageAsset,
     async deleteEntry(path, options) {
       await deletePath(path);
       if (options?.recursive)
@@ -285,8 +355,7 @@ export function createOpendalWorkspaceBackend(
       return entries.map(entryToWorkspaceEntry);
     },
     async readBytes(path) {
-      let value = await readText(path);
-      return decodeBase64(value);
+      return readBinaryBytes(path);
     },
     async readFile(path) {
       return readText(path);
@@ -344,7 +413,7 @@ export function createOpendalWorkspaceBackend(
       }
     },
     async writeBytes(path, bytes) {
-      await queueWrite(path, encodeBase64(bytes));
+      await writeBinaryBytes(path, bytes);
     },
     async writeTextFile(path, value) {
       await queueWrite(path, value);
@@ -552,6 +621,77 @@ function isNotFoundError(error: unknown, pattern: RegExp | undefined) {
     /path[/_. -]?not[/_. -]?found/i.test(message) ||
     /lookup[/_. -]?not[/_. -]?found/i.test(message)
   );
+}
+
+function isBase64StatePath(path: string) {
+  return path.endsWith(".b64");
+}
+
+function isImageFile(file: File) {
+  return file.type.startsWith("image/") || isImageFileName(file.name);
+}
+
+function isImageFileName(fileName: string) {
+  return /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(fileName);
+}
+
+function imageAssetNameParts(file: File) {
+  let extension = imageFileExtension(file);
+  let name = file.name.replace(/\.[^.]*$/, "");
+  let baseName = sanitizeImageAssetBaseName(name || "image");
+  return { baseName, extension };
+}
+
+function imageFileExtension(file: File) {
+  let nameExtension = file.name.match(/\.[^.]+$/)?.[0]?.toLowerCase();
+  if (nameExtension && isImageFileName(`image${nameExtension}`)) return nameExtension;
+
+  switch (file.type) {
+    case "image/avif":
+      return ".avif";
+    case "image/bmp":
+      return ".bmp";
+    case "image/gif":
+      return ".gif";
+    case "image/jpeg":
+      return ".jpg";
+    case "image/png":
+      return ".png";
+    case "image/svg+xml":
+      return ".svg";
+    case "image/webp":
+      return ".webp";
+    default:
+      return ".png";
+  }
+}
+
+function sanitizeImageAssetBaseName(value: string) {
+  return (
+    value
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase() || "image"
+  );
+}
+
+async function nextAvailableImageFileName(
+  parentPath: string,
+  baseName: string,
+  extension: string,
+  exists: (path: string) => Promise<boolean>,
+) {
+  let fileName = `${baseName}${extension}`;
+  if (!(await exists(joinWorkspacePath(parentPath, fileName)))) return fileName;
+
+  for (let index = 2; index < 10_000; index++) {
+    fileName = `${baseName}-${index}${extension}`;
+    if (!(await exists(joinWorkspacePath(parentPath, fileName)))) return fileName;
+  }
+
+  throw new Error("Could not allocate an image file name.");
 }
 
 function decodeBase64(value: string) {

@@ -66,9 +66,15 @@ export type OpendalBrowserOperator = {
   createDir(path: string): Promise<void>;
   delete(path: string): Promise<void>;
   list(prefix: string): Promise<OpendalBrowserEntry[]>;
+  readBytes(path: string): Promise<Uint8Array>;
   readText(path: string): Promise<string>;
   rename(from: string, to: string): Promise<void>;
   stat(path: string): Promise<OpendalBrowserEntry>;
+  writeBytes(
+    path: string,
+    bytes: Uint8Array,
+    options?: OpendalBrowserWriteOptions,
+  ): Promise<OpendalBrowserEntry | void>;
   writeText(
     path: string,
     value: string,
@@ -86,9 +92,15 @@ type GeneratedOperator = {
   createDir(path: string): Promise<void>;
   delete(path: string): Promise<void>;
   list(prefix: string): Promise<unknown>;
+  readBytes(path: string): Promise<unknown>;
   readText(path: string): Promise<string>;
   rename(from: string, to: string): Promise<void>;
   stat(path: string): Promise<unknown>;
+  writeBytes(
+    path: string,
+    bytes: Uint8Array,
+    options?: OpendalBrowserWriteOptions,
+  ): Promise<unknown>;
   writeText(path: string, value: string, options?: OpendalBrowserWriteOptions): Promise<unknown>;
 };
 
@@ -145,6 +157,10 @@ class WasmOpendalBrowserOperator implements OpendalBrowserOperator {
     return parseEntries(await this.operator.list(prefix));
   }
 
+  async readBytes(path: string) {
+    return parseBytes(await this.operator.readBytes(path));
+  }
+
   async readText(path: string) {
     return this.operator.readText(path);
   }
@@ -155,6 +171,12 @@ class WasmOpendalBrowserOperator implements OpendalBrowserOperator {
 
   async stat(path: string) {
     return parseEntry(await this.operator.stat(path));
+  }
+
+  async writeBytes(path: string, bytes: Uint8Array, options?: OpendalBrowserWriteOptions) {
+    let result = await this.operator.writeBytes(path, bytes, options);
+    if (result == null) return undefined;
+    return parseEntry(result, "write result");
   }
 
   async writeText(path: string, value: string, options?: OpendalBrowserWriteOptions) {
@@ -246,6 +268,16 @@ function parseEntry(value: unknown, label = "entry"): OpendalBrowserEntry {
     size: optionalNumber(record.size, `${label}.size`),
     version: optionalText(record.version, `${label}.version`),
   };
+}
+
+function parseBytes(value: unknown) {
+  if (value instanceof Uint8Array) return new Uint8Array(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0));
+  if (ArrayBuffer.isView(value)) {
+    let view = value as ArrayBufferView;
+    return new Uint8Array(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+  }
+  throw new Error("OpenDAL readBytes returned a non-byte value.");
 }
 
 function requireRecord(value: unknown, label: string) {

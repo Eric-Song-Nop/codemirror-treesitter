@@ -229,6 +229,16 @@ impl WasmOpendalBrowserOperator {
         String::from_utf8(bytes.to_vec()).map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = readBytes)]
+    pub async fn read_bytes(&self, path: String) -> Result<Vec<u8>, JsValue> {
+        let bytes = self
+            .operator
+            .read(&normalize_file_path(&path)?)
+            .await
+            .map_err(js_error)?;
+        Ok(bytes.to_vec())
+    }
+
     #[wasm_bindgen(js_name = createDir)]
     pub async fn create_dir(&self, path: String) -> Result<(), JsValue> {
         self.operator
@@ -244,24 +254,17 @@ impl WasmOpendalBrowserOperator {
         value: String,
         options: Option<JsValue>,
     ) -> Result<JsValue, JsValue> {
-        let path = normalize_file_path(&path)?;
-        let options = parse_write_options(options)?;
-        let cap = self.operator.info().native_capability();
-        let metadata = match optional_text(options.if_match.as_deref()) {
-            Some(if_match) if cap.write_with_if_match => {
-                self.operator
-                    .write_with(&path, value.into_bytes())
-                    .if_match(if_match)
-                    .await
-                    .map_err(js_error)?
-            }
-            _ => self
-                .operator
-                .write(&path, value.into_bytes())
-                .await
-                .map_err(js_error)?,
-        };
-        to_js_value(metadata_to_payload(path, &metadata))
+        write_operator_bytes(&self.operator, path, value.into_bytes(), options).await
+    }
+
+    #[wasm_bindgen(js_name = writeBytes)]
+    pub async fn write_bytes(
+        &self,
+        path: String,
+        bytes: Vec<u8>,
+        options: Option<JsValue>,
+    ) -> Result<JsValue, JsValue> {
+        write_operator_bytes(&self.operator, path, bytes, options).await
     }
 
     pub async fn delete(&self, path: String) -> Result<(), JsValue> {
@@ -297,6 +300,28 @@ impl WasmOpendalBrowserOperator {
         let meta = self.operator.stat(&path).await.map_err(js_error)?;
         to_js_value(metadata_to_payload(path, &meta))
     }
+}
+
+async fn write_operator_bytes(
+    operator: &Operator,
+    path: String,
+    bytes: Vec<u8>,
+    options: Option<JsValue>,
+) -> Result<JsValue, JsValue> {
+    let path = normalize_file_path(&path)?;
+    let options = parse_write_options(options)?;
+    let cap = operator.info().native_capability();
+    let metadata = match optional_text(options.if_match.as_deref()) {
+        Some(if_match) if cap.write_with_if_match => {
+            operator
+                .write_with(&path, bytes)
+                .if_match(if_match)
+                .await
+                .map_err(js_error)?
+        }
+        _ => operator.write(&path, bytes).await.map_err(js_error)?,
+    };
+    to_js_value(metadata_to_payload(path, &metadata))
 }
 
 #[wasm_bindgen]

@@ -82,9 +82,11 @@ function fakeOperator(overrides: Partial<OpendalBrowserOperator>): OpendalBrowse
     createDir: async () => {},
     delete: async () => {},
     list: async () => [],
+    readBytes: async () => new Uint8Array(),
     readText: async () => "",
     rename: async () => {},
     stat: async (path) => ({ isDirectory: false, isFile: true, path }),
+    writeBytes: async (path) => ({ isDirectory: false, isFile: true, path }),
     writeText: async (path) => ({ isDirectory: false, isFile: true, path }),
     ...overrides,
   };
