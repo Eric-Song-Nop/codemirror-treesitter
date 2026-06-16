@@ -462,6 +462,41 @@ describe("liveMd editor web component", () => {
     expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts unified config from a property", async () => {
+    let tag = defineTestElement();
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
+    let observed = vi.fn();
+    let cleanup = vi.fn();
+    let plugin: LiveMdPlugin = {
+      extension: EditorView.updateListener.of((update) => {
+        if (update.docChanged) observed(update.state.doc.toString());
+      }),
+      mount({ markdown }) {
+        observed(markdown.features?.[0]?.name);
+        return cleanup;
+      },
+    };
+    editor.defaultValue = "doc";
+    editor.config = {
+      markdown: { features: [{ name: "unified" }] },
+      plugins: [plugin],
+    };
+
+    document.body.append(editor);
+    await editor.ready;
+    editor.view?.dispatch({
+      changes: { from: editor.value.length, insert: "!" },
+      userEvent: "input.test",
+    });
+    editor.config = { markdown: { features: [{ name: "updated" }] } };
+
+    expect(observed).toHaveBeenCalledWith("unified");
+    expect(observed).toHaveBeenCalledWith("doc!");
+    expect(editor.markdown.features?.[0]?.name).toBe("updated");
+    expect(editor.plugins).toHaveLength(0);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("remounts plugins when markdown changes after connection", async () => {
     let tag = defineTestElement();
     let editor = document.createElement(tag) as LiveMdEditorElementType;

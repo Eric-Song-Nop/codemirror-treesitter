@@ -1,6 +1,6 @@
 import type { Extension } from "@codemirror/state";
 import { EditorView, type ViewUpdate } from "@codemirror/view";
-import type { LiveMdPlugin } from "../core/config.js";
+import type { LiveMdConfig, LiveMdPlugin } from "../core/config.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../core/editor.js";
 import type { LiveMdMarkdownConfig } from "../core/features.js";
 import { installLiveMdStyles } from "./styles.js";
@@ -20,9 +20,8 @@ export class LiveMdEditorElement extends HTMLElementBase {
   private controller: LiveMdEditorController | null = null;
   private cleanValue: string | null = null;
   private dirtySinceChange = false;
+  private editorConfig: LiveMdConfig = {};
   private editorExtensions: Extension = [];
-  private editorMarkdown: LiveMdMarkdownConfig = {};
-  private editorPlugins: readonly LiveMdPlugin[] = [];
   private explicitValue = false;
   private mount: HTMLDivElement;
   private shadow: ShadowRoot;
@@ -52,14 +51,13 @@ export class LiveMdEditorElement extends HTMLElementBase {
     try {
       controller = createLiveMdEditor({
         autofocus: this.hasAttribute("autofocus"),
+        config: this.editorConfig,
         defaultValue: initialValue,
-        markdown: this.editorMarkdown,
         onBlur: () => this.dispatchPendingChange(),
         onChange: ({ value }) => this.handleEditorInput(value),
         parent: this.mount,
         persistKey: this.persistKey,
         placeholder: this.placeholder,
-        plugins: this.editorPlugins,
         readOnly: this.readOnly,
         root: this.shadow,
         value: this.explicitValue ? this.storedValue : undefined,
@@ -201,22 +199,33 @@ export class LiveMdEditorElement extends HTMLElementBase {
     this.controller?.setExtensions(this.currentExtensions());
   }
 
+  get config(): LiveMdConfig {
+    return this.editorConfig;
+  }
+
+  set config(value: LiveMdConfig | null | undefined) {
+    this.editorConfig = value ?? {};
+    this.controller?.setConfig(this.editorConfig);
+  }
+
   get markdown(): LiveMdMarkdownConfig {
-    return this.editorMarkdown;
+    return this.editorConfig.markdown ?? {};
   }
 
   set markdown(value: LiveMdMarkdownConfig | null | undefined) {
-    this.editorMarkdown = value ?? {};
-    this.controller?.setMarkdown(this.editorMarkdown);
+    let markdown = value ?? {};
+    this.editorConfig = { ...this.editorConfig, markdown };
+    this.controller?.setMarkdown(markdown);
   }
 
   get plugins(): readonly LiveMdPlugin[] {
-    return this.editorPlugins;
+    return this.editorConfig.plugins ?? [];
   }
 
   set plugins(value: readonly LiveMdPlugin[] | null | undefined) {
-    this.editorPlugins = value ?? [];
-    this.controller?.setPlugins(this.editorPlugins);
+    let plugins = value ?? [];
+    this.editorConfig = { ...this.editorConfig, plugins };
+    this.controller?.setPlugins(plugins);
   }
 
   get dirty() {

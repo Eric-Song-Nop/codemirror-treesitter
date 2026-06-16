@@ -64,6 +64,51 @@ describe("LiveMD plugins", () => {
     }
   });
 
+  it("accepts unified config and reconfigures it through setConfig", async () => {
+    let parent = document.body.appendChild(document.createElement("div"));
+    let events: string[] = [];
+    let first: LiveMdPlugin = {
+      mount({ markdown }) {
+        events.push(`first mount ${markdown.features?.[0]?.name ?? "none"}`);
+        return () => events.push("first cleanup");
+      },
+    };
+    let second: LiveMdPlugin = {
+      mount({ markdown }) {
+        events.push(`second mount ${markdown.features?.[0]?.name ?? "none"}`);
+        return () => events.push("second cleanup");
+      },
+    };
+    let editor = createLiveMdEditor({
+      config: {
+        markdown: { features: [headingClassFeature("cm-md-config-first")] },
+        plugins: [first],
+      },
+      doc: "# Dynamic",
+      focus: false,
+      parent,
+    });
+
+    await editor.ready;
+    expect(parent.querySelector(".cm-md-config-first")).toBeTruthy();
+
+    editor.setConfig({
+      markdown: { features: [headingClassFeature("cm-md-config-second")] },
+      plugins: [second],
+    });
+
+    expect(parent.querySelector(".cm-md-config-first")).toBeNull();
+    expect(parent.querySelector(".cm-md-config-second")).toBeTruthy();
+    editor.destroy();
+
+    expect(events).toEqual([
+      "first mount cm-md-config-first",
+      "first cleanup",
+      "second mount cm-md-config-second",
+      "second cleanup",
+    ]);
+  });
+
   it("cleans plugin mounts on setPlugins and destroy", () => {
     let parent = document.createElement("div");
     let events: string[] = [];

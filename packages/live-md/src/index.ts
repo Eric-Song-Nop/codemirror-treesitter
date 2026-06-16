@@ -16,6 +16,7 @@ export {
   liveMdMarkdownFeatures,
 } from "./core/features.js";
 export {
+  type LiveMdConfig,
   type LiveMdPlugin,
   type LiveMdPluginCleanup,
   type LiveMdPluginContext,

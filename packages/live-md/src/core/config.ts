@@ -17,6 +17,26 @@ export type LiveMdPlugin = {
   name?: string;
 };
 
+export type LiveMdConfig = {
+  markdown?: LiveMdMarkdownConfig;
+  plugins?: readonly LiveMdPlugin[];
+};
+
+export type ResolvedLiveMdConfig = {
+  markdown: LiveMdMarkdownConfig;
+  plugins: readonly LiveMdPlugin[];
+};
+
+export function normalizeLiveMdConfig(
+  config: LiveMdConfig | null | undefined,
+  fallback: LiveMdConfig = {},
+): ResolvedLiveMdConfig {
+  return {
+    markdown: normalizeLiveMdMarkdownConfig(config?.markdown ?? fallback.markdown),
+    plugins: config?.plugins ?? fallback.plugins ?? [],
+  };
+}
+
 export function normalizeLiveMdMarkdownConfig(
   markdown: LiveMdMarkdownConfig | null | undefined,
 ): LiveMdMarkdownConfig {
