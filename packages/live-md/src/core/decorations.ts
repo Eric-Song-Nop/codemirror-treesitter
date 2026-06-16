@@ -21,6 +21,7 @@ import {
   type TreeSitterParser,
   type TreeSitterQueryCapture,
   type TreeSitterQueryMatch,
+  type TreeSitterQuerySource,
 } from "@codemirror-treesitter/language";
 import {
   Decoration,
@@ -37,6 +38,12 @@ import {
   liveMdDefaultCodeFenceHighlighter,
   type CodeFenceLanguageMap,
 } from "./languages.js";
+import {
+  liveMdMarkdownFeatureFacet,
+  type LiveMdFeatureDecoration,
+  type LiveMdFeatureDecorateContext,
+  type LiveMdMarkdownFeature,
+} from "./features.js";
 import {
   liveMdImageSourceResolver,
   resolveLiveMdImageSource,
@@ -68,6 +75,7 @@ type LiveMdBuild = {
   imageSourceResolver: LiveMdImageSourceResolver | null;
   lineClasses: Map<number, Set<string>>;
   linkBaseUrl: string | null;
+  markdownFeatures: readonly LiveMdMarkdownFeature[];
   ranges: readonly DocRange[];
   state: EditorState;
 };
@@ -134,6 +142,7 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
       !transaction.selection &&
       !codeFenceHighlightersChanged(transaction.startState, transaction.state) &&
       !codeFenceLanguagesChanged(transaction.startState, transaction.state) &&
+      !markdownFeaturesChanged(transaction.startState, transaction.state) &&
       transaction.startState.facet(liveMdImageSourceResolver) ==
         transaction.state.facet(liveMdImageSourceResolver) &&
       transaction.startState.facet(liveMdLinkBaseUrl) == transaction.state.facet(liveMdLinkBaseUrl)
@@ -216,6 +225,7 @@ function createLiveMdBuild(
     imageSourceResolver: state.facet(liveMdImageSourceResolver),
     lineClasses: new Map(),
     linkBaseUrl: state.facet(liveMdLinkBaseUrl),
+    markdownFeatures: state.facet(liveMdMarkdownFeatureFacet),
     ranges,
     state,
   };
@@ -375,15 +385,28 @@ function buildLiveMdBuild(
     }
   }
   markParagraphBreaks(build, paragraphContainers);
+  applyLiveMdMarkdownFeatures(build);
 
   return build;
 }
 
 function queryLiveMdMatches(tree: Tree, ranges: readonly DocRange[]) {
+  return queryLiveMdMatchesFromSource(tree, liveMdQuerySource, ranges);
+}
+
+function queryLiveMdMatchesFromSource(
+  tree: Tree,
+  source: TreeSitterQuerySource,
+  ranges: readonly DocRange[],
+  includeNested?: boolean,
+) {
   if (!ranges.length) return [];
   let queryFrom = Math.min(...ranges.map((range) => range.from));
-  let options = queryFrom > 0 ? { from: queryFrom } : undefined;
-  let matches = queryTreeMatches(tree, liveMdQuerySource, options);
+  let options = {
+    ...(queryFrom > 0 ? { from: queryFrom } : null),
+    ...(includeNested == null ? null : { includeNested }),
+  };
+  let matches = queryTreeMatches(tree, source, options);
   if (ranges.some((range) => range.from <= 0 && range.to >= tree.length)) return matches;
   return matches.filter((match) => matchTouchesRanges(match, ranges));
 }
@@ -732,6 +755,10 @@ function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) 
   );
 }
 
+function markdownFeaturesChanged(startState: EditorState, state: EditorState) {
+  return startState.facet(liveMdMarkdownFeatureFacet) != state.facet(liveMdMarkdownFeatureFacet);
+}
+
 function codeFenceHighlightersChanged(startState: EditorState, state: EditorState) {
   return codeFenceHighlighters(startState) != codeFenceHighlighters(state);
 }
@@ -877,6 +904,62 @@ function processLiveMdMatch(
     processed.add(key);
     handler(build, item.node);
   }
+}
+
+function applyLiveMdMarkdownFeatures(build: LiveMdBuild) {
+  if (!build.markdownFeatures.length) return;
+
+  let tree = syntaxTree(build.state);
+  for (let feature of build.markdownFeatures) {
+    if (!feature.query || !feature.decorate) continue;
+    let matches = queryLiveMdMatchesFromSource(
+      tree,
+      feature.query,
+      build.ranges,
+      feature.includeNested ?? false,
+    );
+    for (let match of matches) {
+      feature.decorate(createLiveMdFeatureDecorateContext(build, match));
+    }
+  }
+}
+
+function createLiveMdFeatureDecorateContext(
+  build: LiveMdBuild,
+  match: TreeSitterQueryMatch,
+): LiveMdFeatureDecorateContext {
+  return {
+    activeLines: build.activeLines,
+    addAtomicRange(from, to) {
+      addAtom(build, from, to);
+    },
+    addLineClass(from, to, className) {
+      addLineRangeClass(build, from, to, className);
+    },
+    addMark(from, to, decoration) {
+      addMark(build, from, to, liveMdFeatureDecoration(decoration));
+    },
+    addReplace(from, to, widget, options) {
+      addReplace(build, from, to, widget, options?.block ?? false);
+      if (options?.atomic) addAtom(build, from, to);
+    },
+    addSyntax(from, to, decoration) {
+      addSyntax(build, from, to, decoration ? liveMdFeatureDecoration(decoration) : undefined);
+    },
+    capture: (name) => capture(match, name),
+    captures: (name) => captures(match, name),
+    match,
+    node: (name) => capture(match, name)?.node ?? null,
+    nodes: (name) => captures(match, name).map((item) => item.node),
+    ranges: build.ranges,
+    rangeTouchesActiveLine: (from, to) => rangeTouchesActiveLine(build, from, to),
+    slice: (node) => build.state.sliceDoc(node.from, node.to),
+    state: build.state,
+  };
+}
+
+function liveMdFeatureDecoration(decoration: LiveMdFeatureDecoration) {
+  return typeof decoration == "string" ? Decoration.mark({ class: decoration }) : decoration;
 }
 
 function applyHeadingMatch(build: LiveMdBuild, match: TreeSitterQueryMatch) {

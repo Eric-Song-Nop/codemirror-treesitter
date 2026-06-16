@@ -1,14 +1,6 @@
 import type { Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-
-export type LiveMdMarkdownFeature = {
-  name: string;
-  query?: string;
-};
-
-export type LiveMdMarkdownConfig = {
-  features?: readonly LiveMdMarkdownFeature[];
-};
+import type { LiveMdMarkdownConfig } from "./features.js";
 
 export type LiveMdPluginCleanup = () => void;
 

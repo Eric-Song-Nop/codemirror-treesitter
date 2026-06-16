@@ -8,6 +8,14 @@ export {
 export {
   type LiveMdMarkdownConfig,
   type LiveMdMarkdownFeature,
+  type LiveMdFeatureDecorateContext,
+  type LiveMdFeatureDecoration,
+  type LiveMdFeatureDocRange,
+  type LiveMdFeatureReplaceOptions,
+  liveMdMarkdownFeature,
+  liveMdMarkdownFeatures,
+} from "./core/features.js";
+export {
   type LiveMdPlugin,
   type LiveMdPluginCleanup,
   type LiveMdPluginContext,

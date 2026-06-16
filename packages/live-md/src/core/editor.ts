@@ -6,11 +6,11 @@ import {
   mountPlugins,
   normalizeLiveMdMarkdownConfig,
   pluginExtensions,
-  type LiveMdMarkdownConfig,
   type LiveMdPlugin,
   type LiveMdPluginCleanup,
 } from "./config.js";
 import { liveMarkdown } from "./extension.js";
+import { liveMdMarkdownFeatures, type LiveMdMarkdownConfig } from "./features.js";
 import type { LiveMdImageSourceResolver } from "./images.js";
 import {
   loadCodeFenceLanguages,
@@ -64,6 +64,7 @@ export type LiveMdEditorHandle = LiveMdEditorController;
 export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorController {
   let markdownCompartment = new Compartment();
   let extensionsCompartment = new Compartment();
+  let featuresCompartment = new Compartment();
   let placeholderCompartment = new Compartment();
   let pluginsCompartment = new Compartment();
   let readOnlyCompartment = new Compartment();
@@ -83,6 +84,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       doc: initialValue,
       extensions: [
         liveMarkdown({ imageSource: options.imageSource, linkBaseUrl: options.linkBaseUrl }),
+        featuresCompartment.of(liveMdMarkdownFeatures(markdownConfig.features)),
         markdownCompartment.of([]),
         placeholderCompartment.of(placeholderValue(options.placeholder)),
         readOnlyCompartment.of(readOnlyExtensions(options.readOnly ?? false)),
@@ -137,6 +139,9 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
     },
     setMarkdown(markdown) {
       markdownConfig = normalizeLiveMdMarkdownConfig(markdown);
+      view.dispatch({
+        effects: featuresCompartment.reconfigure(liveMdMarkdownFeatures(markdownConfig.features)),
+      });
       remountPlugins();
     },
     setPersistKey(nextPersistKey) {

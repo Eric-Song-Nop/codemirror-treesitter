@@ -1,7 +1,8 @@
 import type { Extension } from "@codemirror/state";
 import { EditorView, type ViewUpdate } from "@codemirror/view";
-import type { LiveMdMarkdownConfig, LiveMdPlugin } from "../core/config.js";
+import type { LiveMdPlugin } from "../core/config.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../core/editor.js";
+import type { LiveMdMarkdownConfig } from "../core/features.js";
 import { installLiveMdStyles } from "./styles.js";
 
 const HTMLElementBase: typeof HTMLElement =

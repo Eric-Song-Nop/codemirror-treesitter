@@ -49,6 +49,7 @@ import {
   liveMdImageAssets,
   liveMdImageSource,
   liveMdLinkBehavior,
+  liveMdMarkdownFeature,
   liveMdTheme,
   liveMarkdown,
   prepareLiveMd,
@@ -84,6 +85,15 @@ import { gruvboxDark } from "@codemirror-treesitter/theme-gruvbox";
 await prepareLiveMd();
 
 const imageAssetUrlMap = new Map<string, string>();
+const callouts = liveMdMarkdownFeature({
+  name: "callouts",
+  query: "(block_quote) @callout",
+  decorate({ addLineClass, node, slice }) {
+    let callout = node("callout");
+    if (!callout || !slice(callout).startsWith("> [!")) return;
+    addLineClass(callout.from, callout.to, "cm-md-callout");
+  },
+});
 const plugins = [
   liveMdTheme({
     editor: gruvboxDark,
@@ -107,7 +117,7 @@ const editor = createLiveMdEditor({
     console.log(value);
   },
   markdown: {
-    features: [],
+    features: [callouts],
   } satisfies LiveMdMarkdownConfig,
   plugins,
 });
@@ -120,11 +130,14 @@ editor.destroy();
 `createLiveMdEditor()` accepts `value`, `doc`, `defaultValue`, `persistKey`,
 `placeholder`, `readOnly`, `autofocus`, `focus`, `root`, `markdown`, `plugins`,
 `extensions`, `imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`.
-`markdown` currently carries typed `features` placeholders for future
-query-driven Markdown syntax configuration; it does not change runtime parsing
-or decoration behavior yet. `plugins` is the host-behavior layer: each
-`LiveMdPlugin` can provide a CodeMirror `extension` and an optional `mount`
-hook that may return cleanup for `setPlugins(...)` and `destroy()`.
+`markdown.features` is the query-driven Markdown syntax layer. A
+`LiveMdMarkdownFeature` can contribute a Tree-sitter query and a constrained
+decoration callback for marks, line classes, syntax visibility, replacement
+widgets, and atomic ranges. Features run after the standard LiveMD Markdown
+decorations and are reconfigured by `setMarkdown(...)`. `plugins` is the
+host-behavior layer: each `LiveMdPlugin` can provide a CodeMirror `extension`
+and an optional `mount` hook that may return cleanup for `setPlugins(...)` and
+`destroy()`.
 `liveMdTheme(...)`, `liveMdImageAssets(...)`, and `liveMdLinkBehavior(...)`
 cover common host integrations while keeping storage, upload, and navigation
 policy in the host app.

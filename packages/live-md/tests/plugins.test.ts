@@ -6,6 +6,7 @@ import {
   createLiveMdEditor,
   liveMdLinkBehavior,
   liveMdTheme,
+  type LiveMdMarkdownFeature,
   type LiveMdPlugin,
 } from "../src/index.js";
 
@@ -165,4 +166,35 @@ describe("LiveMD plugins", () => {
     expect(link?.dataset.liveMdHref).toBe("https://docs.example/guide");
     editor.destroy();
   });
+
+  it("reconfigures markdown features through setMarkdown", async () => {
+    let parent = document.body.appendChild(document.createElement("div"));
+    let editor = createLiveMdEditor({
+      doc: "# Dynamic",
+      focus: false,
+      markdown: { features: [headingClassFeature("cm-md-set-markdown-first")] },
+      parent,
+    });
+
+    await editor.ready;
+    expect(parent.querySelector(".cm-md-set-markdown-first")).toBeTruthy();
+
+    editor.setMarkdown({ features: [headingClassFeature("cm-md-set-markdown-second")] });
+
+    expect(parent.querySelector(".cm-md-set-markdown-first")).toBeNull();
+    expect(parent.querySelector(".cm-md-set-markdown-second")).toBeTruthy();
+    editor.destroy();
+  });
 });
+
+function headingClassFeature(className: string): LiveMdMarkdownFeature {
+  return {
+    name: className,
+    query: "(atx_heading) @heading",
+    decorate({ addMark, node }) {
+      let heading = node("heading");
+      if (!heading) return;
+      addMark(heading.from, heading.to, className);
+    },
+  };
+}
