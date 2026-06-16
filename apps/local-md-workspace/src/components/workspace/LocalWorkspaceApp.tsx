@@ -42,10 +42,7 @@ import { useI18n } from "@/lib/i18n";
 import { useLiveMdPreloadError } from "@/lib/live-md-preload";
 import { defaultSidebarOpen, isMobileSidebarViewport } from "@/lib/workspace/constants";
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
-import {
-  defaultGoogleDriveClientId,
-  defaultGoogleDriveRoot,
-} from "@/lib/workspace/google-drive-config";
+import { defaultGoogleDriveClientId } from "@/lib/workspace/google-drive-config";
 import { defaultOneDriveClientId, defaultOneDriveRoot } from "@/lib/workspace/onedrive-config";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { createEphemeralLocalWorkspaceRecord, saveStateLabel } from "@/lib/workspace/state";
@@ -494,7 +491,6 @@ export function LocalWorkspaceApp() {
 
     void openGoogleDriveWorkspace({
       clientId,
-      root: storedGoogleDriveConfig?.root ?? defaultGoogleDriveRoot(),
     });
   };
 
@@ -599,7 +595,6 @@ export function LocalWorkspaceApp() {
     setWorkspaceBackend,
     singleFileSourceRef,
     storedDropboxConfig,
-    storedGoogleDriveConfig,
     storedOneDriveConfig,
     t,
     workspaceBackendRef,

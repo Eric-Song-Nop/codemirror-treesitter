@@ -78,7 +78,7 @@ export function workspaceErrorMessage(error: unknown) {
     }
 
     if (isGoogleDrivePathUnavailable(normalized)) {
-      return "Google Drive workspace path is no longer available. Check the Google Drive root setting, then reconnect Google Drive workspace.";
+      return "Grove Google Drive workspace is no longer available. Reconnect Google Drive workspace; this app can only access files it creates or that Google Drive grants to it.";
     }
   }
 

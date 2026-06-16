@@ -353,7 +353,6 @@ export function useWorkspaceOpeners({
     }
     await openGoogleDriveWorkspace({
       clientId,
-      root: storedGoogleDriveConfig.root,
     });
   }, [openGoogleDriveWorkspace, setErrorMessage, setRetryLoadPath, storedGoogleDriveConfig]);
 

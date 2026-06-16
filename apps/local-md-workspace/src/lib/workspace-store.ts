@@ -18,7 +18,6 @@ export type StoredDropboxWorkspaceConfig = {
 
 export type StoredGoogleDriveWorkspaceConfig = {
   clientId: string;
-  root?: string;
 };
 
 export type StoredOneDriveWorkspaceConfig = {
@@ -253,15 +252,7 @@ function parseGoogleDriveWorkspaceConfig(value: unknown): StoredGoogleDriveWorks
   let clientId = record.clientId.trim();
   if (!clientId) return null;
 
-  let root =
-    typeof record.root == "string"
-      ? record.root
-          .trim()
-          .replace(/\\/g, "/")
-          .replace(/^\/+|\/+$/g, "")
-      : "";
-
-  return root ? { clientId, root } : { clientId };
+  return { clientId };
 }
 
 function parseOneDriveWorkspaceConfig(value: unknown): StoredOneDriveWorkspaceConfig | null {

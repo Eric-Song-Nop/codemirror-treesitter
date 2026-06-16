@@ -75,21 +75,29 @@ describe("Dropbox workspace config storage", () => {
     expect(values.has(DROPBOX_CONFIG_KEY)).toBe(false);
   });
 
-  it("saves and restores normalized non-secret Google Drive config", () => {
+  it("saves Google Drive config without a root and drops legacy roots", () => {
     saveStoredGoogleDriveWorkspaceConfig({
       clientId: " test-client-id ",
-      root: " \\notes\\daily/ ",
     });
 
     expect(values.get(GOOGLE_DRIVE_CONFIG_KEY)).toBe(
       JSON.stringify({
         clientId: "test-client-id",
-        root: "notes/daily",
       }),
     );
     expect(loadStoredGoogleDriveWorkspaceConfig()).toEqual({
       clientId: "test-client-id",
-      root: "notes/daily",
+    });
+
+    values.set(
+      GOOGLE_DRIVE_CONFIG_KEY,
+      JSON.stringify({
+        clientId: " legacy-client-id ",
+        root: "legacy/root",
+      }),
+    );
+    expect(loadStoredGoogleDriveWorkspaceConfig()).toEqual({
+      clientId: "legacy-client-id",
     });
   });
 

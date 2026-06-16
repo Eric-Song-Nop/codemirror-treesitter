@@ -215,7 +215,6 @@ export function useWorkspaceStartup({
         await openGoogleDriveWorkspace(
           {
             clientId: token.clientId,
-            root: restoreDraft?.root,
           },
           {
             restoreDraft,

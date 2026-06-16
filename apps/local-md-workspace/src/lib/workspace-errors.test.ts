@@ -170,12 +170,12 @@ describe("workspace error messages", () => {
     expect(
       workspaceErrorMessage(new Error("OpenDAL Google Drive API error 404 file not found")),
     ).toBe(
-      "Google Drive workspace path is no longer available. Check the Google Drive root setting, then reconnect Google Drive workspace.",
+      "Grove Google Drive workspace is no longer available. Reconnect Google Drive workspace; this app can only access files it creates or that Google Drive grants to it.",
     );
     expect(
       workspaceErrorMessage(new Error("GET https://www.googleapis.com/drive/v3/files/root 404")),
     ).toBe(
-      "Google Drive workspace path is no longer available. Check the Google Drive root setting, then reconnect Google Drive workspace.",
+      "Grove Google Drive workspace is no longer available. Reconnect Google Drive workspace; this app can only access files it creates or that Google Drive grants to it.",
     );
   });
 

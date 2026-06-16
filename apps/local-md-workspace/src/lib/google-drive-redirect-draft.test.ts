@@ -4,6 +4,8 @@ import {
   takeGoogleDriveRedirectDraft,
 } from "./google-drive-redirect-draft.ts";
 
+const GOOGLE_DRIVE_REDIRECT_DRAFT_KEY = "local-md-workspace:google-drive-redirect-draft";
+
 describe("Google Drive redirect draft storage", () => {
   let values: Map<string, string>;
 
@@ -26,14 +28,12 @@ describe("Google Drive redirect draft storage", () => {
     saveGoogleDriveRedirectDraft({
       clientId: " client-id ",
       dirtyValue: "# Unsaved\n",
-      root: " \\notes\\daily/ ",
       selectedPath: "/drafts\\today.md",
     });
 
     expect(takeGoogleDriveRedirectDraft()).toEqual({
       clientId: "client-id",
       dirtyValue: "# Unsaved\n",
-      root: "notes/daily",
       selectedPath: "drafts/today.md",
     });
     expect(takeGoogleDriveRedirectDraft()).toBeNull();
@@ -43,12 +43,28 @@ describe("Google Drive redirect draft storage", () => {
     saveGoogleDriveRedirectDraft({
       clientId: "client-id",
       dirtyValue: "# Missing path\n",
-      root: "notes",
     });
 
     expect(takeGoogleDriveRedirectDraft()).toEqual({
       clientId: "client-id",
-      root: "notes",
+    });
+  });
+
+  it("drops legacy Google Drive redirect roots", () => {
+    values.set(
+      GOOGLE_DRIVE_REDIRECT_DRAFT_KEY,
+      JSON.stringify({
+        clientId: "client-id",
+        dirtyValue: "# Draft\n",
+        root: "legacy/root",
+        selectedPath: "/drafts\\today.md",
+      }),
+    );
+
+    expect(takeGoogleDriveRedirectDraft()).toEqual({
+      clientId: "client-id",
+      dirtyValue: "# Draft\n",
+      selectedPath: "drafts/today.md",
     });
   });
 

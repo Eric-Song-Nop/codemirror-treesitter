@@ -6,8 +6,12 @@ import {
 import { saveGoogleDriveRedirectDraft } from "@/lib/google-drive-redirect-draft";
 import type { TFunction } from "@/lib/i18n";
 import {
+  ensureGoogleDriveAppWorkspaceManifest,
+  ensureGoogleDriveAppWorkspaceRoot,
+} from "@/lib/workspace/google-drive-app-workspace";
+import {
   defaultGoogleDriveRedirectUri,
-  normalizeGoogleDriveRootInput,
+  defaultGoogleDriveRoot,
 } from "@/lib/workspace/google-drive-config";
 import {
   saveStoredGoogleDriveWorkspaceConfig,
@@ -61,7 +65,7 @@ export function useGoogleDriveWorkspaceBackend({
   );
 
   let authorizeGoogleDriveAccess = useCallback(
-    async (clientId: string, root?: string) => {
+    async (clientId: string) => {
       let normalizedClientId = clientId.trim();
       if (googleDriveAuthPromiseRef.current) return googleDriveAuthPromiseRef.current;
 
@@ -79,7 +83,6 @@ export function useGoogleDriveWorkspaceBackend({
           saveGoogleDriveRedirectDraft({
             clientId: normalizedClientId,
             dirtyValue: shouldRestoreDirtyEditor ? editorValueRef.current : undefined,
-            root,
             selectedPath: shouldRestoreDirtyEditor ? file?.path : undefined,
           });
         },
@@ -105,8 +108,8 @@ export function useGoogleDriveWorkspaceBackend({
       let clientId = config.clientId.trim();
       if (!clientId) throw new Error("Google Drive client ID is required.");
 
-      let root = normalizeGoogleDriveRootInput(config.root);
-      let refreshAccessToken = () => authorizeGoogleDriveAccess(clientId, root);
+      let root = defaultGoogleDriveRoot();
+      let refreshAccessToken = () => authorizeGoogleDriveAccess(clientId);
       let getAccessToken = async () => {
         let token = googleDriveTokenRef.current;
         if (
@@ -122,13 +125,22 @@ export function useGoogleDriveWorkspaceBackend({
       await getAccessToken();
       let { createGoogleDriveWorkspaceBackend } =
         await import("@/lib/google-drive-workspace-backend");
+      let bootstrapBackend = createGoogleDriveWorkspaceBackend({
+        getAccessToken,
+        name: t("workspace.googleDriveWorkspace"),
+        refreshAccessToken,
+      });
+      await ensureGoogleDriveAppWorkspaceRoot(bootstrapBackend);
+
       let backend = createGoogleDriveWorkspaceBackend({
         getAccessToken,
         name: t("workspace.googleDriveWorkspace"),
         refreshAccessToken,
         root,
       });
-      let storedConfig = root ? { clientId, root } : { clientId };
+      await ensureGoogleDriveAppWorkspaceManifest(backend);
+
+      let storedConfig = { clientId };
       setStoredGoogleDriveConfig(storedConfig);
       setStoredWorkspaceKind("gdrive");
       saveStoredGoogleDriveWorkspaceConfig(storedConfig);

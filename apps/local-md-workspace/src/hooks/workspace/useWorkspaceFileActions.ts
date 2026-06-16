@@ -17,10 +17,7 @@ import {
 } from "@/lib/file-system";
 import type { TFunction } from "@/lib/i18n";
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
-import {
-  defaultGoogleDriveClientId,
-  defaultGoogleDriveRoot,
-} from "@/lib/workspace/google-drive-config";
+import { defaultGoogleDriveClientId } from "@/lib/workspace/google-drive-config";
 import { defaultOneDriveClientId, defaultOneDriveRoot } from "@/lib/workspace/onedrive-config";
 import { errorToMessage, isAbortError } from "@/lib/workspace/errors";
 import {
@@ -93,7 +90,6 @@ type UseWorkspaceFileActionsOptions = {
   setWorkspaceBackend: (backend: WorkspaceBackend) => void;
   singleFileSourceRef: MutableRef<SingleFileSource | null>;
   storedDropboxConfig: StoredDropboxWorkspaceConfig | null;
-  storedGoogleDriveConfig: StoredGoogleDriveWorkspaceConfig | null;
   storedOneDriveConfig: StoredOneDriveWorkspaceConfig | null;
   t: TFunction;
   workspaceBackendRef: MutableRef<WorkspaceBackend | null>;
@@ -123,7 +119,6 @@ export function useWorkspaceFileActions({
   setWorkspaceBackend,
   singleFileSourceRef,
   storedDropboxConfig,
-  storedGoogleDriveConfig,
   storedOneDriveConfig,
   t,
   workspaceBackendRef,
@@ -428,7 +423,6 @@ export function useWorkspaceFileActions({
             ? workspaceBackendRef.current
             : await createGoogleDriveBackend({
                 clientId,
-                root: storedGoogleDriveConfig?.root ?? defaultGoogleDriveRoot(),
               });
         await backend.writeFile(path, value);
         setWorkspaceBackend(backend);
@@ -453,7 +447,6 @@ export function useWorkspaceFileActions({
       setRetryLoadPath,
       setWorkspaceBackend,
       singleFileSourceRef,
-      storedGoogleDriveConfig,
       workspaceBackendRef,
     ],
   );

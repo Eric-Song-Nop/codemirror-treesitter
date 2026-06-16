@@ -99,12 +99,13 @@ Optional Google Drive configuration:
 ```env
 VITE_GOOGLE_DRIVE_CLIENT_ID="your-public-google-oauth-client-id"
 VITE_GOOGLE_DRIVE_REDIRECT_URI="http://localhost:5173/"
-VITE_GOOGLE_DRIVE_ROOT="optional/root"
 ```
 
-Google Drive requests `https://www.googleapis.com/auth/drive.file` by default,
-so it can work with files and folders created or opened through the app without
-requesting full-drive access.
+Google Drive requests `https://www.googleapis.com/auth/drive.file` and uses a
+fixed Grove app-owned workspace. Markdown save paths are resolved inside that
+workspace. The app can only access files it creates or that Google Drive grants
+to it; opening arbitrary existing Drive folders would require Google Picker or a
+broader Drive scope.
 
 Optional relay configuration:
 

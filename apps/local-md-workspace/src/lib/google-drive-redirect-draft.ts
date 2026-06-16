@@ -3,7 +3,6 @@ const GOOGLE_DRIVE_REDIRECT_DRAFT_KEY = "local-md-workspace:google-drive-redirec
 export type GoogleDriveRedirectDraft = {
   clientId: string;
   dirtyValue?: string;
-  root?: string;
   selectedPath?: string;
 };
 
@@ -49,13 +48,6 @@ function normalizeGoogleDriveRedirectDraft(value: unknown): GoogleDriveRedirectD
   let clientId = record.clientId.trim();
   if (!clientId) return null;
 
-  let root =
-    typeof record.root == "string"
-      ? record.root
-          .trim()
-          .replace(/\\/g, "/")
-          .replace(/^\/+|\/+$/g, "")
-      : "";
   let selectedPath =
     typeof record.selectedPath == "string" && record.selectedPath.trim()
       ? record.selectedPath.trim().replace(/\\/g, "/").replace(/^\/+/, "")
@@ -65,7 +57,6 @@ function normalizeGoogleDriveRedirectDraft(value: unknown): GoogleDriveRedirectD
   return {
     clientId,
     ...(dirtyValue != null && selectedPath ? { dirtyValue, selectedPath } : {}),
-    ...(root ? { root } : {}),
   };
 }
 

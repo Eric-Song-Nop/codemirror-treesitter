@@ -237,7 +237,7 @@ const exactMessageKeys: Readonly<Record<string, TranslationKey>> = {
     "errors.googleDriveTokenExchangeFailed",
   "Google Drive workspace is not configured. Set VITE_GOOGLE_DRIVE_CLIENT_ID for this app.":
     "errors.googleDriveNotConfigured",
-  "Google Drive workspace path is no longer available. Check the Google Drive root setting, then reconnect Google Drive workspace.":
+  "Grove Google Drive workspace is no longer available. Reconnect Google Drive workspace; this app can only access files it creates or that Google Drive grants to it.":
     "errors.googleDrivePathUnavailable",
   "OneDrive access token expired. Reconnect OneDrive workspace to continue.":
     "errors.onedriveAccessTokenExpired",
