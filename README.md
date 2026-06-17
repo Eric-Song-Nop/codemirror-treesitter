@@ -103,7 +103,7 @@ await editor.ready;
   themes.
 - LiveMD, a Markdown editor runtime built from the local Tree-sitter packages,
   exposed through `createLiveMdEditor()`, `liveMarkdown()`,
-  `liveMdCodeFenceHighlighting()`, `renderMarkdownToHtml()`,
+  `liveMdCodeFenceHighlighting()`, `liveMdLinkOpen()`, `renderMarkdownToHtml()`,
   `liveMdMarkdownDocumentCss()`, `defineLiveMdEditor()`, and
   `<live-md-editor>`.
 - Optional LiveMD collaboration bindings for Loro documents, presence, custom
@@ -339,9 +339,11 @@ controller.destroy();
 `imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`. `imageSource` maps
 normalized Markdown image destinations to preview URLs, which host apps can use
 for local blob URLs or uploaded assets. `linkBaseUrl` is used to resolve
-relative Markdown links for Shift-click link jumps. The controller exposes
-`view`, `value`, `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`,
-`setPlaceholder()`, `setReadOnly()`, and `destroy()`.
+relative Markdown links for Shift-click link jumps. Link jumps open in a new
+browsing context by default; add `liveMdLinkOpen(handler)` through `extensions`
+when a host needs custom navigation. The controller exposes `view`, `value`,
+`ready`, `setValue()`, `setExtensions()`, `setPersistKey()`, `setPlaceholder()`,
+`setReadOnly()`, and `destroy()`.
 Fenced code token colors reuse the active CodeMirror syntax highlighters from
 `extensions`. `liveMdCodeFenceHighlighting(...)` remains available for hosts
 that need an explicit fenced-code override.

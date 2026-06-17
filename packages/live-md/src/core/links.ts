@@ -8,6 +8,7 @@ const linkMarkCache = new Map<string, Decoration>();
 const plainLinkMark = Decoration.mark({ class: "cm-md-link" });
 
 export type LiveMdLinkBaseUrl = string | URL;
+export type LiveMdLinkOpenHandler = (href: string) => void;
 
 export const liveMdLinkBaseUrl = Facet.define<string, string | null>({
   combine(values) {
@@ -15,9 +16,19 @@ export const liveMdLinkBaseUrl = Facet.define<string, string | null>({
   },
 });
 
+const liveMdLinkOpenHandler = Facet.define<LiveMdLinkOpenHandler, LiveMdLinkOpenHandler>({
+  combine(values) {
+    return values.at(-1) ?? openLiveMdLinkInNewContext;
+  },
+});
+
 export function liveMdLinkBase(baseUrl: LiveMdLinkBaseUrl | null | undefined): Extension {
   let normalized = normalizeLiveMdLinkBaseUrl(baseUrl);
   return normalized ? liveMdLinkBaseUrl.of(normalized) : [];
+}
+
+export function liveMdLinkOpen(handler: LiveMdLinkOpenHandler | null | undefined): Extension {
+  return handler ? liveMdLinkOpenHandler.of(handler) : [];
 }
 
 export function liveMdLinkMark(destination: null | string | undefined, baseUrl: null | string) {
@@ -46,12 +57,12 @@ export function liveMdLinkInteractions(): Extension {
         event.preventDefault();
         return true;
       },
-      click(event) {
+      click(event, view) {
         let link = eventLiveMdLink(event);
         if (!link || !event.shiftKey) return false;
 
         event.preventDefault();
-        openLiveMdLink(link.dataset.liveMdHref!);
+        view.state.facet(liveMdLinkOpenHandler)(link.dataset.liveMdHref!);
         return true;
       },
     }),
@@ -201,7 +212,7 @@ function eventLiveMdLink(event: MouseEvent) {
   return target.closest<HTMLElement>(".cm-md-link[data-live-md-href]");
 }
 
-function openLiveMdLink(href: string) {
+function openLiveMdLinkInNewContext(href: string) {
   if (typeof globalThis.open != "function") return;
   globalThis.open(href, "_blank", "noopener,noreferrer");
 }
