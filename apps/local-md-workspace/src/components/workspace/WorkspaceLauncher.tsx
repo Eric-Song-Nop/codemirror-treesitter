@@ -1,6 +1,7 @@
 import { CloudIcon, FolderOpenIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
+import { PendingButtonContent } from "./PendingButtonContent";
 
 type WorkspaceLauncherProps = {
   browserSupported: boolean;
@@ -38,8 +39,13 @@ export function WorkspaceLauncher({
           disabled={!browserSupported || busy || restoreChecking}
           onClick={onRestoreFolder}
         >
-          <FolderOpenIcon data-icon="inline-start" />
-          {t("actions.continuePreviousFolder")}
+          <PendingButtonContent
+            pending={busy || restoreChecking}
+            pendingLabel={t("actions.restoring")}
+          >
+            <FolderOpenIcon data-icon="inline-start" />
+            {t("actions.continuePreviousFolder")}
+          </PendingButtonContent>
         </Button>
       )}
       {dropboxRestoreAvailable && (
@@ -49,8 +55,13 @@ export function WorkspaceLauncher({
           variant={restoreAvailable ? "outline" : "default"}
           onClick={onRestoreDropbox}
         >
-          <CloudIcon data-icon="inline-start" />
-          {t("actions.continueDropbox")}
+          <PendingButtonContent
+            pending={busy || dropboxConnecting}
+            pendingLabel={t("actions.connecting")}
+          >
+            <CloudIcon data-icon="inline-start" />
+            {t("actions.continueDropbox")}
+          </PendingButtonContent>
         </Button>
       )}
       <Button
@@ -59,8 +70,10 @@ export function WorkspaceLauncher({
         variant={hasPrimaryRestore ? "outline" : "default"}
         onClick={onOpenFolder}
       >
-        <FolderOpenIcon data-icon="inline-start" />
-        {t("actions.openFolder")}
+        <PendingButtonContent pending={busy} pendingLabel={t("actions.opening")}>
+          <FolderOpenIcon data-icon="inline-start" />
+          {t("actions.openFolder")}
+        </PendingButtonContent>
       </Button>
       <Button
         className="justify-start"
@@ -68,8 +81,10 @@ export function WorkspaceLauncher({
         variant="outline"
         onClick={onOpenDropbox}
       >
-        <CloudIcon data-icon="inline-start" />
-        {t("actions.connectDropbox")}
+        <PendingButtonContent pending={dropboxConnecting} pendingLabel={t("actions.connecting")}>
+          <CloudIcon data-icon="inline-start" />
+          {t("actions.connectDropbox")}
+        </PendingButtonContent>
       </Button>
     </div>
   );

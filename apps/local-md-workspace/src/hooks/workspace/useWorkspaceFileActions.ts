@@ -1,4 +1,5 @@
 import { useCallback, useState, type RefObject } from "react";
+import { useMutation } from "@tanstack/react-query";
 import type { LiveMdEditorElement, LiveMdMarkdownConfig } from "@codemirror-treesitter/live-md";
 import {
   getCollabDocumentValue,
@@ -18,6 +19,7 @@ import {
 import type { TFunction } from "@/lib/i18n";
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
 import { errorToMessage, isAbortError } from "@/lib/workspace/errors";
+import { workspaceMutationKeys } from "@/lib/workspace-query-keys";
 import {
   downloadTextFile,
   htmlExportFileName,
@@ -156,7 +158,7 @@ export function useWorkspaceFileActions({
     });
   }, []);
 
-  let exportCurrentFileAsHtml = useCallback(async () => {
+  let exportCurrentFileAsHtmlImpl = useCallback(async () => {
     let file = selectedFileRef.current;
     if (!file) return;
     if (!(await saveCurrentFile())) return;
@@ -190,7 +192,7 @@ export function useWorkspaceFileActions({
     t,
   ]);
 
-  let printCurrentFileAsPdf = useCallback(async () => {
+  let printCurrentFileAsPdfImpl = useCallback(async () => {
     let file = selectedFileRef.current;
     if (!file) return;
 
@@ -246,7 +248,7 @@ export function useWorkspaceFileActions({
     );
   }, [currentMarkdownValue, selectedFileRef, singleFileSourceRef]);
 
-  let saveSingleFileAsLocal = useCallback(async () => {
+  let saveSingleFileAsLocalImpl = useCallback(async () => {
     let file = selectedFileRef.current;
     if (!file) return;
     if (!supportsSaveFilePicker()) {
@@ -309,7 +311,7 @@ export function useWorkspaceFileActions({
     if (!open) setSaveAsDropboxError("");
   }, []);
 
-  let submitSaveAsDropbox = useCallback(
+  let submitSaveAsDropboxImpl = useCallback(
     async (rawPath: string) => {
       let source = singleFileSourceRef.current;
       let value = currentMarkdownValue();
@@ -361,6 +363,46 @@ export function useWorkspaceFileActions({
       storedDropboxConfig,
       workspaceBackendRef,
     ],
+  );
+
+  let { mutateAsync: exportCurrentFileAsHtmlMutation } = useMutation({
+    mutationKey: workspaceMutationKeys.exportHtml,
+    mutationFn: exportCurrentFileAsHtmlImpl,
+  });
+
+  let { mutateAsync: printCurrentFileAsPdfMutation } = useMutation({
+    mutationKey: workspaceMutationKeys.printPdf,
+    mutationFn: printCurrentFileAsPdfImpl,
+  });
+
+  let { mutateAsync: saveSingleFileAsLocalMutation } = useMutation({
+    mutationKey: workspaceMutationKeys.saveAsLocal,
+    mutationFn: saveSingleFileAsLocalImpl,
+  });
+
+  let { mutateAsync: submitSaveAsDropboxMutation } = useMutation({
+    mutationKey: workspaceMutationKeys.saveAsDropbox,
+    mutationFn: submitSaveAsDropboxImpl,
+  });
+
+  let exportCurrentFileAsHtml = useCallback(
+    () => exportCurrentFileAsHtmlMutation(),
+    [exportCurrentFileAsHtmlMutation],
+  );
+
+  let printCurrentFileAsPdf = useCallback(
+    () => printCurrentFileAsPdfMutation(),
+    [printCurrentFileAsPdfMutation],
+  );
+
+  let saveSingleFileAsLocal = useCallback(
+    () => saveSingleFileAsLocalMutation(),
+    [saveSingleFileAsLocalMutation],
+  );
+
+  let submitSaveAsDropbox = useCallback(
+    (rawPath: string) => submitSaveAsDropboxMutation(rawPath),
+    [submitSaveAsDropboxMutation],
   );
 
   return {

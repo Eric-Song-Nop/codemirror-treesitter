@@ -11,6 +11,7 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field
 import { Input } from "@/components/ui/input";
 import { translateKnownMessage, useI18n } from "@/lib/i18n";
 import type { FileDialogMode } from "@/lib/workspace/types";
+import { PendingButtonContent } from "./PendingButtonContent";
 
 type FileNameDialogProps = {
   busy: boolean;
@@ -83,7 +84,12 @@ export function FileNameDialog({
               {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={busy}>
-              {createMode ? t("common.create") : t("actions.rename")}
+              <PendingButtonContent
+                pending={busy}
+                pendingLabel={createMode ? t("actions.creating") : t("actions.renaming")}
+              >
+                {createMode ? t("common.create") : t("actions.rename")}
+              </PendingButtonContent>
             </Button>
           </DialogFooter>
         </form>
@@ -159,7 +165,9 @@ function SaveAsCloudDialog({
               {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={busy}>
-              {t("actions.save")}
+              <PendingButtonContent pending={busy} pendingLabel={t("actions.saving")}>
+                {t("actions.save")}
+              </PendingButtonContent>
             </Button>
           </DialogFooter>
         </form>

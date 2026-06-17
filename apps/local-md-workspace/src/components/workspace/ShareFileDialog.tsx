@@ -24,6 +24,7 @@ import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
 import { translateKnownMessage, useI18n, type Locale, type TFunction } from "@/lib/i18n";
 import type { MarkdownFileNode } from "@/lib/workspace-backend";
 import type { ActiveOwnerShareRecord } from "@/lib/workspace/types";
+import { PendingButtonContent } from "./PendingButtonContent";
 
 type ShareFileDialogProps = {
   activeShare: ActiveOwnerShareRecord | null;
@@ -188,17 +189,23 @@ export function ShareFileDialog({
             {shared ? (
               <>
                 <Button type="button" variant="destructive" disabled={busy} onClick={onStopSharing}>
-                  {t("actions.stopSharing")}
+                  <PendingButtonContent pending={busy} pendingLabel={t("actions.stopping")}>
+                    {t("actions.stopSharing")}
+                  </PendingButtonContent>
                 </Button>
                 <Button type="button" variant="outline" disabled={busy} onClick={onRotateLink}>
-                  <RefreshCwIcon data-icon="inline-start" />
-                  {t("actions.rotateLink")}
+                  <PendingButtonContent pending={busy} pendingLabel={t("actions.rotating")}>
+                    <RefreshCwIcon data-icon="inline-start" />
+                    {t("actions.rotateLink")}
+                  </PendingButtonContent>
                 </Button>
               </>
             ) : (
               <Button type="button" disabled={busy || !file} onClick={onCreateLink}>
-                <Share2Icon data-icon="inline-start" />
-                {t("actions.createLink")}
+                <PendingButtonContent pending={busy} pendingLabel={t("actions.creatingLink")}>
+                  <Share2Icon data-icon="inline-start" />
+                  {t("actions.createLink")}
+                </PendingButtonContent>
               </Button>
             )}
           </DialogFooter>

@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import type { FileTreeCreateKind, FileTreeDeleteTarget } from "@/components/FileTree";
 import type { TFunction } from "@/lib/i18n";
 import { errorToMessage } from "@/lib/workspace/errors";
@@ -10,6 +11,7 @@ import {
   renameWorkspaceDirectory,
 } from "@/lib/workspace/paths";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
+import { workspaceMutationKeys } from "@/lib/workspace-query-keys";
 import type { FileDialogMode, SingleFileSource, SourceAutoSaveTask } from "@/lib/workspace/types";
 import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
 import type {
@@ -111,7 +113,7 @@ export function useWorkspaceEntryDialogs({
     }
   }, []);
 
-  let submitFileDialog = useCallback(
+  let submitFileDialogImpl = useCallback(
     async (value: string) => {
       if (!workspaceBackend || !fileDialogMode) return;
       if (!(await saveCurrentFile())) return;
@@ -169,6 +171,16 @@ export function useWorkspaceEntryDialogs({
     ],
   );
 
+  let { mutateAsync: submitFileDialogMutation } = useMutation({
+    mutationKey: workspaceMutationKeys.submitEntryDialog,
+    mutationFn: submitFileDialogImpl,
+  });
+
+  let submitFileDialog = useCallback(
+    (value: string) => submitFileDialogMutation(value),
+    [submitFileDialogMutation],
+  );
+
   let requestDeleteEntry = useCallback(
     (target: FileTreeDeleteTarget) => {
       setErrorMessage("");
@@ -181,7 +193,7 @@ export function useWorkspaceEntryDialogs({
     if (!open) setDeleteTarget(null);
   }, []);
 
-  let deleteWorkspaceEntry = useCallback(async () => {
+  let deleteWorkspaceEntryImpl = useCallback(async () => {
     let backend = workspaceBackend;
     let target = deleteTarget;
     if (!backend || !target) return;
@@ -239,6 +251,16 @@ export function useWorkspaceEntryDialogs({
     singleFileSourceRef,
     workspaceBackend,
   ]);
+
+  let { mutateAsync: deleteWorkspaceEntryMutation } = useMutation({
+    mutationKey: workspaceMutationKeys.deleteEntry,
+    mutationFn: deleteWorkspaceEntryImpl,
+  });
+
+  let deleteWorkspaceEntry = useCallback(
+    () => deleteWorkspaceEntryMutation(),
+    [deleteWorkspaceEntryMutation],
+  );
 
   return {
     deleteTarget,

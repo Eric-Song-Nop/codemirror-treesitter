@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { useMutation } from "@tanstack/react-query";
 import type { DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
 import {
   type AccessDirectoryHandle,
@@ -11,6 +12,7 @@ import { defaultSidebarOpen } from "@/lib/workspace/constants";
 import { defaultDropboxAppKey } from "@/lib/workspace/dropbox-config";
 import { errorToMessage, isAbortError } from "@/lib/workspace/errors";
 import { loadWorkspaceSelectedPath } from "@/lib/workspace/state";
+import { workspaceMutationKeys } from "@/lib/workspace-query-keys";
 import type {
   StoredDropboxWorkspaceConfig,
   StoredLocalWorkspaceRecord,
@@ -44,6 +46,14 @@ type UseWorkspaceOpenersOptions = {
   workspaceBackend: WorkspaceBackend | null;
 };
 
+type OpenDropboxWorkspaceInput = {
+  config: StoredDropboxWorkspaceConfig;
+  options?: {
+    restoreDraft?: DropboxRedirectDraft | null;
+    skipSaveCurrent?: boolean;
+  };
+};
+
 export function useWorkspaceOpeners({
   clearDropboxAccessToken,
   createDropboxBackend,
@@ -63,7 +73,7 @@ export function useWorkspaceOpeners({
   storedLocalWorkspace,
   workspaceBackend,
 }: UseWorkspaceOpenersOptions) {
-  let openWorkspace = useCallback(async () => {
+  let openWorkspaceImpl = useCallback(async () => {
     setErrorMessage("");
     setRetryLoadPath(null);
     if (!(await saveCurrentFile())) return;
@@ -104,7 +114,7 @@ export function useWorkspaceOpeners({
     setWorkspaceBackend,
   ]);
 
-  let openDropboxWorkspace = useCallback(
+  let openDropboxWorkspaceImpl = useCallback(
     async (
       config: StoredDropboxWorkspaceConfig,
       options: {
@@ -155,7 +165,7 @@ export function useWorkspaceOpeners({
     ],
   );
 
-  let restoreStoredWorkspace = useCallback(async () => {
+  let restoreStoredWorkspaceImpl = useCallback(async () => {
     if (!storedLocalWorkspace) return;
 
     setBusy(true);
@@ -193,6 +203,40 @@ export function useWorkspaceOpeners({
     storedLocalWorkspace,
   ]);
 
+  let { mutateAsync: openWorkspaceMutation } = useMutation({
+    mutationKey: workspaceMutationKeys.openWorkspace,
+    mutationFn: openWorkspaceImpl,
+  });
+
+  let { mutateAsync: openDropboxWorkspaceMutation } = useMutation({
+    mutationKey: workspaceMutationKeys.openDropboxWorkspace,
+    mutationFn: ({ config, options }: OpenDropboxWorkspaceInput) =>
+      openDropboxWorkspaceImpl(config, options),
+  });
+
+  let { mutateAsync: restoreStoredWorkspaceMutation } = useMutation({
+    mutationKey: workspaceMutationKeys.restoreWorkspace,
+    mutationFn: restoreStoredWorkspaceImpl,
+  });
+
+  let openWorkspace = useCallback(() => openWorkspaceMutation(), [openWorkspaceMutation]);
+
+  let openDropboxWorkspace = useCallback(
+    (
+      config: StoredDropboxWorkspaceConfig,
+      options?: {
+        restoreDraft?: DropboxRedirectDraft | null;
+        skipSaveCurrent?: boolean;
+      },
+    ) => openDropboxWorkspaceMutation({ config, options }),
+    [openDropboxWorkspaceMutation],
+  );
+
+  let restoreStoredWorkspace = useCallback(
+    () => restoreStoredWorkspaceMutation(),
+    [restoreStoredWorkspaceMutation],
+  );
+
   let restoreDropboxWorkspace = useCallback(async () => {
     if (!storedDropboxConfig) return;
     let appKey = defaultDropboxAppKey();
@@ -209,7 +253,7 @@ export function useWorkspaceOpeners({
     });
   }, [openDropboxWorkspace, setErrorMessage, setRetryLoadPath, storedDropboxConfig]);
 
-  let refreshWorkspace = useCallback(async () => {
+  let refreshWorkspaceImpl = useCallback(async () => {
     if (!workspaceBackend || !(await saveCurrentFile())) return;
 
     setBusy(true);
@@ -231,6 +275,13 @@ export function useWorkspaceOpeners({
     setRetryLoadPath,
     workspaceBackend,
   ]);
+
+  let { mutateAsync: refreshWorkspaceMutation } = useMutation({
+    mutationKey: workspaceMutationKeys.refreshWorkspace,
+    mutationFn: refreshWorkspaceImpl,
+  });
+
+  let refreshWorkspace = useCallback(() => refreshWorkspaceMutation(), [refreshWorkspaceMutation]);
 
   return {
     openDropboxWorkspace,
