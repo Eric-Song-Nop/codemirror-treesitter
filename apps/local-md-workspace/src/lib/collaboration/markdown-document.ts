@@ -4,9 +4,10 @@ import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import type { Frontiers } from "loro-crdt";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
 import {
+  documentSourceAliasRefs,
   documentSourceDocumentIdInput,
   documentSourceRef,
-  workspaceNamespace,
+  type DocumentSourceRef,
 } from "@/lib/workspace/source-identity";
 import { hashMarkdownText } from "../markdown-hash.ts";
 import {
@@ -14,6 +15,7 @@ import {
   clearBrowserCollabUpdates,
   loadBrowserCollabDocument,
   writeBrowserCollabSnapshot,
+  type BrowserCollabDocumentState,
   type BrowserCollabDocumentMetadata,
   type SerializedCollabFrontier,
   type SerializedCollabVersionVector,
@@ -94,25 +96,28 @@ type SourceImportOutcome = {
   value: string;
 };
 
+type StoredCollabDocumentCandidate = BrowserCollabDocumentState & {
+  metadata: BrowserCollabDocumentMetadata;
+  migratedFromAlias: boolean;
+  snapshot: Uint8Array;
+};
+
 export async function openMarkdownCollabDocument(
   backend: WorkspaceBackend,
   path: string,
   options: OpenMarkdownCollabDocumentOptions = {},
 ): Promise<CollabDocumentState> {
-  let docId = await createDocumentId(backend, path);
-  let workspaceId = workspaceDocumentNamespace(backend);
-  let stored = await loadBrowserCollabDocument(docId);
-  let storedMetadata =
-    stored.metadata && stored.metadata.path == path && stored.metadata.workspaceId == workspaceId
-      ? stored.metadata
-      : null;
+  let sourceRef = documentSourceRef(backend, path);
+  let docId = await createDocumentIdForSourceRef(sourceRef);
+  let workspaceId = sourceRef.workspaceNamespace;
+  let stored = await loadStoredCollabDocumentCandidate(backend, path, sourceRef, docId);
   let doc = new LoroDoc();
   let externalEdit: CollabExternalEditResolution | undefined;
   let sourceState: CollabSourceState = { kind: "synced" };
   let metadata: BrowserCollabDocumentMetadata;
 
-  if (stored.snapshot && storedMetadata) {
-    metadata = storedMetadata;
+  if (stored) {
+    metadata = stored.metadata;
     doc.import(stored.snapshot);
     if (stored.updates.length) doc.importBatch(stored.updates);
     if (options.reconcileExternalEdits ?? true) {
@@ -121,6 +126,7 @@ export async function openMarkdownCollabDocument(
       metadata = result.metadata;
       sourceState = result.sourceState;
     }
+    if (stored.migratedFromAlias) await compactDocumentSnapshot(metadata, doc);
   } else {
     let initialValue = await backend.readFile(path);
     let text = doc.getText(textKey);
@@ -160,6 +166,63 @@ export async function openMarkdownCollabDocument(
     undoManager,
     value,
   };
+}
+
+async function loadStoredCollabDocumentCandidate(
+  backend: WorkspaceBackend,
+  path: string,
+  sourceRef: DocumentSourceRef,
+  docId: string,
+): Promise<StoredCollabDocumentCandidate | null> {
+  let stored = await loadBrowserCollabDocument(docId);
+  let metadata = storedCollabMetadataForSource(stored, path, sourceRef.workspaceNamespace);
+  if (stored.snapshot && metadata) {
+    return {
+      ...stored,
+      metadata,
+      migratedFromAlias: false,
+      snapshot: stored.snapshot,
+    };
+  }
+
+  for (let aliasRef of documentSourceAliasRefs(backend, path)) {
+    let aliasDocId = await createDocumentIdForSourceRef(aliasRef);
+    if (aliasDocId == docId) continue;
+
+    let aliasStored = await loadBrowserCollabDocument(aliasDocId);
+    let aliasMetadata = storedCollabMetadataForSource(
+      aliasStored,
+      path,
+      aliasRef.workspaceNamespace,
+    );
+    if (!aliasStored.snapshot || !aliasMetadata) continue;
+
+    return {
+      ...aliasStored,
+      metadata: {
+        ...aliasMetadata,
+        docId,
+        path,
+        workspaceId: sourceRef.workspaceNamespace,
+      },
+      migratedFromAlias: true,
+      snapshot: aliasStored.snapshot,
+    };
+  }
+
+  return null;
+}
+
+function storedCollabMetadataForSource(
+  stored: BrowserCollabDocumentState,
+  path: string,
+  workspaceId: string,
+) {
+  return stored.metadata &&
+    stored.metadata.path == path &&
+    stored.metadata.workspaceId == workspaceId
+    ? stored.metadata
+    : null;
 }
 
 export function getCollabDocumentValue(state: CollabDocumentState) {
@@ -477,8 +540,8 @@ function replaceMarkdownText(doc: LoroDoc, value: string) {
   doc.commit();
 }
 
-async function createDocumentId(backend: WorkspaceBackend, path: string) {
-  let value = documentSourceDocumentIdInput(documentSourceRef(backend, path));
+async function createDocumentIdForSourceRef(sourceRef: DocumentSourceRef) {
+  let value = documentSourceDocumentIdInput(sourceRef);
   try {
     let bytes = new TextEncoder().encode(value);
     let digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -486,10 +549,6 @@ async function createDocumentId(backend: WorkspaceBackend, path: string) {
   } catch {
     return `doc-${hashMarkdownText(value)}`;
   }
-}
-
-function workspaceDocumentNamespace(backend: WorkspaceBackend) {
-  return workspaceNamespace(backend);
 }
 
 function encodeBase64Url(bytes: Uint8Array) {
