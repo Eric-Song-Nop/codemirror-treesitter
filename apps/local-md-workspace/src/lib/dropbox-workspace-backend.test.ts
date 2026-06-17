@@ -5,8 +5,31 @@ import type {
   OpendalBrowserEntry,
 } from "@codemirror-treesitter/opendal-wasm-browser";
 import { createDropboxWorkspaceBackend } from "./dropbox-workspace-backend.ts";
+import { documentSourceDocumentIdInput, documentSourceRef } from "./workspace/source-identity.ts";
 
 describe("Dropbox workspace backend", () => {
+  it("includes the Dropbox account identity in workspace source ids", () => {
+    let first = createDropboxWorkspaceBackend({
+      getAccessToken: async () => token("token-a"),
+      identity: { id: "dbid:account-a", kind: "account" },
+      refreshAccessToken: async () => token("token-a"),
+      root: "Grove",
+    });
+    let second = createDropboxWorkspaceBackend({
+      getAccessToken: async () => token("token-b"),
+      identity: { id: "dbid:account-b", kind: "account" },
+      refreshAccessToken: async () => token("token-b"),
+      root: "Grove",
+    });
+
+    expect(first.id).toBe("dropbox:account:dbid%3Aaccount-a:Grove");
+    expect(second.id).toBe("dropbox:account:dbid%3Aaccount-b:Grove");
+    expect(first.id).not.toBe(second.id);
+    expect(documentSourceDocumentIdInput(documentSourceRef(first, "notes/today.md"))).not.toBe(
+      documentSourceDocumentIdInput(documentSourceRef(second, "notes/today.md")),
+    );
+  });
+
   it("coalesces pending writes while keeping same-path writes serialized", async () => {
     let firstWriteStarted = deferred<void>();
     let releaseFirstWrite = deferred<void>();

@@ -6,6 +6,7 @@ import {
   createOneDrivePkceChallenge,
   createOneDrivePkceVerifier,
   DEFAULT_ONEDRIVE_SCOPES,
+  fetchOneDriveDriveIdentity,
   hasOneDriveOAuthCallback,
   hasOneDriveRedirectTransaction,
   ONEDRIVE_REDIRECT_TRANSACTION_KEY,
@@ -212,6 +213,27 @@ describe("OneDrive OAuth PKCE helpers", () => {
 
     expect(token?.accessToken).toBe("token");
     expect(token?.expiresAt).toEqual(expect.any(Number));
+  });
+
+  it("fetches OneDrive drive identity from Microsoft Graph", async () => {
+    let fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      tokenResponse({ id: "drive-123" }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(fetchOneDriveDriveIdentity("access-token")).resolves.toEqual({
+      id: "drive-123",
+      kind: "drive",
+    });
+
+    let url = fetch.mock.calls[0]?.[0] as URL;
+    expect(`${url.origin}${url.pathname}`).toBe("https://graph.microsoft.com/v1.0/me/drive");
+    expect(url.searchParams.get("$select")).toBe("id");
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({
+      headers: {
+        Authorization: "Bearer access-token",
+      },
+    });
   });
 
   it("rejects full-page redirect callbacks with mismatched state", async () => {

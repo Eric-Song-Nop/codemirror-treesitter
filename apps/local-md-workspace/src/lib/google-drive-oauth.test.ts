@@ -6,6 +6,7 @@ import {
   createGoogleDrivePkceChallenge,
   createGoogleDrivePkceVerifier,
   DEFAULT_GOOGLE_DRIVE_SCOPES,
+  fetchGoogleDriveAccountIdentity,
   GOOGLE_DRIVE_REDIRECT_TRANSACTION_KEY,
   hasGoogleDriveOAuthCallback,
   hasGoogleDriveRedirectTransaction,
@@ -249,6 +250,27 @@ describe("Google Drive OAuth PKCE helpers", () => {
 
     expect(token?.accessToken).toBe("token");
     expect(token?.expiresAt).toEqual(expect.any(Number));
+  });
+
+  it("fetches Google Drive account identity from Drive about", async () => {
+    let fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      tokenResponse({ user: { permissionId: "permission-123" } }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(fetchGoogleDriveAccountIdentity("access-token")).resolves.toEqual({
+      id: "permission-123",
+      kind: "account",
+    });
+
+    let url = fetch.mock.calls[0]?.[0] as URL;
+    expect(`${url.origin}${url.pathname}`).toBe("https://www.googleapis.com/drive/v3/about");
+    expect(url.searchParams.get("fields")).toBe("user(permissionId)");
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({
+      headers: {
+        Authorization: "Bearer access-token",
+      },
+    });
   });
 
   it("rejects full-page redirect callbacks with mismatched state", async () => {

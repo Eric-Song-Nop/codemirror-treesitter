@@ -2,12 +2,14 @@ import type { DropboxAccessToken } from "./dropbox-oauth.ts";
 import {
   createOpendalWorkspaceBackend,
   type OpendalOperatorFactory,
+  type OpendalWorkspaceIdentity,
 } from "./opendal-workspace-backend.ts";
 import type { WorkspaceBackend } from "./workspace-backend.ts";
 
 export type DropboxWorkspaceBackendOptions = {
   createOperator?: OpendalOperatorFactory;
   getAccessToken: () => Promise<DropboxAccessToken>;
+  identity?: OpendalWorkspaceIdentity;
   name?: string;
   refreshAccessToken: () => Promise<DropboxAccessToken>;
   root?: string;

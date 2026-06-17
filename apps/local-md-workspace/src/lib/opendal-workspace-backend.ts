@@ -37,11 +37,17 @@ export type OpendalWorkspaceProvider = Extract<
   "dropbox" | "gdrive" | "onedrive"
 >;
 
+export type OpendalWorkspaceIdentity = {
+  id: string;
+  kind: "account" | "drive";
+};
+
 export type OpendalWorkspaceBackendOptions = {
   createOperator?: OpendalOperatorFactory;
   defaultName: string;
   expiredTokenPattern?: RegExp;
   getAccessToken: () => Promise<OpendalWorkspaceAccessToken>;
+  identity?: OpendalWorkspaceIdentity;
   kind: Extract<WorkspaceBackendKind, "opendal-dropbox" | "opendal-gdrive" | "opendal-onedrive">;
   name?: string;
   notFoundPattern?: RegExp;
@@ -83,6 +89,7 @@ export function createOpendalWorkspaceBackend(
   let root = normalizeOpendalRoot(options.root);
   let createOperator = options.createOperator ?? devTestOpendalOperatorFactory(options.provider);
   let backendName = options.name ?? options.defaultName;
+  let workspaceId = opendalWorkspaceId(options.provider, root, options.identity);
 
   async function ensureOperator(forceRefresh = false) {
     if (forceRefresh || !token || token.expiresAt <= Date.now() + TOKEN_EXPIRY_SKEW_MS) {
@@ -310,7 +317,7 @@ export function createOpendalWorkspaceBackend(
   }
 
   return {
-    id: `${options.provider}:${root || "/"}`,
+    id: workspaceId,
     kind: options.kind,
     name: backendName,
     createDirectory: (path) => createDirectory(path),
@@ -412,6 +419,24 @@ export function createOpendalWorkspaceBackend(
       await queueWrite(path, value);
     },
   };
+}
+
+export function opendalWorkspaceId(
+  provider: OpendalWorkspaceProvider,
+  root: string | undefined,
+  identity?: OpendalWorkspaceIdentity,
+) {
+  let rootPart = root || "/";
+  let identityId = identity?.id.trim();
+  if (!identity || !identityId) return `${provider}:${rootPart}`;
+  return `${provider}:${identity.kind}:${encodeOpendalWorkspaceIdPart(identityId)}:${rootPart}`;
+}
+
+export function sameOpendalWorkspaceIdentity(
+  left: OpendalWorkspaceIdentity,
+  right: OpendalWorkspaceIdentity,
+) {
+  return left.kind == right.kind && left.id == right.id;
 }
 
 function conditionalWriteOptions(
@@ -554,6 +579,10 @@ function normalizeOpendalRoot(value: string | undefined) {
     .replace(/\\/g, "/")
     .replace(/^\/+|\/+$/g, "");
   return root || undefined;
+}
+
+function encodeOpendalWorkspaceIdPart(value: string) {
+  return encodeURIComponent(value);
 }
 
 function replaceFileName(path: string, nextName: string) {

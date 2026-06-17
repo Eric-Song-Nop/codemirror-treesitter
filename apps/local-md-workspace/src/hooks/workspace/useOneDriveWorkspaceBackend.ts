@@ -1,7 +1,15 @@
 import { useCallback, useRef } from "react";
-import { authorizeOneDriveWithPkce, type OneDriveAccessToken } from "@/lib/onedrive-oauth";
+import {
+  authorizeOneDriveWithPkce,
+  fetchOneDriveDriveIdentity,
+  type OneDriveAccessToken,
+} from "@/lib/onedrive-oauth";
 import { saveOneDriveRedirectDraft } from "@/lib/onedrive-redirect-draft";
 import type { TFunction } from "@/lib/i18n";
+import {
+  sameOpendalWorkspaceIdentity,
+  type OpendalWorkspaceIdentity,
+} from "@/lib/opendal-workspace-backend";
 import {
   defaultOneDriveRedirectUri,
   normalizeOneDriveRootInput,
@@ -101,7 +109,15 @@ export function useOneDriveWorkspaceBackend({
       if (!clientId) throw new Error("OneDrive client ID is required.");
 
       let root = normalizeOneDriveRootInput(config.root);
-      let refreshAccessToken = () => authorizeOneDriveAccess(clientId, root);
+      let workspaceIdentity: OpendalWorkspaceIdentity | null = null;
+      let refreshAccessToken = async () => {
+        let token = await authorizeOneDriveAccess(clientId, root);
+        let identity = await fetchOneDriveDriveIdentity(token.accessToken);
+        if (workspaceIdentity && !sameOpendalWorkspaceIdentity(workspaceIdentity, identity)) {
+          throw new Error("OneDrive drive changed. Reconnect OneDrive workspace to continue.");
+        }
+        return token;
+      };
       let getAccessToken = async () => {
         let token = oneDriveTokenRef.current;
         if (
@@ -114,10 +130,11 @@ export function useOneDriveWorkspaceBackend({
         return refreshAccessToken();
       };
 
-      await getAccessToken();
+      workspaceIdentity = await fetchOneDriveDriveIdentity((await getAccessToken()).accessToken);
       let { createOneDriveWorkspaceBackend } = await import("@/lib/onedrive-workspace-backend");
       let backend = createOneDriveWorkspaceBackend({
         getAccessToken,
+        identity: workspaceIdentity,
         name: t("workspace.onedriveWorkspace"),
         refreshAccessToken,
         root,

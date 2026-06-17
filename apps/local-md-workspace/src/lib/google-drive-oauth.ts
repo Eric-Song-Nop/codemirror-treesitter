@@ -1,5 +1,8 @@
+import type { OpendalWorkspaceIdentity } from "./opendal-workspace-backend.ts";
+
 export const GOOGLE_DRIVE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_DRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_DRIVE_ABOUT_URL = "https://www.googleapis.com/drive/v3/about";
 const GOOGLE_IDENTITY_SERVICES_URL = "https://accounts.google.com/gsi/client";
 export const GOOGLE_DRIVE_OAUTH_MESSAGE = "local-md-workspace:google-drive-oauth";
 export const GOOGLE_DRIVE_REDIRECT_TRANSACTION_KEY =
@@ -178,6 +181,29 @@ export async function completeGoogleDriveRedirectOAuthIfPresent(
     scopes: transaction.scopes,
     state: transaction.state,
   };
+}
+
+export async function fetchGoogleDriveAccountIdentity(
+  accessToken: string,
+): Promise<OpendalWorkspaceIdentity> {
+  let url = new URL(GOOGLE_DRIVE_ABOUT_URL);
+  url.searchParams.set("fields", "user(permissionId)");
+  let response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+  let payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      googleDriveTokenError(payload) ??
+        `Google Drive account identity request failed (${response.status}).`,
+    );
+  }
+
+  let permissionId = parseGoogleDrivePermissionId(payload);
+  if (!permissionId) throw new Error("Google Drive account identity response was invalid.");
+  return { id: permissionId, kind: "account" };
 }
 
 export function parseGoogleDriveOAuthCallback(
@@ -402,6 +428,14 @@ function googleDriveTokenError(value: unknown) {
   }
   if (typeof record.error == "string") return `Google Drive token exchange failed: ${record.error}`;
   return null;
+}
+
+function parseGoogleDrivePermissionId(value: unknown) {
+  if (!value || typeof value != "object") return null;
+  let user = (value as Record<string, unknown>).user;
+  if (!user || typeof user != "object") return null;
+  let permissionId = (user as Record<string, unknown>).permissionId;
+  return typeof permissionId == "string" && permissionId.trim() ? permissionId.trim() : null;
 }
 
 function googleDriveOAuthCallbackError(error: string, description: string | undefined) {

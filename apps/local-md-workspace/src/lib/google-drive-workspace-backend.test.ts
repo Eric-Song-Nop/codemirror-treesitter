@@ -5,8 +5,31 @@ import type {
   OpendalBrowserWriteOptions,
 } from "@codemirror-treesitter/opendal-wasm-browser";
 import { createGoogleDriveWorkspaceBackend } from "./google-drive-workspace-backend.ts";
+import { documentSourceDocumentIdInput, documentSourceRef } from "./workspace/source-identity.ts";
 
 describe("Google Drive workspace backend", () => {
+  it("includes the Google Drive account identity in workspace source ids", () => {
+    let first = createGoogleDriveWorkspaceBackend({
+      getAccessToken: async () => token("token-a"),
+      identity: { id: "permission-a", kind: "account" },
+      refreshAccessToken: async () => token("token-a"),
+      root: "Grove",
+    });
+    let second = createGoogleDriveWorkspaceBackend({
+      getAccessToken: async () => token("token-b"),
+      identity: { id: "permission-b", kind: "account" },
+      refreshAccessToken: async () => token("token-b"),
+      root: "Grove",
+    });
+
+    expect(first.id).toBe("gdrive:account:permission-a:Grove");
+    expect(second.id).toBe("gdrive:account:permission-b:Grove");
+    expect(first.id).not.toBe(second.id);
+    expect(documentSourceDocumentIdInput(documentSourceRef(first, "notes/today.md"))).not.toBe(
+      documentSourceDocumentIdInput(documentSourceRef(second, "notes/today.md")),
+    );
+  });
+
   it("uses the shared OpenDAL backend without conditional writes", async () => {
     let createCalls: OpendalBrowserOperatorConfig[] = [];
     let writes: Array<{ options?: OpendalBrowserWriteOptions; value: string }> = [];

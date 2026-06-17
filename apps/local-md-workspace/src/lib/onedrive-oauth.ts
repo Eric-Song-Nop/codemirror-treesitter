@@ -1,6 +1,9 @@
+import type { OpendalWorkspaceIdentity } from "./opendal-workspace-backend.ts";
+
 export const ONEDRIVE_AUTHORIZE_URL =
   "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
 const ONEDRIVE_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+const ONEDRIVE_ME_DRIVE_URL = "https://graph.microsoft.com/v1.0/me/drive";
 export const ONEDRIVE_OAUTH_MESSAGE = "local-md-workspace:onedrive-oauth";
 export const ONEDRIVE_REDIRECT_TRANSACTION_KEY = "local-md-workspace:onedrive-oauth-redirect";
 export const DEFAULT_ONEDRIVE_SCOPES = ["Files.ReadWrite"];
@@ -179,6 +182,28 @@ export async function completeOneDriveRedirectOAuthIfPresent(
     scopes: transaction.scopes,
     state: transaction.state,
   };
+}
+
+export async function fetchOneDriveDriveIdentity(
+  accessToken: string,
+): Promise<OpendalWorkspaceIdentity> {
+  let url = new URL(ONEDRIVE_ME_DRIVE_URL);
+  url.searchParams.set("$select", "id");
+  let response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+  let payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      oneDriveTokenError(payload) ?? `OneDrive drive identity request failed (${response.status}).`,
+    );
+  }
+
+  let driveId = parseOneDriveDriveId(payload);
+  if (!driveId) throw new Error("OneDrive drive identity response was invalid.");
+  return { id: driveId, kind: "drive" };
 }
 
 export function parseOneDriveOAuthCallback(
@@ -407,6 +432,12 @@ function oneDriveOAuthCallbackError(error: string, description: string | undefin
   return description
     ? `OneDrive authorization failed: ${description}`
     : `OneDrive authorization failed: ${error}`;
+}
+
+function parseOneDriveDriveId(value: unknown) {
+  if (!value || typeof value != "object") return null;
+  let id = (value as Record<string, unknown>).id;
+  return typeof id == "string" && id.trim() ? id.trim() : null;
 }
 
 function saveOneDriveRedirectTransaction(transaction: OneDriveRedirectTransaction) {

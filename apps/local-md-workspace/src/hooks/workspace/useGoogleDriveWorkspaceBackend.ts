@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef } from "react";
 import {
   authorizeGoogleDriveWithPkce,
+  fetchGoogleDriveAccountIdentity,
   preloadGoogleDriveIdentityServices,
   type GoogleDriveAccessToken,
 } from "@/lib/google-drive-oauth";
 import type { TFunction } from "@/lib/i18n";
+import {
+  sameOpendalWorkspaceIdentity,
+  type OpendalWorkspaceIdentity,
+} from "@/lib/opendal-workspace-backend";
 import {
   ensureGoogleDriveAppWorkspaceManifest,
   ensureGoogleDriveAppWorkspaceRoot,
@@ -79,7 +84,17 @@ export function useGoogleDriveWorkspaceBackend({
       if (!clientId) throw new Error("Google Drive client ID is required.");
 
       let root = defaultGoogleDriveRoot();
-      let refreshAccessToken = () => authorizeGoogleDriveAccess(clientId);
+      let workspaceIdentity: OpendalWorkspaceIdentity | null = null;
+      let refreshAccessToken = async () => {
+        let token = await authorizeGoogleDriveAccess(clientId);
+        let identity = await fetchGoogleDriveAccountIdentity(token.accessToken);
+        if (workspaceIdentity && !sameOpendalWorkspaceIdentity(workspaceIdentity, identity)) {
+          throw new Error(
+            "Google Drive account changed. Reconnect Google Drive workspace to continue.",
+          );
+        }
+        return token;
+      };
       let getAccessToken = async () => {
         let token = googleDriveTokenRef.current;
         if (
@@ -92,11 +107,14 @@ export function useGoogleDriveWorkspaceBackend({
         return refreshAccessToken();
       };
 
-      await getAccessToken();
+      workspaceIdentity = await fetchGoogleDriveAccountIdentity(
+        (await getAccessToken()).accessToken,
+      );
       let { createGoogleDriveWorkspaceBackend } =
         await import("@/lib/google-drive-workspace-backend");
       let bootstrapBackend = createGoogleDriveWorkspaceBackend({
         getAccessToken,
+        identity: workspaceIdentity,
         name: t("workspace.googleDriveWorkspace"),
         refreshAccessToken,
       });
@@ -104,6 +122,7 @@ export function useGoogleDriveWorkspaceBackend({
 
       let backend = createGoogleDriveWorkspaceBackend({
         getAccessToken,
+        identity: workspaceIdentity,
         name: t("workspace.googleDriveWorkspace"),
         refreshAccessToken,
         root,
