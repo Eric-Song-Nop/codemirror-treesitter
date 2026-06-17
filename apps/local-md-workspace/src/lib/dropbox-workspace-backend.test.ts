@@ -225,6 +225,9 @@ describe("Dropbox workspace backend", () => {
           async createDir(path) {
             createdDirectories.push(path);
           },
+          async stat() {
+            throw new Error("not_found");
+          },
           async writeText(path) {
             writes.push(path);
           },
@@ -240,6 +243,115 @@ describe("Dropbox workspace backend", () => {
     expect(writes).toEqual(["notes/daily/today.md", "notes/daily/today.md"]);
   });
 
+  it("skips createDir for existing parent directories before writes", async () => {
+    let createdDirectories: string[] = [];
+    let statPaths: string[] = [];
+    let writes: string[] = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async createDir(path) {
+            createdDirectories.push(path);
+          },
+          async stat(path) {
+            statPaths.push(path);
+            if (path == "notes") return directoryEntry(path);
+            throw new Error("not_found");
+          },
+          async writeText(path) {
+            writes.push(path);
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await backend.writeFile("notes/today.md", "# today\n");
+
+    expect(statPaths).toEqual(["notes"]);
+    expect(createdDirectories).toEqual([]);
+    expect(writes).toEqual(["notes/today.md"]);
+  });
+
+  it("creates only missing nested parent directories before writes", async () => {
+    let createdDirectories: string[] = [];
+    let statPaths: string[] = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async createDir(path) {
+            createdDirectories.push(path);
+          },
+          async stat(path) {
+            statPaths.push(path);
+            if (path == "notes") return directoryEntry(path);
+            throw new Error("not_found");
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await backend.writeFile("notes/daily/2026/today.md", "# today\n");
+
+    expect(statPaths).toEqual(["notes", "notes/daily", "notes/daily/2026"]);
+    expect(createdDirectories).toEqual(["notes/daily", "notes/daily/2026"]);
+  });
+
+  it("rejects writes when a parent path is a file", async () => {
+    let createdDirectories: string[] = [];
+    let writes: string[] = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async createDir(path) {
+            createdDirectories.push(path);
+          },
+          async stat(path) {
+            if (path == "notes") return fileEntry(path);
+            throw new Error("not_found");
+          },
+          async writeText(path) {
+            writes.push(path);
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await expect(backend.writeFile("notes/today.md", "# today\n")).rejects.toThrow(
+      "notes exists and is not a folder.",
+    );
+    expect(createdDirectories).toEqual([]);
+    expect(writes).toEqual([]);
+  });
+
+  it("does not recreate existing directories from explicit createDirectory calls", async () => {
+    let createdDirectories: string[] = [];
+    let statPaths: string[] = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async createDir(path) {
+            createdDirectories.push(path);
+          },
+          async stat(path) {
+            statPaths.push(path);
+            if (path == "notes") return directoryEntry(path);
+            throw new Error("not_found");
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await backend.createDirectory!("notes");
+    await backend.createDirectory!("notes");
+
+    expect(statPaths).toEqual(["notes"]);
+    expect(createdDirectories).toEqual([]);
+  });
+
   it("creates folder paths from trailing-slash create targets", async () => {
     let createdDirectories: string[] = [];
     let writes: string[] = [];
@@ -248,6 +360,9 @@ describe("Dropbox workspace backend", () => {
         fakeOperator({
           async createDir(path) {
             createdDirectories.push(path);
+          },
+          async stat() {
+            throw new Error("not_found");
           },
           async writeText(path) {
             writes.push(path);
@@ -290,6 +405,10 @@ describe("Dropbox workspace backend", () => {
           async rename(from, to) {
             renames.push([from, to]);
           },
+          async stat(path) {
+            if (path == "notes") return directoryEntry(path);
+            throw new Error("not_found");
+          },
         }),
       getAccessToken: async () => token("token"),
       refreshAccessToken: async () => token("token"),
@@ -305,6 +424,7 @@ describe("Dropbox workspace backend", () => {
 
   it("does not create parent directories when the operator cannot create them", async () => {
     let createDirCalls = 0;
+    let statCalls = 0;
     let writes: string[] = [];
     let backend = createDropboxWorkspaceBackend({
       createOperator: async () =>
@@ -323,6 +443,10 @@ describe("Dropbox workspace backend", () => {
           async createDir() {
             createDirCalls += 1;
           },
+          async stat() {
+            statCalls += 1;
+            throw new Error("not_found");
+          },
           async writeText(path) {
             writes.push(path);
           },
@@ -333,8 +457,45 @@ describe("Dropbox workspace backend", () => {
 
     await backend.writeFile("notes/today.md", "# today\n");
 
+    expect(statCalls).toBe(0);
     expect(createDirCalls).toBe(0);
     expect(writes).toEqual(["notes/today.md"]);
+  });
+
+  it("rejects explicit createDirectory when the operator cannot create folders", async () => {
+    let createDirCalls = 0;
+    let statCalls = 0;
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          capabilities: () => ({
+            nativeCopy: true,
+            nativeCreateDir: false,
+            nativeDelete: true,
+            nativeList: true,
+            nativeRead: true,
+            nativeRename: true,
+            nativeStat: true,
+            nativeWrite: true,
+            nativeWriteWithIfMatch: false,
+          }),
+          async createDir() {
+            createDirCalls += 1;
+          },
+          async stat() {
+            statCalls += 1;
+            throw new Error("not_found");
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await expect(backend.createDirectory!("notes")).rejects.toThrow(
+      "OpenDAL backend does not support folder creation.",
+    );
+    expect(statCalls).toBe(0);
+    expect(createDirCalls).toBe(0);
   });
 });
 
@@ -418,6 +579,14 @@ function fakeOperator(overrides: Partial<OpendalBrowserOperator>): OpendalBrowse
     writeText: async () => {},
     ...overrides,
   };
+}
+
+function directoryEntry(path: string): OpendalBrowserEntry {
+  return { isDirectory: true, isFile: false, path };
+}
+
+function fileEntry(path: string): OpendalBrowserEntry {
+  return { isDirectory: false, isFile: true, path };
 }
 
 function deferred<T>() {

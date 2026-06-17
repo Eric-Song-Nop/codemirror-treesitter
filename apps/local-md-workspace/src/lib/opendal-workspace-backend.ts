@@ -264,6 +264,16 @@ export function createOpendalWorkspaceBackend(
       for (let part of normalized.split("/")) {
         current = current ? `${current}/${part}` : part;
         if (createdDirectories.has(current)) continue;
+
+        let entry = await statMaybeMissing(operator, current, options.notFoundPattern);
+        if (entry) {
+          if (!entry.isDirectory) {
+            throw new Error(`${current} exists and is not a folder.`);
+          }
+          createdDirectories.add(current);
+          continue;
+        }
+
         await operator.createDir(current);
         createdDirectories.add(current);
       }
@@ -623,6 +633,19 @@ function forgetKnownRevision(path: string, revisions: Map<string, WorkspaceSourc
     if (knownPath == path || knownPath.startsWith(`${path}/`)) {
       revisions.delete(knownPath);
     }
+  }
+}
+
+async function statMaybeMissing(
+  operator: OpendalBrowserOperator,
+  path: string,
+  notFoundPattern: RegExp | undefined,
+) {
+  try {
+    return await operator.stat(path);
+  } catch (error) {
+    if (isNotFoundError(error, notFoundPattern)) return null;
+    throw error;
   }
 }
 
