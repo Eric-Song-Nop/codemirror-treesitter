@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { LoroDoc } from "loro-crdt";
 import {
   browserCollabUpdateLogByteLength,
   resetBrowserCollabMemoryStoreForTests,
@@ -51,14 +52,55 @@ describe("Markdown collaboration documents", () => {
     await vi.advanceTimersByTimeAsync(299);
     let earlyReopen = await openMarkdownCollabDocument(backend, "note.md");
     expect(earlyReopen.value).toBe("# First\n");
-    earlyReopen.dispose();
+    await earlyReopen.dispose();
 
     await vi.advanceTimersByTimeAsync(1);
     let reopened = await openMarkdownCollabDocument(backend, "note.md");
     expect(reopened.value).toBe("# First\n\nShared edit.\n");
 
-    document.dispose();
-    reopened.dispose();
+    await document.dispose();
+    await reopened.dispose();
+  });
+
+  it("flushes pending local Loro updates before disposal", async () => {
+    vi.useFakeTimers();
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let text = document.doc.getText("markdown");
+
+    text.insert(text.toString().length, "\nShared edit.\n");
+    document.doc.commit();
+
+    await vi.advanceTimersByTimeAsync(299);
+    await document.dispose();
+
+    let reopened = await openMarkdownCollabDocument(backend, "note.md");
+    expect(reopened.value).toBe("# First\n\nShared edit.\n");
+
+    await reopened.dispose();
+  });
+
+  it("flushes scheduled snapshots before disposal", async () => {
+    vi.useFakeTimers();
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let remoteDoc = new LoroDoc();
+    let remoteUpdateStart = document.doc.oplogVersion();
+
+    remoteDoc.import(document.doc.export({ mode: "snapshot" }));
+    let remoteText = remoteDoc.getText("markdown");
+    remoteText.insert(remoteText.toString().length, "\nRemote edit.\n");
+    remoteDoc.commit();
+    document.doc.import(remoteDoc.export({ mode: "update", from: remoteUpdateStart }));
+    scheduleCollabDocumentSnapshotFlush(document);
+
+    await vi.advanceTimersByTimeAsync(299);
+    await document.dispose();
+
+    let reopened = await openMarkdownCollabDocument(backend, "note.md");
+    expect(reopened.value).toBe("# First\n\nRemote edit.\n");
+
+    await reopened.dispose();
   });
 
   it("keeps Loro snapshots and updates out of the workspace backend", async () => {
@@ -97,8 +139,8 @@ describe("Markdown collaboration documents", () => {
     let reopened = await openMarkdownCollabDocument(backend, "note.md");
     expect(reopened.value).toBe("# First\n\nShared edit.\n");
 
-    document.dispose();
-    reopened.dispose();
+    await document.dispose();
+    await reopened.dispose();
   });
 
   it("imports external Markdown edits when Loro has no unmaterialized changes", async () => {

@@ -28,7 +28,7 @@ export type CollabDocumentState = {
   cleanValue: string;
   doc: LoroDoc;
   docId: string;
-  dispose: () => void;
+  dispose: () => Promise<void>;
   externalEdit?: CollabExternalEditResolution;
   extensions: Extension[];
   metadata: BrowserCollabDocumentMetadata;
@@ -154,6 +154,7 @@ export async function openMarkdownCollabDocument(
     maxWaitMs: snapshotFlushMaxWaitMs,
     run: () => writeCollabDocumentSnapshot(state),
   });
+  let disposePromise: Promise<void> | null = null;
   let unsubscribeLocalUpdates = doc.subscribeLocalUpdates((bytes) => {
     pendingUpdates.push(new Uint8Array(bytes));
     schedulePendingCollabDocumentUpdateFlush(state);
@@ -164,9 +165,17 @@ export async function openMarkdownCollabDocument(
     doc,
     docId,
     dispose() {
-      pendingUpdateFlush.dispose();
-      snapshotFlush.dispose();
+      if (disposePromise) return disposePromise;
       unsubscribeLocalUpdates();
+      disposePromise = (async () => {
+        try {
+          await flushCollabDocumentPersistence(state);
+        } finally {
+          pendingUpdateFlush.dispose();
+          snapshotFlush.dispose();
+        }
+      })();
+      return disposePromise;
     },
     externalEdit,
     extensions: [liveMdLoroCollaboration({ doc, undoManager, text: textKey })],
@@ -240,6 +249,15 @@ export async function flushPendingCollabDocumentUpdates(state: CollabDocumentSta
   if (!state.pendingUpdates.length) return;
   state.pendingUpdateFlush.schedule();
   await state.pendingUpdateFlush.flush();
+}
+
+export async function flushCollabDocumentPersistence(state: CollabDocumentState) {
+  if (state.snapshotFlush.pending()) {
+    await state.snapshotFlush.flush();
+  } else {
+    await flushPendingCollabDocumentUpdates(state);
+  }
+  await state.persistence;
 }
 
 async function appendPendingCollabDocumentUpdates(state: CollabDocumentState) {

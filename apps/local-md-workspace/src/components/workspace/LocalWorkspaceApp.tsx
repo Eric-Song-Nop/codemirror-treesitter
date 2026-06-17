@@ -20,7 +20,10 @@ import { useWorkspaceShareState } from "@/hooks/workspace/useWorkspaceShareState
 import { useWorkspaceStartup } from "@/hooks/workspace/useWorkspaceStartup";
 import { useWorkspaceTree } from "@/hooks/workspace/useWorkspaceTree";
 import { completeDropboxPopupOAuthIfPresent } from "@/lib/dropbox-oauth";
-import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
+import {
+  flushCollabDocumentPersistence,
+  type CollabDocumentState,
+} from "@/lib/collaboration/markdown-document";
 import { isMobileBrowser } from "@/lib/browser-support";
 import {
   supportsDirectoryPicker,
@@ -149,10 +152,32 @@ export function LocalWorkspaceApp() {
   useEffect(
     () => () => {
       collabSyncCleanupRef.current();
-      collabDocumentRef.current?.dispose();
+      let document = collabDocumentRef.current;
+      collabDocumentRef.current = null;
+      if (document) void document.dispose().catch(() => {});
     },
     [],
   );
+
+  useEffect(() => {
+    let flushActiveCollabDocument = () => {
+      let document = collabDocumentRef.current;
+      if (!document) return;
+      void flushCollabDocumentPersistence(document).catch((error: unknown) => {
+        setErrorMessage(errorToMessage(error));
+      });
+    };
+    let handleVisibilityChange = () => {
+      if (document.visibilityState == "hidden") flushActiveCollabDocument();
+    };
+
+    window.addEventListener("pagehide", flushActiveCollabDocument);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("pagehide", flushActiveCollabDocument);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [setErrorMessage]);
 
   useEffect(() => {
     completeDropboxPopupOAuthIfPresent();
