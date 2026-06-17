@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Extension } from "@codemirror/state";
-import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
+import type { LiveMdConfig, LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { WorkspaceDialogs } from "@/components/workspace/WorkspaceDialogs";
@@ -59,7 +58,8 @@ import {
   type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
 
-const emptyEditorExtensions: Extension[] = [];
+const emptyLiveMdConfig: LiveMdConfig = {};
+const emptyLiveMdPlugins: NonNullable<LiveMdConfig["plugins"]> = [];
 
 export function LocalWorkspaceApp() {
   let { locale, t, toggleLocale } = useI18n();
@@ -204,11 +204,10 @@ export function LocalWorkspaceApp() {
   let visibleErrorMessage = errorMessage || liveMdPreloadError;
   let {
     canInsertImage,
-    handleEditorImageFiles,
     handleImageInputChange,
+    imagePlugin,
     imageInputRef,
     resolveImageAssetFile,
-    resolveImageSource,
   } = useWorkspaceImageAssets({
     editorDocument,
     editorElementRef,
@@ -221,6 +220,15 @@ export function LocalWorkspaceApp() {
     workspaceBackend,
     workspaceBackendRef,
   });
+  let collabLiveMdConfig = collabDocument?.liveMdConfig;
+  let markdownConfig = collabLiveMdConfig?.markdown ?? null;
+  let liveMdConfig = useMemo<LiveMdConfig>(
+    () => ({
+      markdown: collabLiveMdConfig?.markdown,
+      plugins: [imagePlugin, ...(collabLiveMdConfig?.plugins ?? emptyLiveMdPlugins)],
+    }),
+    [collabLiveMdConfig?.markdown, collabLiveMdConfig?.plugins, imagePlugin],
+  );
   let { clearDropboxAccessToken, createDropboxBackend, setDropboxRedirectAccessToken } =
     useDropboxWorkspaceBackend({
       dirtyRef,
@@ -507,6 +515,7 @@ export function LocalWorkspaceApp() {
     editorValueRef,
     loadTree,
     localFileHandleRef,
+    markdownConfig,
     refreshWorkspaceForCurrentEditor,
     resolveImageAssetFile,
     saveCurrentFile,
@@ -612,13 +621,11 @@ export function LocalWorkspaceApp() {
           />
 
           <WorkspaceEditorPane
+            liveMdConfig={selectedFile ? liveMdConfig : emptyLiveMdConfig}
             document={editorDocument}
-            extensions={collabDocument?.extensions ?? emptyEditorExtensions}
-            imageSource={resolveImageSource}
             placeholder={t("workspace.placeholder")}
             selected={Boolean(selectedFile) && fileDialogMode == null}
             onEditorReady={handleEditorReady}
-            onImageFiles={handleEditorImageFiles}
             onInput={handleEditorInput}
           />
         </main>

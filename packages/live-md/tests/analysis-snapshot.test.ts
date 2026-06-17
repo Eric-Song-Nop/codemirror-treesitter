@@ -17,6 +17,7 @@ import {
   __testVisibleLineRanges,
   liveMdAnalysis,
 } from "../src/core/decorations.js";
+import { liveMdMarkdownFeatures } from "../src/core/features.js";
 import { liveMdImageSource, normalizeMarkdownImageSource } from "../src/core/images.js";
 import {
   codeFenceLanguagesField,
@@ -410,6 +411,44 @@ describe("LiveMD analysis snapshot", () => {
     expect(imagePreviewSources(view.state)).toEqual(["blob:second/assets/local.png"]);
     view.destroy();
   });
+
+  it("allows markdown features to add query-driven decorations", async () => {
+    let state = await markdownAnalysisState("# First\n\n# Second\n", "", [
+      liveMdMarkdownFeatures([
+        {
+          name: "test-heading",
+          query: "(atx_heading) @heading",
+          decorate({ addLineClass, addMark, node }) {
+            let heading = node("heading");
+            if (!heading) return;
+            addLineClass(heading.from, heading.to, "cm-md-feature-heading-line");
+            addMark(heading.from, heading.to, "cm-md-feature-heading");
+          },
+        },
+      ]),
+    ]);
+
+    expect(decorationClasses(state).has("cm-md-feature-heading")).toBe(true);
+    expect(decorationClasses(state).has("cm-md-feature-heading-line")).toBe(true);
+  });
+
+  it("rebuilds markdown feature decorations when features change", async () => {
+    let featureCompartment = new Compartment();
+    let view = await markdownAnalysisView("# Dynamic\n\nbody", "", [
+      featureCompartment.of(markHeadingFeature("cm-md-feature-first")),
+    ]);
+
+    expect(decorationClasses(view.state).has("cm-md-feature-first")).toBe(true);
+    expect(decorationClasses(view.state).has("cm-md-feature-second")).toBe(false);
+
+    view.dispatch({
+      effects: featureCompartment.reconfigure(markHeadingFeature("cm-md-feature-second")),
+    });
+
+    expect(decorationClasses(view.state).has("cm-md-feature-first")).toBe(false);
+    expect(decorationClasses(view.state).has("cm-md-feature-second")).toBe(true);
+    view.destroy();
+  });
 });
 
 async function markdownAnalysisState(doc: string, selectionText = "", extensions: Extension = []) {
@@ -490,6 +529,34 @@ function codeFenceClasses(state: EditorState) {
     },
   );
   return classes;
+}
+
+function decorationClasses(
+  state: EditorState,
+  analysis = __testLiveMdAnalysis({ state } as EditorView),
+) {
+  let classes = new Set<string>();
+  analysis.decorations.between(0, state.doc.length, (_from, _to, value) => {
+    let className = (value.spec as { class?: string }).class;
+    for (let name of className?.split(/\s+/) ?? []) {
+      if (name) classes.add(name);
+    }
+  });
+  return classes;
+}
+
+function markHeadingFeature(className: string) {
+  return liveMdMarkdownFeatures([
+    {
+      name: className,
+      query: "(atx_heading) @heading",
+      decorate({ addMark, node }) {
+        let heading = node("heading");
+        if (!heading) return;
+        addMark(heading.from, heading.to, className);
+      },
+    },
+  ]);
 }
 
 async function waitForLiveMdRanges(view: EditorView) {

@@ -3,6 +3,7 @@ import { closeBrackets, closeBracketsKeymap } from "@codemirror-treesitter/autoc
 import { EditorView, keymap, placeholder as placeholderExtension } from "@codemirror/view";
 import { liveMdKeymap } from "./commands.js";
 import { liveMdAnalysis } from "./decorations.js";
+import { liveMdMarkdownFeatures, type LiveMdMarkdownConfig } from "./features.js";
 import { liveMdImageSource, type LiveMdImageSourceResolver } from "./images.js";
 import { codeFenceLanguagesField, liveMdDefaultCodeFenceHighlighting } from "./languages.js";
 import { liveMdLinkBase, liveMdLinkInteractions, type LiveMdLinkBaseUrl } from "./links.js";
@@ -13,6 +14,7 @@ export type LiveMarkdownOptions = {
   className?: string;
   imageSource?: LiveMdImageSourceResolver | null;
   linkBaseUrl?: LiveMdLinkBaseUrl | null;
+  markdown?: LiveMdMarkdownConfig;
   placeholder?: string;
   spellcheck?: boolean;
 };
@@ -35,6 +37,7 @@ export function liveMarkdown(options: LiveMarkdownOptions = {}): Extension {
     }),
     liveMdLinkBase(options.linkBaseUrl),
     liveMdImageSource(options.imageSource),
+    liveMdMarkdownFeatures(options.markdown?.features),
     liveMdLinkInteractions(),
     liveMdSearch,
     liveMdAnalysis,

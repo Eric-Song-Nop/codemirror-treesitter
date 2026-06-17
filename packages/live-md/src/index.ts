@@ -5,6 +5,24 @@ export {
   type LiveMdEditorHandle,
   type LiveMdEditorOptions,
 } from "./core/editor.js";
+export {
+  type LiveMdMarkdownConfig,
+  type LiveMdMarkdownFeature,
+  type LiveMdFeatureDecorateContext,
+  type LiveMdFeatureDecoration,
+  type LiveMdFeatureDocRange,
+  type LiveMdFeatureHtmlRenderContext,
+  type LiveMdFeatureHtmlRenderResult,
+  type LiveMdFeatureReplaceOptions,
+  liveMdMarkdownFeature,
+  liveMdMarkdownFeatures,
+} from "./core/features.js";
+export {
+  type LiveMdConfig,
+  type LiveMdPlugin,
+  type LiveMdPluginCleanup,
+  type LiveMdPluginContext,
+} from "./core/config.js";
 export { liveMarkdown, type LiveMarkdownOptions } from "./core/extension.js";
 export {
   liveMdImageSource,
@@ -12,6 +30,15 @@ export {
   type LiveMdImageSourceResolver,
 } from "./core/images.js";
 export { liveMdLinkOpen, type LiveMdLinkOpenHandler } from "./core/links.js";
+export {
+  liveMdImageAssets,
+  liveMdLinkBehavior,
+  liveMdTheme,
+  type LiveMdImageAssetsPluginOptions,
+  type LiveMdImageFilesInput,
+  type LiveMdLinkBehaviorPluginOptions,
+  type LiveMdThemePluginOptions,
+} from "./core/plugins.js";
 export {
   liveMdCodeFenceHighlighting,
   prepareLiveMd,

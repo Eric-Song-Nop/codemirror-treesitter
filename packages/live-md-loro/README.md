@@ -2,7 +2,7 @@
 
 Optional Loro collaboration bindings for LiveMD. This package keeps CRDT and
 presence dependencies out of `@codemirror-treesitter/live-md` while exposing the
-extensions needed to bind a LiveMD editor to a `LoroDoc`.
+plugin and extension helpers needed to bind a LiveMD editor to a `LoroDoc`.
 
 ## Stack and Boundaries
 
@@ -21,6 +21,9 @@ extensions needed to bind a LiveMD editor to a `LoroDoc`.
   or getter.
 - Pass optional Loro presence and undo manager configuration through to
   `loro-codemirror`.
+- Provide `liveMdLoroCollaborationPlugin(...)` for LiveMD's unified
+  `config.plugins` API while keeping `liveMdLoroCollaboration(...)` available
+  as a direct CodeMirror extension.
 - Export helpers for resolving the LiveMD text container from a `LoroDoc`.
 - Re-export collaboration undo and redo commands as `liveMdLoroUndo` and
   `liveMdLoroRedo`.
@@ -33,6 +36,7 @@ extensions needed to bind a LiveMD editor to a `LoroDoc`.
 import {
   getLiveMdLoroText,
   liveMdLoroCollaboration,
+  liveMdLoroCollaborationPlugin,
   liveMdLoroRedo,
   liveMdLoroUndo,
 } from "@codemirror-treesitter/live-md-loro";
@@ -46,22 +50,31 @@ const extension = liveMdLoroCollaboration({
   undoManager,
   text: "markdown",
 });
+const plugin = liveMdLoroCollaborationPlugin({
+  doc,
+  undoManager,
+  text: "markdown",
+});
 ```
 
 `text` may be a string key or a function that returns a `LoroText` from the
-document.
+document. Prefer `liveMdLoroCollaborationPlugin(...)` when configuring LiveMD
+through `LiveMdConfig`; use `liveMdLoroCollaboration(...)` when a host needs a
+plain CodeMirror extension.
 
 ## Web Component Usage
 
 ```ts
 import "@codemirror-treesitter/live-md/register";
-import { liveMdLoroCollaboration } from "@codemirror-treesitter/live-md-loro";
+import { liveMdLoroCollaborationPlugin } from "@codemirror-treesitter/live-md-loro";
 import { LoroDoc } from "loro-crdt";
 
 const doc = new LoroDoc();
 const editor = document.createElement("live-md-editor");
 
-editor.extensions = [liveMdLoroCollaboration({ doc })];
+editor.config = {
+  plugins: [liveMdLoroCollaborationPlugin({ doc })],
+};
 document.body.append(editor);
 ```
 

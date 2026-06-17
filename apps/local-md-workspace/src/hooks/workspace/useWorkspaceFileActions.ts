@@ -1,5 +1,5 @@
 import { useCallback, useState, type RefObject } from "react";
-import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
+import type { LiveMdEditorElement, LiveMdMarkdownConfig } from "@codemirror-treesitter/live-md";
 import {
   getCollabDocumentValue,
   type CollabDocumentState,
@@ -46,6 +46,7 @@ type MarkdownHtmlExportInput = {
   documentPath: string;
   fileName: string;
   markdown: string;
+  markdownConfig: LiveMdMarkdownConfig | null;
   resolveAsset: MarkdownHtmlExportOptions["resolveAsset"];
   theme: ReturnType<typeof snapshotMarkdownHtmlExportTheme>;
   title: string;
@@ -69,6 +70,7 @@ type UseWorkspaceFileActionsOptions = {
     options?: { saveBeforeSelect?: boolean },
   ) => Promise<void>;
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
+  markdownConfig?: LiveMdMarkdownConfig | null;
   refreshWorkspaceForCurrentEditor: (backend: WorkspaceBackend) => Promise<void>;
   resolveImageAssetFile: NonNullable<MarkdownHtmlExportOptions["resolveAsset"]>;
   saveCurrentFile: () => Promise<boolean>;
@@ -93,6 +95,7 @@ export function useWorkspaceFileActions({
   editorValueRef,
   loadTree,
   localFileHandleRef,
+  markdownConfig = null,
   refreshWorkspaceForCurrentEditor,
   resolveImageAssetFile,
   saveCurrentFile,
@@ -126,18 +129,27 @@ export function useWorkspaceFileActions({
         documentPath: file.path,
         fileName: file.name,
         markdown: currentMarkdownValue(),
+        markdownConfig,
         resolveAsset: resolveImageAssetFile,
         theme: snapshotMarkdownHtmlExportTheme(editorElementRef.current),
         title: htmlExportTitle(file.name, t),
       };
     },
-    [currentMarkdownValue, editorElementRef, resolveImageAssetFile, selectedFileRef, t],
+    [
+      currentMarkdownValue,
+      editorElementRef,
+      markdownConfig,
+      resolveImageAssetFile,
+      selectedFileRef,
+      t,
+    ],
   );
 
   let createCurrentFileHtmlExport = useCallback(async (input: MarkdownHtmlExportInput) => {
     return createStandaloneMarkdownHtml({
       documentPath: input.documentPath,
       markdown: input.markdown,
+      markdownConfig: input.markdownConfig,
       resolveAsset: input.resolveAsset,
       theme: input.theme,
       title: input.title,

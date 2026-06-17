@@ -1,5 +1,6 @@
 import type { Extension } from "@codemirror/state";
 import { EditorView, type ViewUpdate } from "@codemirror/view";
+import type { LiveMdConfig } from "../core/config.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../core/editor.js";
 import { installLiveMdStyles } from "./styles.js";
 
@@ -18,6 +19,7 @@ export class LiveMdEditorElement extends HTMLElementBase {
   private controller: LiveMdEditorController | null = null;
   private cleanValue: string | null = null;
   private dirtySinceChange = false;
+  private editorConfig: LiveMdConfig = {};
   private editorExtensions: Extension = [];
   private explicitValue = false;
   private mount: HTMLDivElement;
@@ -48,6 +50,7 @@ export class LiveMdEditorElement extends HTMLElementBase {
     try {
       controller = createLiveMdEditor({
         autofocus: this.hasAttribute("autofocus"),
+        config: this.editorConfig,
         defaultValue: initialValue,
         onBlur: () => this.dispatchPendingChange(),
         onChange: ({ value }) => this.handleEditorInput(value),
@@ -193,6 +196,15 @@ export class LiveMdEditorElement extends HTMLElementBase {
   set extensions(value: Extension | null | undefined) {
     this.editorExtensions = value ?? [];
     this.controller?.setExtensions(this.currentExtensions());
+  }
+
+  get config(): LiveMdConfig {
+    return this.editorConfig;
+  }
+
+  set config(value: LiveMdConfig | null | undefined) {
+    this.editorConfig = value ?? {};
+    this.controller?.setConfig(this.editorConfig);
   }
 
   get dirty() {

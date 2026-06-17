@@ -1,0 +1,65 @@
+import type { Extension } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
+import type { LiveMdMarkdownConfig } from "./features.js";
+
+export type LiveMdPluginCleanup = () => void;
+
+export type LiveMdPluginContext = {
+  parent: Element | DocumentFragment;
+  root: Document | ShadowRoot;
+  view: EditorView;
+};
+
+export type LiveMdPlugin = {
+  extension?: Extension;
+  mount?: (context: LiveMdPluginContext) => LiveMdPluginCleanup | void;
+};
+
+export type LiveMdConfig = {
+  markdown?: LiveMdMarkdownConfig;
+  plugins?: readonly LiveMdPlugin[];
+};
+
+export type ResolvedLiveMdConfig = {
+  markdown: LiveMdMarkdownConfig;
+  plugins: readonly LiveMdPlugin[];
+};
+
+const emptyLiveMdMarkdownConfig: LiveMdMarkdownConfig = {};
+const emptyLiveMdPlugins: readonly LiveMdPlugin[] = [];
+
+export function normalizeLiveMdConfig(
+  config: LiveMdConfig | null | undefined = null,
+): ResolvedLiveMdConfig {
+  return {
+    markdown: config?.markdown ?? emptyLiveMdMarkdownConfig,
+    plugins: config?.plugins ?? emptyLiveMdPlugins,
+  };
+}
+
+export function pluginExtensions(plugins: readonly LiveMdPlugin[]): Extension {
+  return plugins.map((plugin) => plugin.extension ?? []);
+}
+
+export function mountPlugins(
+  plugins: readonly LiveMdPlugin[],
+  context: LiveMdPluginContext,
+): LiveMdPluginCleanup[] {
+  let cleanups: LiveMdPluginCleanup[] = [];
+  try {
+    for (let plugin of plugins) {
+      let cleanup = plugin.mount?.(context);
+      if (cleanup) cleanups.push(cleanup);
+    }
+  } catch (error) {
+    cleanupPlugins(cleanups);
+    throw error;
+  }
+  return cleanups;
+}
+
+export function cleanupPlugins(cleanups: readonly LiveMdPluginCleanup[]) {
+  for (let index = cleanups.length - 1; index >= 0; index--) {
+    cleanups[index]?.();
+  }
+}

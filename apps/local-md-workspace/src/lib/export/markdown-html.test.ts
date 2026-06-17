@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { liveMdMarkdownFeature } from "@codemirror-treesitter/live-md";
 import {
   createStandaloneMarkdownHtml,
-  resolveMarkdownImagePath,
   snapshotMarkdownHtmlExportTheme,
   type MarkdownHtmlExportAsset,
 } from "./markdown-html.ts";
@@ -79,6 +79,28 @@ describe("Markdown HTML export", () => {
     expect(result.html).not.toContain("<script>");
   });
 
+  it("uses the shared markdown feature config during export", async () => {
+    let result = await createStandaloneMarkdownHtml({
+      documentPath: "notes/today.md",
+      markdown: ":::note Export **feature**",
+      markdownConfig: {
+        features: [
+          liveMdMarkdownFeature({
+            name: "export-note",
+            query: "(paragraph) @html",
+            async renderHtml({ renderInline, slice, target }) {
+              let source = slice(target).trim();
+              if (!source.startsWith(":::note")) return null;
+              return `<aside>${await renderInline(source.slice(":::note".length).trim())}</aside>`;
+            },
+          }),
+        ],
+      },
+    });
+
+    expect(result.html).toContain("<aside>Export <strong>feature</strong></aside>");
+  });
+
   it("reports image warnings without failing the export", async () => {
     let result = await createStandaloneMarkdownHtml({
       documentPath: "notes/today.md",
@@ -95,16 +117,6 @@ describe("Markdown HTML export", () => {
         source: "assets/missing.png",
       },
     ]);
-  });
-
-  it("resolves Markdown image paths relative to the current document", () => {
-    expect(resolveMarkdownImagePath("assets/a.png", "notes/today.md")).toBe("notes/assets/a.png");
-    expect(resolveMarkdownImagePath("../assets/a.png#v1", "notes/daily/today.md")).toBe(
-      "notes/assets/a.png",
-    );
-    expect(resolveMarkdownImagePath("/assets/a.png", "notes/today.md")).toBe("assets/a.png");
-    expect(resolveMarkdownImagePath("../../a.png", "notes/today.md")).toBeNull();
-    expect(resolveMarkdownImagePath("https://example.com/a.png", "notes/today.md")).toBeNull();
   });
 
   it("inlines scoped LiveMD theme variables when provided", async () => {

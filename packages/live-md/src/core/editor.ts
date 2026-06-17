@@ -1,7 +1,17 @@
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { minimalSetup } from "@codemirror-treesitter/basic-setup";
 import { EditorView, placeholder as placeholderExtension, type ViewUpdate } from "@codemirror/view";
+import {
+  cleanupPlugins,
+  mountPlugins,
+  normalizeLiveMdConfig,
+  pluginExtensions,
+  type LiveMdConfig,
+  type LiveMdPluginCleanup,
+  type ResolvedLiveMdConfig,
+} from "./config.js";
 import { liveMarkdown } from "./extension.js";
+import { liveMdMarkdownFeatures } from "./features.js";
 import type { LiveMdImageSourceResolver } from "./images.js";
 import {
   loadCodeFenceLanguages,
@@ -18,6 +28,7 @@ export type LiveMdEditorChange = {
 
 export type LiveMdEditorOptions = {
   autofocus?: boolean;
+  config?: LiveMdConfig;
   defaultValue?: string;
   doc?: string;
   extensions?: Extension;
@@ -37,6 +48,7 @@ export type LiveMdEditorOptions = {
 export type LiveMdEditorController = {
   destroy: () => void;
   ready: Promise<void>;
+  setConfig: (config: LiveMdConfig) => void;
   setExtensions: (extensions: Extension) => void;
   setPersistKey: (persistKey: null | string) => void;
   setPlaceholder: (placeholder: string) => void;
@@ -51,10 +63,14 @@ export type LiveMdEditorHandle = LiveMdEditorController;
 export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorController {
   let markdownCompartment = new Compartment();
   let extensionsCompartment = new Compartment();
+  let featuresCompartment = new Compartment();
   let placeholderCompartment = new Compartment();
+  let pluginsCompartment = new Compartment();
   let readOnlyCompartment = new Compartment();
+  let activePluginCleanups: LiveMdPluginCleanup[] = [];
   let cancelled = false;
   let suppressChange = false;
+  let liveMdConfig = normalizeLiveMdConfig(options.config);
   let persistKey = normalizePersistKey(options.persistKey);
   let view: EditorView;
   let initialValue = initialEditorValue(options, persistKey);
@@ -66,10 +82,12 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       doc: initialValue,
       extensions: [
         liveMarkdown({ imageSource: options.imageSource, linkBaseUrl: options.linkBaseUrl }),
+        featuresCompartment.of(liveMdMarkdownFeatures(liveMdConfig.markdown.features)),
         markdownCompartment.of([]),
         placeholderCompartment.of(placeholderValue(options.placeholder)),
         readOnlyCompartment.of(readOnlyExtensions(options.readOnly ?? false)),
         minimalSetup,
+        pluginsCompartment.of(pluginExtensions(liveMdConfig.plugins)),
         extensionsCompartment.of(options.extensions ?? []),
         EditorView.domEventHandlers({
           blur() {
@@ -107,9 +125,14 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
   let controller: LiveMdEditorController = {
     destroy() {
       cancelled = true;
+      cleanupPlugins(activePluginCleanups);
+      activePluginCleanups = [];
       view.destroy();
     },
     ready: Promise.all([markdownReady, codeFenceReady]).then(() => undefined),
+    setConfig(config) {
+      reconfigureLiveMdConfig(normalizeLiveMdConfig(config));
+    },
     setExtensions(extensions) {
       view.dispatch({
         effects: extensionsCompartment.reconfigure(extensions),
@@ -147,7 +170,41 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
     view,
   };
 
+  try {
+    remountPlugins();
+  } catch (error) {
+    cleanupPlugins(activePluginCleanups);
+    view.destroy();
+    throw error;
+  }
+
   return controller;
+
+  function reconfigureLiveMdConfig(nextConfig: ResolvedLiveMdConfig) {
+    let markdownChanged = nextConfig.markdown !== liveMdConfig.markdown;
+    let pluginsChanged = nextConfig.plugins !== liveMdConfig.plugins;
+    liveMdConfig = nextConfig;
+    let effects = [];
+    if (markdownChanged) {
+      effects.push(
+        featuresCompartment.reconfigure(liveMdMarkdownFeatures(nextConfig.markdown.features)),
+      );
+    }
+    if (pluginsChanged) {
+      effects.push(pluginsCompartment.reconfigure(pluginExtensions(nextConfig.plugins)));
+    }
+    if (effects.length) view.dispatch({ effects });
+    if (pluginsChanged) remountPlugins();
+  }
+
+  function remountPlugins() {
+    cleanupPlugins(activePluginCleanups);
+    activePluginCleanups = mountPlugins(liveMdConfig.plugins, {
+      parent: options.parent,
+      root: pluginRoot(options),
+      view,
+    });
+  }
 }
 
 function initialEditorValue(options: LiveMdEditorOptions, persistKey: null | string) {
@@ -167,6 +224,16 @@ function readOnlyExtensions(readOnly: boolean): Extension {
 
 function placeholderValue(value: string | undefined): Extension {
   return value ? placeholderExtension(value) : [];
+}
+
+function pluginRoot(options: Pick<LiveMdEditorOptions, "parent" | "root">): Document | ShadowRoot {
+  if (options.root) return options.root;
+  if (typeof Element != "undefined" && options.parent instanceof Element) {
+    return options.parent.ownerDocument;
+  }
+  let root = options.parent.getRootNode();
+  if (typeof ShadowRoot != "undefined" && root instanceof ShadowRoot) return root;
+  return options.parent.ownerDocument;
 }
 
 function loadPersistedValue(storageKey: string, fallback: string) {

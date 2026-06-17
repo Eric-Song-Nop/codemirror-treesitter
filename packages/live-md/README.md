@@ -3,7 +3,8 @@
 LiveMD is the product-facing Markdown editor runtime built from the local
 CodeMirror Tree-sitter packages. It exposes a programmatic API, a
 `<live-md-editor>` web component, a side-effect registration entry, fixtures,
-an HTML renderer, scoped document CSS helpers, and a CSS export.
+an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
+`LiveMdConfig` entry point for Markdown features and host plugins.
 
 ## Stack and Boundaries
 
@@ -46,11 +47,18 @@ import {
   liveMdMarkdownDocumentClass,
   liveMdMarkdownDocumentCss,
   liveMdMarkdownDocumentCssVariables,
+  liveMdImageAssets,
   liveMdImageSource,
   liveMdLinkOpen,
+  liveMdLinkBehavior,
+  liveMdMarkdownFeature,
+  liveMdTheme,
   liveMarkdown,
   prepareLiveMd,
   renderMarkdownToHtml,
+  type LiveMdConfig,
+  type LiveMdMarkdownConfig,
+  type LiveMdPlugin,
 } from "@codemirror-treesitter/live-md";
 ```
 
@@ -65,25 +73,68 @@ and benchmark content.
 ## Programmatic API
 
 ```ts
-import { createLiveMdEditor, prepareLiveMd } from "@codemirror-treesitter/live-md";
+import {
+  createLiveMdEditor,
+  liveMdImageAssets,
+  liveMdLinkBehavior,
+  liveMdMarkdownFeature,
+  liveMdTheme,
+  prepareLiveMd,
+  type LiveMdConfig,
+  type LiveMdMarkdownConfig,
+  type LiveMdPlugin,
+} from "@codemirror-treesitter/live-md";
+import { gruvboxDarkLiveMdTheme } from "@codemirror-treesitter/live-md-theme-gruvbox";
 import { gruvboxDark } from "@codemirror-treesitter/theme-gruvbox";
 
 await prepareLiveMd();
 
 const imageAssetUrlMap = new Map<string, string>();
+const callouts = liveMdMarkdownFeature({
+  name: "callouts",
+  query: "(block_quote) @callout @html",
+  decorate({ addLineClass, node, slice }) {
+    let callout = node("callout");
+    if (!callout || !slice(callout).startsWith("> [!")) return;
+    addLineClass(callout.from, callout.to, "cm-md-callout");
+  },
+  async renderHtml({ renderDefault, node, slice }) {
+    let callout = node("callout");
+    if (!callout || !slice(callout).startsWith("> [!")) return null;
+    return (await renderDefault())
+      .replace("<blockquote>", '<aside class="live-md-callout">')
+      .replace("</blockquote>", "</aside>");
+  },
+});
+const plugins = [
+  liveMdTheme({
+    editor: gruvboxDark,
+    theme: gruvboxDarkLiveMdTheme,
+  }),
+  liveMdImageAssets({
+    resolve(source) {
+      return imageAssetUrlMap.get(source) ?? source;
+    },
+  }),
+  liveMdLinkBehavior({
+    baseUrl: "https://docs.example/notes/current.md",
+  }),
+] satisfies LiveMdPlugin[];
+const config = {
+  markdown: {
+    features: [callouts],
+  } satisfies LiveMdMarkdownConfig,
+  plugins,
+} satisfies LiveMdConfig;
 const editor = createLiveMdEditor({
   parent: document.body,
   defaultValue: "# Draft",
-  imageSource(source) {
-    return imageAssetUrlMap.get(source) ?? source;
-  },
-  linkBaseUrl: "https://docs.example/notes/current.md",
   placeholder: "Start writing...",
   persistKey: "draft",
-  extensions: [gruvboxDark],
   onChange({ value }) {
     console.log(value);
   },
+  config,
 });
 
 await editor.ready;
@@ -92,18 +143,41 @@ editor.destroy();
 ```
 
 `createLiveMdEditor()` accepts `value`, `doc`, `defaultValue`, `persistKey`,
-`placeholder`, `readOnly`, `autofocus`, `focus`, `root`, `extensions`,
-`imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`. `imageSource` maps
-normalized Markdown image destinations to preview URLs, which lets host apps
-serve local files through blob URLs. `linkBaseUrl` is used to resolve relative
-Markdown links for Shift-click link jumps. Link jumps open in a new browsing
-context by default; hosts can add `liveMdLinkOpen(handler)` through
-`extensions` to customize navigation. Fenced code token colors reuse the active
-CodeMirror syntax highlighters installed through `extensions`.
+`placeholder`, `readOnly`, `autofocus`, `focus`, `root`, `config`,
+`extensions`, `imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`.
+`config.markdown.features` is the query-driven Markdown syntax layer. A
+`LiveMdMarkdownFeature` can contribute a Tree-sitter query and a constrained
+decoration callback for marks, line classes, syntax visibility, replacement
+widgets, and atomic ranges. It can also provide a separate `renderHtml(...)`
+hook for `renderMarkdownToHtml(...)`; the hook receives the matched target
+node, capture helpers, `slice(...)`, `renderDefault()`, `renderChildren(...)`,
+and `renderInline(...)` so export logic does not depend on editor-only
+decoration semantics. Features run after the standard LiveMD Markdown
+decorations and are reconfigured by `setConfig(...)`. Markdown syntax
+extensions are called features, not plugins; plugins are reserved for host
+behavior.
+`config.plugins` is the host-behavior layer: each `LiveMdPlugin` can provide a
+CodeMirror `extension` and an optional `mount` hook that may return cleanup for
+plugin changes through `setConfig(...)` and for `destroy()`.
+`liveMdTheme(...)`, `liveMdImageAssets(...)`, and `liveMdLinkBehavior(...)`
+cover common host integrations while keeping storage, upload, and navigation
+policy in the host app.
+`config` is the single host configuration entry point on `createLiveMdEditor(...)`.
+Treat `config.markdown`, `config.plugins`, and their arrays as immutable,
+reference-stable values when updating an editor. LiveMD uses reference equality
+to avoid reconfiguring unchanged feature and plugin compartments.
+`extensions` remains the direct CodeMirror escape hatch and is applied after
+plugin extensions. `imageSource` maps normalized Markdown image destinations to
+preview URLs, which lets host apps serve local files through blob URLs.
+`linkBaseUrl` is used to resolve relative Markdown links for Shift-click link
+jumps. Link jumps open in a new browsing context by default; hosts can add
+`liveMdLinkOpen(handler)` through `extensions` to customize navigation. Fenced
+code token colors reuse the active CodeMirror syntax highlighters installed
+through `extensions`.
 `liveMdCodeFenceHighlighting(...)` is still available for advanced hosts that
 need to override fenced-code highlighting explicitly. The controller exposes `view`, `value`,
-`ready`, `setValue()`, `setExtensions()`, `setPersistKey()`, `setPlaceholder()`,
-`setReadOnly()`, and `destroy()`.
+`ready`, `setValue()`, `setConfig()`, `setExtensions()`, `setPersistKey()`,
+`setPlaceholder()`, `setReadOnly()`, and `destroy()`.
 
 `prepareLiveMd(options?)` preloads Markdown language support and warms the
 LiveMD Markdown decoration queries before the first editor render. Pass
@@ -111,11 +185,35 @@ LiveMD Markdown decoration queries before the first editor render. Pass
 code-fence language parsers during startup.
 
 `renderMarkdownToHtml(markdown, options?)` converts Markdown source to escaped
-HTML with the package Tree-sitter Markdown parser. Hosts can pass
-`resolveImageSource` to rewrite image destinations during export:
+HTML with the package Tree-sitter Markdown parser. Hosts can pass the same
+`markdown` feature config used by the editor so query-driven features can
+customize block-level export output with `renderHtml(...)`. Inline query
+replacement during export is intentionally not part of this hook yet; use
+`renderInline(...)` from a block-level feature when custom output needs nested
+inline Markdown. The export hook is separate from editor-only `decorate(...)`
+callbacks:
+
+```ts
+const callouts = liveMdMarkdownFeature({
+  name: "callouts",
+  query: "(block_quote) @html",
+  async renderHtml({ renderDefault, slice, target }) {
+    if (!slice(target).startsWith("> [!")) return null;
+    return `<aside class="callout">${await renderDefault()}</aside>`;
+  },
+});
+
+const html = await renderMarkdownToHtml(markdown, {
+  markdown: { features: [callouts] },
+});
+```
+
+Hosts can also pass `resolveImageSource` to rewrite image destinations during
+export:
 
 ```ts
 const html = await renderMarkdownToHtml(markdown, {
+  markdown: config.markdown,
   resolveImageSource({ source }) {
     return imageAssetUrlMap.get(source) ?? source;
   },
@@ -145,14 +243,16 @@ HTML exports without leaking workspace, reset, or component-library CSS.
 
 The element reflects the runtime API through `value`, `defaultValue`,
 `persistKey`, `placeholder`, `readOnly`, `dirty`, `selectionStart`,
-`selectionEnd`, `view`, `extensions`, `ready`, `markClean()`,
+`selectionEnd`, `view`, `config`, `extensions`, `ready`, `markClean()`,
 `setSelectionRange(...)`, and `select()`.
 
 JavaScript hosts can add `liveMdImageSource(...)`, `liveMdLinkOpen(...)`, and
 ordinary CodeMirror theme extensions to the `extensions` property when a web
 component needs custom image preview URL resolution, link navigation, or themed
-code-fence token highlighting. `liveMdCodeFenceHighlighting(...)` can override
-the active syntax highlighters for specialized fenced-code rendering.
+highlighting. They can assign `config` for host behavior and query-feature
+configuration, including plugin-style image assets and link behavior.
+`liveMdCodeFenceHighlighting(...)` can override the active syntax highlighters
+for specialized fenced-code rendering.
 
 The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 `select`. Styling is installed into Shadow DOM and can be themed with

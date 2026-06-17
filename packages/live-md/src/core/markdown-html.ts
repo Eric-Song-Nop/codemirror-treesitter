@@ -1,7 +1,20 @@
 import { Text } from "@codemirror/state";
-import type { SyntaxNode, TreeSitterParser } from "@codemirror-treesitter/language";
+import {
+  queryTreeMatches,
+  type SyntaxNode,
+  type Tree,
+  type TreeSitterParser,
+  type TreeSitterQueryCapture,
+  type TreeSitterQueryMatch,
+} from "@codemirror-treesitter/language";
 import { languages } from "@codemirror-treesitter/language-data";
 import { liveMdThemeVariableNames } from "@codemirror-treesitter/live-md-theme";
+import {
+  sortLiveMdMarkdownFeatures,
+  type LiveMdFeatureHtmlRenderContext,
+  type LiveMdMarkdownConfig,
+  type LiveMdMarkdownFeature,
+} from "./features.js";
 
 export type MarkdownHtmlImage = {
   alt: string;
@@ -14,6 +27,7 @@ export type MarkdownHtmlImageSourceResolver = (
 ) => Promise<string | null | undefined> | string | null | undefined;
 
 export type MarkdownHtmlRenderOptions = {
+  markdown?: LiveMdMarkdownConfig | null;
   resolveImageSource?: MarkdownHtmlImageSourceResolver | null;
 };
 
@@ -33,8 +47,11 @@ type MarkdownHtmlBlockParser = Pick<TreeSitterParser, "parse"> & {
 type MarkdownHtmlInlineParser = Pick<TreeSitterParser, "parse">;
 
 type MarkdownHtmlRenderContext = {
+  featureMatches: ReadonlyMap<string, readonly MarkdownHtmlFeatureMatch[]>;
   inlineParser: MarkdownHtmlInlineParser;
+  nodeKeys: MarkdownHtmlNodeKeys;
   options: MarkdownHtmlRenderOptions;
+  source: string;
   text: Text;
 };
 
@@ -44,6 +61,17 @@ type InlineRenderContext = {
 };
 
 type TableAlignment = "center" | "default" | "left" | "right";
+
+type MarkdownHtmlFeatureMatch = {
+  feature: LiveMdMarkdownFeature;
+  match: TreeSitterQueryMatch;
+  order: number;
+  target: SyntaxNode;
+};
+
+type MarkdownHtmlNodeKeys = {
+  key: (node: SyntaxNode) => string;
+};
 
 let markdownHtmlParsersPromise: Promise<MarkdownHtmlParsers> | null = null;
 
@@ -55,9 +83,14 @@ export async function renderMarkdownToHtml(
   let source = normalizeMarkdownLineEndings(markdown);
   let text = Text.of(source.split("\n"));
   let tree = parsers.block.parse(text);
+  let features = sortLiveMdMarkdownFeatures(options.markdown?.features ?? []);
+  let nodeKeys = createMarkdownHtmlNodeKeys();
   let context: MarkdownHtmlRenderContext = {
+    featureMatches: collectMarkdownHtmlFeatureMatches(features, tree, nodeKeys),
     inlineParser: parsers.inline,
+    nodeKeys,
     options,
+    source,
     text,
   };
   return renderBlockChildren(context, tree.topNode);
@@ -382,6 +415,15 @@ async function renderBlockChildren(context: MarkdownHtmlRenderContext, node: Syn
 }
 
 async function renderBlock(context: MarkdownHtmlRenderContext, node: SyntaxNode): Promise<string> {
+  let featureHtml = await renderFeatureHtml(context, node);
+  if (featureHtml != null) return featureHtml;
+  return renderBlockDefault(context, node);
+}
+
+async function renderBlockDefault(
+  context: MarkdownHtmlRenderContext,
+  node: SyntaxNode,
+): Promise<string> {
   switch (node.name) {
     case "document":
     case "section":
@@ -412,6 +454,98 @@ async function renderBlock(context: MarkdownHtmlRenderContext, node: SyntaxNode)
       if (node.namedChildCount) return renderBlockChildren(context, node);
       return escapeHtml(sliceNode(context, node).trim());
   }
+}
+
+async function renderFeatureHtml(context: MarkdownHtmlRenderContext, node: SyntaxNode) {
+  let entries = context.featureMatches.get(context.nodeKeys.key(node));
+  if (!entries?.length) return null;
+
+  for (let entry of entries) {
+    let html = await entry.feature.renderHtml?.(createFeatureHtmlRenderContext(context, entry));
+    if (html != null) return html;
+  }
+  return null;
+}
+
+function createFeatureHtmlRenderContext(
+  context: MarkdownHtmlRenderContext,
+  entry: MarkdownHtmlFeatureMatch,
+): LiveMdFeatureHtmlRenderContext {
+  return {
+    capture: (name) => capture(entry.match, name),
+    captures: (name) => captures(entry.match, name),
+    match: entry.match,
+    node: (name) => capture(entry.match, name)?.node ?? null,
+    nodes: (name) => captures(entry.match, name).map((item) => item.node),
+    renderChildren: (node = entry.target) => renderBlockChildren(context, node),
+    renderDefault: () => renderBlockDefault(context, entry.target),
+    renderInline: (sourceOrNode) =>
+      typeof sourceOrNode == "string"
+        ? renderInlineSource(context, sourceOrNode)
+        : renderInlineSyntaxNode(context, sourceOrNode),
+    slice: (node) => sliceNode(context, node),
+    source: context.source,
+    target: entry.target,
+  };
+}
+
+function collectMarkdownHtmlFeatureMatches(
+  features: readonly LiveMdMarkdownFeature[],
+  tree: Tree,
+  nodeKeys: MarkdownHtmlNodeKeys,
+) {
+  let matchesByTarget = new Map<string, MarkdownHtmlFeatureMatch[]>();
+  let order = 0;
+
+  for (let feature of features) {
+    if (!feature.query || !feature.renderHtml) continue;
+
+    let matches = queryTreeMatches(tree, feature.query, {
+      includeNested: feature.includeNested ?? false,
+    });
+    for (let match of matches) {
+      let target = featureHtmlTarget(match);
+      if (!target) continue;
+      let key = nodeKeys.key(target);
+      let entries = matchesByTarget.get(key);
+      if (!entries) {
+        entries = [];
+        matchesByTarget.set(key, entries);
+      }
+      entries.push({ feature, match, order, target });
+      order++;
+    }
+  }
+
+  for (let entries of matchesByTarget.values()) {
+    entries.sort((left, right) => left.order - right.order);
+  }
+  return matchesByTarget;
+}
+
+function featureHtmlTarget(match: TreeSitterQueryMatch) {
+  return (
+    capture(match, "html")?.node ??
+    capture(match, "feature")?.node ??
+    match.captures[0]?.node ??
+    null
+  );
+}
+
+function createMarkdownHtmlNodeKeys(): MarkdownHtmlNodeKeys {
+  let nextTreeId = 1;
+  let treeIds = new WeakMap<Tree, number>();
+  return {
+    key(node) {
+      let treeId = treeIds.get(node.tree);
+      if (treeId == null) {
+        treeId = nextTreeId;
+        nextTreeId++;
+        treeIds.set(node.tree, treeId);
+      }
+      return `${treeId}:${node.name}:${node.id}:${node.from}:${node.to}`;
+    },
+  };
 }
 
 async function renderHeading(context: MarkdownHtmlRenderContext, node: SyntaxNode, level: number) {
@@ -784,6 +918,14 @@ function unescapeMarkdownPunctuation(value: string) {
 
 function firstNamedChild(node: SyntaxNode | null, name: string) {
   return node?.namedChildren.find((child) => child.name == name) ?? null;
+}
+
+function capture(match: TreeSitterQueryMatch, name: string): TreeSitterQueryCapture | null {
+  return match.captures.find((item) => item.name == name) ?? null;
+}
+
+function captures(match: TreeSitterQueryMatch, name: string): TreeSitterQueryCapture[] {
+  return match.captures.filter((item) => item.name == name);
 }
 
 function listItemMarker(node: SyntaxNode) {
