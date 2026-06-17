@@ -3,7 +3,8 @@
 LiveMD is the product-facing Markdown editor runtime built from the local
 CodeMirror Tree-sitter packages. It exposes a programmatic API, a
 `<live-md-editor>` web component, a side-effect registration entry, fixtures,
-an HTML renderer, scoped document CSS helpers, and a CSS export.
+an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
+`LiveMdConfig` entry point for Markdown features and host plugins.
 
 ## Stack and Boundaries
 
@@ -151,7 +152,9 @@ hook for `renderMarkdownToHtml(...)`; the hook receives the matched target
 node, capture helpers, `slice(...)`, `renderDefault()`, `renderChildren(...)`,
 and `renderInline(...)` so export logic does not depend on editor-only
 decoration semantics. Features run after the standard LiveMD Markdown
-decorations and are reconfigured by `setConfig(...)`.
+decorations and are reconfigured by `setConfig(...)`. Markdown syntax
+extensions are called features, not plugins; plugins are reserved for host
+behavior.
 `config.plugins` is the host-behavior layer: each `LiveMdPlugin` can provide a
 CodeMirror `extension` and an optional `mount` hook that may return cleanup for
 plugin changes through `setConfig(...)` and for `destroy()`.
@@ -159,6 +162,9 @@ plugin changes through `setConfig(...)` and for `destroy()`.
 cover common host integrations while keeping storage, upload, and navigation
 policy in the host app.
 `config` is the single host configuration entry point on `createLiveMdEditor(...)`.
+Treat `config.markdown`, `config.plugins`, and their arrays as immutable,
+reference-stable values when updating an editor. LiveMD uses reference equality
+to avoid reconfiguring unchanged feature and plugin compartments.
 `extensions` remains the direct CodeMirror escape hatch and is applied after
 plugin extensions. `imageSource` maps normalized Markdown image destinations to
 preview URLs, which lets host apps serve local files through blob URLs.
@@ -178,8 +184,11 @@ code-fence language parsers during startup.
 `renderMarkdownToHtml(markdown, options?)` converts Markdown source to escaped
 HTML with the package Tree-sitter Markdown parser. Hosts can pass the same
 `markdown` feature config used by the editor so query-driven features can
-customize block-level export output with `renderHtml(...)`. The export hook is
-separate from editor-only `decorate(...)` callbacks:
+customize block-level export output with `renderHtml(...)`. Inline query
+replacement during export is intentionally not part of this hook yet; use
+`renderInline(...)` from a block-level feature when custom output needs nested
+inline Markdown. The export hook is separate from editor-only `decorate(...)`
+callbacks:
 
 ```ts
 const callouts = liveMdMarkdownFeature({
