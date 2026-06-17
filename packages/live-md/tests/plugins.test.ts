@@ -103,12 +103,7 @@ describe("LiveMD plugins", () => {
     expect(parent.querySelector(".cm-md-config-second")).toBeTruthy();
     editor.destroy();
 
-    expect(events).toEqual([
-      "first mount",
-      "first cleanup",
-      "second mount",
-      "second cleanup",
-    ]);
+    expect(events).toEqual(["first mount", "first cleanup", "second mount", "second cleanup"]);
   });
 
   it("cleans plugin mounts on setConfig plugin changes and destroy", () => {

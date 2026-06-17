@@ -186,7 +186,9 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
     liveMdConfig = nextConfig;
     let effects = [];
     if (markdownChanged) {
-      effects.push(featuresCompartment.reconfigure(liveMdMarkdownFeatures(nextConfig.markdown.features)));
+      effects.push(
+        featuresCompartment.reconfigure(liveMdMarkdownFeatures(nextConfig.markdown.features)),
+      );
     }
     if (pluginsChanged) {
       effects.push(pluginsCompartment.reconfigure(pluginExtensions(nextConfig.plugins)));
