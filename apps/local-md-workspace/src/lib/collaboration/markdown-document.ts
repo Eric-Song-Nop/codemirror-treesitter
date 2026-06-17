@@ -2,6 +2,7 @@ import { liveMdLoroCollaboration } from "@codemirror-treesitter/live-md-loro";
 import type { Extension } from "@codemirror/state";
 import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import type { Frontiers } from "loro-crdt";
+import { createDebouncedTask, type DebouncedTask } from "@/lib/scheduling/debounced-task";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
 import {
   documentSourceAliasRefs,
@@ -25,18 +26,24 @@ export { hashMarkdownText } from "../markdown-hash.ts";
 
 const textKey = "markdown";
 const maxDocumentUpdateLogBytes = 64 * 1024;
+const pendingUpdateFlushDelayMs = 300;
+const pendingUpdateFlushMaxWaitMs = 2000;
+const snapshotFlushDelayMs = 300;
+const snapshotFlushMaxWaitMs = 2000;
 
 export type CollabDocumentState = {
   cleanValue: string;
   doc: LoroDoc;
   docId: string;
-  dispose: () => void;
+  dispose: () => Promise<void>;
   externalEdit?: CollabExternalEditResolution;
   extensions: Extension[];
   metadata: BrowserCollabDocumentMetadata;
   path: string;
+  pendingUpdateFlush: DebouncedTask;
   pendingUpdates: Uint8Array[];
   persistence: Promise<void>;
+  snapshotFlush: DebouncedTask;
   sourceState: CollabSourceState;
   undoManager: UndoManager;
   value: string;
@@ -147,25 +154,53 @@ export async function openMarkdownCollabDocument(
     sourceState = sourceStateForValue(metadata, value);
   }
   let pendingUpdates: Uint8Array[] = [];
+  let state: CollabDocumentState;
+  let pendingUpdateFlush = createDebouncedTask({
+    delayMs: pendingUpdateFlushDelayMs,
+    maxWaitMs: pendingUpdateFlushMaxWaitMs,
+    run: () => appendPendingCollabDocumentUpdates(state),
+  });
+  let snapshotFlush = createDebouncedTask({
+    delayMs: snapshotFlushDelayMs,
+    maxWaitMs: snapshotFlushMaxWaitMs,
+    run: () => writeCollabDocumentSnapshot(state),
+  });
+  let disposePromise: Promise<void> | null = null;
   let unsubscribeLocalUpdates = doc.subscribeLocalUpdates((bytes) => {
     pendingUpdates.push(new Uint8Array(bytes));
+    schedulePendingCollabDocumentUpdateFlush(state);
   });
 
-  return {
+  state = {
     cleanValue: value,
     doc,
     docId,
-    dispose: unsubscribeLocalUpdates,
+    dispose() {
+      if (disposePromise) return disposePromise;
+      unsubscribeLocalUpdates();
+      disposePromise = (async () => {
+        try {
+          await flushCollabDocumentPersistence(state);
+        } finally {
+          pendingUpdateFlush.dispose();
+          snapshotFlush.dispose();
+        }
+      })();
+      return disposePromise;
+    },
     externalEdit,
     extensions: [liveMdLoroCollaboration({ doc, undoManager, text: textKey })],
     metadata,
     path,
+    pendingUpdateFlush,
     pendingUpdates,
     persistence: Promise.resolve(),
+    snapshotFlush,
     sourceState,
     undoManager,
     value,
   };
+  return state;
 }
 
 async function loadStoredCollabDocumentCandidate(
@@ -237,6 +272,21 @@ export async function saveCollabDocumentSnapshot(
   _backend: WorkspaceBackend,
   state: CollabDocumentState,
 ) {
+  state.snapshotFlush.cancel();
+  await writeCollabDocumentSnapshot(state);
+}
+
+export function scheduleCollabDocumentSnapshotFlush(state: CollabDocumentState) {
+  state.snapshotFlush.schedule();
+}
+
+export async function flushCollabDocumentSnapshot(state: CollabDocumentState) {
+  state.snapshotFlush.schedule();
+  await state.snapshotFlush.flush();
+}
+
+async function writeCollabDocumentSnapshot(state: CollabDocumentState) {
+  state.pendingUpdateFlush.cancel();
   await enqueueDocumentPersistence(state, async () => {
     let updates = state.pendingUpdates.splice(0);
     try {
@@ -254,7 +304,31 @@ export async function savePendingCollabDocumentUpdates(
   state: CollabDocumentState,
 ) {
   if (!state.pendingUpdates.length) return;
+  state.pendingUpdateFlush.schedule();
+  await state.pendingUpdateFlush.flush();
+}
 
+export function schedulePendingCollabDocumentUpdateFlush(state: CollabDocumentState) {
+  if (!state.pendingUpdates.length) return;
+  state.pendingUpdateFlush.schedule();
+}
+
+export async function flushPendingCollabDocumentUpdates(state: CollabDocumentState) {
+  if (!state.pendingUpdates.length) return;
+  state.pendingUpdateFlush.schedule();
+  await state.pendingUpdateFlush.flush();
+}
+
+export async function flushCollabDocumentPersistence(state: CollabDocumentState) {
+  if (state.snapshotFlush.pending()) {
+    await state.snapshotFlush.flush();
+  } else {
+    await flushPendingCollabDocumentUpdates(state);
+  }
+  await state.persistence;
+}
+
+async function appendPendingCollabDocumentUpdates(state: CollabDocumentState) {
   await enqueueDocumentPersistence(state, async () => {
     if (!state.pendingUpdates.length) return;
 

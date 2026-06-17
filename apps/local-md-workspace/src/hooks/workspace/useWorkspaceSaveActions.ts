@@ -7,14 +7,16 @@ import {
   getCollabDocumentValue,
   ingestExternalMarkdownEdit,
   saveCollabDocumentSnapshot,
-  savePendingCollabDocumentUpdates,
+  schedulePendingCollabDocumentUpdateFlush,
   type CollabDocumentState,
   type CollabSourceImportResult,
 } from "@/lib/collaboration/markdown-document";
 import { createCollabDocumentBroadcastSync } from "@/lib/collaboration/document-sync";
+import { createDebouncedTask } from "@/lib/scheduling/debounced-task";
 import { isWorkspaceWriteConflictError } from "@/lib/workspace-file-conflict";
 import { errorToMessage } from "@/lib/workspace/errors";
-import type { EditorDocument, SaveState } from "@/lib/workspace/types";
+import { sourceAutoSaveKey, sourceAutoSaveTiming } from "@/lib/workspace/source-autosave";
+import type { EditorDocument, SaveState, SourceAutoSaveTask } from "@/lib/workspace/types";
 import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
 
 type MutableRef<T> = {
@@ -23,6 +25,7 @@ type MutableRef<T> = {
 
 type UseWorkspaceSaveActionsOptions = {
   activeDocumentGenerationRef: MutableRef<number>;
+  autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   cleanValueRef: MutableRef<string>;
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
   collabSyncCleanupRef: MutableRef<() => void>;
@@ -31,7 +34,6 @@ type UseWorkspaceSaveActionsOptions = {
   editorValueRef: MutableRef<string>;
   saveOperationRef: MutableRef<number>;
   saveStateRef: MutableRef<SaveState>;
-  saveTimerRef: MutableRef<number | null>;
   scheduleAutoSaveRef: MutableRef<() => void>;
   selectedFileBackendRef: MutableRef<WorkspaceBackend | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
@@ -54,6 +56,7 @@ type UseWorkspaceSaveActionsOptions = {
 
 export function useWorkspaceSaveActions({
   activeDocumentGenerationRef,
+  autoSaveTaskRef,
   cleanValueRef,
   collabDocumentRef,
   collabSyncCleanupRef,
@@ -62,7 +65,6 @@ export function useWorkspaceSaveActions({
   editorValueRef,
   saveOperationRef,
   saveStateRef,
-  saveTimerRef,
   scheduleAutoSaveRef,
   selectedFileBackendRef,
   selectedFileRef,
@@ -74,10 +76,8 @@ export function useWorkspaceSaveActions({
   setSaveStateSynced,
 }: UseWorkspaceSaveActionsOptions) {
   let clearPendingSaveTimer = useCallback(() => {
-    if (saveTimerRef.current == null) return;
-    window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = null;
-  }, [saveTimerRef]);
+    autoSaveTaskRef.current?.task.cancel();
+  }, [autoSaveTaskRef]);
 
   let applyCollabDocumentValue = useCallback(
     (document: CollabDocumentState, value = getCollabDocumentValue(document)) => {
@@ -242,20 +242,25 @@ export function useWorkspaceSaveActions({
   ]);
 
   let scheduleAutoSave = useCallback(() => {
-    clearPendingSaveTimer();
-
-    let backendKind = selectedFileBackendRef.current?.kind;
-    let delay =
-      backendKind == "opendal-dropbox" ||
-      backendKind == "opendal-gdrive" ||
-      backendKind == "opendal-onedrive"
-        ? 2500
-        : 650;
-    saveTimerRef.current = window.setTimeout(() => {
-      saveTimerRef.current = null;
-      void saveCurrentFile();
-    }, delay);
-  }, [clearPendingSaveTimer, saveCurrentFile, saveTimerRef, selectedFileBackendRef]);
+    let key = sourceAutoSaveKey(selectedFileBackendRef.current);
+    let autoSaveTask = autoSaveTaskRef.current;
+    if (!autoSaveTask || autoSaveTask.key != key) {
+      autoSaveTask?.task.dispose();
+      let timing = sourceAutoSaveTiming(key);
+      autoSaveTask = {
+        key,
+        task: createDebouncedTask({
+          delayMs: timing.delayMs,
+          maxWaitMs: timing.maxWaitMs,
+          run: async () => {
+            await saveCurrentFile();
+          },
+        }),
+      };
+      autoSaveTaskRef.current = autoSaveTask;
+    }
+    autoSaveTask.task.schedule();
+  }, [autoSaveTaskRef, saveCurrentFile, selectedFileBackendRef]);
   scheduleAutoSaveRef.current = scheduleAutoSave;
 
   let handleRemoteCollabDocumentUpdate = useCallback(
@@ -301,11 +306,8 @@ export function useWorkspaceSaveActions({
   let handleEditorInput = useCallback(
     (value: string) => {
       editorValueRef.current = value;
-      let backend = selectedFileBackendRef.current;
       let document = collabDocumentRef.current;
-      if (backend && document) {
-        void savePendingCollabDocumentUpdates(backend, document).catch(() => {});
-      }
+      if (document) schedulePendingCollabDocumentUpdateFlush(document);
       editVersionRef.current += 1;
       dirtyRef.current = true;
 
@@ -322,7 +324,6 @@ export function useWorkspaceSaveActions({
       editorValueRef,
       saveStateRef,
       scheduleAutoSave,
-      selectedFileBackendRef,
       setSaveStateSynced,
     ],
   );

@@ -32,6 +32,7 @@ import type {
   EditorDocument,
   SaveState,
   SingleFileSource,
+  SourceAutoSaveTask,
 } from "@/lib/workspace/types";
 import { saveStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
 import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
@@ -50,6 +51,7 @@ type StartOwnerShareHost = (
 
 type UseWorkspaceDocumentActionsOptions = {
   activeDocumentGenerationRef: MutableRef<number>;
+  autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   cleanValueRef: MutableRef<string>;
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
   collabSyncCleanupRef: MutableRef<() => void>;
@@ -61,7 +63,6 @@ type UseWorkspaceDocumentActionsOptions = {
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
   saveOperationRef: MutableRef<number>;
   saveStateRef: MutableRef<SaveState>;
-  saveTimerRef: MutableRef<number | null>;
   scheduleAutoSaveRef: MutableRef<() => void>;
   selectedFileBackendRef: MutableRef<WorkspaceBackend | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
@@ -94,6 +95,7 @@ type UseWorkspaceDocumentActionsOptions = {
 
 export function useWorkspaceDocumentActions({
   activeDocumentGenerationRef,
+  autoSaveTaskRef,
   cleanValueRef,
   collabDocumentRef,
   collabSyncCleanupRef,
@@ -105,7 +107,6 @@ export function useWorkspaceDocumentActions({
   localFileHandleRef,
   saveOperationRef,
   saveStateRef,
-  saveTimerRef,
   scheduleAutoSaveRef,
   selectedFileBackendRef,
   selectedFileRef,
@@ -134,8 +135,9 @@ export function useWorkspaceDocumentActions({
   let disposeActiveCollabDocument = useCallback(() => {
     collabSyncCleanupRef.current();
     collabSyncCleanupRef.current = () => {};
-    collabDocumentRef.current?.dispose();
+    let document = collabDocumentRef.current;
     collabDocumentRef.current = null;
+    return document?.dispose() ?? Promise.resolve();
   }, [collabDocumentRef, collabSyncCleanupRef]);
 
   let {
@@ -146,6 +148,7 @@ export function useWorkspaceDocumentActions({
     scheduleAutoSave,
   } = useWorkspaceSaveActions({
     activeDocumentGenerationRef,
+    autoSaveTaskRef,
     cleanValueRef,
     collabDocumentRef,
     collabSyncCleanupRef,
@@ -154,7 +157,6 @@ export function useWorkspaceDocumentActions({
     editorValueRef,
     saveOperationRef,
     saveStateRef,
-    saveTimerRef,
     scheduleAutoSaveRef,
     selectedFileBackendRef,
     selectedFileRef,
@@ -171,7 +173,9 @@ export function useWorkspaceDocumentActions({
     invalidateActiveDocumentSave();
     clearPendingSaveTimer();
     stopOwnerShareHost();
-    disposeActiveCollabDocument();
+    void disposeActiveCollabDocument().catch((error: unknown) => {
+      setErrorMessage(errorToMessage(error));
+    });
     selectedFileRef.current = null;
     selectedFileBackendRef.current = null;
     singleFileSourceRef.current = null;
@@ -209,6 +213,7 @@ export function useWorkspaceDocumentActions({
     setCollabDocument,
     setCreatedShare,
     setEditorDocument,
+    setErrorMessage,
     setSaveStateSynced,
     setSelectedFile,
     setSingleFileSource,
@@ -241,7 +246,9 @@ export function useWorkspaceDocumentActions({
       invalidateActiveDocumentSave();
       clearPendingSaveTimer();
       stopOwnerShareHost();
-      disposeActiveCollabDocument();
+      void disposeActiveCollabDocument().catch((error: unknown) => {
+        setErrorMessage(errorToMessage(error));
+      });
       selectedFileBackendRef.current = backend;
       selectedFileRef.current = file;
       editorValueRef.current = value;
@@ -364,12 +371,21 @@ export function useWorkspaceDocumentActions({
         if (!isCurrentLoadRequest()) return;
         let document = await openMarkdownCollabDocument(backend, file.path);
         if (!isCurrentLoadRequest()) {
-          document.dispose();
+          await document.dispose();
           return;
         }
         let value = document.value;
         if (!isOwnerShareHostPath(backend, file.path)) stopOwnerShareHost();
-        disposeActiveCollabDocument();
+        try {
+          await disposeActiveCollabDocument();
+        } catch (error) {
+          await document.dispose().catch(() => {});
+          throw error;
+        }
+        if (!isCurrentLoadRequest()) {
+          await document.dispose();
+          return;
+        }
         invalidateActiveDocumentSave();
         selectedFileRef.current = file;
         selectedFileBackendRef.current = backend;
@@ -495,7 +511,12 @@ export function useWorkspaceDocumentActions({
 
       let document = await openMarkdownCollabDocument(backend, file.path);
 
-      disposeActiveCollabDocument();
+      try {
+        await disposeActiveCollabDocument();
+      } catch (error) {
+        await document.dispose().catch(() => {});
+        throw error;
+      }
       invalidateActiveDocumentSave();
       collabDocumentRef.current = document;
       bindCollabDocumentBroadcast(backend, document);

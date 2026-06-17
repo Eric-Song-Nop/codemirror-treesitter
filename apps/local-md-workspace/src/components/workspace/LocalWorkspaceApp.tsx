@@ -20,7 +20,10 @@ import { useWorkspaceShareState } from "@/hooks/workspace/useWorkspaceShareState
 import { useWorkspaceStartup } from "@/hooks/workspace/useWorkspaceStartup";
 import { useWorkspaceTree } from "@/hooks/workspace/useWorkspaceTree";
 import { completeDropboxPopupOAuthIfPresent } from "@/lib/dropbox-oauth";
-import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
+import {
+  flushCollabDocumentPersistence,
+  type CollabDocumentState,
+} from "@/lib/collaboration/markdown-document";
 import { isMobileBrowser } from "@/lib/browser-support";
 import {
   supportsDirectoryPicker,
@@ -40,7 +43,12 @@ import { defaultSidebarOpen, isMobileSidebarViewport } from "@/lib/workspace/con
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { createEphemeralLocalWorkspaceRecord, saveStateLabel } from "@/lib/workspace/state";
-import type { EditorDocument, SaveState, SingleFileSource } from "@/lib/workspace/types";
+import type {
+  EditorDocument,
+  SaveState,
+  SingleFileSource,
+  SourceAutoSaveTask,
+} from "@/lib/workspace/types";
 import {
   loadStoredDropboxWorkspaceConfig,
   loadStoredWorkspaceKind,
@@ -97,7 +105,7 @@ export function LocalWorkspaceApp() {
   let dirtyRef = useRef(false);
   let editVersionRef = useRef(0);
   let saveStateRef = useRef<SaveState>("idle");
-  let saveTimerRef = useRef<number | null>(null);
+  let autoSaveTaskRef = useRef<SourceAutoSaveTask | null>(null);
   let scheduleAutoSaveRef = useRef<() => void>(() => {});
   let saveOperationRef = useRef(0);
   let activeDocumentGenerationRef = useRef(0);
@@ -145,10 +153,32 @@ export function LocalWorkspaceApp() {
   useEffect(
     () => () => {
       collabSyncCleanupRef.current();
-      collabDocumentRef.current?.dispose();
+      let document = collabDocumentRef.current;
+      collabDocumentRef.current = null;
+      if (document) void document.dispose().catch(() => {});
     },
     [],
   );
+
+  useEffect(() => {
+    let flushActiveCollabDocument = () => {
+      let document = collabDocumentRef.current;
+      if (!document) return;
+      void flushCollabDocumentPersistence(document).catch((error: unknown) => {
+        setErrorMessage(errorToMessage(error));
+      });
+    };
+    let handleVisibilityChange = () => {
+      if (document.visibilityState == "hidden") flushActiveCollabDocument();
+    };
+
+    window.addEventListener("pagehide", flushActiveCollabDocument);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("pagehide", flushActiveCollabDocument);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [setErrorMessage]);
 
   useEffect(() => {
     completeDropboxPopupOAuthIfPresent();
@@ -209,6 +239,7 @@ export function LocalWorkspaceApp() {
   }, []);
 
   let {
+    flushOwnerShareHost,
     isOwnerShareHostPath,
     sendHostDocumentUpdate,
     sendHostSaveAck,
@@ -237,6 +268,7 @@ export function LocalWorkspaceApp() {
     saveCurrentFile,
   } = useWorkspaceDocumentActions({
     activeDocumentGenerationRef,
+    autoSaveTaskRef,
     cleanValueRef,
     collabDocumentRef,
     collabSyncCleanupRef,
@@ -248,7 +280,6 @@ export function LocalWorkspaceApp() {
     localFileHandleRef,
     saveOperationRef,
     saveStateRef,
-    saveTimerRef,
     scheduleAutoSaveRef,
     selectedFileBackendRef,
     selectedFileRef,
@@ -353,7 +384,7 @@ export function LocalWorkspaceApp() {
 
   useEffect(
     () => () => {
-      if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+      autoSaveTaskRef.current?.task.dispose();
     },
     [],
   );
@@ -385,12 +416,12 @@ export function LocalWorkspaceApp() {
     setFileDialogValue,
     submitFileDialog,
   } = useWorkspaceEntryDialogs({
+    autoSaveTaskRef,
     beginDocumentTransition,
     clearActiveDocument,
     loadTree,
     saveCurrentFile,
     saveOperationRef,
-    saveTimerRef,
     selectedFile,
     selectedFileRef,
     setBusy,
@@ -445,6 +476,7 @@ export function LocalWorkspaceApp() {
     setShareCreating,
     setShareError,
     shareExpiration,
+    flushOwnerShareHost,
     startOwnerShareHost,
     stopOwnerShareHost,
     workspaceBackendRef,

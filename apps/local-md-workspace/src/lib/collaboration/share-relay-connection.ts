@@ -65,12 +65,17 @@ export class ShareRelayConnection {
   constructor(private readonly options: ShareRelayConnectionOptions) {}
 
   close() {
+    this.flushNow();
     this.activeGeneration++;
     this.clearReconnectTimer();
-    this.clearFlushTimer();
     this.stopHeartbeat();
     this.socket?.close(1000, "Page closed");
     this.socket = null;
+  }
+
+  flushNow() {
+    this.clearFlushTimer();
+    this.flushQueue();
   }
 
   connect() {

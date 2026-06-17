@@ -1,4 +1,6 @@
 import type { OwnerShareRecord } from "@/lib/collaboration/share-storage";
+import type { DebouncedTask } from "@/lib/scheduling/debounced-task";
+import type { SourceAutoSaveKey } from "@/lib/workspace/source-autosave";
 
 export type SaveState = "idle" | "pending" | "saving" | "saved" | "error";
 
@@ -38,4 +40,9 @@ export type ActiveOwnerShareRecord = OwnerShareRecord & {
   hostOnline?: boolean;
   peerCount?: number;
   pendingHostSave?: boolean;
+};
+
+export type SourceAutoSaveTask = {
+  key: SourceAutoSaveKey;
+  task: DebouncedTask;
 };

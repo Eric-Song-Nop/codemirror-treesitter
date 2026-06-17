@@ -142,6 +142,75 @@ describe("shared file relay connection helpers", () => {
     connection.close();
   });
 
+  it("flushes queued relay messages immediately", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { onLine: true });
+    vi.stubGlobal("window", globalThis);
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc: new LoroDoc(),
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+
+    connection.connect();
+    let socket = mockSockets[0]!;
+    socket.open();
+    socket.receive(JSON.stringify({ type: "sync-ready", versionVector: [] }));
+
+    connection.enqueueHostSaveAck(new Uint8Array([7]));
+    connection.flushNow();
+
+    let hostSaveAcks = sentMessages(socket).filter(
+      (message) => message.kind == RelayWireKind.HostSaveAck,
+    );
+    expect(hostSaveAcks).toEqual([
+      { kind: RelayWireKind.HostSaveAck, payload: new Uint8Array([7]) },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(50);
+    hostSaveAcks = sentMessages(socket).filter(
+      (message) => message.kind == RelayWireKind.HostSaveAck,
+    );
+    expect(hostSaveAcks).toHaveLength(1);
+
+    connection.close();
+  });
+
+  it("flushes queued relay messages before closing", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { onLine: true });
+    vi.stubGlobal("window", globalThis);
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc: new LoroDoc(),
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+
+    connection.connect();
+    let socket = mockSockets[0]!;
+    socket.open();
+    socket.receive(JSON.stringify({ type: "sync-ready", versionVector: [] }));
+
+    connection.enqueueHostSaveAck(new Uint8Array([9]));
+    connection.close();
+
+    let hostSaveAcks = sentMessages(socket).filter(
+      (message) => message.kind == RelayWireKind.HostSaveAck,
+    );
+    expect(hostSaveAcks).toEqual([
+      { kind: RelayWireKind.HostSaveAck, payload: new Uint8Array([9]) },
+    ]);
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+  });
+
   it("merges offline document updates before replaying them to the relay", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("crypto", { getRandomValues: (array: Uint16Array) => array.fill(0) });
@@ -231,6 +300,12 @@ describe("shared file relay connection helpers", () => {
     expect(states).toEqual(["resync-required"]);
   });
 });
+
+function sentMessages(socket: MockWebSocket) {
+  return socket.sent
+    .filter((item): item is Uint8Array => item instanceof Uint8Array)
+    .flatMap((frame) => decodeRelayWireFrame(frame));
+}
 
 class MockWebSocket extends EventTarget {
   static readonly CLOSED = 3;

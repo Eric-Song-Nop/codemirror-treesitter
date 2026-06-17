@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } fr
 import type { VersionVector } from "loro-crdt";
 import {
   getCollabDocumentValue,
-  savePendingCollabDocumentUpdates,
+  scheduleCollabDocumentSnapshotFlush,
 } from "@/lib/collaboration/markdown-document";
 import {
   configuredShareRelayOrigin,
@@ -56,6 +56,10 @@ export function useOwnerShareHost({
     shareHostConnectionRef.current?.close();
     shareHostConnectionRef.current = null;
     shareHostRecordRef.current = null;
+  }, []);
+
+  let flushOwnerShareHost = useCallback(() => {
+    shareHostConnectionRef.current?.flushNow();
   }, []);
 
   useEffect(
@@ -156,9 +160,7 @@ export function useOwnerShareHost({
             editVersionRef.current += 1;
             dirtyRef.current = true;
             setSaveStateSynced("pending");
-            void savePendingCollabDocumentUpdates(session.backend, session.collabDocument).catch(
-              () => {},
-            );
+            scheduleCollabDocumentSnapshotFlush(session.collabDocument);
             scheduleAutoSaveRef.current();
           },
           onError: (message) => setShareError(message),
@@ -197,6 +199,7 @@ export function useOwnerShareHost({
   );
 
   return {
+    flushOwnerShareHost,
     sendHostDocumentUpdate,
     sendHostSaveAck,
     isOwnerShareHostPath,
