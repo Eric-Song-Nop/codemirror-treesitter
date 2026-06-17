@@ -9,8 +9,6 @@ import { WorkspaceErrorBanner } from "@/components/workspace/WorkspaceErrorBanne
 import { WorkspaceHeader } from "@/components/workspace/WorkspaceHeader";
 import { WorkspaceSidebar } from "@/components/workspace/WorkspaceSidebar";
 import { useDropboxWorkspaceBackend } from "@/hooks/workspace/useDropboxWorkspaceBackend";
-import { useGoogleDriveWorkspaceBackend } from "@/hooks/workspace/useGoogleDriveWorkspaceBackend";
-import { useOneDriveWorkspaceBackend } from "@/hooks/workspace/useOneDriveWorkspaceBackend";
 import { useOwnerShareHost } from "@/hooks/workspace/useOwnerShareHost";
 import { useWorkspaceDocumentActions } from "@/hooks/workspace/useWorkspaceDocumentActions";
 import { useWorkspaceEntryDialogs } from "@/hooks/workspace/useWorkspaceEntryDialogs";
@@ -22,8 +20,6 @@ import { useWorkspaceShareState } from "@/hooks/workspace/useWorkspaceShareState
 import { useWorkspaceStartup } from "@/hooks/workspace/useWorkspaceStartup";
 import { useWorkspaceTree } from "@/hooks/workspace/useWorkspaceTree";
 import { completeDropboxPopupOAuthIfPresent } from "@/lib/dropbox-oauth";
-import { completeGoogleDrivePopupOAuthIfPresent } from "@/lib/google-drive-oauth";
-import { completeOneDrivePopupOAuthIfPresent } from "@/lib/onedrive-oauth";
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
 import { isMobileBrowser } from "@/lib/browser-support";
 import {
@@ -42,22 +38,16 @@ import { useI18n } from "@/lib/i18n";
 import { useLiveMdPreloadError } from "@/lib/live-md-preload";
 import { defaultSidebarOpen, isMobileSidebarViewport } from "@/lib/workspace/constants";
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
-import { defaultGoogleDriveClientId } from "@/lib/workspace/google-drive-config";
-import { defaultOneDriveClientId, defaultOneDriveRoot } from "@/lib/workspace/onedrive-config";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { createEphemeralLocalWorkspaceRecord, saveStateLabel } from "@/lib/workspace/state";
 import type { EditorDocument, SaveState, SingleFileSource } from "@/lib/workspace/types";
 import {
   loadStoredDropboxWorkspaceConfig,
-  loadStoredGoogleDriveWorkspaceConfig,
-  loadStoredOneDriveWorkspaceConfig,
   loadStoredWorkspaceKind,
   rememberStoredLocalWorkspace,
   saveStoredWorkspaceKind,
   type StoredLocalWorkspaceRecord,
   type StoredDropboxWorkspaceConfig,
-  type StoredGoogleDriveWorkspaceConfig,
-  type StoredOneDriveWorkspaceConfig,
   type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
 
@@ -73,10 +63,6 @@ export function LocalWorkspaceApp() {
   let [storedDropboxConfig, setStoredDropboxConfig] = useState<StoredDropboxWorkspaceConfig | null>(
     () => loadStoredDropboxWorkspaceConfig(),
   );
-  let [storedGoogleDriveConfig, setStoredGoogleDriveConfig] =
-    useState<StoredGoogleDriveWorkspaceConfig | null>(() => loadStoredGoogleDriveWorkspaceConfig());
-  let [storedOneDriveConfig, setStoredOneDriveConfig] =
-    useState<StoredOneDriveWorkspaceConfig | null>(() => loadStoredOneDriveWorkspaceConfig());
   let [storedWorkspaceKind, setStoredWorkspaceKind] = useState<StoredWorkspaceKind | null>(() =>
     loadStoredWorkspaceKind(),
   );
@@ -95,8 +81,6 @@ export function LocalWorkspaceApp() {
   let [retryLoadPath, setRetryLoadPath] = useState<string | null>(null);
   let [busy, setBusy] = useState(false);
   let [dropboxConnecting, setDropboxConnecting] = useState(false);
-  let [googleDriveConnecting, setGoogleDriveConnecting] = useState(false);
-  let [oneDriveConnecting, setOneDriveConnecting] = useState(false);
   let [restoreChecking, setRestoreChecking] = useState(false);
   let [sidebarOpen, setSidebarOpen] = useState(() => defaultSidebarOpen());
 
@@ -168,8 +152,6 @@ export function LocalWorkspaceApp() {
 
   useEffect(() => {
     completeDropboxPopupOAuthIfPresent();
-    completeGoogleDrivePopupOAuthIfPresent();
-    completeOneDrivePopupOAuthIfPresent();
   }, []);
 
   let selectedPath = singleFileSource ? null : (selectedFile?.path ?? null);
@@ -215,22 +197,6 @@ export function LocalWorkspaceApp() {
       editorValueRef,
       selectedFileRef,
       setStoredDropboxConfig,
-      setStoredWorkspaceKind,
-      t,
-      workspaceBackendRef,
-    });
-  let { clearGoogleDriveAccessToken, createGoogleDriveBackend, setGoogleDriveRedirectAccessToken } =
-    useGoogleDriveWorkspaceBackend({
-      setStoredGoogleDriveConfig,
-      setStoredWorkspaceKind,
-      t,
-    });
-  let { clearOneDriveAccessToken, createOneDriveBackend, setOneDriveRedirectAccessToken } =
-    useOneDriveWorkspaceBackend({
-      dirtyRef,
-      editorValueRef,
-      selectedFileRef,
-      setStoredOneDriveConfig,
       setStoredWorkspaceKind,
       t,
       workspaceBackendRef,
@@ -338,21 +304,13 @@ export function LocalWorkspaceApp() {
 
   let {
     openDropboxWorkspace,
-    openGoogleDriveWorkspace,
-    openOneDriveWorkspace,
     openWorkspace,
     refreshWorkspace,
     restoreDropboxWorkspace,
-    restoreGoogleDriveWorkspace,
-    restoreOneDriveWorkspace,
     restoreStoredWorkspace,
   } = useWorkspaceOpeners({
     clearDropboxAccessToken,
-    clearGoogleDriveAccessToken,
-    clearOneDriveAccessToken,
     createDropboxBackend,
-    createGoogleDriveBackend,
-    createOneDriveBackend,
     folderAccessUnavailableMessage,
     loadTree,
     refreshWorkspaceForCurrentEditor,
@@ -362,27 +320,19 @@ export function LocalWorkspaceApp() {
     setBusy,
     setDropboxConnecting,
     setErrorMessage,
-    setGoogleDriveConnecting,
-    setOneDriveConnecting,
     setRetryLoadPath,
     setSidebarOpen,
     setWorkspaceBackend,
     storedDropboxConfig,
-    storedGoogleDriveConfig,
     storedLocalWorkspace,
-    storedOneDriveConfig,
     workspaceBackend,
   });
 
   useWorkspaceStartup({
     browserSupported,
     clearDropboxAccessToken,
-    clearGoogleDriveAccessToken,
-    clearOneDriveAccessToken,
     loadTree,
     openDropboxWorkspace,
-    openGoogleDriveWorkspace,
-    openOneDriveWorkspace,
     openSingleFileDraft,
     selectedFile,
     selectedFileRef,
@@ -390,19 +340,13 @@ export function LocalWorkspaceApp() {
     setDropboxConnecting,
     setDropboxRedirectAccessToken,
     setErrorMessage,
-    setGoogleDriveConnecting,
-    setGoogleDriveRedirectAccessToken,
-    setOneDriveConnecting,
-    setOneDriveRedirectAccessToken,
     setRestoreChecking,
     setRetryLoadPath,
     setSidebarOpen,
     setStoredLocalWorkspace,
     setWorkspaceBackend,
     storedDropboxConfig,
-    storedGoogleDriveConfig,
     storedLocalWorkspace,
-    storedOneDriveConfig,
     storedWorkspaceKind,
     workspaceBackend,
   });
@@ -475,37 +419,6 @@ export function LocalWorkspaceApp() {
     });
   };
 
-  let connectGoogleDrive = () => {
-    let clientId = defaultGoogleDriveClientId();
-    if (!clientId) {
-      setErrorMessage(
-        "Google Drive workspace is not configured. Set VITE_GOOGLE_DRIVE_CLIENT_ID for this app.",
-      );
-      setRetryLoadPath(null);
-      return;
-    }
-
-    void openGoogleDriveWorkspace({
-      clientId,
-    });
-  };
-
-  let connectOneDrive = () => {
-    let clientId = defaultOneDriveClientId();
-    if (!clientId) {
-      setErrorMessage(
-        "OneDrive workspace is not configured. Set VITE_ONEDRIVE_CLIENT_ID for this app.",
-      );
-      setRetryLoadPath(null);
-      return;
-    }
-
-    void openOneDriveWorkspace({
-      clientId,
-      root: storedOneDriveConfig?.root ?? defaultOneDriveRoot(),
-    });
-  };
-
   let retryUnavailableCollabFile = useCallback(async () => {
     let backend = workspaceBackend;
     let retryPath = retryLoadPath;
@@ -543,36 +456,20 @@ export function LocalWorkspaceApp() {
 
   let {
     closeSaveAsDropboxDialog,
-    closeSaveAsGoogleDriveDialog,
-    closeSaveAsOneDriveDialog,
     downloadCurrentMarkdownCopy,
     exportCurrentFileAsHtml,
     openSaveAsDropboxDialog,
-    openSaveAsGoogleDriveDialog,
-    openSaveAsOneDriveDialog,
     printCurrentFileAsPdf,
     saveAsDropboxDialogOpen,
     saveAsDropboxError,
     saveAsDropboxPath,
-    saveAsGoogleDriveDialogOpen,
-    saveAsGoogleDriveError,
-    saveAsGoogleDrivePath,
-    saveAsOneDriveDialogOpen,
-    saveAsOneDriveError,
-    saveAsOneDrivePath,
     saveSingleFileAsLocal,
     setSaveAsDropboxPath,
-    setSaveAsGoogleDrivePath,
-    setSaveAsOneDrivePath,
     submitSaveAsDropbox,
-    submitSaveAsGoogleDrive,
-    submitSaveAsOneDrive,
   } = useWorkspaceFileActions({
     activateSingleFileDocument,
     collabDocumentRef,
     createDropboxBackend,
-    createGoogleDriveBackend,
-    createOneDriveBackend,
     discardMaterializedDraft,
     editorElementRef,
     editorValueRef,
@@ -585,13 +482,10 @@ export function LocalWorkspaceApp() {
     setBusy,
     setDropboxConnecting,
     setErrorMessage,
-    setGoogleDriveConnecting,
-    setOneDriveConnecting,
     setRetryLoadPath,
     setWorkspaceBackend,
     singleFileSourceRef,
     storedDropboxConfig,
-    storedOneDriveConfig,
     t,
     workspaceBackendRef,
   });
@@ -604,8 +498,6 @@ export function LocalWorkspaceApp() {
     locale == "en" ? t("actions.switchToChinese") : t("actions.switchToEnglish");
   let restoreAvailable = Boolean(storedLocalWorkspace);
   let dropboxRestoreAvailable = Boolean(storedDropboxConfig);
-  let googleDriveRestoreAvailable = Boolean(storedGoogleDriveConfig);
-  let oneDriveRestoreAvailable = Boolean(storedOneDriveConfig);
 
   return (
     <TooltipProvider>
@@ -616,10 +508,6 @@ export function LocalWorkspaceApp() {
           canRefresh={canRefreshWorkspace}
           dropboxConnecting={dropboxConnecting}
           dropboxRestoreAvailable={dropboxRestoreAvailable}
-          googleDriveConnecting={googleDriveConnecting}
-          googleDriveRestoreAvailable={googleDriveRestoreAvailable}
-          oneDriveConnecting={oneDriveConnecting}
-          oneDriveRestoreAvailable={oneDriveRestoreAvailable}
           languageToggleLabel={languageToggleLabel}
           open={sidebarOpen}
           restoreAvailable={restoreAvailable}
@@ -632,14 +520,10 @@ export function LocalWorkspaceApp() {
           onDeleteEntry={requestDeleteEntry}
           onLoadDirectory={loadTreeDirectory}
           onOpenDropbox={connectDropbox}
-          onOpenGoogleDrive={connectGoogleDrive}
-          onOpenOneDrive={connectOneDrive}
           onOpenFolder={() => void openWorkspace()}
           onRefresh={() => void refreshWorkspace()}
           onRenameEntry={openRenameDialog}
           onRestoreDropbox={() => void restoreDropboxWorkspace()}
-          onRestoreGoogleDrive={() => void restoreGoogleDriveWorkspace()}
-          onRestoreOneDrive={() => void restoreOneDriveWorkspace()}
           onRestoreFolder={() => void restoreStoredWorkspace()}
           onSelectEntry={setTreeSelection}
           onSelectFile={selectFile}
@@ -673,8 +557,6 @@ export function LocalWorkspaceApp() {
             canSaveToDevice={supportsSaveFilePicker()}
             canShare={canShareFile}
             dropboxConnecting={dropboxConnecting}
-            googleDriveConnecting={googleDriveConnecting}
-            oneDriveConnecting={oneDriveConnecting}
             saveLabel={saveLabel}
             saveState={saveState}
             sidebarOpen={sidebarOpen}
@@ -685,8 +567,6 @@ export function LocalWorkspaceApp() {
             onInsertImage={() => imageInputRef.current?.click()}
             onPrintPdf={() => void printCurrentFileAsPdf()}
             onSaveAsDropbox={openSaveAsDropboxDialog}
-            onSaveAsGoogleDrive={openSaveAsGoogleDriveDialog}
-            onSaveAsOneDrive={openSaveAsOneDriveDialog}
             onSaveAsLocal={() => void saveSingleFileAsLocal()}
             onShareFile={openShareDialog}
             onToggleSidebar={toggleSidebar}
@@ -747,24 +627,6 @@ export function LocalWorkspaceApp() {
             onSubmit: submitSaveAsDropbox,
             onValueChange: setSaveAsDropboxPath,
           }}
-          saveAsGoogleDriveDialog={{
-            busy: busy || googleDriveConnecting,
-            error: saveAsGoogleDriveError,
-            open: saveAsGoogleDriveDialogOpen,
-            value: saveAsGoogleDrivePath,
-            onOpenChange: closeSaveAsGoogleDriveDialog,
-            onSubmit: submitSaveAsGoogleDrive,
-            onValueChange: setSaveAsGoogleDrivePath,
-          }}
-          saveAsOneDriveDialog={{
-            busy: busy || oneDriveConnecting,
-            error: saveAsOneDriveError,
-            open: saveAsOneDriveDialogOpen,
-            value: saveAsOneDrivePath,
-            onOpenChange: closeSaveAsOneDriveDialog,
-            onSubmit: submitSaveAsOneDrive,
-            onValueChange: setSaveAsOneDrivePath,
-          }}
           commandPalette={{
             browserSupported,
             busy,
@@ -775,25 +637,17 @@ export function LocalWorkspaceApp() {
               fileDialogMode != null ||
               shareDialogOpen ||
               saveAsDropboxDialogOpen ||
-              saveAsGoogleDriveDialogOpen ||
-              saveAsOneDriveDialogOpen ||
               deleteTarget != null,
             dropboxConnecting,
-            googleDriveConnecting,
-            oneDriveConnecting,
             selectedPath,
             sidebarOpen,
             tree,
             onConnectDropbox: connectDropbox,
-            onConnectGoogleDrive: connectGoogleDrive,
-            onConnectOneDrive: connectOneDrive,
             onDownloadCopy: downloadCurrentMarkdownCopy,
             onInsertImage: () => imageInputRef.current?.click(),
             onNewDraft: () => void openSingleFileDraft(),
             onOpenFolder: () => void openWorkspace(),
             onSaveAsDropbox: openSaveAsDropboxDialog,
-            onSaveAsGoogleDrive: openSaveAsGoogleDriveDialog,
-            onSaveAsOneDrive: openSaveAsOneDriveDialog,
             onSaveAsLocal: () => void saveSingleFileAsLocal(),
             onSelectFile: selectFile,
             onToggleSidebar: toggleSidebar,

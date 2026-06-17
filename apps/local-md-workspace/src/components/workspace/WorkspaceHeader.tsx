@@ -14,8 +14,6 @@ type WorkspaceHeaderProps = {
   canSaveToDevice: boolean;
   canShare: boolean;
   dropboxConnecting: boolean;
-  googleDriveConnecting: boolean;
-  oneDriveConnecting: boolean;
   saveLabel: string;
   saveState: SaveState;
   sidebarOpen: boolean;
@@ -26,8 +24,6 @@ type WorkspaceHeaderProps = {
   onInsertImage: () => void;
   onPrintPdf: () => void;
   onSaveAsDropbox: () => void;
-  onSaveAsGoogleDrive: () => void;
-  onSaveAsOneDrive: () => void;
   onSaveAsLocal: () => void;
   onShareFile: () => void;
   onToggleSidebar: () => void;
@@ -42,8 +38,6 @@ export function WorkspaceHeader({
   canSaveToDevice,
   canShare,
   dropboxConnecting,
-  googleDriveConnecting,
-  oneDriveConnecting,
   saveLabel,
   saveState,
   sidebarOpen,
@@ -54,8 +48,6 @@ export function WorkspaceHeader({
   onInsertImage,
   onPrintPdf,
   onSaveAsDropbox,
-  onSaveAsGoogleDrive,
-  onSaveAsOneDrive,
   onSaveAsLocal,
   onShareFile,
   onToggleSidebar,
@@ -95,16 +87,12 @@ export function WorkspaceHeader({
         canSaveToDevice={canSaveToDevice}
         canShare={canShare}
         dropboxConnecting={dropboxConnecting}
-        googleDriveConnecting={googleDriveConnecting}
-        oneDriveConnecting={oneDriveConnecting}
         onDownloadCopy={onDownloadCopy}
         onExportHtml={onExportHtml}
         onPrintPdf={onPrintPdf}
         onInsertImage={onInsertImage}
         onSaveToDevice={onSaveAsLocal}
         onSaveToDropbox={onSaveAsDropbox}
-        onSaveToGoogleDrive={onSaveAsGoogleDrive}
-        onSaveToOneDrive={onSaveAsOneDrive}
         onShareFile={onShareFile}
       />
     </header>

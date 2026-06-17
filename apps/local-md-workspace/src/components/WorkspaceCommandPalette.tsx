@@ -40,21 +40,15 @@ type WorkspaceCommandPaletteProps = {
   canSaveAsLocal: boolean;
   disabled?: boolean;
   dropboxConnecting: boolean;
-  googleDriveConnecting: boolean;
-  oneDriveConnecting: boolean;
   selectedPath: string | null;
   sidebarOpen: boolean;
   tree: MarkdownDirectoryNode | null;
   onConnectDropbox: () => void;
-  onConnectGoogleDrive: () => void;
-  onConnectOneDrive: () => void;
   onDownloadCopy: () => void;
   onInsertImage: () => void;
   onNewDraft: () => void;
   onOpenFolder: () => void;
   onSaveAsDropbox: () => void;
-  onSaveAsGoogleDrive: () => void;
-  onSaveAsOneDrive: () => void;
   onSaveAsLocal: () => void;
   onSelectFile: (file: MarkdownFileNode) => void;
   onToggleSidebar: () => void;
@@ -79,21 +73,15 @@ export function WorkspaceCommandPalette({
   canSaveAsLocal,
   disabled = false,
   dropboxConnecting,
-  googleDriveConnecting,
-  oneDriveConnecting,
   selectedPath,
   sidebarOpen,
   tree,
   onConnectDropbox,
-  onConnectGoogleDrive,
-  onConnectOneDrive,
   onDownloadCopy,
   onInsertImage,
   onNewDraft,
   onOpenFolder,
   onSaveAsDropbox,
-  onSaveAsGoogleDrive,
-  onSaveAsOneDrive,
   onSaveAsLocal,
   onSelectFile,
   onToggleSidebar,
@@ -149,26 +137,6 @@ export function WorkspaceCommandPalette({
         onSelect: onSaveAsDropbox,
       },
       {
-        detail: googleDriveConnecting
-          ? t("command.saveAsGoogleDrive.detail.connecting")
-          : "Google Drive",
-        disabled: busy || googleDriveConnecting || !canSaveAs,
-        icon: CloudIcon,
-        id: "save-as-google-drive",
-        keywords: t("command.saveAsGoogleDrive.keywords").split(/\s+/),
-        title: t("actions.saveAsGoogleDrive"),
-        onSelect: onSaveAsGoogleDrive,
-      },
-      {
-        detail: oneDriveConnecting ? t("command.saveAsOneDrive.detail.connecting") : "OneDrive",
-        disabled: busy || oneDriveConnecting || !canSaveAs,
-        icon: CloudIcon,
-        id: "save-as-onedrive",
-        keywords: t("command.saveAsOneDrive.keywords").split(/\s+/),
-        title: t("actions.saveAsOneDrive"),
-        onSelect: onSaveAsOneDrive,
-      },
-      {
         detail: t("command.downloadCopy.detail"),
         disabled: busy || !canSaveAs,
         icon: DownloadIcon,
@@ -202,32 +170,6 @@ export function WorkspaceCommandPalette({
         keywords: t("command.connectDropbox.keywords").split(/\s+/),
         title: t("actions.connectDropbox"),
         onSelect: onConnectDropbox,
-      },
-      {
-        detail: googleDriveConnecting
-          ? t("command.connectGoogleDrive.detail.connecting")
-          : busy
-            ? t("command.connectGoogleDrive.detail.busy")
-            : t("command.connectGoogleDrive.detail.ready"),
-        disabled: busy || googleDriveConnecting,
-        icon: CloudIcon,
-        id: "connect-google-drive",
-        keywords: t("command.connectGoogleDrive.keywords").split(/\s+/),
-        title: t("actions.connectGoogleDrive"),
-        onSelect: onConnectGoogleDrive,
-      },
-      {
-        detail: oneDriveConnecting
-          ? t("command.connectOneDrive.detail.connecting")
-          : busy
-            ? t("command.connectOneDrive.detail.busy")
-            : t("command.connectOneDrive.detail.ready"),
-        disabled: busy || oneDriveConnecting,
-        icon: CloudIcon,
-        id: "connect-onedrive",
-        keywords: t("command.connectOneDrive.keywords").split(/\s+/),
-        title: t("actions.connectOneDrive"),
-        onSelect: onConnectOneDrive,
       },
       {
         detail: sidebarOpen
@@ -282,18 +224,12 @@ export function WorkspaceCommandPalette({
       canSaveAs,
       canSaveAsLocal,
       dropboxConnecting,
-      googleDriveConnecting,
-      oneDriveConnecting,
       onConnectDropbox,
-      onConnectGoogleDrive,
-      onConnectOneDrive,
       onDownloadCopy,
       onInsertImage,
       onNewDraft,
       onOpenFolder,
       onSaveAsDropbox,
-      onSaveAsGoogleDrive,
-      onSaveAsOneDrive,
       onSaveAsLocal,
       onToggleSidebar,
       sidebarOpen,

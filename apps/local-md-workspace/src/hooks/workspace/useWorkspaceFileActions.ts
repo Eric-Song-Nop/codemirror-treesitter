@@ -17,8 +17,6 @@ import {
 } from "@/lib/file-system";
 import type { TFunction } from "@/lib/i18n";
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
-import { defaultGoogleDriveClientId } from "@/lib/workspace/google-drive-config";
-import { defaultOneDriveClientId, defaultOneDriveRoot } from "@/lib/workspace/onedrive-config";
 import { errorToMessage, isAbortError } from "@/lib/workspace/errors";
 import {
   downloadTextFile,
@@ -38,11 +36,7 @@ import {
   type MarkdownFileNode,
   type WorkspaceBackend,
 } from "@/lib/workspace-backend";
-import type {
-  StoredDropboxWorkspaceConfig,
-  StoredGoogleDriveWorkspaceConfig,
-  StoredOneDriveWorkspaceConfig,
-} from "@/lib/workspace-store";
+import type { StoredDropboxWorkspaceConfig } from "@/lib/workspace-store";
 
 type MutableRef<T> = {
   current: T;
@@ -66,8 +60,6 @@ type UseWorkspaceFileActionsOptions = {
   ) => void;
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
   createDropboxBackend: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceBackend>;
-  createGoogleDriveBackend: (config: StoredGoogleDriveWorkspaceConfig) => Promise<WorkspaceBackend>;
-  createOneDriveBackend: (config: StoredOneDriveWorkspaceConfig) => Promise<WorkspaceBackend>;
   discardMaterializedDraft: (source: SingleFileSource | null) => void;
   editorElementRef: RefObject<LiveMdEditorElement | null>;
   editorValueRef: MutableRef<string>;
@@ -84,13 +76,10 @@ type UseWorkspaceFileActionsOptions = {
   setBusy: (busy: boolean) => void;
   setDropboxConnecting: (connecting: boolean) => void;
   setErrorMessage: (message: string) => void;
-  setGoogleDriveConnecting: (connecting: boolean) => void;
-  setOneDriveConnecting: (connecting: boolean) => void;
   setRetryLoadPath: (path: string | null) => void;
   setWorkspaceBackend: (backend: WorkspaceBackend) => void;
   singleFileSourceRef: MutableRef<SingleFileSource | null>;
   storedDropboxConfig: StoredDropboxWorkspaceConfig | null;
-  storedOneDriveConfig: StoredOneDriveWorkspaceConfig | null;
   t: TFunction;
   workspaceBackendRef: MutableRef<WorkspaceBackend | null>;
 };
@@ -99,8 +88,6 @@ export function useWorkspaceFileActions({
   activateSingleFileDocument,
   collabDocumentRef,
   createDropboxBackend,
-  createGoogleDriveBackend,
-  createOneDriveBackend,
   discardMaterializedDraft,
   editorElementRef,
   editorValueRef,
@@ -113,25 +100,16 @@ export function useWorkspaceFileActions({
   setBusy,
   setDropboxConnecting,
   setErrorMessage,
-  setGoogleDriveConnecting,
-  setOneDriveConnecting,
   setRetryLoadPath,
   setWorkspaceBackend,
   singleFileSourceRef,
   storedDropboxConfig,
-  storedOneDriveConfig,
   t,
   workspaceBackendRef,
 }: UseWorkspaceFileActionsOptions) {
   let [saveAsDropboxDialogOpen, setSaveAsDropboxDialogOpen] = useState(false);
   let [saveAsDropboxPath, setSaveAsDropboxPath] = useState("");
   let [saveAsDropboxError, setSaveAsDropboxError] = useState("");
-  let [saveAsGoogleDriveDialogOpen, setSaveAsGoogleDriveDialogOpen] = useState(false);
-  let [saveAsGoogleDrivePath, setSaveAsGoogleDrivePath] = useState("");
-  let [saveAsGoogleDriveError, setSaveAsGoogleDriveError] = useState("");
-  let [saveAsOneDriveDialogOpen, setSaveAsOneDriveDialogOpen] = useState(false);
-  let [saveAsOneDrivePath, setSaveAsOneDrivePath] = useState("");
-  let [saveAsOneDriveError, setSaveAsOneDriveError] = useState("");
 
   let currentMarkdownValue = useCallback(() => {
     let activeDocument = collabDocumentRef.current;
@@ -319,32 +297,6 @@ export function useWorkspaceFileActions({
     if (!open) setSaveAsDropboxError("");
   }, []);
 
-  let openSaveAsGoogleDriveDialog = useCallback(() => {
-    let fileName =
-      singleFileSourceRef.current?.name ?? selectedFileRef.current?.name ?? "Untitled.md";
-    setSaveAsGoogleDrivePath(markdownDownloadFileName(fileName));
-    setSaveAsGoogleDriveError("");
-    setSaveAsGoogleDriveDialogOpen(true);
-  }, [selectedFileRef, singleFileSourceRef]);
-
-  let closeSaveAsGoogleDriveDialog = useCallback((open: boolean) => {
-    setSaveAsGoogleDriveDialogOpen(open);
-    if (!open) setSaveAsGoogleDriveError("");
-  }, []);
-
-  let openSaveAsOneDriveDialog = useCallback(() => {
-    let fileName =
-      singleFileSourceRef.current?.name ?? selectedFileRef.current?.name ?? "Untitled.md";
-    setSaveAsOneDrivePath(markdownDownloadFileName(fileName));
-    setSaveAsOneDriveError("");
-    setSaveAsOneDriveDialogOpen(true);
-  }, [selectedFileRef, singleFileSourceRef]);
-
-  let closeSaveAsOneDriveDialog = useCallback((open: boolean) => {
-    setSaveAsOneDriveDialogOpen(open);
-    if (!open) setSaveAsOneDriveError("");
-  }, []);
-
   let submitSaveAsDropbox = useCallback(
     async (rawPath: string) => {
       let source = singleFileSourceRef.current;
@@ -399,138 +351,18 @@ export function useWorkspaceFileActions({
     ],
   );
 
-  let submitSaveAsGoogleDrive = useCallback(
-    async (rawPath: string) => {
-      let source = singleFileSourceRef.current;
-      let value = currentMarkdownValue();
-      let clientId = defaultGoogleDriveClientId();
-      if (!clientId) {
-        setSaveAsGoogleDriveError(
-          "Google Drive workspace is not configured. Set VITE_GOOGLE_DRIVE_CLIENT_ID for this app.",
-        );
-        return;
-      }
-
-      setBusy(true);
-      setGoogleDriveConnecting(true);
-      setSaveAsGoogleDriveError("");
-      setErrorMessage("");
-      setRetryLoadPath(null);
-      try {
-        let path = normalizeMarkdownPath(rawPath);
-        let backend =
-          workspaceBackendRef.current?.kind == "opendal-gdrive"
-            ? workspaceBackendRef.current
-            : await createGoogleDriveBackend({
-                clientId,
-              });
-        await backend.writeFile(path, value);
-        setWorkspaceBackend(backend);
-        await loadTree(backend, path, { saveBeforeSelect: false });
-        discardMaterializedDraft(source);
-        setSaveAsGoogleDriveDialogOpen(false);
-      } catch (error) {
-        setSaveAsGoogleDriveError(errorToMessage(error));
-      } finally {
-        setGoogleDriveConnecting(false);
-        setBusy(false);
-      }
-    },
-    [
-      createGoogleDriveBackend,
-      currentMarkdownValue,
-      discardMaterializedDraft,
-      loadTree,
-      setBusy,
-      setErrorMessage,
-      setGoogleDriveConnecting,
-      setRetryLoadPath,
-      setWorkspaceBackend,
-      singleFileSourceRef,
-      workspaceBackendRef,
-    ],
-  );
-
-  let submitSaveAsOneDrive = useCallback(
-    async (rawPath: string) => {
-      let source = singleFileSourceRef.current;
-      let value = currentMarkdownValue();
-      let clientId = defaultOneDriveClientId();
-      if (!clientId) {
-        setSaveAsOneDriveError(
-          "OneDrive workspace is not configured. Set VITE_ONEDRIVE_CLIENT_ID for this app.",
-        );
-        return;
-      }
-
-      setBusy(true);
-      setOneDriveConnecting(true);
-      setSaveAsOneDriveError("");
-      setErrorMessage("");
-      setRetryLoadPath(null);
-      try {
-        let path = normalizeMarkdownPath(rawPath);
-        let backend =
-          workspaceBackendRef.current?.kind == "opendal-onedrive"
-            ? workspaceBackendRef.current
-            : await createOneDriveBackend({
-                clientId,
-                root: storedOneDriveConfig?.root ?? defaultOneDriveRoot(),
-              });
-        await backend.writeFile(path, value);
-        setWorkspaceBackend(backend);
-        await loadTree(backend, path, { saveBeforeSelect: false });
-        discardMaterializedDraft(source);
-        setSaveAsOneDriveDialogOpen(false);
-      } catch (error) {
-        setSaveAsOneDriveError(errorToMessage(error));
-      } finally {
-        setOneDriveConnecting(false);
-        setBusy(false);
-      }
-    },
-    [
-      createOneDriveBackend,
-      currentMarkdownValue,
-      discardMaterializedDraft,
-      loadTree,
-      setBusy,
-      setErrorMessage,
-      setOneDriveConnecting,
-      setRetryLoadPath,
-      setWorkspaceBackend,
-      singleFileSourceRef,
-      storedOneDriveConfig,
-      workspaceBackendRef,
-    ],
-  );
-
   return {
     saveAsDropboxDialogOpen,
     saveAsDropboxError,
     saveAsDropboxPath,
-    saveAsGoogleDriveDialogOpen,
-    saveAsGoogleDriveError,
-    saveAsGoogleDrivePath,
-    saveAsOneDriveDialogOpen,
-    saveAsOneDriveError,
-    saveAsOneDrivePath,
     closeSaveAsDropboxDialog,
-    closeSaveAsGoogleDriveDialog,
-    closeSaveAsOneDriveDialog,
     currentMarkdownValue,
     downloadCurrentMarkdownCopy,
     exportCurrentFileAsHtml,
     openSaveAsDropboxDialog,
-    openSaveAsGoogleDriveDialog,
-    openSaveAsOneDriveDialog,
     printCurrentFileAsPdf,
     saveSingleFileAsLocal,
     setSaveAsDropboxPath,
-    setSaveAsGoogleDrivePath,
-    setSaveAsOneDrivePath,
     submitSaveAsDropbox,
-    submitSaveAsGoogleDrive,
-    submitSaveAsOneDrive,
   };
 }

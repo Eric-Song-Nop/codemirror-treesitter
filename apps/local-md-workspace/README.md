@@ -1,22 +1,21 @@
 # local-md-workspace
 
 Grove local-first Markdown workspace. It is a React app built around LiveMD,
-the browser File System Access API, optional Dropbox, Google Drive, and OneDrive
-storage through the OpenDAL WASM wrapper, and optional shared-file collaboration
-through `apps/grove-relay`.
+the browser File System Access API, optional Dropbox storage through the OpenDAL
+WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
 
 ## Responsibilities
 
 - Open a browser-granted local directory and edit `.md` files with LiveMD.
 - Restore previously granted local handles when browser permissions allow it.
-- Connect to Dropbox and OneDrive with OAuth PKCE, connect to Google Drive with
-  Google Identity Services, and use `@codemirror-treesitter/opendal-wasm-browser`
-  for browser-side file operations.
-- Provide a reusable OpenDAL workspace backend for Dropbox, OneDrive, and Google Drive,
-  including cloud-save serialization, token refresh retry, metadata tracking,
-  and ETag-based conditional writes when supported by the provider. Google Drive
-  currently uses ordinary writes because OpenDAL's `gdrive` service does not
-  advertise native conditional writes.
+- Connect to Dropbox with OAuth PKCE and use
+  `@codemirror-treesitter/opendal-wasm-browser` for browser-side file
+  operations.
+- Provide a reusable OpenDAL workspace backend for Dropbox, including cloud-save
+  serialization, token refresh retry, metadata tracking, and ETag-based
+  conditional writes when supported by the provider. OneDrive and Google Drive
+  adapter code exists in source, but those providers are not exposed in the
+  current Grove UI.
 - Build a Markdown file tree, create/rename/delete files and folders, autosave
   edits, and surface permission/storage errors.
 - Open a command palette with `Cmd/Ctrl+Shift+P` for file navigation and core
@@ -56,14 +55,12 @@ through `apps/grove-relay`.
 - `src/theme/*`: shared named-theme contract, document/storage adapters, and
   CSS token ownership for the local and shared workspace routes.
 - `src/lib/file-system.ts`: File System Access API backend.
-- `src/lib/dropbox-oauth.ts`, `src/lib/google-drive-oauth.ts`,
-  `src/lib/onedrive-oauth.ts`, and matching
-  `*-workspace-backend.ts` files: OAuth PKCE and OpenDAL workspace adapters for
-  Dropbox, Google Drive, and OneDrive.
-- `src/lib/opendal-workspace-backend.ts`,
-  `src/lib/onedrive-workspace-backend.ts`, and
-  `src/lib/google-drive-workspace-backend.ts`: shared OpenDAL workspace backend
-  plus OneDrive and Google Drive adapters.
+- `src/lib/dropbox-oauth.ts` and `src/lib/dropbox-workspace-backend.ts`:
+  Dropbox OAuth PKCE and OpenDAL workspace adapter used by the current Grove UI.
+- `src/lib/google-drive-*` and `src/lib/onedrive-*`: dormant OpenDAL provider
+  adapters not exposed in the current Grove UI.
+- `src/lib/opendal-workspace-backend.ts`: shared OpenDAL workspace backend used
+  by cloud provider adapters.
 - `src/lib/workspace-backend.ts`: normalized workspace tree, path, image, and
   backend contracts.
 - `src/lib/export/markdown-html.ts`: standalone HTML export wrapper, LiveMD
@@ -86,26 +83,6 @@ Optional Dropbox configuration:
 VITE_DROPBOX_APP_KEY="your-public-dropbox-app-key"
 VITE_DROPBOX_REDIRECT_URI="http://localhost:5173/"
 ```
-
-Optional OneDrive configuration:
-
-```env
-VITE_ONEDRIVE_CLIENT_ID="your-public-onedrive-client-id"
-VITE_ONEDRIVE_REDIRECT_URI="http://localhost:5173/"
-```
-
-Optional Google Drive configuration:
-
-```env
-VITE_GOOGLE_DRIVE_CLIENT_ID="your-public-google-oauth-client-id"
-```
-
-Google Drive requests `https://www.googleapis.com/auth/drive.file` and uses a
-fixed Grove app-owned workspace. Markdown save paths are resolved inside that
-workspace. The app can only access files it creates or that Google Drive grants
-to it; opening arbitrary existing Drive folders would require Google Picker or a
-broader Drive scope. Configure the Google OAuth web client with
-`http://localhost:5173` as an authorized JavaScript origin for local dev.
 
 Optional relay configuration:
 
