@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LiveMdConfig } from "@codemirror-treesitter/live-md";
 import { liveMdLoroCollaborationPlugin } from "@codemirror-treesitter/live-md-loro";
+import { useQuery } from "@tanstack/react-query";
 import { AlertCircleIcon, CloudIcon, RefreshCwIcon, WifiIcon, WifiOffIcon } from "lucide-react";
 import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { PendingButtonContent } from "@/components/workspace/PendingButtonContent";
 import { GroveMark } from "@/components/GroveMark";
 import { LiveMdEditor } from "@/components/LiveMdEditor";
 import { ThemeSelector } from "@/components/ThemeSelector";
@@ -22,6 +25,7 @@ import {
 import { parseShareLink, type ShareLinkParts } from "@/lib/collaboration/share-identity";
 import { translateKnownMessage, useI18n, type TFunction, type Locale } from "@/lib/i18n";
 import { useLiveMdPreloadError } from "@/lib/live-md-preload";
+import { workspaceQueryKeys } from "@/lib/workspace-query-keys";
 
 type SharedFileRoute =
   | {
@@ -42,6 +46,10 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
   let liveMdPreloadError = useLiveMdPreloadError();
   let route = useMemo(() => sharedFileRouteFromHref(href), [href]);
   let relayOrigin = useMemo(() => configuredShareRelayOrigin(), []);
+  let shareId = route.kind == "share" ? route.parts.shareId : "";
+  let guestSecret = route.kind == "share" ? route.parts.guestSecret : "";
+  let invalidRouteMessage = route.kind == "invalid" ? route.message : "";
+  let canJoinSharedFile = route.kind == "share" && Boolean(relayOrigin);
   let [doc] = useState(() => new LoroDoc());
   let [undoManager] = useState(() => new UndoManager(doc, {}));
   let [sessionReady, setSessionReady] = useState(false);
@@ -57,6 +65,31 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
     () => ({ plugins: [liveMdLoroCollaborationPlugin({ doc, undoManager })] }),
     [doc, undoManager],
   );
+  let sharedSessionQuery = useQuery({
+    enabled: canJoinSharedFile,
+    gcTime: 0,
+    queryFn: ({ signal }) => {
+      if (!canJoinSharedFile) {
+        throw new Error("Shared file relay is not configured.");
+      }
+      let fetchWithAbort: typeof fetch = (input, init) => fetch(input, { ...init, signal });
+      return createRelayShareSession(relayOrigin, shareId, "guest", guestSecret, fetchWithAbort);
+    },
+    queryKey: canJoinSharedFile
+      ? workspaceQueryKeys.sharedSession(relayOrigin, shareId, sharedSecretCacheToken(guestSecret))
+      : workspaceQueryKeys.sharedSession("", "invalid", ""),
+    refetchOnReconnect: false,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  let joiningSharedFile = canJoinSharedFile && sharedSessionQuery.isFetching && !sessionReady;
+  let retrySharedFileConnection = () => {
+    if (sessionReady) {
+      connectionRef.current?.connect();
+      return;
+    }
+    void sharedSessionQuery.refetch();
+  };
 
   useEffect(
     () =>
@@ -68,9 +101,16 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
   );
 
   useEffect(() => {
-    if (route.kind == "invalid") {
+    setDisplayName("Shared file");
+    setShareStatus(null);
+    setSessionReady(false);
+    setLatestLocalVersion(null);
+    setHostSavedVersion(null);
+    setLastHostSavedAt(null);
+
+    if (invalidRouteMessage) {
       setConnectionState("offline");
-      setErrorMessage(route.message);
+      setErrorMessage(invalidRouteMessage);
       setSessionReady(false);
       return;
     }
@@ -82,67 +122,73 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
       return;
     }
 
-    let canceled = false;
-    let connection: ShareRelayConnection | null = null;
-    setConnectionState("connecting");
     setErrorMessage("");
+  }, [guestSecret, invalidRouteMessage, relayOrigin, shareId]);
+
+  useEffect(() => {
+    if (!canJoinSharedFile || !sharedSessionQuery.isFetching || sessionReady) return;
+
+    setConnectionState("connecting");
     setSessionReady(false);
+    setDisplayName("Shared file");
+    setShareStatus(null);
     setLatestLocalVersion(null);
     setHostSavedVersion(null);
     setLastHostSavedAt(null);
+  }, [canJoinSharedFile, sessionReady, sharedSessionQuery.isFetching]);
 
-    void createRelayShareSession(relayOrigin, route.parts.shareId, "guest", route.parts.guestSecret)
-      .then((session) => {
-        if (canceled) return;
+  useEffect(() => {
+    if (!sharedSessionQuery.error) return;
+    setConnectionState("offline");
+    setErrorMessage(errorToMessage(sharedSessionQuery.error));
+    setSessionReady(false);
+  }, [sharedSessionQuery.error]);
 
-        setDisplayName(session.displayName);
-        setShareStatus({
-          displayName: session.displayName,
-          expiresAt: session.shareExpiresAt,
-          guestCount: session.guestCount,
-          hostOnline: session.hostOnline,
-          peerCount: session.peerCount,
-          pendingHostSave: session.pendingHostSave,
-          revokedAt: null,
-          shareId: session.shareId,
-        });
+  useEffect(() => {
+    if (!canJoinSharedFile || !sharedSessionQuery.data) return;
 
-        connection = new ShareRelayConnection({
-          clientId: getOrCreateSharedFileClientId(),
-          doc,
-          onConnectionState: setConnectionState,
-          onError: setErrorMessage,
-          onHostSaveAck: (payload) => {
-            let ack = parseHostSaveAck(payload);
-            if (!ack || ack.shareId != route.parts.shareId) return;
-            setLastHostSavedAt(ack.savedAt);
-            setHostSavedVersion(ack.versionVector);
-          },
-          onShareStatus: (status) => {
-            setShareStatus(status);
-            if (status.displayName) setDisplayName(status.displayName);
-          },
-          relayOrigin,
-          sessionToken: session.sessionToken,
-          shareId: route.parts.shareId,
-        });
-        connectionRef.current = connection;
-        connection.connect();
-        setSessionReady(true);
-      })
-      .catch((error: unknown) => {
-        if (canceled) return;
-        setConnectionState("offline");
-        setErrorMessage(errorToMessage(error));
-      });
+    let session = sharedSessionQuery.data;
+    setErrorMessage("");
+    setDisplayName(session.displayName);
+    setShareStatus({
+      displayName: session.displayName,
+      expiresAt: session.shareExpiresAt,
+      guestCount: session.guestCount,
+      hostOnline: session.hostOnline,
+      peerCount: session.peerCount,
+      pendingHostSave: session.pendingHostSave,
+      revokedAt: null,
+      shareId: session.shareId,
+    });
+
+    let connection = new ShareRelayConnection({
+      clientId: getOrCreateSharedFileClientId(),
+      doc,
+      onConnectionState: setConnectionState,
+      onError: setErrorMessage,
+      onHostSaveAck: (payload) => {
+        let ack = parseHostSaveAck(payload);
+        if (!ack || ack.shareId != shareId) return;
+        setLastHostSavedAt(ack.savedAt);
+        setHostSavedVersion(ack.versionVector);
+      },
+      onShareStatus: (status) => {
+        setShareStatus(status);
+        if (status.displayName) setDisplayName(status.displayName);
+      },
+      relayOrigin,
+      sessionToken: session.sessionToken,
+      shareId,
+    });
+    connectionRef.current = connection;
+    connection.connect();
+    setSessionReady(true);
 
     return () => {
-      canceled = true;
-      connectionRef.current?.close();
-      connectionRef.current = null;
-      connection?.close();
+      if (connectionRef.current == connection) connectionRef.current = null;
+      connection.close();
     };
-  }, [doc, relayOrigin, route]);
+  }, [canJoinSharedFile, doc, relayOrigin, shareId, sharedSessionQuery.data]);
 
   useEffect(() => {
     let handleOnline = () => connectionRef.current?.connect();
@@ -181,7 +227,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
             {connectionState == "connected" ? (
               <WifiIcon data-icon="inline-start" />
             ) : connectionState == "connecting" ? (
-              <RefreshCwIcon data-icon="inline-start" />
+              <RefreshCwIcon className="animate-spin" data-icon="inline-start" />
             ) : (
               <WifiOffIcon data-icon="inline-start" />
             )}
@@ -211,9 +257,21 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
             <AlertCircleIcon className="size-4 shrink-0" />
             <div className="min-w-0 flex-1">{translateKnownMessage(visibleErrorMessage, t)}</div>
             {errorMessage && route.kind == "share" && (
-              <Button size="sm" variant="outline" onClick={() => connectionRef.current?.connect()}>
-                <RefreshCwIcon data-icon="inline-start" />
-                {t("actions.retry")}
+              <Button
+                disabled={joiningSharedFile}
+                size="sm"
+                variant="outline"
+                onClick={retrySharedFileConnection}
+              >
+                <PendingButtonContent
+                  pending={joiningSharedFile}
+                  pendingLabel={t("actions.connecting")}
+                >
+                  <>
+                    <RefreshCwIcon data-icon="inline-start" />
+                    {t("actions.retry")}
+                  </>
+                </PendingButtonContent>
               </Button>
             )}
           </div>
@@ -223,7 +281,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
           <section className="min-h-0 flex-1 overflow-hidden">
             <LiveMdEditor
               config={liveMdConfig}
-              documentKey={route.kind == "share" ? route.parts.shareId : "shared-file"}
+              documentKey={shareId || "shared-file"}
               initialValue=""
               placeholder={t("workspace.placeholder")}
               onInput={() => {}}
@@ -234,7 +292,11 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
             <Empty className="max-w-md">
               <EmptyHeader>
                 <EmptyMedia>
-                  <GroveMark className="size-14" />
+                  {joiningSharedFile ? (
+                    <Spinner className="size-10" />
+                  ) : (
+                    <GroveMark className="size-14" />
+                  )}
                 </EmptyMedia>
                 <EmptyTitle>
                   {route.kind == "invalid" ? t("shared.invalid") : t("shared.joining")}
@@ -351,6 +413,15 @@ function parseVersionVector(value: unknown) {
 function versionCovers(saved: VersionVector, local: VersionVector) {
   let comparison = saved.compare(local);
   return comparison == 0 || comparison == 1;
+}
+
+function sharedSecretCacheToken(secret: string) {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < secret.length; index += 1) {
+    hash ^= secret.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `${secret.length}:${(hash >>> 0).toString(16)}`;
 }
 
 function getOrCreateSharedFileClientId() {
