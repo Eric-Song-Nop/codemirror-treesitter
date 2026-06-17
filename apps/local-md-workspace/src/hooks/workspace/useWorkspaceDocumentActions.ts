@@ -29,6 +29,7 @@ import type {
   EditorDocument,
   SaveState,
   SingleFileSource,
+  SourceAutoSaveTask,
 } from "@/lib/workspace/types";
 import { saveStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
 import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
@@ -46,6 +47,7 @@ type StartOwnerShareHost = (
 
 type UseWorkspaceDocumentActionsOptions = {
   activeDocumentGenerationRef: MutableRef<number>;
+  autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   cleanValueRef: MutableRef<string>;
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
   collabSyncCleanupRef: MutableRef<() => void>;
@@ -57,7 +59,6 @@ type UseWorkspaceDocumentActionsOptions = {
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
   saveOperationRef: MutableRef<number>;
   saveStateRef: MutableRef<SaveState>;
-  saveTimerRef: MutableRef<number | null>;
   scheduleAutoSaveRef: MutableRef<() => void>;
   selectedFileBackendRef: MutableRef<WorkspaceBackend | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
@@ -81,6 +82,7 @@ type UseWorkspaceDocumentActionsOptions = {
 
 export function useWorkspaceDocumentActions({
   activeDocumentGenerationRef,
+  autoSaveTaskRef,
   cleanValueRef,
   collabDocumentRef,
   collabSyncCleanupRef,
@@ -92,7 +94,6 @@ export function useWorkspaceDocumentActions({
   localFileHandleRef,
   saveOperationRef,
   saveStateRef,
-  saveTimerRef,
   scheduleAutoSaveRef,
   selectedFileBackendRef,
   selectedFileRef,
@@ -133,6 +134,7 @@ export function useWorkspaceDocumentActions({
     scheduleAutoSave,
   } = useWorkspaceSaveActions({
     activeDocumentGenerationRef,
+    autoSaveTaskRef,
     cleanValueRef,
     collabDocumentRef,
     collabSyncCleanupRef,
@@ -141,7 +143,6 @@ export function useWorkspaceDocumentActions({
     editorValueRef,
     saveOperationRef,
     saveStateRef,
-    saveTimerRef,
     scheduleAutoSaveRef,
     selectedFileBackendRef,
     selectedFileRef,

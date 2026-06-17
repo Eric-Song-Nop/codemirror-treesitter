@@ -87,7 +87,9 @@ describe("debounced tasks", () => {
 
   it("flushes queued work after an active run when the delay fires while running", async () => {
     vi.useFakeTimers();
-    let resolveFirstRun: (() => void) | null = null;
+    let resolveFirstRun: () => void = () => {
+      throw new Error("First run did not start.");
+    };
     let runs = 0;
     let task = createDebouncedTask({
       delayMs: 50,
@@ -109,7 +111,7 @@ describe("debounced tasks", () => {
     await vi.advanceTimersByTimeAsync(50);
     expect(runs).toBe(1);
 
-    resolveFirstRun?.();
+    resolveFirstRun();
     await vi.runAllTimersAsync();
 
     expect(runs).toBe(2);

@@ -40,7 +40,12 @@ import { defaultSidebarOpen, isMobileSidebarViewport } from "@/lib/workspace/con
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { createEphemeralLocalWorkspaceRecord, saveStateLabel } from "@/lib/workspace/state";
-import type { EditorDocument, SaveState, SingleFileSource } from "@/lib/workspace/types";
+import type {
+  EditorDocument,
+  SaveState,
+  SingleFileSource,
+  SourceAutoSaveTask,
+} from "@/lib/workspace/types";
 import {
   loadStoredDropboxWorkspaceConfig,
   loadStoredWorkspaceKind,
@@ -97,7 +102,7 @@ export function LocalWorkspaceApp() {
   let dirtyRef = useRef(false);
   let editVersionRef = useRef(0);
   let saveStateRef = useRef<SaveState>("idle");
-  let saveTimerRef = useRef<number | null>(null);
+  let autoSaveTaskRef = useRef<SourceAutoSaveTask | null>(null);
   let scheduleAutoSaveRef = useRef<() => void>(() => {});
   let saveOperationRef = useRef(0);
   let activeDocumentGenerationRef = useRef(0);
@@ -236,6 +241,7 @@ export function LocalWorkspaceApp() {
     saveCurrentFile,
   } = useWorkspaceDocumentActions({
     activeDocumentGenerationRef,
+    autoSaveTaskRef,
     cleanValueRef,
     collabDocumentRef,
     collabSyncCleanupRef,
@@ -247,7 +253,6 @@ export function LocalWorkspaceApp() {
     localFileHandleRef,
     saveOperationRef,
     saveStateRef,
-    saveTimerRef,
     scheduleAutoSaveRef,
     selectedFileBackendRef,
     selectedFileRef,
@@ -352,7 +357,7 @@ export function LocalWorkspaceApp() {
 
   useEffect(
     () => () => {
-      if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+      autoSaveTaskRef.current?.task.dispose();
     },
     [],
   );
@@ -384,12 +389,12 @@ export function LocalWorkspaceApp() {
     setFileDialogValue,
     submitFileDialog,
   } = useWorkspaceEntryDialogs({
+    autoSaveTaskRef,
     beginDocumentTransition,
     clearActiveDocument,
     loadTree,
     saveCurrentFile,
     saveOperationRef,
-    saveTimerRef,
     selectedFile,
     selectedFileRef,
     setBusy,

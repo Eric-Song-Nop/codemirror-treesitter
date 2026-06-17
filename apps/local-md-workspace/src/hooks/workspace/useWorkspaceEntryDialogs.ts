@@ -10,7 +10,7 @@ import {
   renameWorkspaceDirectory,
 } from "@/lib/workspace/paths";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
-import type { FileDialogMode, SingleFileSource } from "@/lib/workspace/types";
+import type { FileDialogMode, SingleFileSource, SourceAutoSaveTask } from "@/lib/workspace/types";
 import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
 import type {
   MarkdownDirectoryNode,
@@ -23,6 +23,7 @@ type MutableRef<T> = {
 };
 
 type UseWorkspaceEntryDialogsOptions = {
+  autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   beginDocumentTransition: (path?: string) => void;
   clearActiveDocument: () => void;
   loadTree: (
@@ -32,7 +33,6 @@ type UseWorkspaceEntryDialogsOptions = {
   ) => Promise<void>;
   saveCurrentFile: () => Promise<boolean>;
   saveOperationRef: MutableRef<number>;
-  saveTimerRef: MutableRef<number | null>;
   selectedFile: MarkdownFileNode | null;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
   setBusy: (busy: boolean) => void;
@@ -46,12 +46,12 @@ type UseWorkspaceEntryDialogsOptions = {
 };
 
 export function useWorkspaceEntryDialogs({
+  autoSaveTaskRef,
   beginDocumentTransition,
   clearActiveDocument,
   loadTree,
   saveCurrentFile,
   saveOperationRef,
-  saveTimerRef,
   selectedFile,
   selectedFileRef,
   setBusy,
@@ -190,10 +190,7 @@ export function useWorkspaceEntryDialogs({
     setBusy(true);
     setErrorMessage("");
     setRetryLoadPath(null);
-    if (saveTimerRef.current != null) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
+    autoSaveTaskRef.current?.task.cancel();
     saveOperationRef.current += 1;
     try {
       let nextSelectedPath = singleFileSourceRef.current
@@ -230,11 +227,11 @@ export function useWorkspaceEntryDialogs({
     }
   }, [
     clearActiveDocument,
+    autoSaveTaskRef,
     deleteTarget,
     loadTree,
     saveCurrentFile,
     saveOperationRef,
-    saveTimerRef,
     selectedFileRef,
     setBusy,
     setErrorMessage,
