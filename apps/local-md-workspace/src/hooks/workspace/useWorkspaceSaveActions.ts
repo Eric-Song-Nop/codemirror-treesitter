@@ -7,7 +7,7 @@ import {
   getCollabDocumentValue,
   ingestExternalMarkdownEdit,
   saveCollabDocumentSnapshot,
-  savePendingCollabDocumentUpdates,
+  schedulePendingCollabDocumentUpdateFlush,
   type CollabDocumentState,
   type CollabSourceImportResult,
 } from "@/lib/collaboration/markdown-document";
@@ -286,11 +286,8 @@ export function useWorkspaceSaveActions({
   let handleEditorInput = useCallback(
     (value: string) => {
       editorValueRef.current = value;
-      let backend = selectedFileBackendRef.current;
       let document = collabDocumentRef.current;
-      if (backend && document) {
-        void savePendingCollabDocumentUpdates(backend, document).catch(() => {});
-      }
+      if (document) schedulePendingCollabDocumentUpdateFlush(document);
       editVersionRef.current += 1;
       dirtyRef.current = true;
 
@@ -307,7 +304,6 @@ export function useWorkspaceSaveActions({
       editorValueRef,
       saveStateRef,
       scheduleAutoSave,
-      selectedFileBackendRef,
       setSaveStateSynced,
     ],
   );

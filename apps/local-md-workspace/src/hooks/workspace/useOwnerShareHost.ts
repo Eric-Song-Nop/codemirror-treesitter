@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } fr
 import type { VersionVector } from "loro-crdt";
 import {
   getCollabDocumentValue,
-  savePendingCollabDocumentUpdates,
+  scheduleCollabDocumentSnapshotFlush,
   type CollabDocumentState,
 } from "@/lib/collaboration/markdown-document";
 import {
@@ -106,7 +106,7 @@ export function useOwnerShareHost({
   let startOwnerShareHost = useCallback(
     async (
       record: OwnerShareRecord,
-      backend: WorkspaceBackend,
+      _backend: WorkspaceBackend,
       document: CollabDocumentState,
       options: { actionLabel?: string; shouldContinue?: () => boolean } = {},
     ) => {
@@ -148,7 +148,7 @@ export function useOwnerShareHost({
             editVersionRef.current += 1;
             dirtyRef.current = true;
             setSaveStateSynced("pending");
-            void savePendingCollabDocumentUpdates(backend, document).catch(() => {});
+            scheduleCollabDocumentSnapshotFlush(document);
             scheduleAutoSaveRef.current();
           },
           onError: (message) => setShareError(message),
