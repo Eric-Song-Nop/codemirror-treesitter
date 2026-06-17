@@ -12,6 +12,10 @@ import {
   type WorkspaceEntryStat,
   type WorkspaceBackend,
 } from "./workspace-backend.ts";
+import {
+  legacyLocalWorkspaceId,
+  localWorkspaceSourceAliases,
+} from "./workspace/source-identity.ts";
 
 type AccessPermissionMode = "read" | "readwrite";
 
@@ -150,12 +154,13 @@ export async function queryReadWritePermission(handle: AccessDirectoryHandle) {
 
 export function createLocalWorkspaceBackend(
   handle: AccessDirectoryHandle,
-  workspaceId = `local:${handle.name || "workspace"}`,
+  workspaceId = legacyLocalWorkspaceId(handle.name),
 ): WorkspaceBackend {
   return {
     id: workspaceId,
     kind: "local",
     name: handle.name || "Workspace",
+    sourceAliases: localWorkspaceSourceAliases(handle.name, workspaceId),
     createDirectory: (path) => createWorkspaceDirectory(handle, path),
     createFile: (path) => createMarkdownFile(handle, path),
     createImageAsset: (markdownFilePath, imageFile) =>

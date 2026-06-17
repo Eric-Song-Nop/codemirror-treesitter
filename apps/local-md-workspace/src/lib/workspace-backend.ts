@@ -10,6 +10,12 @@ export type WorkspaceSourceRevision = {
   version?: string;
 };
 
+export type WorkspaceSourceAlias = {
+  kind: WorkspaceBackendKind;
+  namespace: string;
+  workspaceId: string;
+};
+
 export type WorkspaceWriteOptions = {
   baseRevision?: WorkspaceSourceRevision;
 };
@@ -61,6 +67,7 @@ export type WorkspaceBackend = {
   id: string;
   kind: WorkspaceBackendKind;
   name: string;
+  sourceAliases?: WorkspaceSourceAlias[];
   createDirectory?: (path: string) => Promise<void>;
   createFile(path: string): Promise<string | null>;
   createImageAsset?: (

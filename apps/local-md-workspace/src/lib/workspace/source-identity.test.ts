@@ -2,9 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 import type { WorkspaceBackend, WorkspaceBackendKind } from "@/lib/workspace-backend";
 import {
   collabBroadcastChannelName,
+  documentSourceAliasRefs,
   documentSourceDocumentIdInput,
   documentSourceKey,
   documentSourceRef,
+  legacyLocalWorkspaceId,
+  localWorkspaceSourceAliases,
+  sameDocumentSourceRef,
   workspaceNamespace,
   workspaceSourceCapabilities,
   workspaceSourceIdentity,
@@ -93,13 +97,46 @@ describe("workspace source identity", () => {
     expect(documentSourceKey(ref)).toContain("file");
     expect(documentSourceKey(ref)).toContain("file-123");
   });
+
+  it("derives explicit local source aliases for migrated workspace handles", () => {
+    let aliases = localWorkspaceSourceAliases("Notes", "local:workspace-2");
+    let backend = fakeBackend("local", "local:workspace-2", "Notes", aliases);
+    let currentRef = documentSourceRef(backend, "daily.md");
+    let [aliasRef] = documentSourceAliasRefs(backend, "daily.md");
+
+    expect(legacyLocalWorkspaceId("Notes")).toBe("local:Notes");
+    expect(aliases).toEqual([
+      {
+        kind: "local",
+        namespace: "local:local:Notes",
+        workspaceId: "local:Notes",
+      },
+    ]);
+    expect(aliasRef).toEqual({
+      backendKind: "local",
+      path: "daily.md",
+      workspaceId: "local:Notes",
+      workspaceNamespace: "local:local:Notes",
+    });
+    expect(sameDocumentSourceRef(aliasRef, currentRef)).toBe(false);
+  });
+
+  it("omits a local alias when the current workspace already uses the legacy id", () => {
+    expect(localWorkspaceSourceAliases("Notes", "local:Notes")).toEqual([]);
+  });
 });
 
-function fakeBackend(kind: WorkspaceBackendKind, id: string, name = "Workspace"): WorkspaceBackend {
+function fakeBackend(
+  kind: WorkspaceBackendKind,
+  id: string,
+  name = "Workspace",
+  sourceAliases: WorkspaceBackend["sourceAliases"] = [],
+): WorkspaceBackend {
   return {
     id,
     kind,
     name,
+    sourceAliases,
     createFile: async () => null,
     deleteFile: async () => {},
     readFile: async () => "",

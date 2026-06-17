@@ -1,4 +1,5 @@
 import type { AccessDirectoryHandle } from "@/lib/file-system";
+import { legacyLocalWorkspaceId } from "@/lib/workspace/source-identity";
 
 const DB_NAME = "local-md-workspace";
 const DB_VERSION = 1;
@@ -330,7 +331,7 @@ async function loadLocalWorkspaceRecordsWithLegacyMigration(db: IDBDatabase, now
 
   await putValue(db, LOCAL_WORKSPACE_RECORDS_KEY, [record]);
   migrateStoredWorkspaceSelectedPath(
-    { kind: "local", workspaceId: legacyLocalWorkspaceId(legacyHandle) },
+    { kind: "local", workspaceId: legacyLocalWorkspaceId(legacyHandle.name) },
     { kind: "local", workspaceId: record.id },
   );
   return [record];
@@ -424,10 +425,6 @@ function createLocalWorkspaceRecordId() {
     return `local:${globalThis.crypto.randomUUID()}`;
   }
   return `local:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
-function legacyLocalWorkspaceId(handle: AccessDirectoryHandle) {
-  return `local:${handle.name || "workspace"}`;
 }
 
 async function getValue<T>(db: IDBDatabase, key: IDBValidKey) {

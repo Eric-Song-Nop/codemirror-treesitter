@@ -1,6 +1,7 @@
 import type {
   WorkspaceBackend,
   WorkspaceBackendKind,
+  WorkspaceSourceAlias,
   WorkspaceSourceRevision,
 } from "@/lib/workspace-backend";
 
@@ -46,7 +47,40 @@ export function workspaceSourceIdentity(backend: WorkspaceBackend): WorkspaceSou
 
 export function workspaceNamespace(source: WorkspaceBackend | WorkspaceSourceIdentity) {
   if ("namespace" in source) return source.namespace;
-  return `${source.kind}:${source.id}`;
+  return workspaceNamespaceFromParts(source.kind, source.id);
+}
+
+export function legacyLocalWorkspaceId(name: string) {
+  return `local:${name || "workspace"}`;
+}
+
+export function localWorkspaceSourceAliases(
+  name: string,
+  currentWorkspaceId: string,
+): WorkspaceSourceAlias[] {
+  let workspaceId = legacyLocalWorkspaceId(name);
+  let alias: WorkspaceSourceAlias = {
+    kind: "local",
+    namespace: workspaceNamespaceFromParts("local", workspaceId),
+    workspaceId,
+  };
+
+  return alias.namespace == workspaceNamespaceFromParts("local", currentWorkspaceId) ? [] : [alias];
+}
+
+export function workspaceSourceAliases(backend: WorkspaceBackend): WorkspaceSourceAlias[] {
+  let currentNamespace = workspaceNamespace(backend);
+  let seen = new Set([currentNamespace]);
+  let aliases: WorkspaceSourceAlias[] = [];
+
+  for (let alias of backend.sourceAliases ?? []) {
+    if (alias.kind != backend.kind) continue;
+    if (!alias.namespace || !alias.workspaceId || seen.has(alias.namespace)) continue;
+    seen.add(alias.namespace);
+    aliases.push(alias);
+  }
+
+  return aliases;
 }
 
 export function workspaceSourceCapabilities(
@@ -72,13 +106,39 @@ export function documentSourceRef(
   path: string,
   extra: DocumentSourceRefExtra = {},
 ): DocumentSourceRef {
+  return documentSourceRefForWorkspaceSource(
+    {
+      kind: backend.kind,
+      namespace: workspaceNamespace(backend),
+      workspaceId: backend.id,
+    },
+    path,
+    extra,
+  );
+}
+
+export function documentSourceAliasRefs(
+  backend: WorkspaceBackend,
+  path: string,
+  extra: DocumentSourceRefExtra = {},
+): DocumentSourceRef[] {
+  return workspaceSourceAliases(backend).map((alias) =>
+    documentSourceRefForWorkspaceSource(alias, path, extra),
+  );
+}
+
+function documentSourceRefForWorkspaceSource(
+  source: WorkspaceSourceAlias,
+  path: string,
+  extra: DocumentSourceRefExtra = {},
+): DocumentSourceRef {
   return {
-    backendKind: backend.kind,
+    backendKind: source.kind,
     fileId: extra.fileId,
     path: normalizeSourcePath(path),
     revision: extra.revision,
-    workspaceId: backend.id,
-    workspaceNamespace: workspaceNamespace(backend),
+    workspaceId: source.workspaceId,
+    workspaceNamespace: source.namespace,
   };
 }
 
@@ -140,6 +200,10 @@ function normalizeSourcePath(path: string) {
     .replace(/\\/g, "/")
     .replace(/^\/+/, "")
     .replace(/\/{2,}/g, "/");
+}
+
+function workspaceNamespaceFromParts(kind: WorkspaceBackendKind, workspaceId: string) {
+  return `${kind}:${workspaceId}`;
 }
 
 function encodeKeyPart(value: string) {
