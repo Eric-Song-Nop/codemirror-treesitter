@@ -5,11 +5,11 @@ import { resetBrowserCollabMemoryStoreForTests } from "./collab-browser-store.ts
 import { openMarkdownCollabDocument } from "./markdown-document.ts";
 import {
   createOwnerShare,
-  findOwnerShareRecordForPath,
   hostSecretStorageKey,
   ownerShareRecordPath,
   readOwnerShareRecord,
   resetOwnerShareRecordStoreForTests,
+  restoreOwnerShareRecordForPath,
   revokeOwnerShare,
   rotateOwnerShare,
 } from "./share-storage.ts";
@@ -205,7 +205,7 @@ describe("owner shared file metadata", () => {
       },
       workspaceId: "opendal-gdrive:gdrive:workspace-1",
     });
-    await expect(findOwnerShareRecordForPath(backend, "note.md")).resolves.toEqual(share.record);
+    await expect(restoreOwnerShareRecordForPath(backend, "note.md")).resolves.toEqual(share.record);
   });
 
   it("rejects owner-host shares for sources without the share capability", async () => {
@@ -359,7 +359,9 @@ describe("owner shared file metadata", () => {
     });
     window.localStorage.setItem("local-md-workspace:share-record:corrupt", "{");
 
-    await expect(findOwnerShareRecordForPath(backend, "note.md")).resolves.toEqual(second.record);
+    await expect(restoreOwnerShareRecordForPath(backend, "note.md")).resolves.toEqual(
+      second.record,
+    );
   });
 
   it("normalizes legacy owner share metadata without source refs", async () => {
@@ -397,11 +399,108 @@ describe("owner shared file metadata", () => {
         workspaceNamespace: "opendal-dropbox:dropbox:/workspace",
       },
     });
-    await expect(findOwnerShareRecordForPath(backend, "note.md")).resolves.toMatchObject({
+    await expect(restoreOwnerShareRecordForPath(backend, "note.md")).resolves.toMatchObject({
       shareId: legacyRecord.shareId,
       sourceRef: {
         workspaceNamespace: "opendal-dropbox:dropbox:/workspace",
       },
+    });
+  });
+
+  it("migrates owner share metadata from explicit local source aliases", async () => {
+    let backend = createMemoryBackend([["note.md", "# First\n"]], "local", "local:workspace-2", [
+      {
+        kind: "local",
+        namespace: "local:local:Notes",
+        workspaceId: "local:Notes",
+      },
+    ]);
+    let legacyRecord = {
+      backendKind: "local",
+      createdAt: Date.UTC(2026, 5, 6),
+      displayName: "note.md",
+      expiresAt: Date.UTC(2026, 5, 13),
+      guestSecretHash: "guest-hash",
+      hostSecretHash: "host-hash",
+      hostSecretRef: hostSecretStorageKey("legacy-local-share-id"),
+      localFileId: "doc-legacy",
+      materializedHash: "420eb45a",
+      path: "note.md",
+      schemaVersion: 2,
+      shareId: "legacy-local-share-id",
+      sourceRef: {
+        backendKind: "local",
+        path: "note.md",
+        workspaceId: "local:Notes",
+        workspaceNamespace: "local:local:Notes",
+      },
+      workspaceId: "local:local:Notes",
+    };
+    window.localStorage.setItem(
+      ownerShareRecordPath(legacyRecord.shareId),
+      JSON.stringify(legacyRecord),
+    );
+
+    let restored = await restoreOwnerShareRecordForPath(backend, "note.md");
+
+    expect(restored).toMatchObject({
+      backendKind: "local",
+      path: "note.md",
+      shareId: legacyRecord.shareId,
+      sourceRef: {
+        backendKind: "local",
+        path: "note.md",
+        workspaceId: "local:workspace-2",
+        workspaceNamespace: "local:local:workspace-2",
+      },
+      workspaceId: "local:local:workspace-2",
+    });
+    await expect(readOwnerShareRecord(backend, legacyRecord.shareId)).resolves.toMatchObject({
+      sourceRef: {
+        workspaceId: "local:workspace-2",
+        workspaceNamespace: "local:local:workspace-2",
+      },
+      workspaceId: "local:local:workspace-2",
+    });
+  });
+
+  it("migrates legacy local owner share metadata without source refs through aliases", async () => {
+    let backend = createMemoryBackend([["note.md", "# First\n"]], "local", "local:workspace-2", [
+      {
+        kind: "local",
+        namespace: "local:local:Notes",
+        workspaceId: "local:Notes",
+      },
+    ]);
+    let legacyRecord = {
+      backendKind: "local",
+      createdAt: Date.UTC(2026, 5, 6),
+      displayName: "note.md",
+      expiresAt: Date.UTC(2026, 5, 13),
+      guestSecretHash: "guest-hash",
+      hostSecretHash: "host-hash",
+      hostSecretRef: hostSecretStorageKey("legacy-local-share-id"),
+      localFileId: "doc-legacy",
+      materializedHash: "420eb45a",
+      path: "note.md",
+      schemaVersion: 2,
+      shareId: "legacy-local-share-id",
+      workspaceId: "local:local:Notes",
+    };
+    window.localStorage.setItem(
+      ownerShareRecordPath(legacyRecord.shareId),
+      JSON.stringify(legacyRecord),
+    );
+
+    let restored = await restoreOwnerShareRecordForPath(backend, "note.md");
+
+    expect(restored).toMatchObject({
+      shareId: legacyRecord.shareId,
+      sourceRef: {
+        workspaceId: "local:workspace-2",
+        workspaceNamespace: "local:local:workspace-2",
+      },
+      workspaceId: "local:local:workspace-2",
     });
   });
 });
@@ -414,6 +513,7 @@ function createMemoryBackend(
   entries: Array<[string, string]>,
   kind: WorkspaceBackend["kind"] = "local",
   id = "memory:test",
+  sourceAliases: WorkspaceBackend["sourceAliases"] = [],
 ): MemoryBackend {
   let files = new Map(entries);
 
@@ -422,6 +522,7 @@ function createMemoryBackend(
     id,
     kind,
     name: "Memory",
+    sourceAliases,
     async createDirectory() {},
     async createFile(path) {
       files.set(path, "");

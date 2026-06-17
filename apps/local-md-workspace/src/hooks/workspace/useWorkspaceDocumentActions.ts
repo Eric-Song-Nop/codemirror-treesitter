@@ -8,7 +8,7 @@ import {
   type CollabDocumentState,
 } from "@/lib/collaboration/markdown-document";
 import {
-  findOwnerShareRecordForPath,
+  restoreOwnerShareRecordForPath,
   type CreatedOwnerShare,
   type OwnerShareRecord,
 } from "@/lib/collaboration/share-storage";
@@ -358,7 +358,7 @@ export function useWorkspaceDocumentActions({
           selectedFileRef.current?.path == file.path;
         if (!isSameActiveWorkspaceFile) beginDocumentTransition(file.path);
 
-        let restoredShareRecord = await findOwnerShareRecordForPath(backend, file.path).catch(
+        let restoredShareRecord = await restoreOwnerShareRecordForPath(backend, file.path).catch(
           () => null,
         );
         if (!isCurrentLoadRequest()) return;

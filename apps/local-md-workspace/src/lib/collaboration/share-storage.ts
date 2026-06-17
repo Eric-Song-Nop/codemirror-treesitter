@@ -5,6 +5,7 @@ import type {
   WorkspaceSourceRevision,
 } from "@/lib/workspace-backend";
 import {
+  documentSourceAliasRefs,
   documentSourceRef,
   sameDocumentSourceRef,
   workspaceSourceCapabilities,
@@ -217,9 +218,10 @@ export async function readOwnerShareRecord(_backend: WorkspaceBackend, shareId: 
   return parseOwnerShareRecord(JSON.parse(raw));
 }
 
-export async function findOwnerShareRecordForPath(backend: WorkspaceBackend, path: string) {
+export async function restoreOwnerShareRecordForPath(backend: WorkspaceBackend, path: string) {
   let store = shareRecordStore();
   let sourceRef = documentSourceRef(backend, path);
+  let aliasRefs = documentSourceAliasRefs(backend, path);
   let records: OwnerShareRecord[] = [];
   for (let index = 0; index < store.length; index++) {
     let key = store.key(index);
@@ -230,6 +232,15 @@ export async function findOwnerShareRecordForPath(backend: WorkspaceBackend, pat
       let record = parseOwnerShareRecord(JSON.parse(raw));
       if (sameDocumentSourceRef(record.sourceRef, sourceRef) && record.revokedAt == null) {
         records.push(record);
+        continue;
+      }
+      if (
+        record.revokedAt == null &&
+        aliasRefs.some((aliasRef) => sameDocumentSourceRef(record.sourceRef, aliasRef))
+      ) {
+        let migratedRecord = ownerShareRecordForSource(record, sourceRef);
+        await writeOwnerShareRecord(backend, migratedRecord);
+        records.push(migratedRecord);
       }
     } catch {
       // Ignore corrupt browser records so one bad entry does not block the file.
@@ -250,6 +261,19 @@ export function ownerShareRecordPath(shareId: string) {
 
 export function hostSecretStorageKey(shareId: string) {
   return `local-md-workspace:share-host-secret:${shareId}`;
+}
+
+function ownerShareRecordForSource(
+  record: OwnerShareRecord,
+  sourceRef: DocumentSourceRef,
+): OwnerShareRecord {
+  return {
+    ...record,
+    backendKind: sourceRef.backendKind,
+    path: sourceRef.path,
+    sourceRef,
+    workspaceId: sourceRef.workspaceNamespace,
+  };
 }
 
 function saveHostSecret(
