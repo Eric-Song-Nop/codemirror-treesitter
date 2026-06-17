@@ -42,13 +42,15 @@ describe("LiveMD plugins", () => {
       ],
       focus: false,
       parent,
-      plugins: [
-        {
-          extension: EditorView.updateListener.of((update) => {
-            if (update.docChanged) pluginObserved(update.state.doc.toString());
-          }),
-        },
-      ],
+      config: {
+        plugins: [
+          {
+            extension: EditorView.updateListener.of((update) => {
+              if (update.docChanged) pluginObserved(update.state.doc.toString());
+            }),
+          },
+        ],
+      },
     });
 
     try {
@@ -68,14 +70,14 @@ describe("LiveMD plugins", () => {
     let parent = document.body.appendChild(document.createElement("div"));
     let events: string[] = [];
     let first: LiveMdPlugin = {
-      mount({ markdown }) {
-        events.push(`first mount ${markdown.features?.[0]?.name ?? "none"}`);
+      mount() {
+        events.push("first mount");
         return () => events.push("first cleanup");
       },
     };
     let second: LiveMdPlugin = {
-      mount({ markdown }) {
-        events.push(`second mount ${markdown.features?.[0]?.name ?? "none"}`);
+      mount() {
+        events.push("second mount");
         return () => events.push("second cleanup");
       },
     };
@@ -102,20 +104,21 @@ describe("LiveMD plugins", () => {
     editor.destroy();
 
     expect(events).toEqual([
-      "first mount cm-md-config-first",
+      "first mount",
       "first cleanup",
-      "second mount cm-md-config-second",
+      "second mount",
       "second cleanup",
     ]);
   });
 
-  it("cleans plugin mounts on setPlugins and destroy", () => {
+  it("cleans plugin mounts on setConfig plugin changes and destroy", () => {
     let parent = document.createElement("div");
     let events: string[] = [];
+    let markdown = { features: [{ name: "future-query-feature", query: "(paragraph) @node" }] };
     let first: LiveMdPlugin = {
-      mount({ markdown, view }) {
+      mount({ view }) {
         events.push(
-          `first mount ${view.state.doc.toString()} ${markdown.features?.[0]?.name} ${view.dom.classList.contains("cm-editor")}`,
+          `first mount ${view.state.doc.toString()} ${view.dom.classList.contains("cm-editor")}`,
         );
         return () => events.push("first cleanup");
       },
@@ -129,43 +132,60 @@ describe("LiveMD plugins", () => {
     let editor = createLiveMdEditor({
       doc: "doc",
       focus: false,
-      markdown: { features: [{ name: "future-query-feature", query: "(paragraph) @node" }] },
       parent,
-      plugins: [first],
+      config: {
+        markdown,
+        plugins: [first],
+      },
     });
 
-    editor.setPlugins([second]);
+    editor.setConfig({
+      markdown,
+      plugins: [second],
+    });
     editor.destroy();
 
     expect(events).toEqual([
-      "first mount doc future-query-feature true",
+      "first mount doc true",
       "first cleanup",
       "second mount",
       "second cleanup",
     ]);
   });
 
-  it("remounts plugins when markdown config changes", () => {
-    let parent = document.createElement("div");
+  it("does not remount plugins when only markdown config changes", async () => {
+    let parent = document.body.appendChild(document.createElement("div"));
     let events: string[] = [];
     let plugin: LiveMdPlugin = {
-      mount({ markdown }) {
-        events.push(`mount ${markdown.features?.[0]?.name ?? "none"}`);
+      mount() {
+        events.push("mount");
         return () => events.push("cleanup");
       },
     };
+    let plugins = [plugin];
     let editor = createLiveMdEditor({
-      doc: "doc",
+      doc: "# Dynamic",
       focus: false,
-      markdown: { features: [{ name: "first" }] },
       parent,
-      plugins: [plugin],
+      config: {
+        markdown: { features: [headingClassFeature("cm-md-markdown-first")] },
+        plugins,
+      },
     });
 
-    editor.setMarkdown({ features: [{ name: "second" }] });
+    await editor.ready;
+    expect(parent.querySelector(".cm-md-markdown-first")).toBeTruthy();
+
+    editor.setConfig({
+      markdown: { features: [headingClassFeature("cm-md-markdown-second")] },
+      plugins,
+    });
+
+    expect(parent.querySelector(".cm-md-markdown-first")).toBeNull();
+    expect(parent.querySelector(".cm-md-markdown-second")).toBeTruthy();
     editor.destroy();
 
-    expect(events).toEqual(["mount first", "cleanup", "mount second", "cleanup"]);
+    expect(events).toEqual(["mount", "cleanup"]);
   });
 
   it("applies and cleans theme variables through a plugin", () => {
@@ -174,18 +194,20 @@ describe("LiveMD plugins", () => {
       doc: "doc",
       focus: false,
       parent,
-      plugins: [
-        liveMdTheme({
-          theme: {
-            appearance: "light",
-            id: "test-theme",
-            variables: {
-              "--live-md-bg": "#ffffff",
-              "--live-md-text": "#111111",
+      config: {
+        plugins: [
+          liveMdTheme({
+            theme: {
+              appearance: "light",
+              id: "test-theme",
+              variables: {
+                "--live-md-bg": "#ffffff",
+                "--live-md-text": "#111111",
+              },
             },
-          },
-        }),
-      ],
+          }),
+        ],
+      },
     });
 
     expect(parent.style.getPropertyValue("--live-md-bg")).toBe("#ffffff");
@@ -203,7 +225,9 @@ describe("LiveMD plugins", () => {
       doc: "[Guide](guide)",
       focus: false,
       parent,
-      plugins: [liveMdLinkBehavior({ baseUrl: "https://docs.example/current.md" })],
+      config: {
+        plugins: [liveMdLinkBehavior({ baseUrl: "https://docs.example/current.md" })],
+      },
     });
 
     await editor.ready;
@@ -212,19 +236,23 @@ describe("LiveMD plugins", () => {
     editor.destroy();
   });
 
-  it("reconfigures markdown features through setMarkdown", async () => {
+  it("reconfigures markdown features through setConfig", async () => {
     let parent = document.body.appendChild(document.createElement("div"));
     let editor = createLiveMdEditor({
       doc: "# Dynamic",
       focus: false,
-      markdown: { features: [headingClassFeature("cm-md-set-markdown-first")] },
       parent,
+      config: {
+        markdown: { features: [headingClassFeature("cm-md-set-markdown-first")] },
+      },
     });
 
     await editor.ready;
     expect(parent.querySelector(".cm-md-set-markdown-first")).toBeTruthy();
 
-    editor.setMarkdown({ features: [headingClassFeature("cm-md-set-markdown-second")] });
+    editor.setConfig({
+      markdown: { features: [headingClassFeature("cm-md-set-markdown-second")] },
+    });
 
     expect(parent.querySelector(".cm-md-set-markdown-first")).toBeNull();
     expect(parent.querySelector(".cm-md-set-markdown-second")).toBeTruthy();

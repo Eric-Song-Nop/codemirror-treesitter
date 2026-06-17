@@ -1,8 +1,7 @@
 import type { Extension } from "@codemirror/state";
 import { EditorView, type ViewUpdate } from "@codemirror/view";
-import type { LiveMdConfig, LiveMdPlugin } from "../core/config.js";
+import type { LiveMdConfig } from "../core/config.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../core/editor.js";
-import type { LiveMdMarkdownConfig } from "../core/features.js";
 import { installLiveMdStyles } from "./styles.js";
 
 const HTMLElementBase: typeof HTMLElement =
@@ -206,26 +205,6 @@ export class LiveMdEditorElement extends HTMLElementBase {
   set config(value: LiveMdConfig | null | undefined) {
     this.editorConfig = value ?? {};
     this.controller?.setConfig(this.editorConfig);
-  }
-
-  get markdown(): LiveMdMarkdownConfig {
-    return this.editorConfig.markdown ?? {};
-  }
-
-  set markdown(value: LiveMdMarkdownConfig | null | undefined) {
-    let markdown = value ?? {};
-    this.editorConfig = { ...this.editorConfig, markdown };
-    this.controller?.setMarkdown(markdown);
-  }
-
-  get plugins(): readonly LiveMdPlugin[] {
-    return this.editorConfig.plugins ?? [];
-  }
-
-  set plugins(value: readonly LiveMdPlugin[] | null | undefined) {
-    let plugins = value ?? [];
-    this.editorConfig = { ...this.editorConfig, plugins };
-    this.controller?.setPlugins(plugins);
   }
 
   get dirty() {

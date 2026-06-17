@@ -5,7 +5,6 @@ import type { LiveMdMarkdownConfig } from "./features.js";
 export type LiveMdPluginCleanup = () => void;
 
 export type LiveMdPluginContext = {
-  markdown: LiveMdMarkdownConfig;
   parent: Element | DocumentFragment;
   root: Document | ShadowRoot;
   view: EditorView;
@@ -14,7 +13,6 @@ export type LiveMdPluginContext = {
 export type LiveMdPlugin = {
   extension?: Extension;
   mount?: (context: LiveMdPluginContext) => LiveMdPluginCleanup | void;
-  name?: string;
 };
 
 export type LiveMdConfig = {
@@ -27,20 +25,16 @@ export type ResolvedLiveMdConfig = {
   plugins: readonly LiveMdPlugin[];
 };
 
+const emptyLiveMdMarkdownConfig: LiveMdMarkdownConfig = {};
+const emptyLiveMdPlugins: readonly LiveMdPlugin[] = [];
+
 export function normalizeLiveMdConfig(
-  config: LiveMdConfig | null | undefined,
-  fallback: LiveMdConfig = {},
+  config: LiveMdConfig | null | undefined = null,
 ): ResolvedLiveMdConfig {
   return {
-    markdown: normalizeLiveMdMarkdownConfig(config?.markdown ?? fallback.markdown),
-    plugins: config?.plugins ?? fallback.plugins ?? [],
+    markdown: config?.markdown ?? emptyLiveMdMarkdownConfig,
+    plugins: config?.plugins ?? emptyLiveMdPlugins,
   };
-}
-
-export function normalizeLiveMdMarkdownConfig(
-  markdown: LiveMdMarkdownConfig | null | undefined,
-): LiveMdMarkdownConfig {
-  return markdown ?? {};
 }
 
 export function pluginExtensions(plugins: readonly LiveMdPlugin[]): Extension {

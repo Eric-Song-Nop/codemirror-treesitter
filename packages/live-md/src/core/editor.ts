@@ -5,15 +5,13 @@ import {
   cleanupPlugins,
   mountPlugins,
   normalizeLiveMdConfig,
-  normalizeLiveMdMarkdownConfig,
   pluginExtensions,
   type LiveMdConfig,
-  type LiveMdPlugin,
   type LiveMdPluginCleanup,
   type ResolvedLiveMdConfig,
 } from "./config.js";
 import { liveMarkdown } from "./extension.js";
-import { liveMdMarkdownFeatures, type LiveMdMarkdownConfig } from "./features.js";
+import { liveMdMarkdownFeatures } from "./features.js";
 import type { LiveMdImageSourceResolver } from "./images.js";
 import {
   loadCodeFenceLanguages,
@@ -37,13 +35,11 @@ export type LiveMdEditorOptions = {
   focus?: boolean;
   imageSource?: LiveMdImageSourceResolver | null;
   linkBaseUrl?: LiveMdLinkBaseUrl | null;
-  markdown?: LiveMdMarkdownConfig;
   onBlur?: (view: EditorView) => void;
   onChange?: (change: LiveMdEditorChange) => void;
   parent: Element | DocumentFragment;
   persistKey?: string | null;
   placeholder?: string;
-  plugins?: readonly LiveMdPlugin[];
   readOnly?: boolean;
   root?: Document | ShadowRoot;
   value?: string;
@@ -54,10 +50,8 @@ export type LiveMdEditorController = {
   ready: Promise<void>;
   setConfig: (config: LiveMdConfig) => void;
   setExtensions: (extensions: Extension) => void;
-  setMarkdown: (markdown: LiveMdMarkdownConfig) => void;
   setPersistKey: (persistKey: null | string) => void;
   setPlaceholder: (placeholder: string) => void;
-  setPlugins: (plugins: readonly LiveMdPlugin[]) => void;
   setReadOnly: (readOnly: boolean) => void;
   setValue: (value: string) => void;
   value: string;
@@ -76,10 +70,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
   let activePluginCleanups: LiveMdPluginCleanup[] = [];
   let cancelled = false;
   let suppressChange = false;
-  let liveMdConfig = normalizeLiveMdConfig(options.config, {
-    markdown: options.markdown,
-    plugins: options.plugins,
-  });
+  let liveMdConfig = normalizeLiveMdConfig(options.config);
   let persistKey = normalizePersistKey(options.persistKey);
   let view: EditorView;
   let initialValue = initialEditorValue(options, persistKey);
@@ -140,21 +131,12 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
     },
     ready: Promise.all([markdownReady, codeFenceReady]).then(() => undefined),
     setConfig(config) {
-      reconfigureLiveMdConfig(normalizeLiveMdConfig(config), true);
+      reconfigureLiveMdConfig(normalizeLiveMdConfig(config));
     },
     setExtensions(extensions) {
       view.dispatch({
         effects: extensionsCompartment.reconfigure(extensions),
       });
-    },
-    setMarkdown(markdown) {
-      reconfigureLiveMdConfig(
-        {
-          ...liveMdConfig,
-          markdown: normalizeLiveMdMarkdownConfig(markdown),
-        },
-        false,
-      );
     },
     setPersistKey(nextPersistKey) {
       persistKey = normalizePersistKey(nextPersistKey);
@@ -163,15 +145,6 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       view.dispatch({
         effects: placeholderCompartment.reconfigure(placeholderValue(placeholder)),
       });
-    },
-    setPlugins(nextPlugins) {
-      reconfigureLiveMdConfig(
-        {
-          ...liveMdConfig,
-          plugins: nextPlugins,
-        },
-        true,
-      );
     },
     setReadOnly(readOnly) {
       view.dispatch({
@@ -207,22 +180,24 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
 
   return controller;
 
-  function reconfigureLiveMdConfig(nextConfig: ResolvedLiveMdConfig, pluginsChanged: boolean) {
+  function reconfigureLiveMdConfig(nextConfig: ResolvedLiveMdConfig) {
+    let markdownChanged = nextConfig.markdown !== liveMdConfig.markdown;
+    let pluginsChanged = nextConfig.plugins !== liveMdConfig.plugins;
     liveMdConfig = nextConfig;
-    let effects = [
-      featuresCompartment.reconfigure(liveMdMarkdownFeatures(liveMdConfig.markdown.features)),
-    ];
-    if (pluginsChanged) {
-      effects.push(pluginsCompartment.reconfigure(pluginExtensions(liveMdConfig.plugins)));
+    let effects = [];
+    if (markdownChanged) {
+      effects.push(featuresCompartment.reconfigure(liveMdMarkdownFeatures(nextConfig.markdown.features)));
     }
-    view.dispatch({ effects });
-    remountPlugins();
+    if (pluginsChanged) {
+      effects.push(pluginsCompartment.reconfigure(pluginExtensions(nextConfig.plugins)));
+    }
+    if (effects.length) view.dispatch({ effects });
+    if (pluginsChanged) remountPlugins();
   }
 
   function remountPlugins() {
     cleanupPlugins(activePluginCleanups);
     activePluginCleanups = mountPlugins(liveMdConfig.plugins, {
-      markdown: liveMdConfig.markdown,
       parent: options.parent,
       root: pluginRoot(options),
       view,

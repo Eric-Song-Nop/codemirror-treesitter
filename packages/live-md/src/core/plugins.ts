@@ -43,21 +43,18 @@ export function liveMdTheme(options: LiveMdThemePluginOptions): LiveMdPlugin {
       setLiveMdThemeVariables(target, options.theme);
       return () => clearLiveMdThemeVariables(target);
     },
-    name: "live-md-theme",
   };
 }
 
 export function liveMdImageAssets(options: LiveMdImageAssetsPluginOptions): LiveMdPlugin {
   return {
     extension: [liveMdImageSource(options.resolve), imageFilesExtension(options.onFiles)],
-    name: "live-md-image-assets",
   };
 }
 
 export function liveMdLinkBehavior(options: LiveMdLinkBehaviorPluginOptions): LiveMdPlugin {
   return {
     extension: liveMdLinkBase(options.baseUrl),
-    name: "live-md-link-behavior",
   };
 }
 

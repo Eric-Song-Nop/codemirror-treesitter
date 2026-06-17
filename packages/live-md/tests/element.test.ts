@@ -431,37 +431,6 @@ describe("liveMd editor web component", () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 
-  it("accepts markdown and plugins from properties", async () => {
-    let tag = defineTestElement();
-    let editor = document.createElement(tag) as LiveMdEditorElementType;
-    let observed = vi.fn();
-    let cleanup = vi.fn();
-    let plugin: LiveMdPlugin = {
-      extension: EditorView.updateListener.of((update) => {
-        if (update.docChanged) observed(update.state.doc.toString());
-      }),
-      mount({ markdown }) {
-        observed(markdown.features?.[0]?.name);
-        return cleanup;
-      },
-    };
-    editor.defaultValue = "doc";
-    editor.markdown = { features: [{ name: "frontmatter" }] };
-    editor.plugins = [plugin];
-
-    document.body.append(editor);
-    await editor.ready;
-    editor.view?.dispatch({
-      changes: { from: editor.value.length, insert: "!" },
-      userEvent: "input.test",
-    });
-    editor.plugins = [];
-
-    expect(observed).toHaveBeenCalledWith("frontmatter");
-    expect(observed).toHaveBeenCalledWith("doc!");
-    expect(cleanup).toHaveBeenCalledTimes(1);
-  });
-
   it("accepts unified config from a property", async () => {
     let tag = defineTestElement();
     let editor = document.createElement(tag) as LiveMdEditorElementType;
@@ -471,8 +440,8 @@ describe("liveMd editor web component", () => {
       extension: EditorView.updateListener.of((update) => {
         if (update.docChanged) observed(update.state.doc.toString());
       }),
-      mount({ markdown }) {
-        observed(markdown.features?.[0]?.name);
+      mount() {
+        observed("mount");
         return cleanup;
       },
     };
@@ -490,32 +459,39 @@ describe("liveMd editor web component", () => {
     });
     editor.config = { markdown: { features: [{ name: "updated" }] } };
 
-    expect(observed).toHaveBeenCalledWith("unified");
+    expect(observed).toHaveBeenCalledWith("mount");
     expect(observed).toHaveBeenCalledWith("doc!");
-    expect(editor.markdown.features?.[0]?.name).toBe("updated");
-    expect(editor.plugins).toHaveLength(0);
+    expect(editor.config.markdown?.features?.[0]?.name).toBe("updated");
+    expect(editor.config.plugins).toBeUndefined();
     expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it("remounts plugins when markdown changes after connection", async () => {
+  it("does not remount plugins when only markdown config changes after connection", async () => {
     let tag = defineTestElement();
     let editor = document.createElement(tag) as LiveMdEditorElementType;
     let observed: string[] = [];
-    editor.plugins = [
+    let plugins: LiveMdPlugin[] = [
       {
-        mount({ markdown }) {
-          observed.push(markdown.features?.[0]?.name ?? "none");
+        mount() {
+          observed.push("mount");
           return () => observed.push("cleanup");
         },
       },
     ];
+    editor.config = {
+      markdown: { features: [{ name: "initial" }] },
+      plugins,
+    };
 
     document.body.append(editor);
     await editor.ready;
-    editor.markdown = { features: [{ name: "callouts" }] };
-    editor.plugins = [];
+    editor.config = {
+      markdown: { features: [{ name: "callouts" }] },
+      plugins,
+    };
+    editor.config = { markdown: { features: [{ name: "callouts" }] } };
 
-    expect(observed).toEqual(["none", "cleanup", "callouts", "cleanup"]);
+    expect(observed).toEqual(["mount", "cleanup"]);
   });
 
   it("cleans up on disconnect and remounts with the current value", async () => {
