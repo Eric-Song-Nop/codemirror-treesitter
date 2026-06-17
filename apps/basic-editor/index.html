@@ -33,10 +33,7 @@
       - [ ] Compare more LiveMD behaviors
     </live-md-editor>
     <script type="module">
-      import { defineLiveMdEditor, prepareLiveMd } from "@codemirror-treesitter/live-md";
-
-      await prepareLiveMd();
-      defineLiveMdEditor();
+      import "@codemirror-treesitter/live-md/register";
     </script>
   </body>
 </html>

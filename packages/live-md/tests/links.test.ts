@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 
+import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
-import type { LiveMdLinkBaseUrl } from "../src/core/links.js";
+import { liveMdLinkOpen, type LiveMdLinkBaseUrl } from "../src/core/links.js";
 
 let openLink: ReturnType<typeof vi.fn>;
 let locationDescriptor: PropertyDescriptor | undefined;
@@ -34,6 +35,18 @@ describe("LiveMD links", () => {
     shiftClick(firstClickableLink(editor.view));
 
     expect(openLink).toHaveBeenCalledWith("https://viteplus.dev/", "_blank", "noopener,noreferrer");
+  });
+
+  it("lets host apps override Shift-click link opening", async () => {
+    let handleLinkOpen = vi.fn();
+    let editor = await mountEditor("[Vite+](https://viteplus.dev/)", {
+      extensions: [liveMdLinkOpen(handleLinkOpen)],
+    });
+
+    shiftClick(firstClickableLink(editor.view));
+
+    expect(handleLinkOpen).toHaveBeenCalledWith("https://viteplus.dev/");
+    expect(openLink).not.toHaveBeenCalled();
   });
 
   it("keeps ordinary clicks available for editor selection behavior", async () => {
@@ -155,6 +168,7 @@ describe("LiveMD links", () => {
 });
 
 type MountOptions = {
+  extensions?: Extension[];
   linkBaseUrl?: LiveMdLinkBaseUrl | null;
   selection?: number;
 };
@@ -169,6 +183,7 @@ async function mountEditor(
     parent,
     doc,
     focus: false,
+    extensions: options.extensions,
     linkBaseUrl: options.linkBaseUrl,
   });
   await editor.ready;

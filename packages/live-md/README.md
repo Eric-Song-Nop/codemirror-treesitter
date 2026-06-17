@@ -47,6 +47,7 @@ import {
   liveMdMarkdownDocumentCss,
   liveMdMarkdownDocumentCssVariables,
   liveMdImageSource,
+  liveMdLinkOpen,
   liveMarkdown,
   prepareLiveMd,
   renderMarkdownToHtml,
@@ -95,8 +96,10 @@ editor.destroy();
 `imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`. `imageSource` maps
 normalized Markdown image destinations to preview URLs, which lets host apps
 serve local files through blob URLs. `linkBaseUrl` is used to resolve relative
-Markdown links for Shift-click link jumps. Fenced code token colors reuse the
-active CodeMirror syntax highlighters installed through `extensions`.
+Markdown links for Shift-click link jumps. Link jumps open in a new browsing
+context by default; hosts can add `liveMdLinkOpen(handler)` through
+`extensions` to customize navigation. Fenced code token colors reuse the active
+CodeMirror syntax highlighters installed through `extensions`.
 `liveMdCodeFenceHighlighting(...)` is still available for advanced hosts that
 need to override fenced-code highlighting explicitly. The controller exposes `view`, `value`,
 `ready`, `setValue()`, `setExtensions()`, `setPersistKey()`, `setPlaceholder()`,
@@ -145,11 +148,11 @@ The element reflects the runtime API through `value`, `defaultValue`,
 `selectionEnd`, `view`, `extensions`, `ready`, `markClean()`,
 `setSelectionRange(...)`, and `select()`.
 
-JavaScript hosts can add `liveMdImageSource(...)` and
+JavaScript hosts can add `liveMdImageSource(...)`, `liveMdLinkOpen(...)`, and
 ordinary CodeMirror theme extensions to the `extensions` property when a web
-component needs custom image preview URL resolution or themed code-fence token
-highlighting. `liveMdCodeFenceHighlighting(...)` can override the active syntax
-highlighters for specialized fenced-code rendering.
+component needs custom image preview URL resolution, link navigation, or themed
+code-fence token highlighting. `liveMdCodeFenceHighlighting(...)` can override
+the active syntax highlighters for specialized fenced-code rendering.
 
 The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
 `select`. Styling is installed into Shadow DOM and can be themed with
@@ -193,8 +196,9 @@ Cloudflare-specific code, and concrete theme packages.
 ## Current Implementation Notes
 
 - Public exports are limited to the editor controller, live Markdown extension,
-  image source helpers, startup preparation, code-fence highlighting, Markdown
-  HTML rendering, scoped document CSS helpers, and custom element definition.
+  image source and link navigation helpers, startup preparation, code-fence
+  highlighting, Markdown HTML rendering, scoped document CSS helpers, and
+  custom element definition.
 - `./register` prepares LiveMD, defines the custom element, and re-exports the
   element API.
 - `./fixtures` currently exposes benchmark/example Markdown content such as
