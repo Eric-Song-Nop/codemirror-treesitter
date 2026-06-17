@@ -32,6 +32,7 @@ type UseWorkspaceShareActionsOptions = {
     backend: WorkspaceBackend,
     file: MarkdownFileNode,
   ) => Promise<CollabDocumentState>;
+  flushOwnerShareHost: () => void;
   saveCurrentFile: () => Promise<boolean>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
   setActiveShareRecord: Dispatch<SetStateAction<ActiveOwnerShareRecord | null>>;
@@ -49,6 +50,7 @@ export function useWorkspaceShareActions({
   activeShareRecord,
   collabDocumentRef,
   ensureSelectedCollabDocument,
+  flushOwnerShareHost,
   saveCurrentFile,
   selectedFileRef,
   setActiveShareRecord,
@@ -174,6 +176,7 @@ export function useWorkspaceShareActions({
     setShareError("");
     setShareCopied(false);
     try {
+      flushOwnerShareHost();
       let nextRecord = await revokeOwnerShare({
         backend,
         hostSecret,
@@ -190,6 +193,7 @@ export function useWorkspaceShareActions({
     }
   }, [
     activeShareRecord,
+    flushOwnerShareHost,
     setActiveShareRecord,
     setCreatedShare,
     setShareCopied,

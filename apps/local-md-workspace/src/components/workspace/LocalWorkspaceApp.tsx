@@ -213,6 +213,7 @@ export function LocalWorkspaceApp() {
   }, []);
 
   let {
+    flushOwnerShareHost,
     isOwnerShareHostPath,
     sendHostDocumentUpdate,
     sendHostSaveAck,
@@ -449,6 +450,7 @@ export function LocalWorkspaceApp() {
     setShareCreating,
     setShareError,
     shareExpiration,
+    flushOwnerShareHost,
     startOwnerShareHost,
     stopOwnerShareHost,
     workspaceBackendRef,

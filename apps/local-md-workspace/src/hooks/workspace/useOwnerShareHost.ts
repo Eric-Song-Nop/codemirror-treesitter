@@ -57,6 +57,10 @@ export function useOwnerShareHost({
     shareHostRecordRef.current = null;
   }, []);
 
+  let flushOwnerShareHost = useCallback(() => {
+    shareHostConnectionRef.current?.flushNow();
+  }, []);
+
   useEffect(
     () => () => {
       shareHostUpdateCleanupRef.current();
@@ -185,6 +189,7 @@ export function useOwnerShareHost({
   );
 
   return {
+    flushOwnerShareHost,
     sendHostDocumentUpdate,
     sendHostSaveAck,
     isOwnerShareHostPath,
