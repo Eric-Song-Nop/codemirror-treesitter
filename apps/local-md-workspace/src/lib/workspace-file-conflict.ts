@@ -19,12 +19,16 @@ export function isWorkspaceWriteConflictError(error: unknown) {
   }
 
   return matchesAny(normalized, [
+    "412 precondition failed",
     "409 conflict",
+    "condition not match",
+    "conditionnotmatch",
     "conflict",
     "file changed",
     "file lock",
     "locked",
     "no modification allowed",
+    "precondition failed",
     "rev mismatch",
     "too many write operations",
     "too_many_write_operations",

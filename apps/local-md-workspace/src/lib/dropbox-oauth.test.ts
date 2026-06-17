@@ -7,7 +7,9 @@ import {
   createDropboxPkceVerifier,
   DEFAULT_DROPBOX_SCOPES,
   DROPBOX_REDIRECT_TRANSACTION_KEY,
+  fetchDropboxAccountIdentity,
   hasDropboxOAuthCallback,
+  hasDropboxRedirectTransaction,
   parseDropboxOAuthCallback,
 } from "./dropbox-oauth.ts";
 
@@ -73,10 +75,17 @@ describe("Dropbox OAuth PKCE helpers", () => {
     expect(parseDropboxOAuthCallback("?state=s1")).toBeNull();
   });
 
-  it("detects complete OAuth callback URLs", () => {
+  it("detects complete OAuth callback URLs and stored redirect transactions", () => {
+    let values = new Map<string, string>();
+    let storage = memoryStorage(values);
+
     expect(hasDropboxOAuthCallback("?state=s1&code=c1")).toBe(true);
     expect(hasDropboxOAuthCallback("?state=s1&error=access_denied")).toBe(true);
     expect(hasDropboxOAuthCallback("?state=s1")).toBe(false);
+    expect(hasDropboxRedirectTransaction(storage)).toBe(false);
+
+    values.set(DROPBOX_REDIRECT_TRANSACTION_KEY, "{}");
+    expect(hasDropboxRedirectTransaction(storage)).toBe(true);
   });
 
   it("falls back to a full-page PKCE redirect when the popup is blocked", async () => {
@@ -138,7 +147,7 @@ describe("Dropbox OAuth PKCE helpers", () => {
 
     let replaceState = vi.fn();
     let fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      tokenResponse({ access_token: "access-token", expires_in: 60 }),
+      tokenResponse({ access_token: "access-token", account_id: "dbid:account", expires_in: 60 }),
     );
     vi.stubGlobal("fetch", fetch);
     vi.stubGlobal("window", {
@@ -156,6 +165,7 @@ describe("Dropbox OAuth PKCE helpers", () => {
 
     expect(token?.accessToken).toBe("access-token");
     expect(token?.appKey).toBe("app-key");
+    expect(token?.identity).toEqual({ id: "dbid:account", kind: "account" });
     expect(token?.redirectUri).toBe("http://127.0.0.1:5173/");
     expect(token?.scopes).toEqual(DEFAULT_DROPBOX_SCOPES);
     expect(values.has(DROPBOX_REDIRECT_TRANSACTION_KEY)).toBe(false);
@@ -203,6 +213,28 @@ describe("Dropbox OAuth PKCE helpers", () => {
 
     expect(token?.accessToken).toBe("token");
     expect(token?.expiresAt).toEqual(expect.any(Number));
+  });
+
+  it("fetches Dropbox account identity from the current account API", async () => {
+    let fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      tokenResponse({ account_id: "dbid:fetched-account" }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(fetchDropboxAccountIdentity("access-token")).resolves.toEqual({
+      id: "dbid:fetched-account",
+      kind: "account",
+    });
+
+    expect(fetch.mock.calls[0]?.[0]).toBe("https://api.dropboxapi.com/2/users/get_current_account");
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({
+      body: "null",
+      headers: {
+        Authorization: "Bearer access-token",
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
   });
 
   it("rejects full-page redirect callbacks with mismatched state", async () => {

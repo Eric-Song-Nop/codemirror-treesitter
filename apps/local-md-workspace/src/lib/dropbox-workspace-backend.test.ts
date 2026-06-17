@@ -5,8 +5,31 @@ import type {
   OpendalBrowserEntry,
 } from "@codemirror-treesitter/opendal-wasm-browser";
 import { createDropboxWorkspaceBackend } from "./dropbox-workspace-backend.ts";
+import { documentSourceDocumentIdInput, documentSourceRef } from "./workspace/source-identity.ts";
 
 describe("Dropbox workspace backend", () => {
+  it("includes the Dropbox account identity in workspace source ids", () => {
+    let first = createDropboxWorkspaceBackend({
+      getAccessToken: async () => token("token-a"),
+      identity: { id: "dbid:account-a", kind: "account" },
+      refreshAccessToken: async () => token("token-a"),
+      root: "Grove",
+    });
+    let second = createDropboxWorkspaceBackend({
+      getAccessToken: async () => token("token-b"),
+      identity: { id: "dbid:account-b", kind: "account" },
+      refreshAccessToken: async () => token("token-b"),
+      root: "Grove",
+    });
+
+    expect(first.id).toBe("dropbox:account:dbid%3Aaccount-a:Grove");
+    expect(second.id).toBe("dropbox:account:dbid%3Aaccount-b:Grove");
+    expect(first.id).not.toBe(second.id);
+    expect(documentSourceDocumentIdInput(documentSourceRef(first, "notes/today.md"))).not.toBe(
+      documentSourceDocumentIdInput(documentSourceRef(second, "notes/today.md")),
+    );
+  });
+
   it("coalesces pending writes while keeping same-path writes serialized", async () => {
     let firstWriteStarted = deferred<void>();
     let releaseFirstWrite = deferred<void>();
@@ -114,8 +137,8 @@ describe("Dropbox workspace backend", () => {
     });
   });
 
-  it("stores bytes as base64 text files", async () => {
-    let files = new Map<string, string>();
+  it("keeps .b64 bytes compatible with base64 text files", async () => {
+    let files = new Map<string, string | Uint8Array>();
     let backend = createDropboxWorkspaceBackend({
       createOperator: async () => fakeMapOperator(files),
       getAccessToken: async () => token("token"),
@@ -133,6 +156,46 @@ describe("Dropbox workspace backend", () => {
       path: "state/missing.snapshot.b64",
     });
     expect([...files.keys()].filter((path) => path.includes(".next."))).toEqual([]);
+  });
+
+  it("stores ordinary bytes through OpenDAL binary IO", async () => {
+    let files = new Map<string, string | Uint8Array>();
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () => fakeMapOperator(files),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+    let pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 255]);
+
+    await backend.writeBytes!("images/pixel.png", pngBytes);
+
+    expect(files.get("images/pixel.png")).toEqual(pngBytes);
+    await expect(backend.readBytes!("images/pixel.png")).resolves.toEqual(pngBytes);
+    expect(files.get("images/pixel.png")).not.toBe("iVBORwD/");
+  });
+
+  it("creates image assets as sibling binary files", async () => {
+    let files = new Map<string, string | Uint8Array>([
+      ["notes/assets/photo.png", new Uint8Array([1])],
+    ]);
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () => fakeMapOperator(files),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+    let pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10]);
+    let imageFile = new File([pngBytes], "Photo.PNG", { type: "image/png" });
+
+    let asset = await backend.createImageAsset!("notes/today.md", imageFile);
+
+    expect(asset).toMatchObject({
+      file: imageFile,
+      markdownReference: "assets/photo-2.png",
+      name: "photo-2.png",
+      path: "notes/assets/photo-2.png",
+    });
+    expect(files.get("notes/assets/photo-2.png")).toEqual(pngBytes);
+    await expect(backend.readBytes!("notes/assets/photo-2.png")).resolves.toEqual(pngBytes);
   });
 
   it("treats Dropbox 409 path-not-found responses as missing entries", async () => {
@@ -162,6 +225,9 @@ describe("Dropbox workspace backend", () => {
           async createDir(path) {
             createdDirectories.push(path);
           },
+          async stat() {
+            throw new Error("not_found");
+          },
           async writeText(path) {
             writes.push(path);
           },
@@ -177,6 +243,115 @@ describe("Dropbox workspace backend", () => {
     expect(writes).toEqual(["notes/daily/today.md", "notes/daily/today.md"]);
   });
 
+  it("skips createDir for existing parent directories before writes", async () => {
+    let createdDirectories: string[] = [];
+    let statPaths: string[] = [];
+    let writes: string[] = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async createDir(path) {
+            createdDirectories.push(path);
+          },
+          async stat(path) {
+            statPaths.push(path);
+            if (path == "notes") return directoryEntry(path);
+            throw new Error("not_found");
+          },
+          async writeText(path) {
+            writes.push(path);
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await backend.writeFile("notes/today.md", "# today\n");
+
+    expect(statPaths).toEqual(["notes"]);
+    expect(createdDirectories).toEqual([]);
+    expect(writes).toEqual(["notes/today.md"]);
+  });
+
+  it("creates only missing nested parent directories before writes", async () => {
+    let createdDirectories: string[] = [];
+    let statPaths: string[] = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async createDir(path) {
+            createdDirectories.push(path);
+          },
+          async stat(path) {
+            statPaths.push(path);
+            if (path == "notes") return directoryEntry(path);
+            throw new Error("not_found");
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await backend.writeFile("notes/daily/2026/today.md", "# today\n");
+
+    expect(statPaths).toEqual(["notes", "notes/daily", "notes/daily/2026"]);
+    expect(createdDirectories).toEqual(["notes/daily", "notes/daily/2026"]);
+  });
+
+  it("rejects writes when a parent path is a file", async () => {
+    let createdDirectories: string[] = [];
+    let writes: string[] = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async createDir(path) {
+            createdDirectories.push(path);
+          },
+          async stat(path) {
+            if (path == "notes") return fileEntry(path);
+            throw new Error("not_found");
+          },
+          async writeText(path) {
+            writes.push(path);
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await expect(backend.writeFile("notes/today.md", "# today\n")).rejects.toThrow(
+      "notes exists and is not a folder.",
+    );
+    expect(createdDirectories).toEqual([]);
+    expect(writes).toEqual([]);
+  });
+
+  it("does not recreate existing directories from explicit createDirectory calls", async () => {
+    let createdDirectories: string[] = [];
+    let statPaths: string[] = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async createDir(path) {
+            createdDirectories.push(path);
+          },
+          async stat(path) {
+            statPaths.push(path);
+            if (path == "notes") return directoryEntry(path);
+            throw new Error("not_found");
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await backend.createDirectory!("notes");
+    await backend.createDirectory!("notes");
+
+    expect(statPaths).toEqual(["notes"]);
+    expect(createdDirectories).toEqual([]);
+  });
+
   it("creates folder paths from trailing-slash create targets", async () => {
     let createdDirectories: string[] = [];
     let writes: string[] = [];
@@ -185,6 +360,9 @@ describe("Dropbox workspace backend", () => {
         fakeOperator({
           async createDir(path) {
             createdDirectories.push(path);
+          },
+          async stat() {
+            throw new Error("not_found");
           },
           async writeText(path) {
             writes.push(path);
@@ -227,6 +405,10 @@ describe("Dropbox workspace backend", () => {
           async rename(from, to) {
             renames.push([from, to]);
           },
+          async stat(path) {
+            if (path == "notes") return directoryEntry(path);
+            throw new Error("not_found");
+          },
         }),
       getAccessToken: async () => token("token"),
       refreshAccessToken: async () => token("token"),
@@ -242,6 +424,7 @@ describe("Dropbox workspace backend", () => {
 
   it("does not create parent directories when the operator cannot create them", async () => {
     let createDirCalls = 0;
+    let statCalls = 0;
     let writes: string[] = [];
     let backend = createDropboxWorkspaceBackend({
       createOperator: async () =>
@@ -255,9 +438,14 @@ describe("Dropbox workspace backend", () => {
             nativeRename: true,
             nativeStat: true,
             nativeWrite: true,
+            nativeWriteWithIfMatch: false,
           }),
           async createDir() {
             createDirCalls += 1;
+          },
+          async stat() {
+            statCalls += 1;
+            throw new Error("not_found");
           },
           async writeText(path) {
             writes.push(path);
@@ -269,8 +457,45 @@ describe("Dropbox workspace backend", () => {
 
     await backend.writeFile("notes/today.md", "# today\n");
 
+    expect(statCalls).toBe(0);
     expect(createDirCalls).toBe(0);
     expect(writes).toEqual(["notes/today.md"]);
+  });
+
+  it("rejects explicit createDirectory when the operator cannot create folders", async () => {
+    let createDirCalls = 0;
+    let statCalls = 0;
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          capabilities: () => ({
+            nativeCopy: true,
+            nativeCreateDir: false,
+            nativeDelete: true,
+            nativeList: true,
+            nativeRead: true,
+            nativeRename: true,
+            nativeStat: true,
+            nativeWrite: true,
+            nativeWriteWithIfMatch: false,
+          }),
+          async createDir() {
+            createDirCalls += 1;
+          },
+          async stat() {
+            statCalls += 1;
+            throw new Error("not_found");
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await expect(backend.createDirectory!("notes")).rejects.toThrow(
+      "OpenDAL backend does not support folder creation.",
+    );
+    expect(statCalls).toBe(0);
+    expect(createDirCalls).toBe(0);
   });
 });
 
@@ -281,7 +506,7 @@ function token(accessToken: string) {
   };
 }
 
-function fakeMapOperator(files: Map<string, string>, operations: string[] = []) {
+function fakeMapOperator(files: Map<string, string | Uint8Array>, operations: string[] = []) {
   return fakeOperator({
     async createDir(path) {
       operations.push(`createDir ${path}`);
@@ -293,7 +518,14 @@ function fakeMapOperator(files: Map<string, string>, operations: string[] = []) 
     async readText(path) {
       let value = files.get(path);
       if (value == null) throw new Error("not_found");
+      if (typeof value != "string") throw new Error("not_text");
       return value;
+    },
+    async readBytes(path) {
+      let value = files.get(path);
+      if (value == null) throw new Error("not_found");
+      if (typeof value == "string") return new TextEncoder().encode(value);
+      return new Uint8Array(value);
     },
     async rename(from, to) {
       operations.push(`rename ${from} ${to}`);
@@ -303,8 +535,18 @@ function fakeMapOperator(files: Map<string, string>, operations: string[] = []) 
       files.set(to, value);
     },
     async stat(path) {
-      if (!files.has(path)) throw new Error("not_found");
-      return { isDirectory: false, isFile: true, path };
+      let value = files.get(path);
+      if (value == null) throw new Error("not_found");
+      return {
+        isDirectory: false,
+        isFile: true,
+        path,
+        size: typeof value == "string" ? value.length : value.byteLength,
+      };
+    },
+    async writeBytes(path, bytes) {
+      operations.push(`writeBytes ${path}`);
+      files.set(path, new Uint8Array(bytes));
     },
     async writeText(path, value) {
       operations.push(`write ${path}`);
@@ -324,16 +566,27 @@ function fakeOperator(overrides: Partial<OpendalBrowserOperator>): OpendalBrowse
       nativeRename: true,
       nativeStat: true,
       nativeWrite: true,
+      nativeWriteWithIfMatch: false,
     }),
     createDir: async () => {},
     delete: async () => {},
     list: async () => [],
+    readBytes: async () => new Uint8Array(),
     readText: async () => "",
     rename: async () => {},
     stat: async (path) => ({ isDirectory: false, isFile: true, path }),
+    writeBytes: async () => {},
     writeText: async () => {},
     ...overrides,
   };
+}
+
+function directoryEntry(path: string): OpendalBrowserEntry {
+  return { isDirectory: true, isFile: false, path };
+}
+
+function fileEntry(path: string): OpendalBrowserEntry {
+  return { isDirectory: false, isFile: true, path };
 }
 
 function deferred<T>() {
