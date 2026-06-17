@@ -189,12 +189,14 @@ export function LocalWorkspaceApp() {
     workspaceBackend,
     workspaceBackendRef,
   });
-  let editorConfig = useMemo<LiveMdConfig>(
+  let collabLiveMdConfig = collabDocument?.liveMdConfig;
+  let markdownConfig = collabLiveMdConfig?.markdown ?? null;
+  let liveMdConfig = useMemo<LiveMdConfig>(
     () => ({
-      markdown: collabDocument?.config.markdown,
-      plugins: [imagePlugin, ...(collabDocument?.config.plugins ?? emptyLiveMdPlugins)],
+      markdown: collabLiveMdConfig?.markdown,
+      plugins: [imagePlugin, ...(collabLiveMdConfig?.plugins ?? emptyLiveMdPlugins)],
     }),
-    [collabDocument?.config.markdown, collabDocument?.config.plugins, imagePlugin],
+    [collabLiveMdConfig?.markdown, collabLiveMdConfig?.plugins, imagePlugin],
   );
   let { clearDropboxAccessToken, createDropboxBackend, setDropboxRedirectAccessToken } =
     useDropboxWorkspaceBackend({
@@ -480,7 +482,7 @@ export function LocalWorkspaceApp() {
     editorValueRef,
     loadTree,
     localFileHandleRef,
-    markdownConfig: editorConfig.markdown,
+    markdownConfig,
     refreshWorkspaceForCurrentEditor,
     resolveImageAssetFile,
     saveCurrentFile,
@@ -586,7 +588,7 @@ export function LocalWorkspaceApp() {
           />
 
           <WorkspaceEditorPane
-            config={selectedFile ? editorConfig : emptyLiveMdConfig}
+            liveMdConfig={selectedFile ? liveMdConfig : emptyLiveMdConfig}
             document={editorDocument}
             placeholder={t("workspace.placeholder")}
             selected={Boolean(selectedFile) && fileDialogMode == null}

@@ -3,8 +3,8 @@ import { LiveMdEditor } from "@/components/LiveMdEditor";
 import type { EditorDocument } from "@/lib/workspace/types";
 
 type WorkspaceEditorPaneProps = {
-  config: LiveMdConfig;
   document: EditorDocument;
+  liveMdConfig: LiveMdConfig;
   placeholder: string;
   selected: boolean;
   onEditorReady: (editor: LiveMdEditorElement | null) => void;
@@ -12,8 +12,8 @@ type WorkspaceEditorPaneProps = {
 };
 
 export function WorkspaceEditorPane({
-  config,
   document,
+  liveMdConfig,
   placeholder,
   selected,
   onEditorReady,
@@ -23,7 +23,7 @@ export function WorkspaceEditorPane({
     <section className="local-md-editor min-h-0 flex-1">
       {selected ? (
         <LiveMdEditor
-          config={config}
+          config={liveMdConfig}
           documentKey={`${document.path}:${document.version}`}
           initialValue={document.value}
           placeholder={placeholder}

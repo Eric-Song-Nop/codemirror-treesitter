@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import type { Extension } from "@codemirror/state";
 import {
   liveMdTheme,
@@ -43,9 +43,27 @@ export function LiveMdEditor({
   let { theme } = useTheme();
   let editorRef = useRef<LiveMdEditorElement | null>(null);
   let initialValueRef = useRef(initialValue);
+  let onEditorReadyRef = useRef(onEditorReady);
   let onInputRef = useRef(onInput);
 
   initialValueRef.current = initialValue;
+  onEditorReadyRef.current = onEditorReady;
+  onInputRef.current = onInput;
+
+  let themePlugin = useMemo(() => {
+    let themeDefinition = liveMdThemeDefinition(theme);
+    return liveMdTheme({
+      editor: themeDefinition.codeMirrorTheme,
+      theme: themeDefinition.liveMdTheme,
+    });
+  }, [theme]);
+  let effectiveConfig = useMemo<LiveMdConfig>(
+    () => ({
+      markdown: config.markdown,
+      plugins: [themePlugin, ...(config.plugins ?? emptyLiveMdEditorPlugins)],
+    }),
+    [config.markdown, config.plugins, themePlugin],
+  );
 
   let setEditorRef = useCallback((editor: LiveMdEditorElement | null) => {
     editorRef.current = editor;
@@ -53,10 +71,6 @@ export function LiveMdEditor({
     editor.value = initialValueRef.current;
     editor.markClean();
   }, []);
-
-  useEffect(() => {
-    onInputRef.current = onInput;
-  }, [onInput]);
 
   useLayoutEffect(() => {
     let editor = editorRef.current;
@@ -68,29 +82,21 @@ export function LiveMdEditor({
   useLayoutEffect(() => {
     let editor = editorRef.current;
     if (!editor) return;
+    editor.config = effectiveConfig;
+  }, [effectiveConfig]);
 
-    let themeDefinition = liveMdThemeDefinition(theme);
-    editor.config = {
-      ...config,
-      plugins: [
-        liveMdTheme({
-          editor: themeDefinition.codeMirrorTheme,
-          target: editor,
-          theme: themeDefinition.liveMdTheme,
-        }),
-        ...(config.plugins ?? emptyLiveMdEditorPlugins),
-      ],
-    };
-
+  useLayoutEffect(() => {
+    let editor = editorRef.current;
+    if (!editor) return;
     let handleInput = () => onInputRef.current(editor.value);
     editor.addEventListener("input", handleInput);
-    onEditorReady?.(editor);
+    onEditorReadyRef.current?.(editor);
     return () => {
       editor.removeEventListener("input", handleInput);
-      onEditorReady?.(null);
+      onEditorReadyRef.current?.(null);
       editor.config = {};
     };
-  }, [config, onEditorReady, theme]);
+  }, []);
 
   return (
     <live-md-editor

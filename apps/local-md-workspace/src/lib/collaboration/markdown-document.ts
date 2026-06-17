@@ -21,11 +21,11 @@ const maxDocumentUpdateLogBytes = 64 * 1024;
 
 export type CollabDocumentState = {
   cleanValue: string;
-  config: LiveMdConfig;
   doc: LoroDoc;
   docId: string;
   dispose: () => void;
   externalEdit?: CollabExternalEditResolution;
+  liveMdConfig: LiveMdConfig;
   metadata: BrowserCollabDocumentMetadata;
   path: string;
   pendingUpdates: Uint8Array[];
@@ -142,11 +142,13 @@ export async function openMarkdownCollabDocument(
 
   return {
     cleanValue: value,
-    config: { plugins: [liveMdLoroCollaborationPlugin({ doc, undoManager, text: textKey })] },
     doc,
     docId,
     dispose: unsubscribeLocalUpdates,
     externalEdit,
+    liveMdConfig: {
+      plugins: [liveMdLoroCollaborationPlugin({ doc, undoManager, text: textKey })],
+    },
     metadata,
     path,
     pendingUpdates,

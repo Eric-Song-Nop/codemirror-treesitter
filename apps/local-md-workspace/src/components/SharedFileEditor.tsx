@@ -53,7 +53,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
   let [lastHostSavedAt, setLastHostSavedAt] = useState<number | null>(null);
   let [errorMessage, setErrorMessage] = useState("");
   let connectionRef = useRef<ShareRelayConnection | null>(null);
-  let config = useMemo<LiveMdConfig>(
+  let liveMdConfig = useMemo<LiveMdConfig>(
     () => ({ plugins: [liveMdLoroCollaborationPlugin({ doc, undoManager })] }),
     [doc, undoManager],
   );
@@ -222,7 +222,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
         {sessionReady ? (
           <section className="min-h-0 flex-1 overflow-hidden">
             <LiveMdEditor
-              config={config}
+              config={liveMdConfig}
               documentKey={route.kind == "share" ? route.parts.shareId : "shared-file"}
               initialValue=""
               placeholder={t("workspace.placeholder")}

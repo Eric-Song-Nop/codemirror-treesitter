@@ -39,7 +39,6 @@ export function liveMdLoroCollaborationPlugin(
 ): LiveMdPlugin {
   return {
     extension: liveMdLoroCollaboration(options),
-    name: "live-md-loro-collaboration",
   };
 }
 
