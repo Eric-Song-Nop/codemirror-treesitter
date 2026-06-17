@@ -10,15 +10,17 @@ describe("source autosave scheduling", () => {
     });
   });
 
-  it("uses the slower cadence for Dropbox-backed workspaces", () => {
-    expect(
-      sourceAutoSaveKey({
-        id: "dropbox:test",
-        kind: "opendal-dropbox",
-        name: "Dropbox",
-      } as Parameters<typeof sourceAutoSaveKey>[0]),
-    ).toBe("dropbox");
-    expect(sourceAutoSaveTiming("dropbox")).toEqual({
+  it("uses the slower cadence for cloud-backed workspaces", () => {
+    for (let kind of ["opendal-dropbox", "opendal-gdrive", "opendal-onedrive"] as const) {
+      expect(
+        sourceAutoSaveKey({
+          id: `${kind}:test`,
+          kind,
+          name: kind,
+        } as Parameters<typeof sourceAutoSaveKey>[0]),
+      ).toBe("cloud");
+    }
+    expect(sourceAutoSaveTiming("cloud")).toEqual({
       delayMs: 2500,
       maxWaitMs: 10_000,
     });

@@ -1,5 +1,6 @@
 import type { LoroDoc, UndoManager } from "loro-crdt";
 import type { WorkspaceBackendKind } from "@/lib/workspace-backend";
+import type { DocumentSourceRef } from "@/lib/workspace/source-identity";
 
 export type ShareExpirationOption = "24h" | "7d" | "30d";
 
@@ -20,13 +21,14 @@ export type SharedFileSession = {
 };
 
 export type OwnerSharedFileState = {
-  backendKind: Extract<WorkspaceBackendKind, "local" | "opendal-dropbox">;
+  backendKind: WorkspaceBackendKind;
   hostSecretRef: string;
   lastHostSavedVersion?: string;
   localFileId: string;
   materializedHash: string;
   path: string;
   shareId: string;
+  sourceRef: DocumentSourceRef;
 };
 
 export type GuestSharedFileState = {

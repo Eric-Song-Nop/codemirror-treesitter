@@ -6,6 +6,7 @@ import { defaultSidebarOpen } from "@/lib/workspace/constants";
 import { isDropboxRedirectCallbackWindow } from "@/lib/workspace/dropbox-config";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { loadWorkspaceSelectedPath } from "@/lib/workspace/state";
+import type { OpendalWorkspaceIdentity } from "@/lib/opendal-workspace-backend";
 import {
   loadStoredLocalWorkspaceRecord,
   type StoredDropboxWorkspaceConfig,
@@ -45,6 +46,7 @@ type UseWorkspaceStartupOptions = {
     accessToken: string;
     appKey: string;
     expiresAt: number;
+    identity?: OpendalWorkspaceIdentity;
   }) => void;
   setErrorMessage: (message: string) => void;
   setRestoreChecking: (checking: boolean) => void;

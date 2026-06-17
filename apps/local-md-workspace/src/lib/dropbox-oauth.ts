@@ -1,5 +1,8 @@
+import type { OpendalWorkspaceIdentity } from "./opendal-workspace-backend.ts";
+
 export const DROPBOX_AUTHORIZE_URL = "https://www.dropbox.com/oauth2/authorize";
 const DROPBOX_TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";
+const DROPBOX_CURRENT_ACCOUNT_URL = "https://api.dropboxapi.com/2/users/get_current_account";
 export const DROPBOX_OAUTH_MESSAGE = "local-md-workspace:dropbox-oauth";
 export const DROPBOX_REDIRECT_TRANSACTION_KEY = "local-md-workspace:dropbox-oauth-redirect";
 export const DEFAULT_DROPBOX_SCOPES = [
@@ -11,6 +14,7 @@ export const DEFAULT_DROPBOX_SCOPES = [
 export type DropboxAccessToken = {
   accessToken: string;
   expiresAt: number;
+  identity?: OpendalWorkspaceIdentity;
 };
 
 export type DropboxPkceOptions = {
@@ -60,6 +64,31 @@ export function defaultDropboxRedirectUri() {
 
 export function hasDropboxOAuthCallback(search: string | URLSearchParams = window.location.search) {
   return Boolean(parseDropboxOAuthCallback(search));
+}
+
+export function hasDropboxRedirectTransaction(storage = window.sessionStorage) {
+  try {
+    return Boolean(storage.getItem(DROPBOX_REDIRECT_TRANSACTION_KEY));
+  } catch {
+    return false;
+  }
+}
+
+export function hasDropboxRedirectCallbackForStoredTransaction(
+  search: string | URLSearchParams = window.location.search,
+  storage = window.sessionStorage,
+) {
+  let callback = parseDropboxOAuthCallback(search);
+  if (!callback) return false;
+
+  try {
+    let raw = storage.getItem(DROPBOX_REDIRECT_TRANSACTION_KEY);
+    if (!raw) return false;
+    let transaction = parseDropboxRedirectTransaction(JSON.parse(raw));
+    return transaction?.state == callback.state;
+  } catch {
+    return false;
+  }
 }
 
 export function completeDropboxPopupOAuthIfPresent() {
@@ -153,6 +182,29 @@ export async function completeDropboxRedirectOAuthIfPresent(
     scopes: transaction.scopes,
     state: transaction.state,
   };
+}
+
+export async function fetchDropboxAccountIdentity(
+  accessToken: string,
+): Promise<OpendalWorkspaceIdentity> {
+  let response = await fetch(DROPBOX_CURRENT_ACCOUNT_URL, {
+    body: "null",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+  let payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      dropboxTokenError(payload) ?? `Dropbox account identity request failed (${response.status}).`,
+    );
+  }
+
+  let accountId = parseDropboxAccountId(payload);
+  if (!accountId) throw new Error("Dropbox account identity response was invalid.");
+  return { id: accountId, kind: "account" };
 }
 
 export function parseDropboxOAuthCallback(
@@ -327,6 +379,9 @@ async function exchangeDropboxCodeForToken(options: {
   return {
     accessToken: tokenResponse.accessToken,
     expiresAt: Date.now() + tokenResponse.expiresIn * 1000,
+    ...(tokenResponse.accountId
+      ? { identity: { id: tokenResponse.accountId, kind: "account" } }
+      : {}),
   };
 }
 
@@ -358,8 +413,17 @@ function parseDropboxTokenResponse(value: unknown) {
 
   return {
     accessToken: record.access_token,
+    accountId: parseDropboxAccountId(record) ?? undefined,
     expiresIn,
   };
+}
+
+function parseDropboxAccountId(value: unknown) {
+  if (!value || typeof value != "object") return null;
+  let record = value as Record<string, unknown>;
+  return typeof record.account_id == "string" && record.account_id.trim()
+    ? record.account_id.trim()
+    : null;
 }
 
 function dropboxTokenError(value: unknown) {

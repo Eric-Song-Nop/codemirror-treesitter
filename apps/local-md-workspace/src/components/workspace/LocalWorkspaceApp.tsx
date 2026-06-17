@@ -131,6 +131,7 @@ export function LocalWorkspaceApp() {
   } = useWorkspaceShareState({
     selectedFile,
     singleFileSource,
+    workspaceBackend,
   });
 
   useEffect(() => {
@@ -263,7 +264,7 @@ export function LocalWorkspaceApp() {
     handleEditorInput,
     loadFile,
     openSingleFileDraft,
-    restoreDropboxRedirectEditorDraft,
+    restoreCloudRedirectEditorDraft,
     saveCurrentFile,
   } = useWorkspaceDocumentActions({
     activeDocumentGenerationRef,
@@ -345,7 +346,7 @@ export function LocalWorkspaceApp() {
     loadTree,
     refreshWorkspaceForCurrentEditor,
     rememberWorkspaceHandle,
-    restoreDropboxRedirectEditorDraft,
+    restoreCloudRedirectEditorDraft,
     saveCurrentFile,
     setBusy,
     setDropboxConnecting,

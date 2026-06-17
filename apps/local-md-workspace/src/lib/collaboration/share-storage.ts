@@ -1,4 +1,16 @@
-import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import type {
+  MarkdownFileNode,
+  WorkspaceBackend,
+  WorkspaceBackendKind,
+  WorkspaceSourceRevision,
+} from "@/lib/workspace-backend";
+import {
+  documentSourceAliasRefs,
+  documentSourceRef,
+  sameDocumentSourceRef,
+  workspaceSourceCapabilities,
+  type DocumentSourceRef,
+} from "@/lib/workspace/source-identity";
 import {
   getCollabDocumentValue,
   hashMarkdownText,
@@ -25,7 +37,7 @@ const shareRecordStoragePrefix = "local-md-workspace:share-record:";
 const schemaVersion = 2;
 
 export type OwnerShareRecord = {
-  backendKind: "local" | "opendal-dropbox";
+  backendKind: WorkspaceBackendKind;
   createdAt: number;
   displayName: string;
   expiresAt: number | null;
@@ -39,6 +51,7 @@ export type OwnerShareRecord = {
   revokedAt?: number;
   schemaVersion: 2;
   shareId: string;
+  sourceRef: DocumentSourceRef;
   workspaceId: string;
 };
 
@@ -103,12 +116,14 @@ export async function createOwnerShare({
   now = Date.now(),
   relayOrigin,
 }: CreateOwnerShareOptions): Promise<CreatedOwnerShare> {
-  if (backend.kind != "local" && backend.kind != "opendal-dropbox") {
+  let capabilities = workspaceSourceCapabilities(backend);
+  if (!capabilities.canHostOwnerShare) {
     throw new Error("This workspace cannot host shared files.");
   }
 
   let credentials = createShareCredentials();
   let hostSecretRef = hostSecretStorageKey(credentials.shareId);
+  let sourceRef = documentSourceRef(backend, file.path);
   let record: OwnerShareRecord = {
     backendKind: backend.kind,
     createdAt: now,
@@ -122,7 +137,8 @@ export async function createOwnerShare({
     path: file.path,
     schemaVersion,
     shareId: credentials.shareId,
-    workspaceId: workspaceShareNamespace(backend),
+    sourceRef,
+    workspaceId: sourceRef.workspaceNamespace,
   };
 
   await createRelayShare(relayOrigin, {
@@ -202,9 +218,10 @@ export async function readOwnerShareRecord(_backend: WorkspaceBackend, shareId: 
   return parseOwnerShareRecord(JSON.parse(raw));
 }
 
-export async function findOwnerShareRecordForPath(backend: WorkspaceBackend, path: string) {
+export async function restoreOwnerShareRecordForPath(backend: WorkspaceBackend, path: string) {
   let store = shareRecordStore();
-  let workspaceId = workspaceShareNamespace(backend);
+  let sourceRef = documentSourceRef(backend, path);
+  let aliasRefs = documentSourceAliasRefs(backend, path);
   let records: OwnerShareRecord[] = [];
   for (let index = 0; index < store.length; index++) {
     let key = store.key(index);
@@ -213,8 +230,17 @@ export async function findOwnerShareRecordForPath(backend: WorkspaceBackend, pat
       let raw = store.getItem(key);
       if (!raw) continue;
       let record = parseOwnerShareRecord(JSON.parse(raw));
-      if (record.workspaceId == workspaceId && record.path == path && record.revokedAt == null) {
+      if (sameDocumentSourceRef(record.sourceRef, sourceRef) && record.revokedAt == null) {
         records.push(record);
+        continue;
+      }
+      if (
+        record.revokedAt == null &&
+        aliasRefs.some((aliasRef) => sameDocumentSourceRef(record.sourceRef, aliasRef))
+      ) {
+        let migratedRecord = ownerShareRecordForSource(record, sourceRef);
+        await writeOwnerShareRecord(backend, migratedRecord);
+        records.push(migratedRecord);
       }
     } catch {
       // Ignore corrupt browser records so one bad entry does not block the file.
@@ -237,6 +263,19 @@ export function hostSecretStorageKey(shareId: string) {
   return `local-md-workspace:share-host-secret:${shareId}`;
 }
 
+function ownerShareRecordForSource(
+  record: OwnerShareRecord,
+  sourceRef: DocumentSourceRef,
+): OwnerShareRecord {
+  return {
+    ...record,
+    backendKind: sourceRef.backendKind,
+    path: sourceRef.path,
+    sourceRef,
+    workspaceId: sourceRef.workspaceNamespace,
+  };
+}
+
 function saveHostSecret(
   key: string,
   hostSecret: string,
@@ -254,7 +293,11 @@ function saveHostSecret(
 
 function parseOwnerShareRecord(value: unknown): OwnerShareRecord {
   if (!value || typeof value != "object") throw new Error("Invalid share metadata.");
-  let record = value as Partial<OwnerShareRecord>;
+  let record = value as Partial<Omit<OwnerShareRecord, "backendKind" | "sourceRef">> & {
+    backendKind?: unknown;
+    sourceRef?: unknown;
+  };
+  let backendKind = parseWorkspaceBackendKind(record.backendKind);
   if (
     record.schemaVersion != schemaVersion ||
     typeof record.shareId != "string" ||
@@ -262,7 +305,6 @@ function parseOwnerShareRecord(value: unknown): OwnerShareRecord {
     typeof record.path != "string" ||
     typeof record.workspaceId != "string" ||
     typeof record.displayName != "string" ||
-    (record.backendKind != "local" && record.backendKind != "opendal-dropbox") ||
     typeof record.createdAt != "number" ||
     (record.expiresAt != null && typeof record.expiresAt != "number") ||
     typeof record.guestSecretHash != "string" ||
@@ -274,8 +316,13 @@ function parseOwnerShareRecord(value: unknown): OwnerShareRecord {
     throw new Error("Invalid share metadata.");
   }
 
+  let sourceRef = parseOwnerShareSourceRef(record.sourceRef, {
+    backendKind,
+    path: record.path,
+    workspaceId: record.workspaceId,
+  });
   return {
-    backendKind: record.backendKind,
+    backendKind: sourceRef.backendKind,
     createdAt: record.createdAt,
     displayName: record.displayName,
     expiresAt: record.expiresAt ?? null,
@@ -287,20 +334,95 @@ function parseOwnerShareRecord(value: unknown): OwnerShareRecord {
       : {}),
     localFileId: record.localFileId,
     materializedHash: record.materializedHash,
-    path: record.path,
+    path: sourceRef.path,
     ...(typeof record.revokedAt == "number" ? { revokedAt: record.revokedAt } : {}),
     schemaVersion,
     shareId: record.shareId,
-    workspaceId: record.workspaceId,
+    sourceRef,
+    workspaceId: sourceRef.workspaceNamespace,
   };
+}
+
+function parseOwnerShareSourceRef(
+  value: unknown,
+  fallback: { backendKind: WorkspaceBackendKind; path: string; workspaceId: string },
+): DocumentSourceRef {
+  if (value == null) {
+    return {
+      backendKind: fallback.backendKind,
+      path: fallback.path,
+      workspaceId: rawWorkspaceIdFromLegacyNamespace(fallback.backendKind, fallback.workspaceId),
+      workspaceNamespace: fallback.workspaceId,
+    };
+  }
+
+  if (!value || typeof value != "object") throw new Error("Invalid share metadata.");
+  let record = value as Partial<Omit<DocumentSourceRef, "backendKind" | "revision">> & {
+    backendKind?: unknown;
+    revision?: unknown;
+  };
+  let backendKind = parseWorkspaceBackendKind(record.backendKind);
+  if (
+    typeof record.path != "string" ||
+    typeof record.workspaceId != "string" ||
+    typeof record.workspaceNamespace != "string" ||
+    (record.fileId != null && typeof record.fileId != "string")
+  ) {
+    throw new Error("Invalid share metadata.");
+  }
+
+  return {
+    backendKind,
+    ...(typeof record.fileId == "string" ? { fileId: record.fileId } : {}),
+    path: record.path,
+    revision: parseWorkspaceSourceRevision(record.revision),
+    workspaceId: record.workspaceId,
+    workspaceNamespace: record.workspaceNamespace,
+  };
+}
+
+function parseWorkspaceBackendKind(value: unknown): WorkspaceBackendKind {
+  if (
+    value == "local" ||
+    value == "opendal-dropbox" ||
+    value == "opendal-gdrive" ||
+    value == "opendal-onedrive" ||
+    value == "opendal-s3"
+  ) {
+    return value as WorkspaceBackendKind;
+  }
+  throw new Error("Invalid share metadata.");
+}
+
+function parseWorkspaceSourceRevision(value: unknown): WorkspaceSourceRevision | undefined {
+  if (value == null) return undefined;
+  if (!value || typeof value != "object") throw new Error("Invalid share metadata.");
+  let record = value as Partial<WorkspaceSourceRevision>;
+  if (
+    (record.etag != null && typeof record.etag != "string") ||
+    (record.version != null && typeof record.version != "string")
+  ) {
+    throw new Error("Invalid share metadata.");
+  }
+  let revision = {
+    ...(typeof record.etag == "string" ? { etag: record.etag } : {}),
+    ...(typeof record.version == "string" ? { version: record.version } : {}),
+  };
+  return revision.etag || revision.version ? revision : undefined;
+}
+
+function rawWorkspaceIdFromLegacyNamespace(
+  backendKind: WorkspaceBackendKind,
+  legacyWorkspaceId: string,
+) {
+  let prefix = `${backendKind}:`;
+  return legacyWorkspaceId.startsWith(prefix)
+    ? legacyWorkspaceId.slice(prefix.length)
+    : legacyWorkspaceId;
 }
 
 export function resetOwnerShareRecordStoreForTests() {
   memoryShareRecords = new Map();
-}
-
-function workspaceShareNamespace(backend: WorkspaceBackend) {
-  return `${backend.kind}:${backend.id}`;
 }
 
 function shareRecordStore(): ShareRecordStore {

@@ -1,4 +1,5 @@
 import type { AccessDirectoryHandle } from "@/lib/file-system";
+import { legacyLocalWorkspaceId } from "@/lib/workspace/source-identity";
 
 const DB_NAME = "local-md-workspace";
 const DB_VERSION = 1;
@@ -6,6 +7,8 @@ const STORE_NAME = "workspace";
 const HANDLE_KEY = "directory-handle";
 const LOCAL_WORKSPACE_RECORDS_KEY = "local-workspaces";
 const DROPBOX_CONFIG_KEY = "local-md-workspace:dropbox-config";
+const GOOGLE_DRIVE_CONFIG_KEY = "local-md-workspace:google-drive-config";
+const ONEDRIVE_CONFIG_KEY = "local-md-workspace:onedrive-config";
 const WORKSPACE_KIND_KEY = "local-md-workspace:workspace-kind";
 const SELECTED_PATH_KEY_PREFIX = "local-md-workspace:selected-path";
 
@@ -14,7 +17,16 @@ export type StoredDropboxWorkspaceConfig = {
   root?: string;
 };
 
-export type StoredWorkspaceKind = "local" | "dropbox";
+export type StoredGoogleDriveWorkspaceConfig = {
+  clientId: string;
+};
+
+export type StoredOneDriveWorkspaceConfig = {
+  clientId: string;
+  root?: string;
+};
+
+export type StoredWorkspaceKind = "local" | "dropbox" | "gdrive" | "onedrive";
 
 export type StoredWorkspaceSelectedPathContext = {
   kind: StoredWorkspaceKind;
@@ -105,6 +117,50 @@ export function saveStoredDropboxWorkspaceConfig(config: StoredDropboxWorkspaceC
   } catch {}
 }
 
+export function loadStoredGoogleDriveWorkspaceConfig() {
+  if (!canUseLocalStorage()) return null;
+
+  try {
+    let raw = window.localStorage.getItem(GOOGLE_DRIVE_CONFIG_KEY);
+    if (!raw) return null;
+    return parseGoogleDriveWorkspaceConfig(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+export function saveStoredGoogleDriveWorkspaceConfig(config: StoredGoogleDriveWorkspaceConfig) {
+  if (!canUseLocalStorage()) return;
+
+  let normalized = parseGoogleDriveWorkspaceConfig(config);
+  if (!normalized) return;
+  try {
+    window.localStorage.setItem(GOOGLE_DRIVE_CONFIG_KEY, JSON.stringify(normalized));
+  } catch {}
+}
+
+export function loadStoredOneDriveWorkspaceConfig() {
+  if (!canUseLocalStorage()) return null;
+
+  try {
+    let raw = window.localStorage.getItem(ONEDRIVE_CONFIG_KEY);
+    if (!raw) return null;
+    return parseOneDriveWorkspaceConfig(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+export function saveStoredOneDriveWorkspaceConfig(config: StoredOneDriveWorkspaceConfig) {
+  if (!canUseLocalStorage()) return;
+
+  let normalized = parseOneDriveWorkspaceConfig(config);
+  if (!normalized) return;
+  try {
+    window.localStorage.setItem(ONEDRIVE_CONFIG_KEY, JSON.stringify(normalized));
+  } catch {}
+}
+
 export function loadStoredWorkspaceKind() {
   if (!canUseLocalStorage()) return null;
 
@@ -189,9 +245,41 @@ function parseDropboxWorkspaceConfig(value: unknown): StoredDropboxWorkspaceConf
   return root ? { appKey, root } : { appKey };
 }
 
+function parseGoogleDriveWorkspaceConfig(value: unknown): StoredGoogleDriveWorkspaceConfig | null {
+  if (!value || typeof value != "object") return null;
+  let record = value as Record<string, unknown>;
+  if (typeof record.clientId != "string") return null;
+
+  let clientId = record.clientId.trim();
+  if (!clientId) return null;
+
+  return { clientId };
+}
+
+function parseOneDriveWorkspaceConfig(value: unknown): StoredOneDriveWorkspaceConfig | null {
+  if (!value || typeof value != "object") return null;
+  let record = value as Record<string, unknown>;
+  if (typeof record.clientId != "string") return null;
+
+  let clientId = record.clientId.trim();
+  if (!clientId) return null;
+
+  let root =
+    typeof record.root == "string"
+      ? record.root
+          .trim()
+          .replace(/\\/g, "/")
+          .replace(/^\/+|\/+$/g, "")
+      : "";
+
+  return root ? { clientId, root } : { clientId };
+}
+
 function parseWorkspaceKind(value: unknown): StoredWorkspaceKind | null {
   if (typeof value != "string") return null;
-  if (value == "local" || value == "dropbox") return value;
+  if (value == "local" || value == "dropbox" || value == "gdrive" || value == "onedrive") {
+    return value;
+  }
   return null;
 }
 
@@ -243,7 +331,7 @@ async function loadLocalWorkspaceRecordsWithLegacyMigration(db: IDBDatabase, now
 
   await putValue(db, LOCAL_WORKSPACE_RECORDS_KEY, [record]);
   migrateStoredWorkspaceSelectedPath(
-    { kind: "local", workspaceId: legacyLocalWorkspaceId(legacyHandle) },
+    { kind: "local", workspaceId: legacyLocalWorkspaceId(legacyHandle.name) },
     { kind: "local", workspaceId: record.id },
   );
   return [record];
@@ -337,10 +425,6 @@ function createLocalWorkspaceRecordId() {
     return `local:${globalThis.crypto.randomUUID()}`;
   }
   return `local:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
-function legacyLocalWorkspaceId(handle: AccessDirectoryHandle) {
-  return `local:${handle.name || "workspace"}`;
 }
 
 async function getValue<T>(db: IDBDatabase, key: IDBValidKey) {

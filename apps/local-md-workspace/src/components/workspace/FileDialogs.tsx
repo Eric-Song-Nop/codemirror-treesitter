@@ -92,27 +92,34 @@ export function FileNameDialog({
   );
 }
 
-type SaveAsDropboxDialogProps = {
+type SaveAsCloudDialogProps = {
   busy: boolean;
+  description: string;
   error: string;
+  inputId: string;
   open: boolean;
+  placeholder: string;
+  title: string;
   value: string;
   onOpenChange: (open: boolean) => void;
   onSubmit: (value: string) => Promise<void>;
   onValueChange: (value: string) => void;
 };
 
-export function SaveAsDropboxDialog({
+function SaveAsCloudDialog({
   busy,
+  description,
   error,
+  inputId,
   open,
+  placeholder,
+  title,
   value,
   onOpenChange,
   onSubmit,
   onValueChange,
-}: SaveAsDropboxDialogProps) {
+}: SaveAsCloudDialogProps) {
   let { t } = useI18n();
-  let inputId = "dropbox-save-as-path";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -125,10 +132,8 @@ export function SaveAsDropboxDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>{t("dialog.saveAsDropbox.title")}</DialogTitle>
-            <DialogDescription className="sr-only">
-              {t("dialog.saveAsDropbox.description")}
-            </DialogDescription>
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription className="sr-only">{description}</DialogDescription>
           </DialogHeader>
           <FieldGroup>
             <Field data-invalid={Boolean(error)}>
@@ -137,7 +142,7 @@ export function SaveAsDropboxDialog({
                 id={inputId}
                 aria-invalid={Boolean(error)}
                 autoFocus
-                placeholder={t("dialog.saveAsDropbox.placeholder")}
+                placeholder={placeholder}
                 value={value}
                 onChange={(event) => onValueChange(event.target.value)}
               />
@@ -160,5 +165,23 @@ export function SaveAsDropboxDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+type SaveAsProviderDialogProps = Omit<
+  SaveAsCloudDialogProps,
+  "description" | "inputId" | "placeholder" | "title"
+>;
+
+export function SaveAsDropboxDialog(props: SaveAsProviderDialogProps) {
+  let { t } = useI18n();
+  return (
+    <SaveAsCloudDialog
+      {...props}
+      description={t("dialog.saveAsDropbox.description")}
+      inputId="dropbox-save-as-path"
+      placeholder={t("dialog.saveAsDropbox.placeholder")}
+      title={t("dialog.saveAsDropbox.title")}
+    />
   );
 }

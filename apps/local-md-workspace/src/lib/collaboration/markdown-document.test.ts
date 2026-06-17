@@ -283,20 +283,52 @@ describe("Markdown collaboration documents", () => {
       expect.arrayContaining([expect.stringMatching(/external-conflict-\d{14}\.md$/)]),
     );
   });
+
+  it("opens legacy local CRDT documents through explicit source aliases", async () => {
+    let files = new Map([["note.md", "# First\n"]]);
+    let legacyBackend = createMemoryBackend(files, "local:Notes");
+    let legacyDocument = await openMarkdownCollabDocument(legacyBackend, "note.md");
+    let text = legacyDocument.doc.getText("markdown");
+    text.insert(text.toString().length, "\nShared edit.\n");
+    legacyDocument.doc.commit();
+    await saveCollabDocumentSnapshot(legacyBackend, legacyDocument);
+
+    let migratedBackend = createMemoryBackend(files, "local:workspace-2", [
+      {
+        kind: "local",
+        namespace: "local:local:Notes",
+        workspaceId: "local:Notes",
+      },
+    ]);
+    let migratedDocument = await openMarkdownCollabDocument(migratedBackend, "note.md");
+
+    expect(migratedDocument.docId).not.toBe(legacyDocument.docId);
+    expect(migratedDocument.metadata.workspaceId).toBe("local:local:workspace-2");
+    expect(migratedDocument.value).toBe("# First\n\nShared edit.\n");
+    expect(migratedDocument.sourceState).toEqual({ kind: "needs-write" });
+
+    let reopened = await openMarkdownCollabDocument(migratedBackend, "note.md");
+    expect(reopened.docId).toBe(migratedDocument.docId);
+    expect(reopened.value).toBe("# First\n\nShared edit.\n");
+  });
 });
 
 type MemoryBackend = WorkspaceBackend & {
   files: Map<string, string>;
 };
 
-function createMemoryBackend(entries: Array<[string, string]>): MemoryBackend {
-  let files = new Map(entries);
-
+function createMemoryBackend(
+  entries: Array<[string, string]> | Map<string, string>,
+  id = "memory:test",
+  sourceAliases: WorkspaceBackend["sourceAliases"] = [],
+): MemoryBackend {
+  let files = entries instanceof Map ? entries : new Map(entries);
   return {
     files,
-    id: "memory:test",
+    id,
     kind: "local",
     name: "Memory",
+    sourceAliases,
     async createFile(path) {
       files.set(path, "");
       return path;

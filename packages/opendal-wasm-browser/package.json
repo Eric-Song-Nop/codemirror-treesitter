@@ -19,6 +19,7 @@
   },
   "scripts": {
     "auth:dropbox-token": "node smoke/dropbox-token.mjs",
+    "build": "vp run @codemirror-treesitter/opendal-wasm-browser#build:wasm && vp run @codemirror-treesitter/opendal-wasm-browser#build:ts",
     "build:ts": "vp pack",
     "build:wasm": "PATH=\"$(dirname $(rustup which cargo)):$PATH\" RUSTC=\"$(rustup which rustc)\" bun x wasm-pack build --target web --out-dir pkg --out-name opendal_wasm_browser",
     "check": "vp check",

@@ -1,5 +1,6 @@
 import type { LoroDoc } from "loro-crdt";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
+import { collabBroadcastChannelName } from "@/lib/workspace/source-identity";
 
 type BroadcastSyncMessage = {
   bytes: Uint8Array;
@@ -57,7 +58,7 @@ export function createCollabDocumentBroadcastSync({
 }
 
 export function collabDocumentBroadcastChannelName(backend: WorkspaceBackend, docId: string) {
-  return `local-md-workspace:${backend.kind}:${backend.id}:doc:${docId}`;
+  return collabBroadcastChannelName(backend, docId);
 }
 
 function parseBroadcastSyncMessage(value: unknown): BroadcastSyncMessage | null {

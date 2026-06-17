@@ -28,7 +28,7 @@ type UseWorkspaceOpenersOptions = {
   ) => Promise<void>;
   refreshWorkspaceForCurrentEditor: (backend: WorkspaceBackend) => Promise<void>;
   rememberWorkspaceHandle: (handle: AccessDirectoryHandle) => Promise<StoredLocalWorkspaceRecord>;
-  restoreDropboxRedirectEditorDraft: (
+  restoreCloudRedirectEditorDraft: (
     backend: WorkspaceBackend,
     draft: DropboxRedirectDraft,
   ) => boolean;
@@ -51,7 +51,7 @@ export function useWorkspaceOpeners({
   loadTree,
   refreshWorkspaceForCurrentEditor,
   rememberWorkspaceHandle,
-  restoreDropboxRedirectEditorDraft,
+  restoreCloudRedirectEditorDraft,
   saveCurrentFile,
   setBusy,
   setDropboxConnecting,
@@ -130,7 +130,7 @@ export function useWorkspaceOpeners({
             saveBeforeSelect: false,
           },
         );
-        if (options.restoreDraft) restoreDropboxRedirectEditorDraft(backend, options.restoreDraft);
+        if (options.restoreDraft) restoreCloudRedirectEditorDraft(backend, options.restoreDraft);
         return true;
       } catch (error) {
         setErrorMessage(errorToMessage(error));
@@ -144,7 +144,7 @@ export function useWorkspaceOpeners({
     [
       createDropboxBackend,
       loadTree,
-      restoreDropboxRedirectEditorDraft,
+      restoreCloudRedirectEditorDraft,
       saveCurrentFile,
       setBusy,
       setDropboxConnecting,
