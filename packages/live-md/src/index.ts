@@ -29,6 +29,7 @@ export {
   normalizeMarkdownImageSource,
   type LiveMdImageSourceResolver,
 } from "./core/images.js";
+export { liveMdLinkOpen, type LiveMdLinkOpenHandler } from "./core/links.js";
 export {
   liveMdImageAssets,
   liveMdLinkBehavior,

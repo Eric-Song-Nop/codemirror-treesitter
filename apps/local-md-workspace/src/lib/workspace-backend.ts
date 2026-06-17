@@ -1,4 +1,28 @@
-export type WorkspaceBackendKind = "local" | "opendal-dropbox" | "opendal-s3";
+export type WorkspaceBackendKind =
+  | "local"
+  | "opendal-dropbox"
+  | "opendal-gdrive"
+  | "opendal-onedrive"
+  | "opendal-s3";
+
+export type WorkspaceSourceRevision = {
+  etag?: string;
+  version?: string;
+};
+
+export type WorkspaceSourceAlias = {
+  kind: WorkspaceBackendKind;
+  namespace: string;
+  workspaceId: string;
+};
+
+export type WorkspaceWriteOptions = {
+  baseRevision?: WorkspaceSourceRevision;
+};
+
+export type WorkspaceWriteResult = {
+  revision?: WorkspaceSourceRevision;
+};
 
 export type MarkdownFileNode = {
   kind: "file";
@@ -30,6 +54,7 @@ export type WorkspaceEntry = {
   isDirectory: boolean;
   isFile: boolean;
   path: string;
+  revision?: WorkspaceSourceRevision;
 };
 
 export type WorkspaceEntryStat = WorkspaceEntry & {
@@ -42,6 +67,7 @@ export type WorkspaceBackend = {
   id: string;
   kind: WorkspaceBackendKind;
   name: string;
+  sourceAliases?: WorkspaceSourceAlias[];
   createDirectory?: (path: string) => Promise<void>;
   createFile(path: string): Promise<string | null>;
   createImageAsset?: (
@@ -62,7 +88,11 @@ export type WorkspaceBackend = {
   renameFile(path: string, rawName: string): Promise<string>;
   stat?: (path: string) => Promise<WorkspaceEntryStat>;
   writeBytes?: (path: string, bytes: Uint8Array) => Promise<void>;
-  writeFile(path: string, value: string): Promise<void>;
+  writeFile(
+    path: string,
+    value: string,
+    options?: WorkspaceWriteOptions,
+  ): Promise<void | WorkspaceWriteResult>;
   writeTextFile?: (path: string, value: string) => Promise<void>;
 };
 

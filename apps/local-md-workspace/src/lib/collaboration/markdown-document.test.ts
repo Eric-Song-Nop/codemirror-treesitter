@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
 
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { LoroDoc } from "loro-crdt";
 import {
+  browserCollabUpdateLogByteLength,
   resetBrowserCollabMemoryStoreForTests,
   writeBrowserCollabSnapshot,
 } from "./collab-browser-store.ts";
@@ -12,6 +14,7 @@ import {
   openMarkdownCollabDocument,
   saveCollabDocumentSnapshot,
   savePendingCollabDocumentUpdates,
+  scheduleCollabDocumentSnapshotFlush,
 } from "./markdown-document.ts";
 import type { MarkdownDirectoryNode, WorkspaceBackend } from "@/lib/workspace-backend";
 
@@ -27,6 +30,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   resetBrowserCollabMemoryStoreForTests();
   if (indexedDbDescriptor) {
     Object.defineProperty(window, "indexedDB", indexedDbDescriptor);
@@ -36,6 +40,69 @@ afterEach(() => {
 });
 
 describe("Markdown collaboration documents", () => {
+  it("debounces local Loro update-log persistence", async () => {
+    vi.useFakeTimers();
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let text = document.doc.getText("markdown");
+
+    text.insert(text.toString().length, "\nShared edit.\n");
+    document.doc.commit();
+
+    await vi.advanceTimersByTimeAsync(299);
+    let earlyReopen = await openMarkdownCollabDocument(backend, "note.md");
+    expect(earlyReopen.value).toBe("# First\n");
+    await earlyReopen.dispose();
+
+    await vi.advanceTimersByTimeAsync(1);
+    let reopened = await openMarkdownCollabDocument(backend, "note.md");
+    expect(reopened.value).toBe("# First\n\nShared edit.\n");
+
+    await document.dispose();
+    await reopened.dispose();
+  });
+
+  it("flushes pending local Loro updates before disposal", async () => {
+    vi.useFakeTimers();
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let text = document.doc.getText("markdown");
+
+    text.insert(text.toString().length, "\nShared edit.\n");
+    document.doc.commit();
+
+    await vi.advanceTimersByTimeAsync(299);
+    await document.dispose();
+
+    let reopened = await openMarkdownCollabDocument(backend, "note.md");
+    expect(reopened.value).toBe("# First\n\nShared edit.\n");
+
+    await reopened.dispose();
+  });
+
+  it("flushes scheduled snapshots before disposal", async () => {
+    vi.useFakeTimers();
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let remoteDoc = new LoroDoc();
+    let remoteUpdateStart = document.doc.oplogVersion();
+
+    remoteDoc.import(document.doc.export({ mode: "snapshot" }));
+    let remoteText = remoteDoc.getText("markdown");
+    remoteText.insert(remoteText.toString().length, "\nRemote edit.\n");
+    remoteDoc.commit();
+    document.doc.import(remoteDoc.export({ mode: "update", from: remoteUpdateStart }));
+    scheduleCollabDocumentSnapshotFlush(document);
+
+    await vi.advanceTimersByTimeAsync(299);
+    await document.dispose();
+
+    let reopened = await openMarkdownCollabDocument(backend, "note.md");
+    expect(reopened.value).toBe("# First\n\nRemote edit.\n");
+
+    await reopened.dispose();
+  });
+
   it("keeps Loro snapshots and updates out of the workspace backend", async () => {
     let backend = createMemoryBackend([["note.md", "# First\n"]]);
     let document = await openMarkdownCollabDocument(backend, "note.md");
@@ -52,6 +119,28 @@ describe("Markdown collaboration documents", () => {
     expect(reopened.docId).toBe(document.docId);
     expect(reopened.value).toBe("# First\n\nShared edit.\n");
     expect(hasLiveMdFiles(backend)).toBe(false);
+  });
+
+  it("lets snapshot persistence replace a pending update-log flush", async () => {
+    vi.useFakeTimers();
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let text = document.doc.getText("markdown");
+
+    text.insert(text.toString().length, "\nShared edit.\n");
+    document.doc.commit();
+    scheduleCollabDocumentSnapshotFlush(document);
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(await browserCollabUpdateLogByteLength(document.docId)).toBe(0);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await browserCollabUpdateLogByteLength(document.docId)).toBe(0);
+
+    let reopened = await openMarkdownCollabDocument(backend, "note.md");
+    expect(reopened.value).toBe("# First\n\nShared edit.\n");
+
+    await document.dispose();
+    await reopened.dispose();
   });
 
   it("imports external Markdown edits when Loro has no unmaterialized changes", async () => {
@@ -194,20 +283,52 @@ describe("Markdown collaboration documents", () => {
       expect.arrayContaining([expect.stringMatching(/external-conflict-\d{14}\.md$/)]),
     );
   });
+
+  it("opens legacy local CRDT documents through explicit source aliases", async () => {
+    let files = new Map([["note.md", "# First\n"]]);
+    let legacyBackend = createMemoryBackend(files, "local:Notes");
+    let legacyDocument = await openMarkdownCollabDocument(legacyBackend, "note.md");
+    let text = legacyDocument.doc.getText("markdown");
+    text.insert(text.toString().length, "\nShared edit.\n");
+    legacyDocument.doc.commit();
+    await saveCollabDocumentSnapshot(legacyBackend, legacyDocument);
+
+    let migratedBackend = createMemoryBackend(files, "local:workspace-2", [
+      {
+        kind: "local",
+        namespace: "local:local:Notes",
+        workspaceId: "local:Notes",
+      },
+    ]);
+    let migratedDocument = await openMarkdownCollabDocument(migratedBackend, "note.md");
+
+    expect(migratedDocument.docId).not.toBe(legacyDocument.docId);
+    expect(migratedDocument.metadata.workspaceId).toBe("local:local:workspace-2");
+    expect(migratedDocument.value).toBe("# First\n\nShared edit.\n");
+    expect(migratedDocument.sourceState).toEqual({ kind: "needs-write" });
+
+    let reopened = await openMarkdownCollabDocument(migratedBackend, "note.md");
+    expect(reopened.docId).toBe(migratedDocument.docId);
+    expect(reopened.value).toBe("# First\n\nShared edit.\n");
+  });
 });
 
 type MemoryBackend = WorkspaceBackend & {
   files: Map<string, string>;
 };
 
-function createMemoryBackend(entries: Array<[string, string]>): MemoryBackend {
-  let files = new Map(entries);
-
+function createMemoryBackend(
+  entries: Array<[string, string]> | Map<string, string>,
+  id = "memory:test",
+  sourceAliases: WorkspaceBackend["sourceAliases"] = [],
+): MemoryBackend {
+  let files = entries instanceof Map ? entries : new Map(entries);
   return {
     files,
-    id: "memory:test",
+    id,
     kind: "local",
     name: "Memory",
+    sourceAliases,
     async createFile(path) {
       files.set(path, "");
       return path;

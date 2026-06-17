@@ -88,6 +88,22 @@ export function translateKnownMessage(message: string, t: TFunction) {
     return t("errors.dropboxMissingScopes", { scopes: missingScopes.groups.scopes });
   }
 
+  let missingGoogleDriveScopes = message.match(
+    /^Google Drive app is missing required file permissions: (?<scopes>.+)\. Enable those scopes and reconnect Google Drive workspace\.$/,
+  );
+  if (missingGoogleDriveScopes?.groups) {
+    return t("errors.googleDriveMissingScopes", {
+      scopes: missingGoogleDriveScopes.groups.scopes,
+    });
+  }
+
+  let missingOneDriveScopes = message.match(
+    /^OneDrive app is missing required file permissions: (?<scopes>.+)\. Enable those scopes and reconnect OneDrive workspace\.$/,
+  );
+  if (missingOneDriveScopes?.groups) {
+    return t("errors.onedriveMissingScopes", { scopes: missingOneDriveScopes.groups.scopes });
+  }
+
   let pathExists = message.match(/^(?<path>.+) already exists\.$/);
   if (pathExists?.groups) {
     return t("errors.pathAlreadyExists", { path: pathExists.groups.path });
@@ -125,6 +141,15 @@ export function translateKnownMessage(message: string, t: TFunction) {
     return t("errors.hostSyncDidNotStart", {
       action: translateShareActionLabel(hostSync.groups.action, t),
       message: hostSync.groups.detail,
+    });
+  }
+
+  let hostSourceMismatch = message.match(
+    /^(?<action>.+), but this file is no longer the shared source\.$/,
+  );
+  if (hostSourceMismatch?.groups) {
+    return t("errors.shareHostSourceMismatch", {
+      action: translateShareActionLabel(hostSourceMismatch.groups.action, t),
     });
   }
 
@@ -194,6 +219,47 @@ const exactMessageKeys: Readonly<Record<string, TranslationKey>> = {
     "errors.dropboxTokenExchangeFailed",
   "Dropbox workspace is not configured. Set VITE_DROPBOX_APP_KEY for this app.":
     "errors.dropboxNotConfigured",
+  "Google Drive access token expired. Reconnect Google Drive workspace to continue.":
+    "errors.googleDriveAccessTokenExpired",
+  "Google Drive authorization did not return a code.": "errors.googleDriveAuthorizationCodeMissing",
+  "Google Drive authorization is invalid or was revoked. Reconnect Google Drive workspace to continue.":
+    "errors.googleDriveAuthorizationInvalid",
+  "Google Drive authorization popup was blocked. Allow popups for this site and try again.":
+    "errors.googleDrivePopupBlocked",
+  "Google Drive authorization state did not match.": "errors.googleDriveAuthorizationStateMismatch",
+  "Google Drive authorization state was not found.": "errors.googleDriveAuthorizationStateMissing",
+  "Google Drive authorization was closed before it completed. Reconnect Google Drive workspace to continue.":
+    "errors.googleDriveAuthorizationClosed",
+  "Google Drive authorization failed. Check the Web client ID, authorized JavaScript origin, and OAuth consent screen, then reconnect Google Drive workspace.":
+    "errors.googleDriveAuthorizationConfig",
+  "Google Drive authorization was denied or blocked by Google OAuth app settings. If this is a development app, add your Google account as a test user and check the Drive scope before reconnecting.":
+    "errors.googleDriveAuthorizationDenied",
+  "Google Drive client ID is required.": "errors.googleDriveClientIdRequired",
+  "Google Drive token exchange failed. Check the client ID and reconnect Google Drive workspace.":
+    "errors.googleDriveTokenExchangeFailed",
+  "Google Drive workspace is not configured. Set VITE_GOOGLE_DRIVE_CLIENT_ID for this app.":
+    "errors.googleDriveNotConfigured",
+  "Grove Google Drive workspace is no longer available. Reconnect Google Drive workspace; this app can only access files it creates or that Google Drive grants to it.":
+    "errors.googleDrivePathUnavailable",
+  "OneDrive access token expired. Reconnect OneDrive workspace to continue.":
+    "errors.onedriveAccessTokenExpired",
+  "OneDrive authorization did not return a code.": "errors.onedriveAuthorizationCodeMissing",
+  "OneDrive authorization is invalid or was revoked. Reconnect OneDrive workspace to continue.":
+    "errors.onedriveAuthorizationInvalid",
+  "OneDrive authorization popup was blocked. Allow popups for this site and try again.":
+    "errors.onedrivePopupBlocked",
+  "OneDrive authorization state did not match.": "errors.onedriveAuthorizationStateMismatch",
+  "OneDrive authorization state was not found.": "errors.onedriveAuthorizationStateMissing",
+  "OneDrive authorization was closed before it completed. Reconnect OneDrive workspace to continue.":
+    "errors.onedriveAuthorizationClosed",
+  "OneDrive authorization was denied.": "errors.onedriveAuthorizationDenied",
+  "OneDrive client ID is required.": "errors.onedriveClientIdRequired",
+  "OneDrive token exchange failed. Check the client ID and reconnect OneDrive workspace.":
+    "errors.onedriveTokenExchangeFailed",
+  "OneDrive workspace is not configured. Set VITE_ONEDRIVE_CLIENT_ID for this app.":
+    "errors.onedriveNotConfigured",
+  "OneDrive workspace path is no longer available. Check the OneDrive root setting, then reconnect OneDrive workspace.":
+    "errors.onedrivePathUnavailable",
   "Enter a file name, not a path.": "errors.enterFileNameNotPath",
   "Enter a file name.": "errors.enterFileName",
   "Enter a folder name, not a path.": "errors.enterFolderNameNotPath",

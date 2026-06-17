@@ -17,4 +17,9 @@ describe("workspace write conflict errors", () => {
       ),
     ).toBe(false);
   });
+
+  it("classifies OneDrive precondition failures as save conflicts", () => {
+    expect(isWorkspaceWriteConflictError(new Error("412 Precondition Failed"))).toBe(true);
+    expect(isWorkspaceWriteConflictError(new Error("ConditionNotMatch at write"))).toBe(true);
+  });
 });

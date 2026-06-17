@@ -1,7 +1,15 @@
 import { useCallback, useRef } from "react";
-import { authorizeDropboxWithPkce, type DropboxAccessToken } from "@/lib/dropbox-oauth";
+import {
+  authorizeDropboxWithPkce,
+  fetchDropboxAccountIdentity,
+  type DropboxAccessToken,
+} from "@/lib/dropbox-oauth";
 import { saveDropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
 import type { TFunction } from "@/lib/i18n";
+import {
+  sameOpendalWorkspaceIdentity,
+  type OpendalWorkspaceIdentity,
+} from "@/lib/opendal-workspace-backend";
 import {
   defaultDropboxRedirectUri,
   normalizeDropboxRootInput,
@@ -47,10 +55,16 @@ export function useDropboxWorkspaceBackend({
   }, []);
 
   let setDropboxRedirectAccessToken = useCallback(
-    (token: { accessToken: string; appKey: string; expiresAt: number }) => {
+    (token: {
+      accessToken: string;
+      appKey: string;
+      expiresAt: number;
+      identity?: OpendalWorkspaceIdentity;
+    }) => {
       dropboxTokenRef.current = {
         accessToken: token.accessToken,
         expiresAt: token.expiresAt,
+        ...(token.identity ? { identity: token.identity } : {}),
       };
       dropboxTokenAppKeyRef.current = token.appKey;
     },
@@ -101,7 +115,15 @@ export function useDropboxWorkspaceBackend({
       if (!appKey) throw new Error("Dropbox app key is required.");
 
       let root = normalizeDropboxRootInput(config.root);
-      let refreshAccessToken = () => authorizeDropboxAccess(appKey, root);
+      let workspaceIdentity: OpendalWorkspaceIdentity | null = null;
+      let refreshAccessToken = async () => {
+        let token = await authorizeDropboxAccess(appKey, root);
+        let identity = await dropboxTokenIdentity(token);
+        if (workspaceIdentity && !sameOpendalWorkspaceIdentity(workspaceIdentity, identity)) {
+          throw new Error("Dropbox account changed. Reconnect Dropbox workspace to continue.");
+        }
+        return token;
+      };
       let getAccessToken = async () => {
         let token = dropboxTokenRef.current;
         if (
@@ -114,10 +136,11 @@ export function useDropboxWorkspaceBackend({
         return refreshAccessToken();
       };
 
-      await getAccessToken();
+      workspaceIdentity = await dropboxTokenIdentity(await getAccessToken());
       let { createDropboxWorkspaceBackend } = await import("@/lib/dropbox-workspace-backend");
       let backend = createDropboxWorkspaceBackend({
         getAccessToken,
+        identity: workspaceIdentity,
         name: t("workspace.dropboxWorkspace"),
         refreshAccessToken,
         root,
@@ -137,4 +160,8 @@ export function useDropboxWorkspaceBackend({
     createDropboxBackend,
     setDropboxRedirectAccessToken,
   };
+}
+
+async function dropboxTokenIdentity(token: DropboxAccessToken): Promise<OpendalWorkspaceIdentity> {
+  return token.identity ?? fetchDropboxAccountIdentity(token.accessToken);
 }

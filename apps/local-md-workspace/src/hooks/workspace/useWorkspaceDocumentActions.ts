@@ -8,11 +8,13 @@ import {
   type CollabDocumentState,
 } from "@/lib/collaboration/markdown-document";
 import {
-  findOwnerShareRecordForPath,
+  restoreOwnerShareRecordForPath,
   type CreatedOwnerShare,
   type OwnerShareRecord,
 } from "@/lib/collaboration/share-storage";
 import type { DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
+import type { GoogleDriveRedirectDraft } from "@/lib/google-drive-redirect-draft";
+import type { OneDriveRedirectDraft } from "@/lib/onedrive-redirect-draft";
 import { type AccessFileHandle } from "@/lib/file-system";
 import {
   clearLastSingleFileDraft,
@@ -22,6 +24,7 @@ import {
   rememberLastSingleFileDraft,
 } from "@/lib/single-file-draft-store";
 import { errorToMessage } from "@/lib/workspace/errors";
+import { createDocumentSession, type DocumentSession } from "@/lib/workspace/document-session";
 import { createSingleFileDraftBackend, singleFileMarkdownNode } from "@/lib/workspace/single-file";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
 import type {
@@ -29,6 +32,7 @@ import type {
   EditorDocument,
   SaveState,
   SingleFileSource,
+  SourceAutoSaveTask,
 } from "@/lib/workspace/types";
 import { saveStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
 import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
@@ -37,32 +41,42 @@ type MutableRef<T> = {
   current: T;
 };
 
+type CloudRedirectDraft = DropboxRedirectDraft | GoogleDriveRedirectDraft | OneDriveRedirectDraft;
+
 type StartOwnerShareHost = (
   record: OwnerShareRecord,
-  backend: WorkspaceBackend,
-  document: CollabDocumentState,
+  session: DocumentSession,
   options?: { actionLabel?: string; shouldContinue?: () => boolean },
 ) => Promise<void>;
 
 type UseWorkspaceDocumentActionsOptions = {
   activeDocumentGenerationRef: MutableRef<number>;
+  autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   cleanValueRef: MutableRef<string>;
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
   collabSyncCleanupRef: MutableRef<() => void>;
   dirtyRef: MutableRef<boolean>;
   editVersionRef: MutableRef<number>;
   editorValueRef: MutableRef<string>;
-  isOwnerShareHostPath: (path: string) => boolean;
+  isOwnerShareHostPath: (backend: WorkspaceBackend, path: string) => boolean;
   loadFileRequestRef: MutableRef<number>;
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
   saveOperationRef: MutableRef<number>;
   saveStateRef: MutableRef<SaveState>;
-  saveTimerRef: MutableRef<number | null>;
   scheduleAutoSaveRef: MutableRef<() => void>;
   selectedFileBackendRef: MutableRef<WorkspaceBackend | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
-  sendHostDocumentUpdate: (path: string, update: Uint8Array | null) => void;
-  sendHostSaveAck: (path: string, value: string, savedVersion: VersionVector) => void;
+  sendHostDocumentUpdate: (
+    backend: WorkspaceBackend,
+    path: string,
+    update: Uint8Array | null,
+  ) => void;
+  sendHostSaveAck: (
+    backend: WorkspaceBackend,
+    path: string,
+    value: string,
+    savedVersion: VersionVector,
+  ) => void;
   setActiveShareRecord: Dispatch<SetStateAction<ActiveOwnerShareRecord | null>>;
   setBusy: (busy: boolean) => void;
   setCollabDocument: Dispatch<SetStateAction<CollabDocumentState | null>>;
@@ -81,6 +95,7 @@ type UseWorkspaceDocumentActionsOptions = {
 
 export function useWorkspaceDocumentActions({
   activeDocumentGenerationRef,
+  autoSaveTaskRef,
   cleanValueRef,
   collabDocumentRef,
   collabSyncCleanupRef,
@@ -92,7 +107,6 @@ export function useWorkspaceDocumentActions({
   localFileHandleRef,
   saveOperationRef,
   saveStateRef,
-  saveTimerRef,
   scheduleAutoSaveRef,
   selectedFileBackendRef,
   selectedFileRef,
@@ -121,8 +135,9 @@ export function useWorkspaceDocumentActions({
   let disposeActiveCollabDocument = useCallback(() => {
     collabSyncCleanupRef.current();
     collabSyncCleanupRef.current = () => {};
-    collabDocumentRef.current?.dispose();
+    let document = collabDocumentRef.current;
     collabDocumentRef.current = null;
+    return document?.dispose() ?? Promise.resolve();
   }, [collabDocumentRef, collabSyncCleanupRef]);
 
   let {
@@ -133,6 +148,7 @@ export function useWorkspaceDocumentActions({
     scheduleAutoSave,
   } = useWorkspaceSaveActions({
     activeDocumentGenerationRef,
+    autoSaveTaskRef,
     cleanValueRef,
     collabDocumentRef,
     collabSyncCleanupRef,
@@ -141,7 +157,6 @@ export function useWorkspaceDocumentActions({
     editorValueRef,
     saveOperationRef,
     saveStateRef,
-    saveTimerRef,
     scheduleAutoSaveRef,
     selectedFileBackendRef,
     selectedFileRef,
@@ -158,7 +173,9 @@ export function useWorkspaceDocumentActions({
     invalidateActiveDocumentSave();
     clearPendingSaveTimer();
     stopOwnerShareHost();
-    disposeActiveCollabDocument();
+    void disposeActiveCollabDocument().catch((error: unknown) => {
+      setErrorMessage(errorToMessage(error));
+    });
     selectedFileRef.current = null;
     selectedFileBackendRef.current = null;
     singleFileSourceRef.current = null;
@@ -196,6 +213,7 @@ export function useWorkspaceDocumentActions({
     setCollabDocument,
     setCreatedShare,
     setEditorDocument,
+    setErrorMessage,
     setSaveStateSynced,
     setSelectedFile,
     setSingleFileSource,
@@ -228,7 +246,9 @@ export function useWorkspaceDocumentActions({
       invalidateActiveDocumentSave();
       clearPendingSaveTimer();
       stopOwnerShareHost();
-      disposeActiveCollabDocument();
+      void disposeActiveCollabDocument().catch((error: unknown) => {
+        setErrorMessage(errorToMessage(error));
+      });
       selectedFileBackendRef.current = backend;
       selectedFileRef.current = file;
       editorValueRef.current = value;
@@ -345,18 +365,27 @@ export function useWorkspaceDocumentActions({
           selectedFileRef.current?.path == file.path;
         if (!isSameActiveWorkspaceFile) beginDocumentTransition(file.path);
 
-        let restoredShareRecord = await findOwnerShareRecordForPath(backend, file.path).catch(
+        let restoredShareRecord = await restoreOwnerShareRecordForPath(backend, file.path).catch(
           () => null,
         );
         if (!isCurrentLoadRequest()) return;
         let document = await openMarkdownCollabDocument(backend, file.path);
         if (!isCurrentLoadRequest()) {
-          document.dispose();
+          await document.dispose();
           return;
         }
         let value = document.value;
-        if (!isOwnerShareHostPath(file.path)) stopOwnerShareHost();
-        disposeActiveCollabDocument();
+        if (!isOwnerShareHostPath(backend, file.path)) stopOwnerShareHost();
+        try {
+          await disposeActiveCollabDocument();
+        } catch (error) {
+          await document.dispose().catch(() => {});
+          throw error;
+        }
+        if (!isCurrentLoadRequest()) {
+          await document.dispose();
+          return;
+        }
         invalidateActiveDocumentSave();
         selectedFileRef.current = file;
         selectedFileBackendRef.current = backend;
@@ -383,9 +412,13 @@ export function useWorkspaceDocumentActions({
         setActiveShareRecord(restoredShareRecord);
         setCreatedShare(null);
         if (restoredShareRecord) {
-          void startOwnerShareHost(restoredShareRecord, backend, document, {
-            shouldContinue: isCurrentLoadRequest,
-          });
+          void startOwnerShareHost(
+            restoredShareRecord,
+            createDocumentSession(backend, file, document),
+            {
+              shouldContinue: isCurrentLoadRequest,
+            },
+          );
         }
         if (needsSourceWrite) scheduleAutoSave();
         setRetryLoadPath(null);
@@ -431,8 +464,8 @@ export function useWorkspaceDocumentActions({
     ],
   );
 
-  let restoreDropboxRedirectEditorDraft = useCallback(
-    (backend: WorkspaceBackend, draft: DropboxRedirectDraft) => {
+  let restoreCloudRedirectEditorDraft = useCallback(
+    (backend: WorkspaceBackend, draft: CloudRedirectDraft) => {
       if (!draft.selectedPath || draft.dirtyValue == null) return false;
 
       let file = selectedFileRef.current;
@@ -478,7 +511,12 @@ export function useWorkspaceDocumentActions({
 
       let document = await openMarkdownCollabDocument(backend, file.path);
 
-      disposeActiveCollabDocument();
+      try {
+        await disposeActiveCollabDocument();
+      } catch (error) {
+        await document.dispose().catch(() => {});
+        throw error;
+      }
       invalidateActiveDocumentSave();
       collabDocumentRef.current = document;
       bindCollabDocumentBroadcast(backend, document);
@@ -525,7 +563,7 @@ export function useWorkspaceDocumentActions({
     handleEditorInput,
     loadFile,
     openSingleFileDraft,
-    restoreDropboxRedirectEditorDraft,
+    restoreCloudRedirectEditorDraft,
     saveCurrentFile,
   };
 }

@@ -2,13 +2,21 @@ import { liveMdLoroCollaborationPlugin } from "@codemirror-treesitter/live-md-lo
 import type { LiveMdConfig } from "@codemirror-treesitter/live-md";
 import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import type { Frontiers } from "loro-crdt";
+import { createDebouncedTask, type DebouncedTask } from "@/lib/scheduling/debounced-task";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
+import {
+  documentSourceAliasRefs,
+  documentSourceDocumentIdInput,
+  documentSourceRef,
+  type DocumentSourceRef,
+} from "@/lib/workspace/source-identity";
 import { hashMarkdownText } from "../markdown-hash.ts";
 import {
   appendBrowserCollabUpdates,
   clearBrowserCollabUpdates,
   loadBrowserCollabDocument,
   writeBrowserCollabSnapshot,
+  type BrowserCollabDocumentState,
   type BrowserCollabDocumentMetadata,
   type SerializedCollabFrontier,
   type SerializedCollabVersionVector,
@@ -18,18 +26,24 @@ export { hashMarkdownText } from "../markdown-hash.ts";
 
 const textKey = "markdown";
 const maxDocumentUpdateLogBytes = 64 * 1024;
+const pendingUpdateFlushDelayMs = 300;
+const pendingUpdateFlushMaxWaitMs = 2000;
+const snapshotFlushDelayMs = 300;
+const snapshotFlushMaxWaitMs = 2000;
 
 export type CollabDocumentState = {
   cleanValue: string;
   doc: LoroDoc;
   docId: string;
-  dispose: () => void;
+  dispose: () => Promise<void>;
   externalEdit?: CollabExternalEditResolution;
   liveMdConfig: LiveMdConfig;
   metadata: BrowserCollabDocumentMetadata;
   path: string;
+  pendingUpdateFlush: DebouncedTask;
   pendingUpdates: Uint8Array[];
   persistence: Promise<void>;
+  snapshotFlush: DebouncedTask;
   sourceState: CollabSourceState;
   undoManager: UndoManager;
   value: string;
@@ -89,25 +103,28 @@ type SourceImportOutcome = {
   value: string;
 };
 
+type StoredCollabDocumentCandidate = BrowserCollabDocumentState & {
+  metadata: BrowserCollabDocumentMetadata;
+  migratedFromAlias: boolean;
+  snapshot: Uint8Array;
+};
+
 export async function openMarkdownCollabDocument(
   backend: WorkspaceBackend,
   path: string,
   options: OpenMarkdownCollabDocumentOptions = {},
 ): Promise<CollabDocumentState> {
-  let docId = await createDocumentId(backend, path);
-  let workspaceId = workspaceDocumentNamespace(backend);
-  let stored = await loadBrowserCollabDocument(docId);
-  let storedMetadata =
-    stored.metadata && stored.metadata.path == path && stored.metadata.workspaceId == workspaceId
-      ? stored.metadata
-      : null;
+  let sourceRef = documentSourceRef(backend, path);
+  let docId = await createDocumentIdForSourceRef(sourceRef);
+  let workspaceId = sourceRef.workspaceNamespace;
+  let stored = await loadStoredCollabDocumentCandidate(backend, path, sourceRef, docId);
   let doc = new LoroDoc();
   let externalEdit: CollabExternalEditResolution | undefined;
   let sourceState: CollabSourceState = { kind: "synced" };
   let metadata: BrowserCollabDocumentMetadata;
 
-  if (stored.snapshot && storedMetadata) {
-    metadata = storedMetadata;
+  if (stored) {
+    metadata = stored.metadata;
     doc.import(stored.snapshot);
     if (stored.updates.length) doc.importBatch(stored.updates);
     if (options.reconcileExternalEdits ?? true) {
@@ -116,6 +133,7 @@ export async function openMarkdownCollabDocument(
       metadata = result.metadata;
       sourceState = result.sourceState;
     }
+    if (stored.migratedFromAlias) await compactDocumentSnapshot(metadata, doc);
   } else {
     let initialValue = await backend.readFile(path);
     let text = doc.getText(textKey);
@@ -136,27 +154,112 @@ export async function openMarkdownCollabDocument(
     sourceState = sourceStateForValue(metadata, value);
   }
   let pendingUpdates: Uint8Array[] = [];
+  let state: CollabDocumentState;
+  let pendingUpdateFlush = createDebouncedTask({
+    delayMs: pendingUpdateFlushDelayMs,
+    maxWaitMs: pendingUpdateFlushMaxWaitMs,
+    run: () => appendPendingCollabDocumentUpdates(state),
+  });
+  let snapshotFlush = createDebouncedTask({
+    delayMs: snapshotFlushDelayMs,
+    maxWaitMs: snapshotFlushMaxWaitMs,
+    run: () => writeCollabDocumentSnapshot(state),
+  });
+  let disposePromise: Promise<void> | null = null;
   let unsubscribeLocalUpdates = doc.subscribeLocalUpdates((bytes) => {
     pendingUpdates.push(new Uint8Array(bytes));
+    schedulePendingCollabDocumentUpdateFlush(state);
   });
 
-  return {
+  state = {
     cleanValue: value,
     doc,
     docId,
-    dispose: unsubscribeLocalUpdates,
+    dispose() {
+      if (disposePromise) return disposePromise;
+      unsubscribeLocalUpdates();
+      disposePromise = (async () => {
+        try {
+          await flushCollabDocumentPersistence(state);
+        } finally {
+          pendingUpdateFlush.dispose();
+          snapshotFlush.dispose();
+        }
+      })();
+      return disposePromise;
+    },
     externalEdit,
     liveMdConfig: {
       plugins: [liveMdLoroCollaborationPlugin({ doc, undoManager, text: textKey })],
     },
     metadata,
     path,
+    pendingUpdateFlush,
     pendingUpdates,
     persistence: Promise.resolve(),
+    snapshotFlush,
     sourceState,
     undoManager,
     value,
   };
+  return state;
+}
+
+async function loadStoredCollabDocumentCandidate(
+  backend: WorkspaceBackend,
+  path: string,
+  sourceRef: DocumentSourceRef,
+  docId: string,
+): Promise<StoredCollabDocumentCandidate | null> {
+  let stored = await loadBrowserCollabDocument(docId);
+  let metadata = storedCollabMetadataForSource(stored, path, sourceRef.workspaceNamespace);
+  if (stored.snapshot && metadata) {
+    return {
+      ...stored,
+      metadata,
+      migratedFromAlias: false,
+      snapshot: stored.snapshot,
+    };
+  }
+
+  for (let aliasRef of documentSourceAliasRefs(backend, path)) {
+    let aliasDocId = await createDocumentIdForSourceRef(aliasRef);
+    if (aliasDocId == docId) continue;
+
+    let aliasStored = await loadBrowserCollabDocument(aliasDocId);
+    let aliasMetadata = storedCollabMetadataForSource(
+      aliasStored,
+      path,
+      aliasRef.workspaceNamespace,
+    );
+    if (!aliasStored.snapshot || !aliasMetadata) continue;
+
+    return {
+      ...aliasStored,
+      metadata: {
+        ...aliasMetadata,
+        docId,
+        path,
+        workspaceId: sourceRef.workspaceNamespace,
+      },
+      migratedFromAlias: true,
+      snapshot: aliasStored.snapshot,
+    };
+  }
+
+  return null;
+}
+
+function storedCollabMetadataForSource(
+  stored: BrowserCollabDocumentState,
+  path: string,
+  workspaceId: string,
+) {
+  return stored.metadata &&
+    stored.metadata.path == path &&
+    stored.metadata.workspaceId == workspaceId
+    ? stored.metadata
+    : null;
 }
 
 export function getCollabDocumentValue(state: CollabDocumentState) {
@@ -171,6 +274,21 @@ export async function saveCollabDocumentSnapshot(
   _backend: WorkspaceBackend,
   state: CollabDocumentState,
 ) {
+  state.snapshotFlush.cancel();
+  await writeCollabDocumentSnapshot(state);
+}
+
+export function scheduleCollabDocumentSnapshotFlush(state: CollabDocumentState) {
+  state.snapshotFlush.schedule();
+}
+
+export async function flushCollabDocumentSnapshot(state: CollabDocumentState) {
+  state.snapshotFlush.schedule();
+  await state.snapshotFlush.flush();
+}
+
+async function writeCollabDocumentSnapshot(state: CollabDocumentState) {
+  state.pendingUpdateFlush.cancel();
   await enqueueDocumentPersistence(state, async () => {
     let updates = state.pendingUpdates.splice(0);
     try {
@@ -188,7 +306,31 @@ export async function savePendingCollabDocumentUpdates(
   state: CollabDocumentState,
 ) {
   if (!state.pendingUpdates.length) return;
+  state.pendingUpdateFlush.schedule();
+  await state.pendingUpdateFlush.flush();
+}
 
+export function schedulePendingCollabDocumentUpdateFlush(state: CollabDocumentState) {
+  if (!state.pendingUpdates.length) return;
+  state.pendingUpdateFlush.schedule();
+}
+
+export async function flushPendingCollabDocumentUpdates(state: CollabDocumentState) {
+  if (!state.pendingUpdates.length) return;
+  state.pendingUpdateFlush.schedule();
+  await state.pendingUpdateFlush.flush();
+}
+
+export async function flushCollabDocumentPersistence(state: CollabDocumentState) {
+  if (state.snapshotFlush.pending()) {
+    await state.snapshotFlush.flush();
+  } else {
+    await flushPendingCollabDocumentUpdates(state);
+  }
+  await state.persistence;
+}
+
+async function appendPendingCollabDocumentUpdates(state: CollabDocumentState) {
   await enqueueDocumentPersistence(state, async () => {
     if (!state.pendingUpdates.length) return;
 
@@ -474,8 +616,8 @@ function replaceMarkdownText(doc: LoroDoc, value: string) {
   doc.commit();
 }
 
-async function createDocumentId(backend: WorkspaceBackend, path: string) {
-  let value = `${workspaceDocumentNamespace(backend)}:${path}`;
+async function createDocumentIdForSourceRef(sourceRef: DocumentSourceRef) {
+  let value = documentSourceDocumentIdInput(sourceRef);
   try {
     let bytes = new TextEncoder().encode(value);
     let digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -483,10 +625,6 @@ async function createDocumentId(backend: WorkspaceBackend, path: string) {
   } catch {
     return `doc-${hashMarkdownText(value)}`;
   }
-}
-
-function workspaceDocumentNamespace(backend: WorkspaceBackend) {
-  return `${backend.kind}:${backend.id}`;
 }
 
 function encodeBase64Url(bytes: Uint8Array) {

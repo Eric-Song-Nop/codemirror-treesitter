@@ -1,9 +1,8 @@
 # local-md-workspace
 
 Grove local-first Markdown workspace. It is a React app built around LiveMD,
-the browser File System Access API, optional Dropbox storage through the
-OpenDAL WASM wrapper, and optional shared-file collaboration through
-`apps/grove-relay`.
+the browser File System Access API, optional Dropbox storage through the OpenDAL
+WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
 
 ## Responsibilities
 
@@ -12,6 +11,11 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
 - Connect to Dropbox with OAuth PKCE and use
   `@codemirror-treesitter/opendal-wasm-browser` for browser-side file
   operations.
+- Provide a reusable OpenDAL workspace backend for Dropbox, including cloud-save
+  serialization, token refresh retry, metadata tracking, and ETag-based
+  conditional writes when supported by the provider. OneDrive and Google Drive
+  adapter code exists in source, but those providers are not exposed in the
+  current Grove UI.
 - Build a Markdown file tree, create/rename/delete files and folders, autosave
   edits, and surface permission/storage errors.
 - Open a command palette with `Cmd/Ctrl+Shift+P` for file navigation and core
@@ -27,7 +31,7 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
   edits can become a shared Grove file.
 - Create, rotate, revoke, and host shared-file links through the Grove relay.
 - Open guest shared-file routes and sync through the relay without requiring
-  access to the owner's local or Dropbox workspace.
+  access to the owner's local or cloud workspace.
 - Switch the full workspace, shared-file route, LiveMD editor chrome, nested
   code highlighting, and file tree between named Gruvbox, GitHub Light, and
   Catppuccin themes.
@@ -52,7 +56,11 @@ OpenDAL WASM wrapper, and optional shared-file collaboration through
   CSS token ownership for the local and shared workspace routes.
 - `src/lib/file-system.ts`: File System Access API backend.
 - `src/lib/dropbox-oauth.ts` and `src/lib/dropbox-workspace-backend.ts`:
-  Dropbox OAuth PKCE and OpenDAL-backed workspace backend.
+  Dropbox OAuth PKCE and OpenDAL workspace adapter used by the current Grove UI.
+- `src/lib/google-drive-*` and `src/lib/onedrive-*`: dormant OpenDAL provider
+  adapters not exposed in the current Grove UI.
+- `src/lib/opendal-workspace-backend.ts`: shared OpenDAL workspace backend used
+  by cloud provider adapters.
 - `src/lib/workspace-backend.ts`: normalized workspace tree, path, image, and
   backend contracts.
 - `src/lib/export/markdown-html.ts`: standalone HTML export wrapper, LiveMD
@@ -73,7 +81,7 @@ Optional Dropbox configuration:
 
 ```env
 VITE_DROPBOX_APP_KEY="your-public-dropbox-app-key"
-VITE_DROPBOX_REDIRECT_URI="http://localhost:5173"
+VITE_DROPBOX_REDIRECT_URI="http://localhost:5173/"
 ```
 
 Optional relay configuration:
@@ -94,8 +102,8 @@ service worker is registered only for production builds, so normal
 `vp run local-md-workspace#build` followed by `vp run local-md-workspace#preview`
 to test installability and offline app-shell loading.
 
-The service worker caches same-origin GET navigations and static assets. Dropbox
-requests, relay API mutations, and relay WebSockets remain network-only.
+The service worker caches same-origin GET navigations and static assets. Cloud
+storage requests, relay API mutations, and relay WebSockets remain network-only.
 
 ## Commands
 
