@@ -1,6 +1,6 @@
 import {
   createOpendalBrowserOperator,
-  defaultGeneratedModuleUrl,
+  defaultOpendalBrowserRuntimeOptions,
   type OpendalBrowserOperatorConfig,
 } from "../src/index.js";
 
@@ -25,9 +25,7 @@ async function runSmoke() {
   let cleanupPaths: string[] = [];
 
   try {
-    operator = await createOpendalBrowserOperator(config, {
-      generatedModuleUrl: defaultGeneratedModuleUrl(),
-    });
+    operator = await createOpendalBrowserOperator(config, defaultOpendalBrowserRuntimeOptions());
     let firstPath = `opendal-browser-smoke-${Date.now()}.md`;
     let renamedPath = firstPath.replace(/\.md$/, "-renamed.md");
     let value = "# OpenDAL browser smoke\n";

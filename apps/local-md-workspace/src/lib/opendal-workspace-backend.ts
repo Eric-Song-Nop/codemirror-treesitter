@@ -1,10 +1,11 @@
-import type {
-  CreateOpendalBrowserOperatorOptions,
-  OpendalBrowserEntry,
-  OpendalBrowserOperator,
-  OpendalBrowserOperatorConfig,
-  OpendalBrowserProvider,
-  OpendalBrowserWriteOptions,
+import {
+  defaultOpendalBrowserRuntimeOptions,
+  type CreateOpendalBrowserOperatorOptions,
+  type OpendalBrowserEntry,
+  type OpendalBrowserOperator,
+  type OpendalBrowserOperatorConfig,
+  type OpendalBrowserProvider,
+  type OpendalBrowserWriteOptions,
 } from "@codemirror-treesitter/opendal-wasm-browser";
 import {
   buildMarkdownTreeFromEntries,
@@ -24,15 +25,7 @@ import {
 } from "./workspace-backend.ts";
 
 const TOKEN_EXPIRY_SKEW_MS = 5 * 60 * 1000;
-const OPENDAL_WASM_BUILD_COMMAND = "vp run @codemirror-treesitter/opendal-wasm-browser#build:wasm";
-const generatedModuleUrl = new URL(
-  "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser.js",
-  import.meta.url,
-).href;
-const wasmModuleUrl = new URL(
-  "../../../../packages/opendal-wasm-browser/pkg/opendal_wasm_browser_bg.wasm",
-  import.meta.url,
-).href;
+const OPENDAL_WASM_BUILD_COMMAND = "vp run @codemirror-treesitter/opendal-wasm-browser#build";
 
 export type OpendalWorkspaceAccessToken = {
   accessToken: string;
@@ -525,9 +518,6 @@ async function createDefaultOpendalOperator(
 ) {
   try {
     let runtimeOptions = opendalOperatorRuntimeOptions();
-    if (!runtimeOptions) {
-      throw new Error("OpenDAL browser WASM assets are missing from the build.");
-    }
     let { createOpendalBrowserOperator } =
       await import("@codemirror-treesitter/opendal-wasm-browser");
     return await createOpendalBrowserOperator(config, runtimeOptions);
@@ -536,8 +526,8 @@ async function createDefaultOpendalOperator(
   }
 }
 
-function opendalOperatorRuntimeOptions(): CreateOpendalBrowserOperatorOptions | null {
-  return generatedModuleUrl && wasmModuleUrl ? { generatedModuleUrl, wasmModuleUrl } : null;
+function opendalOperatorRuntimeOptions(): CreateOpendalBrowserOperatorOptions {
+  return defaultOpendalBrowserRuntimeOptions();
 }
 
 function unavailableOpendalRuntimeError(error: unknown, storageName: string) {

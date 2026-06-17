@@ -151,22 +151,35 @@ falls back to copy/delete when copy is available.
 
 ## Build
 
-Generate the browser WASM package:
+Build the browser WASM package and TypeScript wrapper:
+
+```bash
+vp run @codemirror-treesitter/opendal-wasm-browser#build
+```
+
+The package build runs the lower-level WASM and TypeScript builds in order.
+Those tasks can still be run individually:
 
 ```bash
 vp run @codemirror-treesitter/opendal-wasm-browser#build:wasm
-```
-
-Build the TypeScript wrapper:
-
-```bash
 vp run @codemirror-treesitter/opendal-wasm-browser#build:ts
 ```
 
-The generated TypeScript wrapper dynamically imports
-`pkg/opendal_wasm_browser.js` by default. Callers can override
-`generatedModuleUrl` or `wasmModuleUrl` when a bundler or deployment path needs
-explicit asset URLs.
+The TypeScript wrapper dynamically imports `pkg/opendal_wasm_browser.js` by
+default. Browser apps that need explicit bundler asset URLs should use the
+package-owned runtime contract:
+
+```ts
+import {
+  createOpendalBrowserOperator,
+  defaultOpendalBrowserRuntimeOptions,
+} from "@codemirror-treesitter/opendal-wasm-browser";
+
+let operator = await createOpendalBrowserOperator(config, defaultOpendalBrowserRuntimeOptions());
+```
+
+Callers can still override `generatedModuleUrl` or `wasmModuleUrl` when a
+deployment path needs custom asset URLs.
 
 ## Smoke Fixture
 

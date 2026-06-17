@@ -87,6 +87,11 @@ export type CreateOpendalBrowserOperatorOptions = {
   wasmModuleUrl?: string | URL | WebAssembly.Module | Response | Promise<Response>;
 };
 
+export type OpendalBrowserRuntimeAssetOptions = {
+  generatedModuleUrl: string;
+  wasmModuleUrl: string;
+};
+
 type GeneratedOperator = {
   capabilities(): unknown;
   createDir(path: string): Promise<void>;
@@ -123,6 +128,17 @@ export async function createOpendalBrowserOperator(
 
 export function defaultGeneratedModuleUrl() {
   return new URL("../pkg/opendal_wasm_browser.js", import.meta.url).href;
+}
+
+export function defaultWasmModuleUrl() {
+  return new URL("../pkg/opendal_wasm_browser_bg.wasm", import.meta.url).href;
+}
+
+export function defaultOpendalBrowserRuntimeOptions(): OpendalBrowserRuntimeAssetOptions {
+  return {
+    generatedModuleUrl: defaultGeneratedModuleUrl(),
+    wasmModuleUrl: defaultWasmModuleUrl(),
+  };
 }
 
 async function loadGeneratedModule(generatedModuleUrl = defaultGeneratedModuleUrl()) {
