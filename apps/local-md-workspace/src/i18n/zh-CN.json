@@ -240,5 +240,7 @@
   "workspace.googleDriveWorkspace": "Google Drive 工作区",
   "workspace.onedriveWorkspace": "OneDrive 工作区",
   "workspace.placeholder": "开始写作...",
+  "workspace.loadingDirectory": "正在加载 {path}",
+  "workspace.loadingTree": "正在加载工作区",
   "workspace.sharedFileBadge": "共享文件"
 }

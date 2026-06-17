@@ -240,5 +240,7 @@
   "workspace.googleDriveWorkspace": "Google Drive workspace",
   "workspace.onedriveWorkspace": "OneDrive workspace",
   "workspace.placeholder": "Start writing...",
+  "workspace.loadingDirectory": "Loading {path}",
+  "workspace.loadingTree": "Loading workspace",
   "workspace.sharedFileBadge": "Shared file"
 }

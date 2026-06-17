@@ -7,6 +7,7 @@ import {
   type ChangeEvent,
   type RefObject,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { EditorView } from "@codemirror/view";
 import {
   liveMdImageAssets,
@@ -16,6 +17,7 @@ import {
   type LiveMdPlugin,
 } from "@codemirror-treesitter/live-md";
 import { errorToMessage } from "@/lib/workspace/errors";
+import { workspaceQueryKeys } from "@/lib/workspace-query-keys";
 import {
   createWorkspaceImageAssetFromBytes,
   insertImageMarkdown,
@@ -52,8 +54,8 @@ export function useWorkspaceImageAssets({
   workspaceBackend,
   workspaceBackendRef,
 }: UseWorkspaceImageAssetsOptions) {
+  let queryClient = useQueryClient();
   let imageAssetsRef = useRef(new Map<string, WorkspaceImageAsset>());
-  let imageLoadPromisesRef = useRef(new Map<string, Promise<WorkspaceImageAsset | null>>());
   let imageInputRef = useRef<HTMLInputElement | null>(null);
   let [imageAssetVersion, setImageAssetVersion] = useState(0);
 
@@ -83,7 +85,6 @@ export function useWorkspaceImageAssets({
   }, []);
 
   useEffect(() => {
-    imageLoadPromisesRef.current = new Map();
     replaceImageAssets([]);
   }, [replaceImageAssets, workspaceBackend?.id]);
 
@@ -97,26 +98,21 @@ export function useWorkspaceImageAssets({
       let backend = workspaceBackendRef.current;
       if (!backend?.readBytes) return Promise.resolve(null);
 
-      let loadKey = `${backend.id}\0${path}`;
-      let pending = imageLoadPromisesRef.current.get(loadKey);
-      if (pending) return pending;
-
-      let promise = backend
-        .readBytes(path)
+      return queryClient
+        .fetchQuery({
+          queryKey: workspaceQueryKeys.image(backend, path),
+          queryFn: () => backend.readBytes!(path),
+          staleTime: Infinity,
+        })
         .then((bytes) => {
           if (workspaceBackendRef.current?.id != backend.id) return null;
           let asset = createWorkspaceImageAssetFromBytes(path, bytes);
           upsertImageAssets([asset]);
           return asset;
         })
-        .catch(() => null)
-        .finally(() => {
-          imageLoadPromisesRef.current.delete(loadKey);
-        });
-      imageLoadPromisesRef.current.set(loadKey, promise);
-      return promise;
+        .catch(() => null);
     },
-    [upsertImageAssets, workspaceBackendRef],
+    [queryClient, upsertImageAssets, workspaceBackendRef],
   );
 
   let resolveImageSource = useMemo<LiveMdImageSourceResolver>(() => {
