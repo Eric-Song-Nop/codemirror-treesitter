@@ -151,15 +151,14 @@ hook for `renderMarkdownToHtml(...)`; the hook receives the matched target
 node, capture helpers, `slice(...)`, `renderDefault()`, `renderChildren(...)`,
 and `renderInline(...)` so export logic does not depend on editor-only
 decoration semantics. Features run after the standard LiveMD Markdown
-decorations and are reconfigured by `setConfig(...)` or `setMarkdown(...)`.
+decorations and are reconfigured by `setConfig(...)`.
 `config.plugins` is the host-behavior layer: each `LiveMdPlugin` can provide a
 CodeMirror `extension` and an optional `mount` hook that may return cleanup for
-`setConfig(...)`, `setPlugins(...)`, and `destroy()`.
+plugin changes through `setConfig(...)` and for `destroy()`.
 `liveMdTheme(...)`, `liveMdImageAssets(...)`, and `liveMdLinkBehavior(...)`
 cover common host integrations while keeping storage, upload, and navigation
 policy in the host app.
-`markdown` and `plugins` remain supported as compatibility shortcuts on
-`createLiveMdEditor(...)`; `config` takes precedence when both are present.
+`config` is the single host configuration entry point on `createLiveMdEditor(...)`.
 `extensions` remains the direct CodeMirror escape hatch and is applied after
 plugin extensions. `imageSource` maps normalized Markdown image destinations to
 preview URLs, which lets host apps serve local files through blob URLs.
@@ -168,9 +167,8 @@ jumps. Fenced code token colors reuse the active CodeMirror syntax highlighters
 installed through `extensions`.
 `liveMdCodeFenceHighlighting(...)` is still available for advanced hosts that
 need to override fenced-code highlighting explicitly. The controller exposes `view`, `value`,
-`ready`, `setValue()`, `setConfig()`, `setPlugins()`, `setMarkdown()`,
-`setExtensions()`, `setPersistKey()`, `setPlaceholder()`, `setReadOnly()`, and
-`destroy()`.
+`ready`, `setValue()`, `setConfig()`, `setExtensions()`, `setPersistKey()`,
+`setPlaceholder()`, `setReadOnly()`, and `destroy()`.
 
 `prepareLiveMd(options?)` preloads Markdown language support and warms the
 LiveMD Markdown decoration queries before the first editor render. Pass
@@ -233,15 +231,14 @@ HTML exports without leaking workspace, reset, or component-library CSS.
 
 The element reflects the runtime API through `value`, `defaultValue`,
 `persistKey`, `placeholder`, `readOnly`, `dirty`, `selectionStart`,
-`selectionEnd`, `view`, `config`, `markdown`, `plugins`, `extensions`, `ready`,
-`markClean()`, `setSelectionRange(...)`, and `select()`.
+`selectionEnd`, `view`, `config`, `extensions`, `ready`, `markClean()`,
+`setSelectionRange(...)`, and `select()`.
 
 JavaScript hosts can add `liveMdImageSource(...)` and
 ordinary CodeMirror theme extensions to the `extensions` property when a web
 component needs custom image preview URL resolution or themed code-fence token
 highlighting. They can assign `config` for host behavior and query-feature
-configuration, while `plugins` and `markdown` remain available as focused
-property shortcuts. `liveMdCodeFenceHighlighting(...)` can override the active
+configuration. `liveMdCodeFenceHighlighting(...)` can override the active
 syntax highlighters for specialized fenced-code rendering.
 
 The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
