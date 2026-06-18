@@ -107,7 +107,6 @@ export function useWorkspaceImageAssets({
         .fetchQuery({
           queryKey: workspaceQueryKeys.image(backend, path),
           queryFn: () => backend.readBytes!(path),
-          staleTime: Infinity,
         })
         .then((bytes) => {
           if (workspaceBackendRef.current?.id != backend.id) return null;
