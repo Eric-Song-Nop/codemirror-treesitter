@@ -30,8 +30,17 @@ export type MermaidDiagram = {
   source: string;
 };
 
+export type LiveMdWidgetCacheUnit = {
+  readonly id: string;
+  readonly signature: string;
+};
+
+export function liveMdWidgetCacheKey(kind: string, unit: LiveMdWidgetCacheUnit) {
+  return `${kind}:${unit.id}:${unit.signature}`;
+}
+
 export class TaskCheckboxWidget extends WidgetType {
-  private checked: boolean;
+  private readonly checked: boolean;
 
   constructor(checked: boolean) {
     super();
@@ -76,10 +85,10 @@ export class TaskCheckboxWidget extends WidgetType {
 }
 
 export class LatexWidget extends WidgetType {
-  private block: boolean;
-  private displayMode: boolean;
-  private source: string;
-  private tex: string;
+  private readonly block: boolean;
+  private readonly displayMode: boolean;
+  private readonly source: string;
+  private readonly tex: string;
 
   constructor(formula: LatexFormula) {
     super();
@@ -147,7 +156,7 @@ let mermaidPromise: Promise<Mermaid> | null = null;
 let mermaidRenderSequence = 0;
 
 export class MermaidWidget extends WidgetType {
-  private source: string;
+  private readonly source: string;
 
   constructor(diagram: MermaidDiagram) {
     super();
@@ -190,7 +199,7 @@ export class MermaidWidget extends WidgetType {
 }
 
 export class ListMarkerWidget extends WidgetType {
-  private marker: string;
+  private readonly marker: string;
 
   constructor(marker: string) {
     super();
@@ -211,8 +220,8 @@ export class ListMarkerWidget extends WidgetType {
 }
 
 export class ImagePreviewWidget extends WidgetType {
-  private alt: string;
-  private src: string;
+  private readonly alt: string;
+  private readonly src: string;
 
   constructor(alt: string, src: string) {
     super();
@@ -244,8 +253,8 @@ export class ImagePreviewWidget extends WidgetType {
 }
 
 export class TablePreviewWidget extends WidgetType {
-  private table: MarkdownTable;
-  private tableKey: string;
+  private readonly table: MarkdownTable;
+  private readonly tableKey: string;
 
   constructor(table: MarkdownTable) {
     super();
