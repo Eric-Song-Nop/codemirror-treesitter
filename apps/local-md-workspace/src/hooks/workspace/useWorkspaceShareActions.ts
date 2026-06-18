@@ -1,5 +1,4 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
-import { useMutation } from "@tanstack/react-query";
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
 import {
   createOwnerShare,
@@ -12,7 +11,6 @@ import { configuredShareRelayOrigin } from "@/lib/collaboration/share-relay-clie
 import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { readHostSecret } from "@/lib/workspace/share-host";
-import { workspaceMutationKeys } from "@/lib/workspace-query-keys";
 import type { ActiveOwnerShareRecord } from "@/lib/workspace/types";
 import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
 import {
@@ -69,7 +67,7 @@ export function useWorkspaceShareActions({
   stopOwnerShareHost,
   workspaceBackendRef,
 }: UseWorkspaceShareActionsOptions) {
-  let createSharedFileLinkImpl = useCallback(async () => {
+  let createSharedFileLink = useCallback(async () => {
     let backend = workspaceBackendRef.current;
     let file = selectedFileRef.current;
     if (!backend || !file) return;
@@ -110,7 +108,7 @@ export function useWorkspaceShareActions({
     workspaceBackendRef,
   ]);
 
-  let rotateSharedFileLinkImpl = useCallback(async () => {
+  let rotateSharedFileLink = useCallback(async () => {
     let backend = workspaceBackendRef.current;
     let record = activeShareRecord;
     if (!backend || !record || record.revokedAt != null) return;
@@ -174,7 +172,7 @@ export function useWorkspaceShareActions({
     workspaceBackendRef,
   ]);
 
-  let stopSharingFileImpl = useCallback(async () => {
+  let stopSharingFile = useCallback(async () => {
     let backend = workspaceBackendRef.current;
     let record = activeShareRecord;
     if (!backend || !record || record.revokedAt != null) return;
@@ -215,33 +213,6 @@ export function useWorkspaceShareActions({
     stopOwnerShareHost,
     workspaceBackendRef,
   ]);
-
-  let { mutateAsync: createSharedFileLinkMutation } = useMutation({
-    mutationKey: workspaceMutationKeys.shareFile,
-    mutationFn: createSharedFileLinkImpl,
-  });
-
-  let { mutateAsync: rotateSharedFileLinkMutation } = useMutation({
-    mutationKey: workspaceMutationKeys.shareFile,
-    mutationFn: rotateSharedFileLinkImpl,
-  });
-
-  let { mutateAsync: stopSharingFileMutation } = useMutation({
-    mutationKey: workspaceMutationKeys.shareFile,
-    mutationFn: stopSharingFileImpl,
-  });
-
-  let createSharedFileLink = useCallback(
-    () => createSharedFileLinkMutation(),
-    [createSharedFileLinkMutation],
-  );
-
-  let rotateSharedFileLink = useCallback(
-    () => rotateSharedFileLinkMutation(),
-    [rotateSharedFileLinkMutation],
-  );
-
-  let stopSharingFile = useCallback(() => stopSharingFileMutation(), [stopSharingFileMutation]);
 
   return {
     createSharedFileLink,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, type ChangeEvent, type RefObject } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import type { EditorView } from "@codemirror/view";
 import {
   liveMdImageAssets,
@@ -10,7 +10,6 @@ import {
 } from "@codemirror-treesitter/live-md";
 import { useWorkspaceImageAssetStore } from "@/hooks/workspace/useWorkspaceImageAssetStore";
 import { errorToMessage } from "@/lib/workspace/errors";
-import { workspaceMutationKeys } from "@/lib/workspace-query-keys";
 import {
   createWorkspaceImageAssetFromBytes,
   insertImageMarkdown,
@@ -36,11 +35,6 @@ type UseWorkspaceImageAssetsOptions = {
   singleFileSourceRef: RefObject<SingleFileSource | null>;
   workspaceBackend: WorkspaceBackend | null;
   workspaceBackendRef: RefObject<WorkspaceBackend | null>;
-};
-
-type InsertImageFilesInput = {
-  files: File[];
-  options?: { position?: number; view?: EditorView };
 };
 
 export function useWorkspaceImageAssets({
@@ -109,9 +103,8 @@ export function useWorkspaceImageAssets({
     };
   }, [editorDocument.path, imageAssetVersion, loadImageAsset, singleFileSource]);
 
-  let { mutateAsync: insertImageFilesMutation } = useMutation({
-    mutationKey: workspaceMutationKeys.insertImages,
-    mutationFn: async ({ files, options = {} }: InsertImageFilesInput) => {
+  let insertImageFiles = useCallback(
+    async (files: File[], options: { position?: number; view?: EditorView } = {}) => {
       if (singleFileSourceRef.current) return;
 
       let file = selectedFileRef.current;
@@ -146,12 +139,15 @@ export function useWorkspaceImageAssets({
         setBusy(false);
       }
     },
-  });
-
-  let insertImageFiles = useCallback(
-    (files: File[], options: { position?: number; view?: EditorView } = {}) =>
-      insertImageFilesMutation({ files, options }),
-    [insertImageFilesMutation],
+    [
+      editorElementRef,
+      selectedFileRef,
+      setBusy,
+      setErrorMessage,
+      singleFileSourceRef,
+      upsertImageAssets,
+      workspaceBackendRef,
+    ],
   );
 
   let handleEditorImageFiles = useCallback(

@@ -17,22 +17,3 @@ export const workspaceQueryKeys = {
   tree: (backend: Pick<WorkspaceBackend, "id">) =>
     [...workspaceQueryKeys.backend(backend), "tree"] as const,
 };
-
-const workspaceMutationKeyBase = [...workspaceQueryKeys.all, "mutation"] as const;
-
-export const workspaceMutationKeys = {
-  all: workspaceMutationKeyBase,
-  deleteEntry: [...workspaceMutationKeyBase, "delete-entry"] as const,
-  exportHtml: [...workspaceMutationKeyBase, "export-html"] as const,
-  insertImages: [...workspaceMutationKeyBase, "insert-images"] as const,
-  openDropboxWorkspace: [...workspaceMutationKeyBase, "open-dropbox-workspace"] as const,
-  openFile: [...workspaceMutationKeyBase, "open-file"] as const,
-  openWorkspace: [...workspaceMutationKeyBase, "open-workspace"] as const,
-  printPdf: [...workspaceMutationKeyBase, "print-pdf"] as const,
-  refreshWorkspace: [...workspaceMutationKeyBase, "refresh-workspace"] as const,
-  restoreWorkspace: [...workspaceMutationKeyBase, "restore-workspace"] as const,
-  saveAsDropbox: [...workspaceMutationKeyBase, "save-as-dropbox"] as const,
-  saveAsLocal: [...workspaceMutationKeyBase, "save-as-local"] as const,
-  shareFile: [...workspaceMutationKeyBase, "share-file"] as const,
-  submitEntryDialog: [...workspaceMutationKeyBase, "submit-entry-dialog"] as const,
-};

@@ -1,5 +1,4 @@
 import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
-import { useMutation } from "@tanstack/react-query";
 import type { VersionVector } from "loro-crdt";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { useWorkspaceSaveActions } from "@/hooks/workspace/useWorkspaceSaveActions";
@@ -25,7 +24,6 @@ import {
   rememberLastSingleFileDraft,
 } from "@/lib/single-file-draft-store";
 import { errorToMessage } from "@/lib/workspace/errors";
-import { workspaceMutationKeys } from "@/lib/workspace-query-keys";
 import { createDocumentSession, type DocumentSession } from "@/lib/workspace/document-session";
 import { createSingleFileDraftBackend, singleFileMarkdownNode } from "@/lib/workspace/single-file";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
@@ -44,12 +42,6 @@ type MutableRef<T> = {
 };
 
 type CloudRedirectDraft = DropboxRedirectDraft | GoogleDriveRedirectDraft | OneDriveRedirectDraft;
-
-type LoadFileInput = {
-  backend: WorkspaceBackend;
-  file: MarkdownFileNode;
-  options?: { saveCurrent?: boolean };
-};
 
 type StartOwnerShareHost = (
   record: OwnerShareRecord,
@@ -314,9 +306,8 @@ export function useWorkspaceDocumentActions({
     void clearLastSingleFileDraft(source.draftId).catch(() => {});
   }, []);
 
-  let { mutateAsync: openSingleFileDraftMutation } = useMutation({
-    mutationKey: workspaceMutationKeys.openFile,
-    mutationFn: async (
+  let openSingleFileDraft = useCallback(
+    async (
       options: {
         reuseLast?: boolean;
         saveCurrent?: boolean;
@@ -350,22 +341,15 @@ export function useWorkspaceDocumentActions({
         setBusy(false);
       }
     },
-  });
-
-  let openSingleFileDraft = useCallback(
-    (
-      options: {
-        reuseLast?: boolean;
-        saveCurrent?: boolean;
-        shouldContinue?: () => boolean;
-      } = {},
-    ) => openSingleFileDraftMutation(options),
-    [openSingleFileDraftMutation],
+    [activateSingleFileDocument, saveCurrentFile, setBusy, setErrorMessage, setRetryLoadPath],
   );
 
-  let { mutateAsync: loadFileMutation } = useMutation({
-    mutationKey: workspaceMutationKeys.openFile,
-    mutationFn: async ({ backend, file, options = {} }: LoadFileInput) => {
+  let loadFile = useCallback(
+    async (
+      backend: WorkspaceBackend,
+      file: MarkdownFileNode,
+      options: { saveCurrent?: boolean } = {},
+    ) => {
       let requestId = ++loadFileRequestRef.current;
       let isCurrentLoadRequest = () => loadFileRequestRef.current == requestId;
 
@@ -452,12 +436,38 @@ export function useWorkspaceDocumentActions({
         }
       }
     },
-  });
-
-  let loadFile = useCallback(
-    (backend: WorkspaceBackend, file: MarkdownFileNode, options: { saveCurrent?: boolean } = {}) =>
-      loadFileMutation({ backend, file, options }),
-    [loadFileMutation],
+    [
+      beginDocumentTransition,
+      bindCollabDocumentBroadcast,
+      cleanValueRef,
+      collabDocumentRef,
+      dirtyRef,
+      disposeActiveCollabDocument,
+      editVersionRef,
+      editorValueRef,
+      invalidateActiveDocumentSave,
+      isOwnerShareHostPath,
+      loadFileRequestRef,
+      localFileHandleRef,
+      saveCurrentFile,
+      scheduleAutoSave,
+      selectedFileBackendRef,
+      selectedFileRef,
+      setActiveShareRecord,
+      setBusy,
+      setCollabDocument,
+      setCreatedShare,
+      setEditorDocument,
+      setErrorMessage,
+      setRetryLoadPath,
+      setSaveStateSynced,
+      setSelectedFile,
+      setSingleFileSource,
+      setTreeSelection,
+      singleFileSourceRef,
+      startOwnerShareHost,
+      stopOwnerShareHost,
+    ],
   );
 
   let restoreCloudRedirectEditorDraft = useCallback(
