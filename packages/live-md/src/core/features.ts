@@ -11,11 +11,6 @@ export type LiveMdMarkdownConfig = {
   features?: readonly LiveMdMarkdownFeature[];
 };
 
-export type LiveMdFeatureDocRange = {
-  from: number;
-  to: number;
-};
-
 export type LiveMdFeatureDecoration = Decoration | string;
 
 export type LiveMdFeatureReplaceOptions = {
@@ -41,7 +36,6 @@ export type LiveMdFeatureDecorateContext = {
   node: (name: string) => SyntaxNode | null;
   nodes: (name: string) => readonly SyntaxNode[];
   rangeTouchesActiveLine: (from: number, to: number) => boolean;
-  ranges: readonly LiveMdFeatureDocRange[];
   slice: (node: SyntaxNode) => string;
   state: EditorState;
 };

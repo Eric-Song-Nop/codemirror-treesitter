@@ -31,8 +31,6 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Render live Markdown decorations for headings, lists, task checkboxes,
   blockquotes, inline emphasis/strong/strike/code/link syntax, tables, images,
   thematic breaks, LaTeX, Mermaid diagrams, and code fences.
-- Patch decorations incrementally with dirty-range analysis so edits avoid full
-  document recomputation where possible.
 - Support Shadow DOM styling, CSS custom properties, persistence, readonly
   mode, placeholder text, focus/blur, selection APIs, dirty tracking, ready and
   error events, and fixtures for demos/benchmarks.
@@ -271,12 +269,11 @@ starts `prepareLiveMd()` in the background, and dispatches a global
 - `src/core/editor.ts`: editor controller, persistence, read-only state,
   placeholders, and async language loading.
 - `src/core/extension.ts`, `src/core/decorations.ts`,
-  `src/core/dirty-ranges.ts`, `src/core/features.ts`, `src/core/widgets.ts`,
-  `src/core/images.ts`, `src/core/links.ts`, `src/core/search.ts`, and
-  `src/core/languages.ts`: live Markdown extension, query-based decoration
-  pipeline, dirty-range patching, feature registration, image source
-  resolution, link interactions, search, widget rendering, and language
-  loading.
+  `src/core/features.ts`, `src/core/widgets.ts`, `src/core/images.ts`,
+  `src/core/links.ts`, `src/core/search.ts`, and `src/core/languages.ts`: live
+  Markdown extension, full-document query-based decoration analysis, feature
+  registration, image source resolution, link interactions, search, widget
+  rendering, and language loading.
 - `src/core/markdown-html.ts`: Tree-sitter Markdown-to-HTML renderer and scoped
   document CSS helpers for hosts that need sanitized document export.
 - `src/element/*`: custom element implementation and style installation.
@@ -317,5 +314,5 @@ vp run @codemirror-treesitter/live-md#build
 ```
 
 The LiveMD test suite covers web component behavior, readonly commands,
-dirty-range expansion, feature registration, code fences, LaTeX, Mermaid,
-paragraph breaks, Markdown HTML rendering, and style installation.
+full-document decoration analysis, feature registration, code fences, LaTeX,
+Mermaid, paragraph breaks, Markdown HTML rendering, and style installation.

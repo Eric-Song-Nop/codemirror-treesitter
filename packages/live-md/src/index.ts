@@ -10,7 +10,6 @@ export {
   type LiveMdMarkdownFeature,
   type LiveMdFeatureDecorateContext,
   type LiveMdFeatureDecoration,
-  type LiveMdFeatureDocRange,
   type LiveMdFeatureHtmlRenderContext,
   type LiveMdFeatureHtmlRenderResult,
   type LiveMdFeatureReplaceOptions,
