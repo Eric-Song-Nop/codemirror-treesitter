@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { useI18n } from "@/lib/i18n";
+import { PendingButtonContent } from "./PendingButtonContent";
 
 type DeleteEntryDialogProps = {
   busy: boolean;
@@ -56,7 +57,9 @@ export function DeleteEntryDialog({
               onConfirm();
             }}
           >
-            {t("actions.delete")}
+            <PendingButtonContent pending={busy} pendingLabel={t("actions.deleting")}>
+              {t("actions.delete")}
+            </PendingButtonContent>
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

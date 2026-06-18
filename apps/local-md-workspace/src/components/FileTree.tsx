@@ -1,6 +1,7 @@
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { FileTree as TreesFileTree } from "@pierre/trees";
 import { basename, dirname, join, relative } from "pathe";
+import { Spinner } from "@/components/ui/spinner";
 import type {
   MarkdownDirectoryNode,
   MarkdownFileNode,
@@ -58,6 +59,7 @@ export const FileTree = memo(function FileTree({
   let loadingDirectoryPathsRef = useRef(new Set<string>());
   let modelRef = useRef<TreesFileTree | null>(null);
   let syncingSelectionRef = useRef(false);
+  let [loadingDirectoryPath, setLoadingDirectoryPath] = useState<string | null>(null);
   latestSelectionRef.current = latestSelection;
 
   useEffect(() => {
@@ -120,10 +122,16 @@ export const FileTree = memo(function FileTree({
             !loadingDirectoryPaths.has(target.path)
           ) {
             loadingDirectoryPaths.add(target.path);
+            setLoadingDirectoryPath(target.path);
             void latest
               .onLoadDirectory(target.path)
               .finally(() => {
                 loadingDirectoryPaths.delete(target.path);
+                setLoadingDirectoryPath((currentPath) =>
+                  currentPath == target.path
+                    ? (loadingDirectoryPaths.values().next().value ?? null)
+                    : currentPath,
+                );
               })
               .catch(() => {});
           }
@@ -178,7 +186,19 @@ export const FileTree = memo(function FileTree({
 
   if (!root) return null;
 
-  return <div ref={containerRef} className="local-md-file-tree min-h-0 flex-1 overflow-auto" />;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {loadingDirectoryPath && (
+        <div className="flex h-8 shrink-0 items-center gap-2 border-b border-sidebar-border px-3 text-xs text-sidebar-foreground/70">
+          <Spinner aria-hidden className="size-3" />
+          <span className="min-w-0 truncate">
+            {t("workspace.loadingDirectory", { path: loadingDirectoryPath })}
+          </span>
+        </div>
+      )}
+      <div ref={containerRef} className="local-md-file-tree min-h-0 flex-1 overflow-auto" />
+    </div>
+  );
 });
 
 function shouldLoadDirectory(root: MarkdownDirectoryNode | null, path: string) {

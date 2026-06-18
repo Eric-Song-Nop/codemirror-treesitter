@@ -1,4 +1,4 @@
-import { useCallback, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
 import type { VersionVector } from "loro-crdt";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { useWorkspaceSaveActions } from "@/hooks/workspace/useWorkspaceSaveActions";
@@ -127,6 +127,8 @@ export function useWorkspaceDocumentActions({
   startOwnerShareHost,
   stopOwnerShareHost,
 }: UseWorkspaceDocumentActionsOptions) {
+  let [loadingFilePath, setLoadingFilePath] = useState<string | null>(null);
+
   let invalidateActiveDocumentSave = useCallback(() => {
     activeDocumentGenerationRef.current += 1;
     saveOperationRef.current += 1;
@@ -351,6 +353,7 @@ export function useWorkspaceDocumentActions({
       let requestId = ++loadFileRequestRef.current;
       let isCurrentLoadRequest = () => loadFileRequestRef.current == requestId;
 
+      setLoadingFilePath(file.path);
       setBusy(true);
       setErrorMessage("");
       setRetryLoadPath(null);
@@ -427,7 +430,10 @@ export function useWorkspaceDocumentActions({
         setErrorMessage(errorToMessage(error));
         setRetryLoadPath(file.path);
       } finally {
-        if (isCurrentLoadRequest()) setBusy(false);
+        if (isCurrentLoadRequest()) {
+          setLoadingFilePath(null);
+          setBusy(false);
+        }
       }
     },
     [
@@ -562,6 +568,7 @@ export function useWorkspaceDocumentActions({
     ensureSelectedCollabDocument,
     handleEditorInput,
     loadFile,
+    loadingFilePath,
     openSingleFileDraft,
     restoreCloudRedirectEditorDraft,
     saveCurrentFile,

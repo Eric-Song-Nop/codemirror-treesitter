@@ -1,9 +1,9 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import type { AccessFileHandle } from "@/lib/file-system";
 import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
 import {
-  buildMarkdownDirectoryFromEntries,
   findMarkdownFile,
   findMarkdownDirectory,
   replaceMarkdownDirectory,
@@ -11,8 +11,9 @@ import {
   type MarkdownFileNode,
   type WorkspaceBackend,
 } from "@/lib/workspace-backend";
-import { basename, dirname } from "pathe";
+import { dirname } from "pathe";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
+import { readWorkspaceDirectory, readWorkspaceTree } from "@/lib/workspace/workspace-data-cache";
 import type { SingleFileSource } from "@/lib/workspace/types";
 
 type MutableRef<T> = {
@@ -44,6 +45,8 @@ export function useWorkspaceTree({
   setTreeSelection,
   singleFileSourceRef,
 }: UseWorkspaceTreeOptions) {
+  let queryClient = useQueryClient();
+
   let loadTree = useCallback(
     async (
       backend: WorkspaceBackend,
@@ -52,8 +55,9 @@ export function useWorkspaceTree({
     ) => {
       let nextTree = await loadSelectedPathAncestors(
         backend,
-        await backend.readTree(),
+        await readWorkspaceTree(queryClient, backend),
         nextSelectedPath ?? null,
+        queryClient,
       );
       setTree(nextTree);
 
@@ -87,6 +91,7 @@ export function useWorkspaceTree({
       setTree,
       setTreeSelection,
       singleFileSourceRef,
+      queryClient,
     ],
   );
 
@@ -118,13 +123,13 @@ export function useWorkspaceTree({
 
   let loadDirectory = useCallback(
     async (backend: WorkspaceBackend, path: string) => {
-      let directory = await readBackendDirectory(backend, path);
+      let directory = await readWorkspaceDirectory(queryClient, backend, path);
       if (!directory) return;
       setTree((currentTree) =>
         currentTree ? replaceMarkdownDirectory(currentTree, directory) : currentTree,
       );
     },
-    [setTree],
+    [queryClient, setTree],
   );
 
   return {
@@ -139,6 +144,7 @@ async function loadSelectedPathAncestors(
   backend: WorkspaceBackend,
   tree: MarkdownDirectoryNode,
   selectedPath: string | null,
+  queryClient: QueryClient,
 ) {
   if (!selectedPath || findMarkdownFile(tree, selectedPath)) return tree;
 
@@ -147,19 +153,13 @@ async function loadSelectedPathAncestors(
     if (!directory) break;
     if (directory.childrenLoaded) continue;
 
-    let loadedDirectory = await readBackendDirectory(backend, directoryPath);
+    let loadedDirectory = await readWorkspaceDirectory(queryClient, backend, directoryPath);
     if (!loadedDirectory) break;
     tree = replaceMarkdownDirectory(tree, loadedDirectory);
     if (findMarkdownFile(tree, selectedPath)) break;
   }
 
   return tree;
-}
-
-async function readBackendDirectory(backend: WorkspaceBackend, path: string) {
-  if (!backend.listEntries) return null;
-  let entries = await backend.listEntries(path);
-  return buildMarkdownDirectoryFromEntries(directoryName(path, backend.name), path, entries);
 }
 
 function ancestorDirectoryPaths(filePath: string) {
@@ -173,8 +173,4 @@ function ancestorDirectoryPaths(filePath: string) {
     paths.push(current);
   }
   return paths;
-}
-
-function directoryName(path: string, rootName: string) {
-  return path ? basename(path) : rootName;
 }

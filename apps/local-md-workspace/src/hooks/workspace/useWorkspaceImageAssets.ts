@@ -1,12 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type RefObject,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, type ChangeEvent, type RefObject } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { EditorView } from "@codemirror/view";
 import {
   liveMdImageAssets,
@@ -15,15 +8,19 @@ import {
   type LiveMdImageSourceResolver,
   type LiveMdPlugin,
 } from "@codemirror-treesitter/live-md";
+import { useWorkspaceImageAssetStore } from "@/hooks/workspace/useWorkspaceImageAssetStore";
 import { errorToMessage } from "@/lib/workspace/errors";
 import {
   createWorkspaceImageAssetFromBytes,
   insertImageMarkdown,
   isImageFile,
   isImageFileName,
-  revokeImageAssetUrls,
 } from "@/lib/workspace/images";
 import { resolveMarkdownImagePath } from "@/lib/workspace/markdown-images";
+import {
+  readWorkspaceImageBytes,
+  removeWorkspaceImageQueries,
+} from "@/lib/workspace/workspace-data-cache";
 import type { EditorDocument, SingleFileSource, WorkspaceImageAsset } from "@/lib/workspace/types";
 import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
 
@@ -52,71 +49,46 @@ export function useWorkspaceImageAssets({
   workspaceBackend,
   workspaceBackendRef,
 }: UseWorkspaceImageAssetsOptions) {
-  let imageAssetsRef = useRef(new Map<string, WorkspaceImageAsset>());
-  let imageLoadPromisesRef = useRef(new Map<string, Promise<WorkspaceImageAsset | null>>());
+  let queryClient = useQueryClient();
+  let {
+    clear: clearImageAssets,
+    get: getImageAsset,
+    upsert: upsertImageAssets,
+    version: imageAssetVersion,
+  } = useWorkspaceImageAssetStore();
   let imageInputRef = useRef<HTMLInputElement | null>(null);
-  let [imageAssetVersion, setImageAssetVersion] = useState(0);
-
-  useEffect(
-    () => () => {
-      revokeImageAssetUrls(imageAssetsRef.current);
-      imageAssetsRef.current = new Map();
-    },
-    [],
-  );
-
-  let replaceImageAssets = useCallback((nextAssets: WorkspaceImageAsset[]) => {
-    revokeImageAssetUrls(imageAssetsRef.current);
-    imageAssetsRef.current = new Map(nextAssets.map((asset) => [asset.path, asset]));
-    setImageAssetVersion((version) => version + 1);
-  }, []);
-
-  let upsertImageAssets = useCallback((nextAssets: WorkspaceImageAsset[]) => {
-    let assets = new Map(imageAssetsRef.current);
-    for (let asset of nextAssets) {
-      let previous = assets.get(asset.path);
-      if (previous) URL.revokeObjectURL(previous.url);
-      assets.set(asset.path, asset);
-    }
-    imageAssetsRef.current = assets;
-    setImageAssetVersion((version) => version + 1);
-  }, []);
+  let previousWorkspaceBackendRef = useRef<WorkspaceBackend | null>(null);
 
   useEffect(() => {
-    imageLoadPromisesRef.current = new Map();
-    replaceImageAssets([]);
-  }, [replaceImageAssets, workspaceBackend?.id]);
+    let previousBackend = previousWorkspaceBackendRef.current;
+    if (previousBackend && previousBackend.id != workspaceBackend?.id) {
+      removeWorkspaceImageQueries(queryClient, previousBackend);
+    }
+    previousWorkspaceBackendRef.current = workspaceBackend;
+    clearImageAssets();
+  }, [clearImageAssets, queryClient, workspaceBackend]);
 
   let loadImageAsset = useCallback(
     (path: string) => {
       if (!isImageFileName(path)) return Promise.resolve(null);
 
-      let cached = imageAssetsRef.current.get(path);
+      let cached = getImageAsset(path);
       if (cached) return Promise.resolve(cached);
 
       let backend = workspaceBackendRef.current;
-      if (!backend?.readBytes) return Promise.resolve(null);
+      if (!backend) return Promise.resolve(null);
 
-      let loadKey = `${backend.id}\0${path}`;
-      let pending = imageLoadPromisesRef.current.get(loadKey);
-      if (pending) return pending;
-
-      let promise = backend
-        .readBytes(path)
+      return readWorkspaceImageBytes(queryClient, backend, path)
         .then((bytes) => {
+          if (!bytes) return null;
           if (workspaceBackendRef.current?.id != backend.id) return null;
           let asset = createWorkspaceImageAssetFromBytes(path, bytes);
           upsertImageAssets([asset]);
           return asset;
         })
-        .catch(() => null)
-        .finally(() => {
-          imageLoadPromisesRef.current.delete(loadKey);
-        });
-      imageLoadPromisesRef.current.set(loadKey, promise);
-      return promise;
+        .catch(() => null);
     },
-    [upsertImageAssets, workspaceBackendRef],
+    [getImageAsset, queryClient, upsertImageAssets, workspaceBackendRef],
   );
 
   let resolveImageSource = useMemo<LiveMdImageSourceResolver>(() => {
@@ -124,7 +96,7 @@ export function useWorkspaceImageAssets({
       if (singleFileSource) return source;
       let imagePath = resolveMarkdownImagePath(source, editorDocument.path);
       if (!imagePath) return source;
-      let asset = imageAssetsRef.current.get(imagePath);
+      let asset = getImageAsset(imagePath);
       if (asset) return asset.url;
       void loadImageAsset(imagePath);
       return source;
@@ -206,11 +178,11 @@ export function useWorkspaceImageAssets({
   let resolveImageAssetFile = useCallback(
     async (path: string) => {
       if (singleFileSourceRef.current) return null;
-      let cached = imageAssetsRef.current.get(path);
+      let cached = getImageAsset(path);
       if (cached) return cached.file;
       return (await loadImageAsset(path))?.file ?? null;
     },
-    [loadImageAsset, singleFileSourceRef],
+    [getImageAsset, loadImageAsset, singleFileSourceRef],
   );
 
   return {

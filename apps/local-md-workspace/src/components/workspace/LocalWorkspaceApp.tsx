@@ -271,6 +271,7 @@ export function LocalWorkspaceApp() {
     ensureSelectedCollabDocument,
     handleEditorInput,
     loadFile,
+    loadingFilePath,
     openSingleFileDraft,
     restoreCloudRedirectEditorDraft,
     saveCurrentFile,
@@ -623,6 +624,9 @@ export function LocalWorkspaceApp() {
           <WorkspaceEditorPane
             liveMdConfig={selectedFile ? liveMdConfig : emptyLiveMdConfig}
             document={editorDocument}
+            loadingLabel={
+              loadingFilePath ? t("workspace.loadingFile", { path: loadingFilePath }) : undefined
+            }
             placeholder={t("workspace.placeholder")}
             selected={Boolean(selectedFile) && fileDialogMode == null}
             onEditorReady={handleEditorReady}

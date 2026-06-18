@@ -7,6 +7,8 @@ import {
 import { GroveMark } from "@/components/GroveMark";
 import { ThemeSelector } from "@/components/ThemeSelector";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace-backend";
 import { useI18n } from "@/lib/i18n";
@@ -124,6 +126,8 @@ export function WorkspaceSidebar({
           onSelectEntry={onSelectEntry}
           onSelectFile={onSelectFile}
         />
+      ) : workspaceOpen && busy ? (
+        <WorkspaceTreeSkeleton label={t("workspace.loadingTree")} />
       ) : (
         <WorkspaceLauncher
           browserSupported={browserSupported}
@@ -146,6 +150,26 @@ export function WorkspaceSidebar({
         onToggleLanguage={onToggleLanguage}
       />
     </aside>
+  );
+}
+
+function WorkspaceTreeSkeleton({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+      <div className="flex h-8 items-center gap-2 text-xs text-sidebar-foreground/70">
+        <Spinner aria-hidden className="size-3" />
+        <span>{label}</span>
+      </div>
+      {Array.from({ length: 10 }, (_, index) => (
+        <Skeleton
+          key={index}
+          className={cn(
+            "h-5",
+            index % 3 == 0 ? "w-3/5" : index % 3 == 1 ? "ml-4 w-4/5" : "ml-8 w-1/2",
+          )}
+        />
+      ))}
+    </div>
   );
 }
 
