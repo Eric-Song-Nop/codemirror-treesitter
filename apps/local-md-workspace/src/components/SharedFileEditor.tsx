@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type { LiveMdConfig } from "@codemirror-treesitter/live-md";
 import { liveMdLoroCollaborationPlugin } from "@codemirror-treesitter/live-md-loro";
-import { useQuery } from "@tanstack/react-query";
 import { AlertCircleIcon, CloudIcon, RefreshCwIcon, WifiIcon, WifiOffIcon } from "lucide-react";
-import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
+import { LoroDoc, UndoManager, type VersionVector } from "loro-crdt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
@@ -13,19 +12,13 @@ import { PendingButtonContent } from "@/components/workspace/PendingButtonConten
 import { GroveMark } from "@/components/GroveMark";
 import { LiveMdEditor } from "@/components/LiveMdEditor";
 import { ThemeSelector } from "@/components/ThemeSelector";
-import {
-  ShareRelayConnection,
-  type ShareRelayConnectionState,
-  type ShareRelayStatus,
-} from "@/lib/collaboration/share-relay-connection";
-import {
-  configuredShareRelayOrigin,
-  createRelayShareSession,
-} from "@/lib/collaboration/share-relay-client";
+import type { ShareRelayConnectionState } from "@/lib/collaboration/share-relay-connection";
+import { configuredShareRelayOrigin } from "@/lib/collaboration/share-relay-client";
 import { parseShareLink, type ShareLinkParts } from "@/lib/collaboration/share-identity";
+import { useSharedFileConnection } from "@/hooks/shared/useSharedFileConnection";
+import { useSharedFileSession } from "@/hooks/shared/useSharedFileSession";
 import { translateKnownMessage, useI18n, type TFunction, type Locale } from "@/lib/i18n";
 import { useLiveMdPreloadError } from "@/lib/live-md-preload";
-import { workspaceQueryKeys } from "@/lib/workspace-query-keys";
 
 type SharedFileRoute =
   | {
@@ -52,168 +45,58 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
   let canJoinSharedFile = route.kind == "share" && Boolean(relayOrigin);
   let [doc] = useState(() => new LoroDoc());
   let [undoManager] = useState(() => new UndoManager(doc, {}));
-  let [sessionReady, setSessionReady] = useState(false);
-  let [displayName, setDisplayName] = useState("Shared file");
-  let [connectionState, setConnectionState] = useState<ShareRelayConnectionState>("connecting");
-  let [shareStatus, setShareStatus] = useState<ShareRelayStatus | null>(null);
-  let [latestLocalVersion, setLatestLocalVersion] = useState<VersionVector | null>(null);
-  let [hostSavedVersion, setHostSavedVersion] = useState<VersionVector | null>(null);
-  let [lastHostSavedAt, setLastHostSavedAt] = useState<number | null>(null);
-  let [errorMessage, setErrorMessage] = useState("");
-  let connectionRef = useRef<ShareRelayConnection | null>(null);
   let liveMdConfig = useMemo<LiveMdConfig>(
     () => ({ plugins: [liveMdLoroCollaborationPlugin({ doc, undoManager })] }),
     [doc, undoManager],
   );
-  let sharedSessionQuery = useQuery({
+  let sharedSession = useSharedFileSession({
     enabled: canJoinSharedFile,
-    gcTime: 0,
-    queryFn: ({ signal }) => {
-      if (!canJoinSharedFile) {
-        throw new Error("Shared file relay is not configured.");
-      }
-      let fetchWithAbort: typeof fetch = (input, init) => fetch(input, { ...init, signal });
-      return createRelayShareSession(relayOrigin, shareId, "guest", guestSecret, fetchWithAbort);
-    },
-    queryKey: canJoinSharedFile
-      ? workspaceQueryKeys.sharedSession(relayOrigin, shareId, sharedSecretCacheToken(guestSecret))
-      : workspaceQueryKeys.sharedSession("", "invalid", ""),
-    refetchOnReconnect: false,
-    retry: false,
-    staleTime: Number.POSITIVE_INFINITY,
+    guestSecret,
+    relayOrigin,
+    shareId,
   });
-  let joiningSharedFile = canJoinSharedFile && sharedSessionQuery.isFetching && !sessionReady;
+  let disabledConnectionMessage =
+    invalidRouteMessage ||
+    (route.kind == "share" && !relayOrigin ? "Shared file relay is not configured." : "");
+  let sharedConnection = useSharedFileConnection({
+    canConnect: canJoinSharedFile,
+    disabledErrorMessage: disabledConnectionMessage,
+    doc,
+    joining: sharedSession.isJoining,
+    relayOrigin,
+    session: sharedSession.session,
+    sessionErrorMessage: sharedSession.errorMessage,
+    sessionKey: sharedSession.guestSecretToken,
+    shareId,
+  });
+  let joiningSharedFile =
+    canJoinSharedFile && sharedSession.isJoining && !sharedConnection.sessionReady;
   let retrySharedFileConnection = () => {
-    if (sessionReady) {
-      connectionRef.current?.connect();
+    if (sharedConnection.sessionReady) {
+      sharedConnection.reconnect();
       return;
     }
-    void sharedSessionQuery.refetch();
+    sharedSession.retry();
   };
 
-  useEffect(
-    () =>
-      doc.subscribeLocalUpdates((bytes) => {
-        connectionRef.current?.enqueueDocumentUpdate(bytes);
-        setLatestLocalVersion(doc.oplogVersion());
-      }),
-    [doc],
-  );
-
-  useEffect(() => {
-    setDisplayName("Shared file");
-    setShareStatus(null);
-    setSessionReady(false);
-    setLatestLocalVersion(null);
-    setHostSavedVersion(null);
-    setLastHostSavedAt(null);
-
-    if (invalidRouteMessage) {
-      setConnectionState("offline");
-      setErrorMessage(invalidRouteMessage);
-      setSessionReady(false);
-      return;
-    }
-
-    if (!relayOrigin) {
-      setConnectionState("offline");
-      setErrorMessage("Shared file relay is not configured.");
-      setSessionReady(false);
-      return;
-    }
-
-    setErrorMessage("");
-  }, [guestSecret, invalidRouteMessage, relayOrigin, shareId]);
-
-  useEffect(() => {
-    if (!canJoinSharedFile || !sharedSessionQuery.isFetching || sessionReady) return;
-
-    setConnectionState("connecting");
-    setSessionReady(false);
-    setDisplayName("Shared file");
-    setShareStatus(null);
-    setLatestLocalVersion(null);
-    setHostSavedVersion(null);
-    setLastHostSavedAt(null);
-  }, [canJoinSharedFile, sessionReady, sharedSessionQuery.isFetching]);
-
-  useEffect(() => {
-    if (!sharedSessionQuery.error) return;
-    setConnectionState("offline");
-    setErrorMessage(errorToMessage(sharedSessionQuery.error));
-    setSessionReady(false);
-  }, [sharedSessionQuery.error]);
-
-  useEffect(() => {
-    if (!canJoinSharedFile || !sharedSessionQuery.data) return;
-
-    let session = sharedSessionQuery.data;
-    setErrorMessage("");
-    setDisplayName(session.displayName);
-    setShareStatus({
-      displayName: session.displayName,
-      expiresAt: session.shareExpiresAt,
-      guestCount: session.guestCount,
-      hostOnline: session.hostOnline,
-      peerCount: session.peerCount,
-      pendingHostSave: session.pendingHostSave,
-      revokedAt: null,
-      shareId: session.shareId,
-    });
-
-    let connection = new ShareRelayConnection({
-      clientId: getOrCreateSharedFileClientId(),
-      doc,
-      onConnectionState: setConnectionState,
-      onError: setErrorMessage,
-      onHostSaveAck: (payload) => {
-        let ack = parseHostSaveAck(payload);
-        if (!ack || ack.shareId != shareId) return;
-        setLastHostSavedAt(ack.savedAt);
-        setHostSavedVersion(ack.versionVector);
-      },
-      onShareStatus: (status) => {
-        setShareStatus(status);
-        if (status.displayName) setDisplayName(status.displayName);
-      },
-      relayOrigin,
-      sessionToken: session.sessionToken,
-      shareId,
-    });
-    connectionRef.current = connection;
-    connection.connect();
-    setSessionReady(true);
-
-    return () => {
-      if (connectionRef.current == connection) connectionRef.current = null;
-      connection.close();
-    };
-  }, [canJoinSharedFile, doc, relayOrigin, shareId, sharedSessionQuery.data]);
-
-  useEffect(() => {
-    let handleOnline = () => connectionRef.current?.connect();
-    let handleOffline = () => connectionRef.current?.pause();
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, []);
-
-  let statusLabel = connectionStatusLabel(connectionState, t);
-  let expiresAt = shareStatus?.expiresAt ?? null;
+  let statusLabel = connectionStatusLabel(sharedConnection.connectionState, t);
+  let expiresAt = sharedConnection.shareStatus?.expiresAt ?? null;
   let saveStatus = guestSaveStatus({
-    hostSavedVersion,
-    latestLocalVersion,
+    hostSavedVersion: sharedConnection.hostSavedVersion,
+    latestLocalVersion: sharedConnection.latestLocalVersion,
     t,
   });
   let saveStatusTitle =
-    saveStatus == t("shared.savedToHost") && lastHostSavedAt
-      ? t("shared.hostSavedAt", { time: formatTimestamp(lastHostSavedAt, locale) })
+    saveStatus == t("shared.savedToHost") && sharedConnection.lastHostSavedAt
+      ? t("shared.hostSavedAt", {
+          time: formatTimestamp(sharedConnection.lastHostSavedAt, locale),
+        })
       : undefined;
-  let displayNameLabel = displayName == "Shared file" ? t("shared.title") : displayName;
-  let visibleErrorMessage = errorMessage || liveMdPreloadError;
+  let displayNameLabel =
+    sharedConnection.displayName == "Shared file"
+      ? t("shared.title")
+      : sharedConnection.displayName;
+  let visibleErrorMessage = sharedConnection.errorMessage || liveMdPreloadError;
 
   return (
     <TooltipProvider>
@@ -224,16 +107,16 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
             <div className="min-w-0 truncate text-sm font-medium">{displayNameLabel}</div>
           </div>
           <Badge variant="secondary">
-            {connectionState == "connected" ? (
+            {sharedConnection.connectionState == "connected" ? (
               <WifiIcon data-icon="inline-start" />
-            ) : connectionState == "connecting" ? (
+            ) : sharedConnection.connectionState == "connecting" ? (
               <RefreshCwIcon className="animate-spin" data-icon="inline-start" />
             ) : (
               <WifiOffIcon data-icon="inline-start" />
             )}
             {statusLabel}
           </Badge>
-          {shareStatus?.hostOnline ? (
+          {sharedConnection.shareStatus?.hostOnline ? (
             <Badge variant="secondary">
               <CloudIcon data-icon="inline-start" />
               {t("shared.hostOnline")}
@@ -241,8 +124,10 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
           ) : (
             <Badge variant="outline">{t("shared.hostOffline")}</Badge>
           )}
-          {shareStatus && shareStatus.peerCount > 0 && (
-            <Badge variant="outline">{formatPeerCount(shareStatus.peerCount, t)}</Badge>
+          {sharedConnection.shareStatus && sharedConnection.shareStatus.peerCount > 0 && (
+            <Badge variant="outline">
+              {formatPeerCount(sharedConnection.shareStatus.peerCount, t)}
+            </Badge>
           )}
           {saveStatus && (
             <Badge title={saveStatusTitle} variant="secondary">
@@ -256,7 +141,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
           <div className="flex shrink-0 items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
             <AlertCircleIcon className="size-4 shrink-0" />
             <div className="min-w-0 flex-1">{translateKnownMessage(visibleErrorMessage, t)}</div>
-            {errorMessage && route.kind == "share" && (
+            {sharedConnection.errorMessage && route.kind == "share" && (
               <Button
                 disabled={joiningSharedFile}
                 size="sm"
@@ -277,7 +162,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
           </div>
         )}
 
-        {sessionReady ? (
+        {sharedConnection.sessionReady ? (
           <section className="min-h-0 flex-1 overflow-hidden">
             <LiveMdEditor
               config={liveMdConfig}
@@ -351,10 +236,6 @@ function guestSaveStatus({
   return t("shared.waitingForHost");
 }
 
-function errorToMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function formatTimestamp(value: number, locale: Locale) {
   return new Intl.DateTimeFormat(locale, {
     dateStyle: "medium",
@@ -370,68 +251,7 @@ function formatPeerCount(count: number, t: TFunction) {
       });
 }
 
-function parseHostSaveAck(payload: Uint8Array) {
-  try {
-    let value = JSON.parse(new TextDecoder().decode(payload)) as {
-      savedAt?: unknown;
-      shareId?: unknown;
-      versionVector?: unknown;
-    };
-    if (typeof value.savedAt != "number" || typeof value.shareId != "string") return null;
-    let versionVector = parseVersionVector(value.versionVector);
-    if (!versionVector) return null;
-    return {
-      savedAt: value.savedAt,
-      shareId: value.shareId,
-      versionVector,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function parseVersionVector(value: unknown) {
-  if (!Array.isArray(value)) return null;
-  let version = new Map<`${number}`, number>();
-  for (let entry of value) {
-    if (!Array.isArray(entry) || entry.length != 2) return null;
-    let [peer, counter] = entry;
-    if (
-      typeof peer != "string" ||
-      !/^\d+$/.test(peer) ||
-      typeof counter != "number" ||
-      !Number.isSafeInteger(counter) ||
-      counter < 0
-    ) {
-      return null;
-    }
-    version.set(peer as `${number}`, counter);
-  }
-  return new VersionVector(version);
-}
-
 function versionCovers(saved: VersionVector, local: VersionVector) {
   let comparison = saved.compare(local);
   return comparison == 0 || comparison == 1;
-}
-
-function sharedSecretCacheToken(secret: string) {
-  let hash = 2_166_136_261;
-  for (let index = 0; index < secret.length; index += 1) {
-    hash ^= secret.charCodeAt(index);
-    hash = Math.imul(hash, 16_777_619);
-  }
-  return `${secret.length}:${(hash >>> 0).toString(16)}`;
-}
-
-function getOrCreateSharedFileClientId() {
-  try {
-    let existing = sessionStorage.getItem("local-md-workspace:shared-file-client-id");
-    if (existing) return existing;
-    let next = crypto.randomUUID();
-    sessionStorage.setItem("local-md-workspace:shared-file-client-id", next);
-    return next;
-  } catch {
-    return crypto.randomUUID();
-  }
 }
