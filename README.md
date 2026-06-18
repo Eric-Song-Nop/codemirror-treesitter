@@ -443,6 +443,10 @@ through `EphemeralStore`, and optional Loro undo managers.
   highlight tags.
 - Indentation, folding, bracket matching, bidi isolates, comment tokens, and
   stream-parser language support are implemented without Lezer.
+- LiveMD treats Tree-sitter queries as semantic unit extractors. A persistent
+  unit index handles mapping and bounded patch windows, projection owns
+  decorations/widgets/cache reuse, and document-scope analysis handles global
+  Markdown semantics separately from the local hot path.
 - Some upstream `language-data` entries that only have legacy stream modes are
   covered with compact in-repo grammar/style shims.
 - `grove-relay` persists Durable Object snapshots and bounded update logs for

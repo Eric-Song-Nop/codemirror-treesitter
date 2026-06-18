@@ -37,6 +37,33 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
   mode, placeholder text, focus/blur, selection APIs, dirty tracking, ready and
   error events, and fixtures for demos/benchmarks.
 
+## Incremental Runtime Architecture
+
+LiveMD uses Tree-sitter queries as semantic unit extractors, not as the complete
+decoration lifecycle. Runtime updates flow through these layers:
+
+- Tree-sitter maintains the current incremental syntax tree.
+- Local rooted LiveMD queries extract semantic units such as headings, tables,
+  fences, images, links, task markers, and inline marks.
+- `LiveMdUnitIndex` owns unit identity, owner ranges, old-unit mapping, touching
+  queries, and bounded patch replacement.
+- Runtime invalidation keeps document edits, tree changes, selection changes,
+  viewport changes, and config changes as separate inputs. Selection and config
+  changes can reuse semantic units when syntax did not change.
+- Projection converts semantic units to CodeMirror decorations, widgets, atomic
+  ranges, and code-fence parses. Projection caches track used keys each render
+  and prune unused widgets/parses when units disappear.
+- A small viewport observer only reports visible ranges back into the runtime
+  StateField; the StateField remains the single owner of block decorations and
+  atomic ranges.
+- Document-scope analysis runs separately from the local unit hot path. It
+  currently records link reference definitions and is the place for future
+  global semantics such as footnotes or outlines.
+
+Hot-path queries must stay bounded with both `from` and `to`, and local patterns
+should remain rooted to a clear owner. Global behavior should be implemented in
+the document-scope pass rather than by widening every local dirty range.
+
 ## Public Entries
 
 ```ts
