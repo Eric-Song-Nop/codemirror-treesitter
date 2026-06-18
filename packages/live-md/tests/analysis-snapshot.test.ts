@@ -241,6 +241,22 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("rebuilds image preview widgets when the source resolver changes", async () => {
+    let imageCompartment = new Compartment();
+    let view = await markdownAnalysisView("anchor\n\n![Alt](image.png)\n", "anchor", [
+      imageCompartment.of(liveMdImageSource((source) => `one/${source}`)),
+    ]);
+
+    expect(imagePreviewElement(view)?.getAttribute("src")).toBe("one/image.png");
+
+    view.dispatch({
+      effects: imageCompartment.reconfigure(liveMdImageSource((source) => `two/${source}`)),
+    });
+
+    expect(imagePreviewElement(view)?.getAttribute("src")).toBe("two/image.png");
+    view.destroy();
+  });
+
   it("does not reparse unchanged code fences after unrelated edits", async () => {
     let doc = "```ts\nlet a = 1;\n```\n\nparagraph\n";
     let parseCalls = 0;
@@ -540,6 +556,10 @@ function imagePreviewSources(state: EditorState) {
     }
   });
   return sources;
+}
+
+function imagePreviewElement(view: EditorView) {
+  return view.contentDOM.querySelector<HTMLImageElement>(".cm-md-image-preview img");
 }
 
 type TestMarkdownTable = {

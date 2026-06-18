@@ -100,8 +100,11 @@ export function mapLiveMdRange(
   changes: ChangeDesc,
   state: EditorState,
 ): LiveMdDocRange | null {
-  let from = clampLiveMdPosition(changes.mapPos(range.from, 1), 0, state.doc.length);
-  let to = clampLiveMdPosition(changes.mapPos(range.to, -1), 0, state.doc.length);
+  let oldLength = (changes as ChangeDesc & { length: number }).length;
+  let oldFrom = clampLiveMdPosition(range.from, 0, oldLength);
+  let oldTo = clampLiveMdPosition(range.to, 0, oldLength);
+  let from = clampLiveMdPosition(changes.mapPos(oldFrom, 1), 0, state.doc.length);
+  let to = clampLiveMdPosition(changes.mapPos(oldTo, -1), 0, state.doc.length);
   return from <= to ? { from, to } : null;
 }
 

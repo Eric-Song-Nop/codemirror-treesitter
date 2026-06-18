@@ -67,7 +67,7 @@ export class LiveMdProjectionEmitter {
     widget: WidgetType,
     options: LiveMdProjectionReplaceOptions = {},
   ) {
-    if (from >= to || !this.rangeTouchesProjectionRanges(from, to)) return;
+    if (from >= to) return;
     this.decorations.push(
       Decoration.replace({ block: options.block ?? false, widget }).range(from, to),
     );

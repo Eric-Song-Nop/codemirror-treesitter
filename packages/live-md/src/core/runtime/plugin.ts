@@ -1,4 +1,10 @@
-import { RangeSet, type EditorState, type Extension, type RangeValue } from "@codemirror/state";
+import {
+  RangeSet,
+  StateField,
+  type EditorState,
+  type Extension,
+  type RangeValue,
+} from "@codemirror/state";
 import { syntaxTree } from "@codemirror-treesitter/language";
 import { EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import {
@@ -86,13 +92,67 @@ export class LiveMdRuntimePlugin {
   }
 }
 
-export const liveMdRuntimePlugin = ViewPlugin.fromClass(LiveMdRuntimePlugin, {
-  decorations: (plugin) => plugin.decorations,
-  provide: (plugin) =>
-    EditorView.atomicRanges.of((view) => view.plugin(plugin)?.atomicRanges ?? RangeSet.empty),
+const liveMdRuntimeField = StateField.define<LiveMdRuntimeSnapshot>({
+  create(state) {
+    return createLiveMdRuntimeSnapshot(state, {
+      activeLines: activeLiveMdLines(state),
+      config: readLiveMdRuntimeConfig(state),
+      visibleRanges: fullLiveMdDocRange(state),
+    });
+  },
+  update(snapshot, transaction) {
+    let nextConfig = readLiveMdRuntimeConfig(transaction.state);
+    let configChanged = !sameLiveMdRuntimeConfig(
+      readLiveMdRuntimeConfig(transaction.startState),
+      nextConfig,
+    );
+    let nextActiveLines = activeLiveMdLines(transaction.state);
+    let selectionChanged =
+      !!transaction.selection || !sameLiveMdNumberSet(snapshot.activeLines, nextActiveLines);
+    let nextTree = syntaxTree(transaction.state);
+    let treeChanged = nextTree != snapshot.tree;
+
+    if (!transaction.docChanged && !treeChanged && !configChanged && !selectionChanged) {
+      return snapshot;
+    }
+
+    let visibleRanges = fullLiveMdDocRange(transaction.state);
+    let invalidation = createLiveMdInvalidation({
+      activeLines: nextActiveLines,
+      configChanged,
+      previousActiveLines: snapshot.activeLines,
+      previousIndex: snapshot.semanticIndex,
+      selectionChanged,
+      startState: transaction.startState,
+      state: transaction.state,
+      transactions: [transaction],
+      treeChanged,
+      visibleRanges,
+    });
+
+    return createLiveMdRuntimeSnapshot(transaction.state, {
+      activeLines: nextActiveLines,
+      config: nextConfig,
+      invalidation,
+      previous: snapshot,
+      visibleRanges,
+    });
+  },
+  provide(field) {
+    return [
+      EditorView.decorations.from(field, (snapshot) => snapshot.decorations),
+      EditorView.atomicRanges.of(
+        (view) => view.state.field(field, false)?.atomicRanges ?? RangeSet.empty,
+      ),
+    ];
+  },
 });
 
-export const liveMdAnalysis: Extension = liveMdRuntimePlugin;
+export const liveMdRuntimePlugin = ViewPlugin.fromClass(LiveMdRuntimePlugin, {
+  provide: () => [],
+});
+
+export const liveMdAnalysis: Extension = liveMdRuntimeField;
 
 export function __testBuildLiveMdAnalysis(state: EditorState) {
   return createLiveMdRuntimeSnapshot(state, {
@@ -114,6 +174,8 @@ export function __testBuildVisibleLiveMdAnalysis(
 }
 
 export function __testLiveMdAnalysis(view: EditorView): LiveMdRuntimeSnapshot {
+  let fieldSnapshot = view.state.field(liveMdRuntimeField, false);
+  if (fieldSnapshot) return fieldSnapshot;
   let plugin = liveMdPluginFromView(view);
   if (plugin) return plugin.snapshot;
   return __testBuildLiveMdAnalysis(view.state);

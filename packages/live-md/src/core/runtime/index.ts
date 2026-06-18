@@ -13,8 +13,8 @@ export {
 } from "./plugin.js";
 export {
   projectLiveMdRuntime,
-  type LiveMdProjectionInput,
   type LiveMdProjectionResult,
+  type LiveMdRuntimeProjectionInput,
 } from "./projection.js";
 export {
   createLiveMdRuntimeSnapshot,

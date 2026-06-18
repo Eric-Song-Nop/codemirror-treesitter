@@ -139,11 +139,18 @@ function liveMdCodeFenceUnit(
   let node = liveMdCapture(match, "codeFence")?.node;
   if (!node) return null;
   let languageNode = liveMdCapture(match, "codeFence.language")?.node;
+  let contentNode = liveMdCapture(match, "codeFence.content")?.node;
   let language = readLiveMdFenceLanguage(state, languageNode);
   return {
-    ...baseLiveMdUnit("codeFence", node, match, ["codeFence", language], node),
+    ...baseLiveMdUnit(
+      "codeFence",
+      node,
+      match,
+      ["codeFence", language, contentNode ? state.sliceDoc(contentNode.from, contentNode.to) : ""],
+      node,
+    ),
     closeRange: nodeRangeOrNull(liveMdCapture(match, "codeFence.close")?.node),
-    contentRange: nodeRangeOrNull(liveMdCapture(match, "codeFence.content")?.node),
+    contentRange: nodeRangeOrNull(contentNode),
     language,
     languageRange: nodeRangeOrNull(languageNode),
     openRange: nodeRangeOrNull(liveMdCapture(match, "codeFence.open")?.node),
@@ -153,10 +160,12 @@ function liveMdCodeFenceUnit(
 function liveMdImageUnit(match: TreeSitterQueryMatch): LiveMdSemanticUnit | null {
   let node = liveMdCapture(match, "image")?.node;
   if (!node) return null;
+  let alt = liveMdCapture(match, "image.description")?.node;
+  let destination = liveMdCapture(match, "image.destination")?.node;
   return {
-    ...baseLiveMdUnit("image", node, match, ["image"], node),
-    altRange: nodeRangeOrNull(liveMdCapture(match, "image.description")?.node),
-    destinationRange: nodeRangeOrNull(liveMdCapture(match, "image.destination")?.node),
+    ...baseLiveMdUnit("image", node, match, ["image", node.text], node),
+    altRange: nodeRangeOrNull(alt),
+    destinationRange: nodeRangeOrNull(destination),
   };
 }
 
@@ -164,7 +173,7 @@ function liveMdLatexUnit(match: TreeSitterQueryMatch): LiveMdSemanticUnit | null
   let node = liveMdCapture(match, "latex")?.node;
   if (!node) return null;
   return {
-    ...baseLiveMdUnit("latex", node, match, ["latex"], node),
+    ...baseLiveMdUnit("latex", node, match, ["latex", node.text], node),
     closeRange: nodeRangeOrNull(liveMdCapture(match, "latex.close")?.node),
     openRange: nodeRangeOrNull(liveMdCapture(match, "latex.open")?.node),
   };
@@ -174,7 +183,7 @@ function liveMdLinkUnit(match: TreeSitterQueryMatch): LiveMdSemanticUnit | null 
   let node = liveMdCapture(match, "link")?.node;
   if (!node) return null;
   return {
-    ...baseLiveMdUnit("link", node, match, ["link"], node),
+    ...baseLiveMdUnit("link", node, match, ["link", node.text], node),
     destinationRange: nodeRangeOrNull(liveMdCapture(match, "link.destination")?.node),
     textRange: nodeRangeOrNull(liveMdCapture(match, "link.text")?.node),
   };
@@ -190,7 +199,7 @@ function liveMdTableUnit(match: TreeSitterQueryMatch): LiveMdSemanticUnit | null
   let node = liveMdCapture(match, "table")?.node;
   if (!node) return null;
   return {
-    ...baseLiveMdUnit("table", node, match, ["table"], node),
+    ...baseLiveMdUnit("table", node, match, ["table", node.text], node),
     delimiterRowRange: nodeRangeOrNull(liveMdCapture(match, "table.delimiter.row")?.node),
   };
 }

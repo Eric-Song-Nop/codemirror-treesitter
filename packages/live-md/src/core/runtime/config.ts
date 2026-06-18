@@ -9,13 +9,13 @@ import {
 } from "../languages.js";
 import { liveMdMarkdownFeatureFacet, type LiveMdMarkdownFeature } from "../features.js";
 import { liveMdImageSourceResolver, type LiveMdImageSourceResolver } from "../images.js";
-import { liveMdLinkBaseUrl, type LiveMdLinkBaseUrl } from "../links.js";
+import { liveMdLinkBaseUrl } from "../links.js";
 
 export type LiveMdRuntimeConfig = {
   codeFenceHighlighters: readonly Highlighter[];
   codeFenceLanguages: CodeFenceLanguageMap;
   imageSourceResolver: LiveMdImageSourceResolver | null;
-  linkBaseUrl: LiveMdLinkBaseUrl | null;
+  linkBaseUrl: string | null;
   markdownFeatures: readonly LiveMdMarkdownFeature[];
 };
 

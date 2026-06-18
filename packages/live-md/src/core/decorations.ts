@@ -10,6 +10,6 @@ export {
 export type {
   LiveMdRuntimeConfig,
   LiveMdRuntimeSnapshot,
-  LiveMdProjectionInput,
   LiveMdProjectionResult,
+  LiveMdRuntimeProjectionInput,
 } from "./runtime/index.js";

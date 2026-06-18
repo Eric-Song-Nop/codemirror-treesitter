@@ -10,6 +10,7 @@ import {
   TablePreviewWidget,
   TaskCheckboxWidget,
   liveMdWidgetCacheKey,
+  liveMdWidgetCacheKeyPrefix,
   type LatexFormula,
   type MarkdownTable,
   type MermaidDiagram,
@@ -17,8 +18,8 @@ import {
 import type {
   CodeFenceParseResult,
   LiveMdCacheableSemanticUnit,
+  LiveMdCodeFenceParseUnit,
   LiveMdProjectionInput,
-  LiveMdSemanticCodeFenceUnit,
 } from "./types.js";
 
 export type LiveMdWidgetCacheKind =
@@ -61,15 +62,22 @@ export class WidgetCache {
   }
 
   delete(kind: LiveMdWidgetCacheKind, unit: LiveMdCacheableSemanticUnit) {
-    return this.widgets.delete(liveMdWidgetCacheKey(kind, unit));
+    let deleted = false;
+    let prefix = liveMdWidgetCacheKeyPrefix(kind, unit);
+    for (let key of this.widgets.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      deleted = this.widgets.delete(key) || deleted;
+    }
+    return deleted;
   }
 
   getOrCreate<T extends WidgetType>(
     kind: LiveMdWidgetCacheKind,
     unit: LiveMdCacheableSemanticUnit,
+    context: string,
     create: () => T,
   ): T {
-    let key = liveMdWidgetCacheKey(kind, unit);
+    let key = liveMdWidgetCacheKey(kind, unit, context);
     let cached = this.widgets.get(key);
     if (cached) return cached as T;
     let widget = create();
@@ -78,35 +86,43 @@ export class WidgetCache {
   }
 
   image(input: LiveMdProjectionInput, unit: LiveMdCacheableSemanticUnit, alt: string, src: string) {
+    let resolvedSrc = resolveLiveMdImageSource(src, input.imageSourceResolver ?? null);
     return this.getOrCreate(
       "image",
       unit,
-      () =>
-        new ImagePreviewWidget(
-          alt,
-          resolveLiveMdImageSource(src, input.imageSourceResolver ?? null),
-        ),
+      JSON.stringify([alt, resolvedSrc]),
+      () => new ImagePreviewWidget(alt, resolvedSrc),
     );
   }
 
   latex(unit: LiveMdCacheableSemanticUnit, formula: LatexFormula) {
-    return this.getOrCreate("latex", unit, () => new LatexWidget(formula));
+    return this.getOrCreate("latex", unit, JSON.stringify(formula), () => new LatexWidget(formula));
   }
 
   listMarker(unit: LiveMdCacheableSemanticUnit, marker: string) {
-    return this.getOrCreate("listMarker", unit, () => new ListMarkerWidget(marker));
+    return this.getOrCreate("listMarker", unit, marker, () => new ListMarkerWidget(marker));
   }
 
   mermaid(unit: LiveMdCacheableSemanticUnit, diagram: MermaidDiagram) {
-    return this.getOrCreate("mermaid", unit, () => new MermaidWidget(diagram));
+    return this.getOrCreate("mermaid", unit, diagram.source, () => new MermaidWidget(diagram));
   }
 
   table(unit: LiveMdCacheableSemanticUnit, table: MarkdownTable) {
-    return this.getOrCreate("table", unit, () => new TablePreviewWidget(table));
+    return this.getOrCreate(
+      "table",
+      unit,
+      JSON.stringify(table),
+      () => new TablePreviewWidget(table),
+    );
   }
 
   taskMarker(unit: LiveMdCacheableSemanticUnit, checked: boolean) {
-    return this.getOrCreate("taskMarker", unit, () => new TaskCheckboxWidget(checked));
+    return this.getOrCreate(
+      "taskMarker",
+      unit,
+      String(checked),
+      () => new TaskCheckboxWidget(checked),
+    );
   }
 }
 
@@ -123,16 +139,16 @@ export class CodeFenceParseCache {
     this.parses.clear();
   }
 
-  delete(unit: LiveMdSemanticCodeFenceUnit, parser: TreeSitterParser) {
+  delete(unit: LiveMdCodeFenceParseUnit, parser: TreeSitterParser) {
     return this.parses.delete(this.key(unit, parser));
   }
 
-  key(unit: LiveMdSemanticCodeFenceUnit, parser: TreeSitterParser) {
+  key(unit: LiveMdCodeFenceParseUnit, parser: TreeSitterParser) {
     return codeFenceParseCacheKey(unit, this.parserIdentity(parser));
   }
 
   parse(
-    unit: LiveMdSemanticCodeFenceUnit,
+    unit: LiveMdCodeFenceParseUnit,
     parser: TreeSitterParser,
     source: () => string,
   ): CodeFenceParseResult {
@@ -158,6 +174,7 @@ export class CodeFenceParseCache {
       ...cached,
       contentFrom: unit.contentFrom,
       contentTo: unit.contentTo,
+      unitId: unit.id,
     };
   }
 
@@ -172,8 +189,8 @@ export class CodeFenceParseCache {
   }
 }
 
-export function codeFenceParseCacheKey(unit: LiveMdSemanticCodeFenceUnit, parserIdentity: string) {
-  return `codeFence:${unit.id}:${unit.signature}:${parserIdentity}`;
+export function codeFenceParseCacheKey(unit: LiveMdCodeFenceParseUnit, parserIdentity: string) {
+  return `codeFence:${unit.signature}:${parserIdentity}`;
 }
 
 type CodeFenceParseCacheEntry = Omit<CodeFenceParseResult, "contentFrom" | "contentTo">;

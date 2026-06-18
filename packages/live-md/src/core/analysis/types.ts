@@ -7,6 +7,7 @@ import type {
   TreeSitterQueryMatch,
   TreeSitterQueryProperties,
 } from "@codemirror-treesitter/language";
+import type { LiveMdProjectionCache } from "../projection/index.js";
 
 export type LiveMdDocRange = {
   from: number;
@@ -181,6 +182,7 @@ export type LiveMdRuntimeSnapshot = {
   codeFenceHighlightTrees: readonly LiveMdCodeFenceHighlightTree[];
   decorations: DecorationSet;
   invalidation: LiveMdInvalidation;
+  projectionCache: LiveMdProjectionCache;
   ranges: readonly LiveMdDocRange[];
   semanticIndex: LiveMdSemanticIndex;
   tree: Tree;

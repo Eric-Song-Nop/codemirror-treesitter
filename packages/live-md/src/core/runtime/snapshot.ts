@@ -7,6 +7,7 @@ import {
   type LiveMdInvalidation,
   type LiveMdRuntimeSnapshot,
 } from "../analysis/index.js";
+import { LiveMdProjectionCache } from "../projection/index.js";
 import { readLiveMdRuntimeConfig, type LiveMdRuntimeConfig } from "./config.js";
 import { projectLiveMdRuntime } from "./projection.js";
 
@@ -35,16 +36,11 @@ export function createLiveMdRuntimeSnapshot(
       state,
       visibleRanges: options.visibleRanges,
     });
-  let previousProjection = options.previous
-    ? {
-        atomicRanges: options.previous.atomicRanges,
-        decorations: options.previous.decorations,
-      }
-    : null;
+  let projectionCache = options.previous?.projectionCache ?? new LiveMdProjectionCache();
   let projection = projectLiveMdRuntime({
+    cache: projectionCache,
     config,
     invalidation,
-    previous: previousProjection,
     semanticIndex,
     state,
   });
@@ -52,9 +48,10 @@ export function createLiveMdRuntimeSnapshot(
   return {
     activeLines,
     atomicRanges: projection.atomicRanges,
-    codeFenceHighlightTrees: [],
+    codeFenceHighlightTrees: projection.codeFenceParses,
     decorations: projection.decorations,
     invalidation,
+    projectionCache,
     ranges: semanticIndex.ranges,
     semanticIndex,
     tree: semanticIndex.tree,

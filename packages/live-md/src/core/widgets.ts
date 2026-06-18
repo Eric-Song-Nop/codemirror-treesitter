@@ -35,8 +35,16 @@ export type LiveMdWidgetCacheUnit = {
   readonly signature: string;
 };
 
-export function liveMdWidgetCacheKey(kind: string, unit: LiveMdWidgetCacheUnit) {
-  return `${kind}:${unit.id}:${unit.signature}`;
+export function liveMdWidgetCacheKey(kind: string, unit: LiveMdWidgetCacheUnit, context = "") {
+  return `${liveMdWidgetCacheKeyPrefix(kind, unit)}${cacheKeyPart(context)}`;
+}
+
+export function liveMdWidgetCacheKeyPrefix(kind: string, unit: LiveMdWidgetCacheUnit) {
+  return `${cacheKeyPart(kind)}${cacheKeyPart(unit.signature)}`;
+}
+
+function cacheKeyPart(value: string) {
+  return `${value.length}:${value}`;
 }
 
 export class TaskCheckboxWidget extends WidgetType {
