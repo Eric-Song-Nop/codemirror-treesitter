@@ -1,4 +1,5 @@
 export { buildLiveMdSemanticIndex, type BuildLiveMdSemanticIndexOptions } from "./build.js";
+export { buildLiveMdGlobalState, normalizeLiveMdReferenceLabel } from "./global.js";
 export {
   createLiveMdUnitId,
   liveMdOwnerId,
@@ -66,6 +67,7 @@ export type {
   LiveMdDocRange,
   LiveMdHeadingUnit,
   LiveMdImageUnit,
+  LiveMdGlobalState,
   LiveMdInlineMarkKind,
   LiveMdInlineMarkUnit,
   LiveMdInvalidation,
@@ -81,6 +83,7 @@ export type {
   LiveMdParagraphBreakUnit,
   LiveMdParagraphContainerKind,
   LiveMdParagraphContainerUnit,
+  LiveMdReferenceDefinition,
   LiveMdRuleUnit,
   LiveMdRuntimeSnapshot,
   LiveMdSemanticCapture,

@@ -214,6 +214,30 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("builds document-scope reference definitions outside the local unit index", async () => {
+    let doc = '[Example]: <https://example.com> "Example Title"\n\nUse [Example].\n';
+    let view = await markdownAnalysisView(doc, "Use");
+    let definition = __testLiveMdAnalysis(view).globalState.referenceDefinitions.get("example");
+
+    expect(definition?.label).toBe("Example");
+    expect(definition?.destination).toBe("https://example.com");
+    expect(definition?.title).toBe("Example Title");
+
+    let destinationFrom = doc.indexOf("https://example.com");
+    view.dispatch({
+      changes: {
+        from: destinationFrom,
+        to: destinationFrom + "https://example.com".length,
+        insert: "https://example.org",
+      },
+    });
+
+    expect(
+      __testLiveMdAnalysis(view).globalState.referenceDefinitions.get("example")?.destination,
+    ).toBe("https://example.org");
+    view.destroy();
+  });
+
   it("renders table previews when visible ranges end inside a larger README table", async () => {
     let doc =
       "before\n\n" +

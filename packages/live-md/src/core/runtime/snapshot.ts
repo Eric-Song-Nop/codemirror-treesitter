@@ -1,6 +1,7 @@
 import type { EditorState } from "@codemirror/state";
 import {
   activeLiveMdLines,
+  buildLiveMdGlobalState,
   buildLiveMdSemanticIndex,
   createLiveMdInvalidation,
   patchLiveMdSemanticIndex,
@@ -56,6 +57,7 @@ export function createLiveMdRuntimeSnapshot(
     atomicRanges: projection.atomicRanges,
     codeFenceHighlightTrees: projection.codeFenceParses,
     decorations: projection.decorations,
+    globalState: buildLiveMdGlobalState(state),
     invalidation,
     projectionCache,
     ranges: semanticIndex.ranges,

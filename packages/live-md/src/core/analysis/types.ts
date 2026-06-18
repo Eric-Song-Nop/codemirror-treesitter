@@ -140,6 +140,20 @@ export type LiveMdOwnerRange = {
   range: LiveMdDocRange;
 };
 
+export type LiveMdReferenceDefinition = {
+  destination: string;
+  destinationRange: LiveMdDocRange | null;
+  label: string;
+  labelRange: LiveMdDocRange;
+  range: LiveMdDocRange;
+  title: string | null;
+  titleRange: LiveMdDocRange | null;
+};
+
+export type LiveMdGlobalState = {
+  referenceDefinitions: ReadonlyMap<string, LiveMdReferenceDefinition>;
+};
+
 export type LiveMdUnitIndexPatchDocLength = EditorState | number;
 
 export type LiveMdUnitIndex = {
@@ -199,6 +213,7 @@ export type LiveMdRuntimeSnapshot = {
   atomicRanges: RangeSet<RangeValue>;
   codeFenceHighlightTrees: readonly LiveMdCodeFenceHighlightTree[];
   decorations: DecorationSet;
+  globalState: LiveMdGlobalState;
   invalidation: LiveMdInvalidation;
   projectionCache: LiveMdProjectionCache;
   ranges: readonly LiveMdDocRange[];
