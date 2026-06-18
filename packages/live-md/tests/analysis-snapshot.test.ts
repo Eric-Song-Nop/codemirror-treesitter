@@ -109,6 +109,26 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("keeps semantic units stable during config-only invalidations", async () => {
+    let imageCompartment = new Compartment();
+    let view = await markdownAnalysisView("# Heading\n\n![Alt](image.png)\n", "Heading", [
+      imageCompartment.of(liveMdImageSource((source) => `one/${source}`)),
+    ]);
+    let beforeHeading = __testLiveMdAnalysis(view).semanticIndex.units.find(
+      (unit) => unit.kind == "heading",
+    );
+    if (!beforeHeading) throw new Error("Expected heading unit");
+
+    view.dispatch({
+      effects: imageCompartment.reconfigure(liveMdImageSource((source) => `two/${source}`)),
+    });
+
+    let snapshot = __testLiveMdAnalysis(view);
+    expect(snapshot.semanticIndex.queryRanges).toEqual([]);
+    expect(snapshot.semanticIndex.unitsById.get(beforeHeading.id)).toBe(beforeHeading);
+    view.destroy();
+  });
+
   it("builds decorations through query captures without tree iteration", async () => {
     let state = await markdownAnalysisState(liveMdKitchenSinkDoc(), "After anchor");
     expect(canonicalAnalysis(state).decorations.length).toBeGreaterThan(0);
