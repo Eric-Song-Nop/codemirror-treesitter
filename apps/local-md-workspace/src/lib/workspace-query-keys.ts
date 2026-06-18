@@ -8,8 +8,10 @@ export const workspaceQueryKeys = {
     [...workspaceQueryKeys.backend(backend), "directory", path] as const,
   document: (backend: Pick<WorkspaceBackend, "id">, path: string) =>
     [...workspaceQueryKeys.backend(backend), "document", path] as const,
+  images: (backend: Pick<WorkspaceBackend, "id">) =>
+    [...workspaceQueryKeys.backend(backend), "image"] as const,
   image: (backend: Pick<WorkspaceBackend, "id">, path: string) =>
-    [...workspaceQueryKeys.backend(backend), "image", path] as const,
+    [...workspaceQueryKeys.images(backend), path] as const,
   sharedSession: (relayOrigin: string, shareId: string, guestSecretToken: string) =>
     [...workspaceQueryKeys.all, "shared-session", relayOrigin, shareId, guestSecretToken] as const,
   tree: (backend: Pick<WorkspaceBackend, "id">) =>
