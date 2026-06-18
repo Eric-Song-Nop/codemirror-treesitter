@@ -447,7 +447,7 @@ export class ActiveResult extends ActiveSource {
       this.source,
       this.explicit,
       mapping.mapPos(this.limit),
-      this.result,
+      result,
       mapping.mapPos(this.from),
       mapping.mapPos(this.to, 1),
     );

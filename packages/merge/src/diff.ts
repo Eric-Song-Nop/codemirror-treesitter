@@ -221,7 +221,7 @@ function commonPrefix(
   fromB: number,
   toB: number,
 ): number {
-  if (fromA == toA || fromA == toB || a.charCodeAt(fromA) != b.charCodeAt(fromB)) return 0;
+  if (fromA == toA || fromB == toB || a.charCodeAt(fromA) != b.charCodeAt(fromB)) return 0;
   let chunk = chunkSize(toA - fromA, toB - fromB);
   for (let pA = fromA, pB = fromB; ; ) {
     let endA = pA + chunk,
