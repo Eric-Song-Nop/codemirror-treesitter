@@ -2,6 +2,7 @@ export {
   __testBuildLiveMdAnalysis,
   __testBuildVisibleLiveMdAnalysis,
   __testLiveMdAnalysis,
+  __testSetLiveMdViewportRanges,
   __testVisibleLineRanges,
   liveMdAnalysis,
   liveMdRuntimePlugin,

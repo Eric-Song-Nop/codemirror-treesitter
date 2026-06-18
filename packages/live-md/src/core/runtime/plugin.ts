@@ -1,94 +1,68 @@
 import {
   RangeSet,
+  StateEffect,
   StateField,
   type EditorState,
   type Extension,
-  type RangeValue,
+  type Transaction,
 } from "@codemirror/state";
 import { syntaxTree } from "@codemirror-treesitter/language";
-import { EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import {
   activeLiveMdLines,
   createLiveMdInvalidation,
   fullLiveMdDocRange,
+  mapLiveMdRanges,
   sameLiveMdNumberSet,
   sameLiveMdRanges,
   type LiveMdDocRange,
   type LiveMdRuntimeSnapshot,
 } from "../analysis/index.js";
-import {
-  readLiveMdRuntimeConfig,
-  sameLiveMdRuntimeConfig,
-  type LiveMdRuntimeConfig,
-} from "./config.js";
+import { readLiveMdRuntimeConfig, sameLiveMdRuntimeConfig } from "./config.js";
 import { createLiveMdRuntimeSnapshot } from "./snapshot.js";
 import { visibleLiveMdLineRanges } from "./viewport.js";
 
+const setLiveMdViewportRanges = StateEffect.define<readonly LiveMdDocRange[]>();
+
 export class LiveMdRuntimePlugin {
-  private config: LiveMdRuntimeConfig;
-  snapshot: LiveMdRuntimeSnapshot;
+  private pendingViewportDispatch = false;
+  private visibleRanges: readonly LiveMdDocRange[];
 
   constructor(readonly view: EditorView) {
-    this.config = readLiveMdRuntimeConfig(view.state);
-    this.snapshot = createLiveMdRuntimeSnapshot(view.state, {
-      activeLines: activeLiveMdLines(view.state),
-      config: this.config,
-      visibleRanges: visibleLiveMdLineRanges(view),
-    });
+    this.visibleRanges =
+      view.state.field(liveMdRuntimeField, false)?.visibleRanges ?? visibleLiveMdLineRanges(view);
   }
 
   update(update: ViewUpdate) {
-    let nextConfig = readLiveMdRuntimeConfig(update.state);
-    let configChanged = !sameLiveMdRuntimeConfig(this.config, nextConfig);
-    let nextActiveLines = activeLiveMdLines(update.state);
-    let selectionChanged =
-      update.selectionSet || !sameLiveMdNumberSet(this.snapshot.activeLines, nextActiveLines);
-    let nextVisibleRanges = visibleLiveMdLineRanges(update.view);
-    let viewportChanged =
-      update.viewportChanged || !sameLiveMdRanges(this.snapshot.visibleRanges, nextVisibleRanges);
-    let nextTree = syntaxTree(update.state);
-    let treeChanged = nextTree != this.snapshot.tree;
-
-    if (
-      !update.docChanged &&
-      !treeChanged &&
-      !configChanged &&
-      !selectionChanged &&
-      !viewportChanged
-    ) {
+    if (updateHasLiveMdViewportEffect(update)) {
+      this.visibleRanges =
+        update.state.field(liveMdRuntimeField, false)?.visibleRanges ?? this.visibleRanges;
       return;
     }
 
-    let invalidation = createLiveMdInvalidation({
-      activeLines: nextActiveLines,
-      configChanged,
-      previousActiveLines: this.snapshot.activeLines,
-      previousIndex: this.snapshot.semanticIndex,
-      selectionChanged,
-      startState: update.startState,
-      state: update.state,
-      transactions: update.transactions,
-      treeChanged,
-      viewportChanged,
-      visibleRanges: nextVisibleRanges,
-    });
+    let nextVisibleRanges = visibleLiveMdLineRanges(update.view);
+    let snapshotRanges = update.state.field(liveMdRuntimeField, false)?.visibleRanges;
+    let changed =
+      update.docChanged ||
+      update.viewportChanged ||
+      !sameLiveMdRanges(snapshotRanges ?? this.visibleRanges, nextVisibleRanges);
+    this.visibleRanges = nextVisibleRanges;
+    if (!changed) {
+      return;
+    }
 
-    this.config = nextConfig;
-    this.snapshot = createLiveMdRuntimeSnapshot(update.state, {
-      activeLines: nextActiveLines,
-      config: nextConfig,
-      invalidation,
-      previous: this.snapshot,
-      visibleRanges: nextVisibleRanges,
-    });
+    this.scheduleViewportDispatch(update.view, nextVisibleRanges);
   }
 
-  get atomicRanges(): RangeSet<RangeValue> {
-    return this.snapshot.atomicRanges;
-  }
-
-  get decorations(): DecorationSet {
-    return this.snapshot.decorations;
+  private scheduleViewportDispatch(view: EditorView, visibleRanges: readonly LiveMdDocRange[]) {
+    if (this.pendingViewportDispatch) return;
+    this.pendingViewportDispatch = true;
+    queueMicrotask(() => {
+      this.pendingViewportDispatch = false;
+      let current = view.state.field(liveMdRuntimeField, false)?.visibleRanges;
+      if (current && sameLiveMdRanges(current, visibleRanges)) return;
+      view.dispatch({ effects: setLiveMdViewportRanges.of(visibleRanges) });
+    });
   }
 }
 
@@ -111,12 +85,19 @@ const liveMdRuntimeField = StateField.define<LiveMdRuntimeSnapshot>({
       !!transaction.selection || !sameLiveMdNumberSet(snapshot.activeLines, nextActiveLines);
     let nextTree = syntaxTree(transaction.state);
     let treeChanged = nextTree != snapshot.tree;
+    let visibleRanges = nextLiveMdVisibleRanges(snapshot, transaction);
+    let viewportChanged = !sameLiveMdRanges(snapshot.visibleRanges, visibleRanges);
 
-    if (!transaction.docChanged && !treeChanged && !configChanged && !selectionChanged) {
+    if (
+      !transaction.docChanged &&
+      !treeChanged &&
+      !configChanged &&
+      !selectionChanged &&
+      !viewportChanged
+    ) {
       return snapshot;
     }
 
-    let visibleRanges = fullLiveMdDocRange(transaction.state);
     let invalidation = createLiveMdInvalidation({
       activeLines: nextActiveLines,
       configChanged,
@@ -152,7 +133,7 @@ export const liveMdRuntimePlugin = ViewPlugin.fromClass(LiveMdRuntimePlugin, {
   provide: () => [],
 });
 
-export const liveMdAnalysis: Extension = liveMdRuntimeField;
+export const liveMdAnalysis: Extension = [liveMdRuntimeField, liveMdRuntimePlugin];
 
 export function __testBuildLiveMdAnalysis(state: EditorState) {
   return createLiveMdRuntimeSnapshot(state, {
@@ -176,14 +157,22 @@ export function __testBuildVisibleLiveMdAnalysis(
 export function __testLiveMdAnalysis(view: EditorView): LiveMdRuntimeSnapshot {
   let fieldSnapshot = view.state.field(liveMdRuntimeField, false);
   if (fieldSnapshot) return fieldSnapshot;
-  let plugin = liveMdPluginFromView(view);
-  if (plugin) return plugin.snapshot;
   return __testBuildLiveMdAnalysis(view.state);
 }
 
-function liveMdPluginFromView(view: EditorView) {
-  let maybeView = view as EditorView & {
-    plugin?: EditorView["plugin"];
-  };
-  return maybeView.plugin?.(liveMdRuntimePlugin) ?? null;
+export const __testSetLiveMdViewportRanges = setLiveMdViewportRanges;
+
+function updateHasLiveMdViewportEffect(update: ViewUpdate) {
+  return update.transactions.some((transaction) =>
+    transaction.effects.some((effect) => effect.is(setLiveMdViewportRanges)),
+  );
+}
+
+function nextLiveMdVisibleRanges(snapshot: LiveMdRuntimeSnapshot, transaction: Transaction) {
+  for (let effect of transaction.effects) {
+    if (effect.is(setLiveMdViewportRanges)) return effect.value;
+  }
+  return transaction.docChanged
+    ? mapLiveMdRanges(snapshot.visibleRanges, transaction.changes, transaction.state)
+    : snapshot.visibleRanges;
 }

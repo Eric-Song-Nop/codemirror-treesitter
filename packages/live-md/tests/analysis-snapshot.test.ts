@@ -14,6 +14,7 @@ import {
   __testBuildLiveMdAnalysis,
   __testBuildVisibleLiveMdAnalysis,
   __testLiveMdAnalysis,
+  __testSetLiveMdViewportRanges,
   __testVisibleLineRanges,
   liveMdAnalysis,
 } from "../src/core/decorations.js";
@@ -192,6 +193,25 @@ describe("LiveMD analysis snapshot", () => {
     let secondHeadingFrom = doc.indexOf("# Second");
     let decorations = canonicalAnalysis(state, analysis).decorations;
     expect(decorations.some((decoration) => decoration.from >= secondHeadingFrom)).toBe(false);
+  });
+
+  it("keeps runtime state owned by the field while viewport effects narrow ranges", async () => {
+    let doc = "# First\n\n# Second\n\n";
+    let view = await markdownAnalysisView(doc);
+    let firstLine = view.state.doc.line(1);
+    view.dispatch({
+      effects: __testSetLiveMdViewportRanges.of([{ from: firstLine.from, to: firstLine.to }]),
+    });
+
+    let snapshot = __testLiveMdAnalysis(view);
+    let secondHeadingFrom = doc.indexOf("# Second");
+    expect(snapshot.ranges).toEqual([{ from: firstLine.from, to: firstLine.to }]);
+    expect(
+      canonicalAnalysis(view.state, snapshot).decorations.some(
+        (decoration) => decoration.from >= secondHeadingFrom,
+      ),
+    ).toBe(false);
+    view.destroy();
   });
 
   it("renders table previews when visible ranges end inside a larger README table", async () => {
