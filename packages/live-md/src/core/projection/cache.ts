@@ -43,6 +43,16 @@ export class LiveMdProjectionCache {
     this.widgets.clear();
     this.codeFences.clear();
   }
+
+  beginProjection() {
+    this.widgets.beginProjection();
+    this.codeFences.beginProjection();
+  }
+
+  pruneUnused() {
+    this.widgets.pruneUnused();
+    this.codeFences.pruneUnused();
+  }
 }
 
 export type LiveMdProjectionCacheOptions = {
@@ -51,6 +61,7 @@ export type LiveMdProjectionCacheOptions = {
 };
 
 export class WidgetCache {
+  private readonly usedKeys = new Set<string>();
   private readonly widgets = new Map<string, WidgetType>();
 
   get size() {
@@ -58,7 +69,18 @@ export class WidgetCache {
   }
 
   clear() {
+    this.usedKeys.clear();
     this.widgets.clear();
+  }
+
+  beginProjection() {
+    this.usedKeys.clear();
+  }
+
+  pruneUnused() {
+    for (let key of this.widgets.keys()) {
+      if (!this.usedKeys.has(key)) this.widgets.delete(key);
+    }
   }
 
   delete(kind: LiveMdWidgetCacheKind, unit: LiveMdCacheableSemanticUnit) {
@@ -78,6 +100,7 @@ export class WidgetCache {
     create: () => T,
   ): T {
     let key = liveMdWidgetCacheKey(kind, unit, context);
+    this.usedKeys.add(key);
     let cached = this.widgets.get(key);
     if (cached) return cached as T;
     let widget = create();
@@ -130,13 +153,25 @@ export class CodeFenceParseCache {
   private nextParserId = 1;
   private readonly parserIds = new WeakMap<object, string>();
   private readonly parses = new Map<string, CodeFenceParseCacheEntry>();
+  private readonly usedKeys = new Set<string>();
 
   get size() {
     return this.parses.size;
   }
 
   clear() {
+    this.usedKeys.clear();
     this.parses.clear();
+  }
+
+  beginProjection() {
+    this.usedKeys.clear();
+  }
+
+  pruneUnused() {
+    for (let key of this.parses.keys()) {
+      if (!this.usedKeys.has(key)) this.parses.delete(key);
+    }
   }
 
   delete(unit: LiveMdCodeFenceParseUnit, parser: TreeSitterParser) {
@@ -154,6 +189,7 @@ export class CodeFenceParseCache {
   ): CodeFenceParseResult {
     let parserIdentity = this.parserIdentity(parser);
     let cacheKey = codeFenceParseCacheKey(unit, parserIdentity);
+    this.usedKeys.add(cacheKey);
     let cached = this.parses.get(cacheKey);
     if (!cached) {
       let sourceText = Text.of(source().split("\n"));

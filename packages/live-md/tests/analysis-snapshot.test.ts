@@ -317,6 +317,21 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("prunes widget cache entries for deleted projection units", async () => {
+    let doc = "anchor\n\n![Alt](image.png)\n\n- [ ] Todo\n";
+    let view = await markdownAnalysisView(doc, "anchor");
+
+    expect(__testLiveMdAnalysis(view).projectionCache.widgets.size).toBe(3);
+
+    let imageFrom = doc.indexOf("![Alt]");
+    view.dispatch({
+      changes: { from: imageFrom, to: imageFrom + "![Alt](image.png)\n\n".length, insert: "" },
+    });
+
+    expect(__testLiveMdAnalysis(view).projectionCache.widgets.size).toBe(2);
+    view.destroy();
+  });
+
   it("rebuilds image preview widgets when the source resolver changes", async () => {
     let imageCompartment = new Compartment();
     let view = await markdownAnalysisView("anchor\n\n![Alt](image.png)\n", "anchor", [
@@ -360,6 +375,22 @@ describe("LiveMD analysis snapshot", () => {
 
     expect(__testLiveMdAnalysis({ state } as EditorView).codeFenceHighlightTrees).toHaveLength(1);
     expect(parseCalls).toBe(0);
+  });
+
+  it("prunes code fence parse cache entries for deleted fences", async () => {
+    let doc = "```ts\nlet a = 1;\n```\n\nparagraph\n";
+    let languages = new Map(await loadCodeFenceLanguages());
+    let view = await markdownAnalysisView(doc, "paragraph");
+    view.dispatch({ effects: setCodeFenceLanguages.of(languages) });
+
+    expect(__testLiveMdAnalysis(view).projectionCache.codeFences.size).toBe(1);
+
+    view.dispatch({
+      changes: { from: 0, to: doc.indexOf("paragraph"), insert: "" },
+    });
+
+    expect(__testLiveMdAnalysis(view).projectionCache.codeFences.size).toBe(0);
+    view.destroy();
   });
 
   it("reuses active syntax highlighters for code fence highlights", async () => {

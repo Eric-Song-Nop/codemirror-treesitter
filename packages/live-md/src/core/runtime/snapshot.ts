@@ -41,6 +41,7 @@ export function createLiveMdRuntimeSnapshot(
     visibleRanges: options.visibleRanges,
   });
   let projectionCache = options.previous?.projectionCache ?? new LiveMdProjectionCache();
+  projectionCache.beginProjection();
   let projection = projectLiveMdRuntime({
     cache: projectionCache,
     config,
@@ -48,6 +49,7 @@ export function createLiveMdRuntimeSnapshot(
     semanticIndex,
     state,
   });
+  projectionCache.pruneUnused();
 
   return {
     activeLines,
