@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { build } from "vite-plus";
@@ -9,6 +9,15 @@ const workspaceRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const liveMdSourceRoot = join(workspaceRoot, "packages/live-md/src");
 
 describe("public LiveMD stylesheet", () => {
+  it("keeps code block spacing inside measured line boxes", async () => {
+    let css = await readFile(join(liveMdSourceRoot, "style.css"), "utf8");
+
+    expect(css).not.toMatch(/\.cm-md-code-block-start\s*\{[^}]*margin-top/u);
+    expect(css).not.toMatch(/\.cm-md-code-block-end\s*\{[^}]*margin-bottom/u);
+    expect(css).toContain("padding-top: calc(8px + 0.45em)");
+    expect(css).toContain("padding-bottom: calc(8px + 0.55em)");
+  });
+
   it("bundles KaTeX rules and fonts for programmatic editors", async () => {
     let root = await mkdtemp(join(workspaceRoot, ".tmp-live-md-style-"));
 

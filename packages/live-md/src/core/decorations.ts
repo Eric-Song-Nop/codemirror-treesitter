@@ -9,12 +9,17 @@ import {
   Text,
   type Extension,
   type Range,
+  type Transaction,
 } from "@codemirror/state";
 import {
   highlightTree,
+  lineRangesForChanges,
+  patchRangeSet,
   queryTreeMatches,
+  rangesTouch,
   syntaxHighlighters,
   syntaxTree,
+  syntaxTreeChangedRanges,
   type Highlighter,
   type SyntaxNode,
   type Tree,
@@ -135,11 +140,18 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
     }
 
     let tree = syntaxTree(transaction.state);
+    let activeLines = getActiveLines(transaction.state);
+    let decorations = transaction.docChanged
+      ? value.decorations.map(transaction.changes)
+      : value.decorations;
+    let atomicRanges = transaction.docChanged
+      ? value.atomicRanges.map(transaction.changes)
+      : value.atomicRanges;
     if (
       !rangesChanged &&
       tree == value.tree &&
       !transaction.docChanged &&
-      !transaction.selection &&
+      sameNumbers(activeLines, value.activeLines) &&
       !codeFenceHighlightersChanged(transaction.startState, transaction.state) &&
       !codeFenceLanguagesChanged(transaction.startState, transaction.state) &&
       !markdownFeaturesChanged(transaction.startState, transaction.state) &&
@@ -150,7 +162,58 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
       return value;
     }
 
-    return buildLiveMdAnalysis(transaction.state, getActiveLines(transaction.state), ranges);
+    if (
+      rangesChanged ||
+      codeFenceHighlightersChanged(transaction.startState, transaction.state) ||
+      codeFenceLanguagesChanged(transaction.startState, transaction.state) ||
+      markdownFeaturesChanged(transaction.startState, transaction.state) ||
+      transaction.startState.facet(liveMdImageSourceResolver) !=
+        transaction.state.facet(liveMdImageSourceResolver) ||
+      transaction.startState.facet(liveMdLinkBaseUrl) != transaction.state.facet(liveMdLinkBaseUrl)
+    ) {
+      return buildLiveMdAnalysis(transaction.state, activeLines, ranges);
+    }
+
+    let dirtyRanges = liveMdDirtyRanges(value, transaction, ranges, activeLines);
+    if (!dirtyRanges.length) {
+      return {
+        ...value,
+        activeLines,
+        atomicRanges,
+        codeFenceHighlightTrees: transaction.docChanged
+          ? mapCodeFenceHighlightTrees(value.codeFenceHighlightTrees, transaction.changes)
+          : value.codeFenceHighlightTrees,
+        decorations,
+        ranges,
+        tree,
+      };
+    }
+
+    let dirtyAnalysis = buildLiveMdAnalysis(transaction.state, activeLines, dirtyRanges, {
+      expandLeadingBlankRanges: false,
+    });
+    return {
+      activeLines,
+      atomicRanges: patchRangeSet(
+        atomicRanges,
+        dirtyRanges,
+        rangeSetRanges(dirtyAnalysis.atomicRanges, transaction.state.doc.length),
+      ),
+      codeFenceHighlightTrees: patchCodeFenceHighlightTrees(
+        value,
+        transaction,
+        dirtyAnalysis,
+        dirtyRanges,
+      ),
+      codeFenceLanguages: value.codeFenceLanguages,
+      decorations: patchRangeSet(
+        decorations,
+        dirtyRanges,
+        rangeSetRanges(dirtyAnalysis.decorations, transaction.state.doc.length),
+      ),
+      ranges,
+      tree,
+    };
   },
   provide(field) {
     return [
@@ -324,13 +387,14 @@ function buildLiveMdAnalysis(
   state: EditorState,
   activeLines = getActiveLines(state),
   ranges: readonly DocRange[] = fullDocRange(state),
+  options: { expandLeadingBlankRanges?: boolean } = {},
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
   let build = buildLiveMdBuild(
     state,
     activeLines,
     codeFenceLanguages,
-    expandLeadingBlankRanges(state, ranges),
+    options.expandLeadingBlankRanges === false ? ranges : expandLeadingBlankRanges(state, ranges),
   );
   return {
     activeLines,
@@ -412,17 +476,200 @@ function queryLiveMdMatchesFromSource(
 }
 
 function matchTouchesRanges(match: TreeSitterQueryMatch, ranges: readonly DocRange[]) {
-  let node = capture(match, "feature")?.node ?? capture(match, "paragraph.child")?.node;
-  if (node) return nodeTouchesRanges(node, ranges);
-  return match.captures.some((item) => nodeTouchesRanges(item.node, ranges));
+  let feature = capture(match, "feature")?.node ?? matchFeatureRoot(match);
+  if (feature) return nodeRangesTouch(feature, ranges);
+  let paragraphChild = capture(match, "paragraph.child")?.node;
+  if (paragraphChild) return nodeTouchesRangesInclusive(paragraphChild, ranges);
+  return match.captures.some((item) => nodeRangesTouch(item.node, ranges));
 }
 
-function nodeTouchesRanges(node: SyntaxNode, ranges: readonly DocRange[]) {
+function matchFeatureRoot(match: TreeSitterQueryMatch) {
+  switch (matchKind(match)) {
+    case "codeFence":
+      return capture(match, "codeFence")?.node ?? null;
+    case "heading":
+      return capture(match, "heading")?.node ?? null;
+    case "image":
+      return capture(match, "image")?.node ?? null;
+    case "latex":
+      return capture(match, "latex")?.node ?? null;
+    case "link":
+      return capture(match, "link")?.node ?? null;
+    case "rule":
+      return capture(match, "rule")?.node ?? null;
+    case "table":
+      return capture(match, "table")?.node ?? null;
+    default:
+      return null;
+  }
+}
+
+function nodeRangesTouch(node: SyntaxNode, ranges: readonly DocRange[]) {
+  return ranges.some((range) => rangesTouch(node.from, node.to, range.from, range.to));
+}
+
+function nodeTouchesRangesInclusive(node: SyntaxNode, ranges: readonly DocRange[]) {
   return ranges.some((range) => node.from <= range.to && node.to >= range.from);
 }
 
 function liveMdQueryRanges(state: EditorState, ranges: readonly DocRange[]) {
   return expandPipeTableRanges(state, expandLeadingBlankRanges(state, ranges));
+}
+
+function liveMdDirtyRanges(
+  value: LiveMdAnalysis,
+  transaction: Transaction,
+  ranges: readonly DocRange[],
+  activeLines: ReadonlySet<number>,
+) {
+  let dirtyRanges: DocRange[] = [];
+  if (transaction.docChanged) {
+    dirtyRanges.push(
+      ...lineRangesForChanges(
+        transaction.state,
+        transaction.changes,
+        syntaxTreeChangedRanges(transaction),
+      ),
+    );
+  } else {
+    dirtyRanges.push(...syntaxTreeChangedRanges(transaction));
+  }
+
+  if (!sameNumbers(activeLines, value.activeLines)) {
+    dirtyRanges.push(
+      ...previousActiveLineRanges(value, transaction),
+      ...activeLineRanges(transaction.state, activeLines),
+    );
+  }
+
+  if (!dirtyRanges.length) return [];
+  return expandLiveMdDirtyRanges(transaction.state, dirtyRanges).filter((range) =>
+    ranges.some((visibleRange) =>
+      rangesTouch(range.from, range.to, visibleRange.from, visibleRange.to),
+    ),
+  );
+}
+
+function expandLiveMdDirtyRanges(state: EditorState, ranges: readonly DocRange[]) {
+  let expanded: DocRange[] = [...ranges];
+  let tree = syntaxTree(state);
+  for (let range of ranges) {
+    tree.iterate({
+      from: range.from,
+      to: range.to,
+      enter(node) {
+        if (isLiveMdDirtyBoundary(node)) expanded.push(liveMdDirtyBoundaryRange(node));
+      },
+    });
+  }
+  return mergeDocRanges([
+    ...expandPipeTableRanges(state, mergeDocRanges(expanded)),
+    ...expandLeadingBlankRanges(state, ranges),
+  ]);
+}
+
+function isLiveMdDirtyBoundary(node: SyntaxNode) {
+  switch (node.name) {
+    case "atx_heading":
+    case "block_quote":
+    case "fenced_code_block":
+    case "latex_block":
+    case "list":
+    case "list_item":
+    case "paragraph":
+    case "pipe_table":
+    case "setext_heading":
+    case "thematic_break":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function liveMdDirtyBoundaryRange(node: SyntaxNode): DocRange {
+  return {
+    from: previousLiveMdDirtySibling(node)?.to ?? node.from,
+    to: nextLiveMdDirtySibling(node)?.from ?? node.to,
+  };
+}
+
+function previousLiveMdDirtySibling(node: SyntaxNode) {
+  for (let sibling = node.previousSibling; sibling; sibling = sibling.previousSibling) {
+    if (isLiveMdDirtyBoundary(sibling)) return sibling;
+  }
+  return null;
+}
+
+function nextLiveMdDirtySibling(node: SyntaxNode) {
+  for (let sibling = node.nextSibling; sibling; sibling = sibling.nextSibling) {
+    if (isLiveMdDirtyBoundary(sibling)) return sibling;
+  }
+  return null;
+}
+
+function previousActiveLineRanges(value: LiveMdAnalysis, transaction: Transaction) {
+  let ranges: DocRange[] = [];
+  for (let lineNumber of value.activeLines) {
+    if (lineNumber < 1 || lineNumber > transaction.startState.doc.lines) continue;
+    let line = transaction.startState.doc.line(lineNumber);
+    let from = transaction.docChanged ? transaction.changes.mapPos(line.from, 1) : line.from;
+    let to = transaction.docChanged ? transaction.changes.mapPos(line.to, -1) : line.to;
+    ranges.push(lineRangeFor(transaction.state, from, to));
+  }
+  return ranges;
+}
+
+function activeLineRanges(state: EditorState, lines: ReadonlySet<number>) {
+  let ranges: DocRange[] = [];
+  for (let lineNumber of lines) {
+    if (lineNumber < 1 || lineNumber > state.doc.lines) continue;
+    let line = state.doc.line(lineNumber);
+    ranges.push({ from: line.from, to: line.to });
+  }
+  return ranges;
+}
+
+function rangeSetRanges<T extends RangeValue>(rangeSet: RangeSet<T>, length: number) {
+  let ranges: Range<T>[] = [];
+  rangeSet.between(0, length, (from, to, value) => {
+    ranges.push(value.range(from, to));
+  });
+  return ranges;
+}
+
+function patchCodeFenceHighlightTrees(
+  value: LiveMdAnalysis,
+  transaction: Transaction,
+  dirtyAnalysis: LiveMdAnalysis,
+  dirtyRanges: readonly DocRange[],
+) {
+  let previous = transaction.docChanged
+    ? mapCodeFenceHighlightTrees(value.codeFenceHighlightTrees, transaction.changes)
+    : value.codeFenceHighlightTrees;
+  return previous
+    .filter(
+      (highlight) =>
+        !dirtyRanges.some((range) =>
+          rangesTouch(highlight.contentFrom, highlight.contentTo, range.from, range.to),
+        ),
+    )
+    .concat(dirtyAnalysis.codeFenceHighlightTrees)
+    .sort(
+      (left, right) => left.contentFrom - right.contentFrom || left.contentTo - right.contentTo,
+    );
+}
+
+function mapCodeFenceHighlightTrees(
+  highlights: readonly CodeFenceHighlightTree[],
+  changes: ChangeDesc,
+) {
+  return highlights
+    .map((highlight) => ({
+      ...highlight,
+      contentFrom: changes.mapPos(highlight.contentFrom, 1),
+      contentTo: changes.mapPos(highlight.contentTo, -1),
+    }))
+    .filter((highlight) => highlight.contentFrom < highlight.contentTo);
 }
 
 function fullDocRange(state: EditorState): readonly DocRange[] {
@@ -542,7 +789,17 @@ function expandLeadingBlankRange(state: EditorState, range: DocRange): DocRange 
     if (isWhitespaceOnly(state.sliceDoc(line.from, line.to))) break;
     from = line.from;
   }
-  return { from, to };
+  return { from, to: expandToNextNonBlankLineStart(state, to) };
+}
+
+function expandToNextNonBlankLineStart(state: EditorState, to: number) {
+  let lineNumber = state.doc.lineAt(clamp(to, 0, state.doc.length)).number;
+  for (; lineNumber <= state.doc.lines; lineNumber++) {
+    let line = state.doc.line(lineNumber);
+    if (line.to < to) continue;
+    if (!isWhitespaceOnly(state.sliceDoc(line.from, line.to))) return Math.max(to, line.from);
+  }
+  return to;
 }
 
 function lineRangeFor(state: EditorState, from: number, to: number): DocRange {
@@ -559,6 +816,20 @@ function sameDocRanges(left: readonly DocRange[], right: readonly DocRange[]) {
     let leftRange = left[index]!;
     let rightRange = right[index]!;
     if (leftRange.from != rightRange.from || leftRange.to != rightRange.to) return false;
+  }
+  return true;
+}
+
+function sameNumbers(left: ReadonlySet<number>, right: ReadonlySet<number>) {
+  if (left.size != right.size) return false;
+  for (let value of left) if (!right.has(value)) return false;
+  return true;
+}
+
+function sameArrayItems<T>(left: readonly T[], right: readonly T[]) {
+  if (left.length != right.length) return false;
+  for (let index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) return false;
   }
   return true;
 }
@@ -756,11 +1027,14 @@ function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) 
 }
 
 function markdownFeaturesChanged(startState: EditorState, state: EditorState) {
-  return startState.facet(liveMdMarkdownFeatureFacet) != state.facet(liveMdMarkdownFeatureFacet);
+  return !sameArrayItems(
+    startState.facet(liveMdMarkdownFeatureFacet),
+    state.facet(liveMdMarkdownFeatureFacet),
+  );
 }
 
 function codeFenceHighlightersChanged(startState: EditorState, state: EditorState) {
-  return codeFenceHighlighters(startState) != codeFenceHighlighters(state);
+  return !sameArrayItems(codeFenceHighlighters(startState), codeFenceHighlighters(state));
 }
 
 function codeFenceHighlighters(state: EditorState) {
@@ -1275,6 +1549,7 @@ function addCodeFenceHighlights(
   contentTo: number,
   language: string,
 ) {
+  if (!rangeTouchesBuildRanges(build, contentFrom, contentTo)) return;
   let highlight = getCodeFenceHighlight(build, contentFrom, contentTo, language);
   if (!highlight) return;
 
@@ -1292,6 +1567,10 @@ function addCodeFenceHighlights(
     0,
     sourceText.length,
   );
+}
+
+function rangeTouchesBuildRanges(build: LiveMdBuild, from: number, to: number) {
+  return build.ranges.some((range) => rangesTouch(from, to, range.from, range.to));
 }
 
 function getCodeFenceHighlight(
