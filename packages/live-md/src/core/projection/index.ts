@@ -192,7 +192,7 @@ function projectLiveMdSemanticUnit(
       emitter.syntaxVisibility(unit.textRange.to, unit.range.to);
       return;
     case "listItem":
-      emitter.lineRangeClass(unit.range.from, unit.range.to, "cm-md-list-line");
+      projectListItem(input, unit, emitter);
       return;
     case "listMarker":
       projectListMarker(input, unit, cache, emitter);
@@ -221,6 +221,38 @@ function projectLiveMdSemanticUnit(
     case "capture":
       return;
   }
+}
+
+function projectListItem(
+  input: LiveMdProjectionInput,
+  unit: Extract<LiveMdSemanticUnit, { kind: "listItem" }>,
+  emitter: LiveMdProjectionEmitter,
+) {
+  let range = listItemProjectionRange(input, unit);
+  emitter.lineRangeClass(range.from, range.to, "cm-md-list-line");
+}
+
+function listItemProjectionRange(
+  input: LiveMdProjectionInput,
+  unit: Extract<LiveMdSemanticUnit, { kind: "listItem" }>,
+): LiveMdDocRange {
+  let doc = input.state.doc;
+  let from = Math.max(0, Math.min(unit.range.from, doc.length));
+  let to = Math.max(from, Math.min(unit.range.to, doc.length));
+  if (from >= to) return { from, to };
+
+  let firstLine = doc.lineAt(from);
+  let lastLine = doc.lineAt(Math.max(from, to - 1));
+  for (let lineNumber = lastLine.number; lineNumber >= firstLine.number; lineNumber--) {
+    let line = doc.line(lineNumber);
+    let lineFrom = Math.max(from, line.from);
+    let lineTo = Math.min(to, line.to);
+    if (!isWhitespaceOnly(input.state.sliceDoc(lineFrom, lineTo))) {
+      return { from, to: lineTo };
+    }
+  }
+
+  return { from, to };
 }
 
 function projectListMarker(

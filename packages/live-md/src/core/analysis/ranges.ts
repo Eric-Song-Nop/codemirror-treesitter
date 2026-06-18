@@ -35,6 +35,20 @@ export function liveMdRangeTouchesRanges(
   return ranges.some((range) => liveMdRangesTouch(from, to, range.from, range.to));
 }
 
+export function liveMdRangeTouchesPatchRanges(
+  from: number,
+  to: number,
+  ranges: readonly LiveMdDocRange[],
+) {
+  return ranges.some((range) => {
+    if (range.from == range.to) {
+      return from == to ? from == range.from : from < range.from && to > range.from;
+    }
+    if (from == to) return from >= range.from && from <= range.to;
+    return from < range.to && to > range.from;
+  });
+}
+
 export function liveMdRangeContains(range: LiveMdDocRange, position: number) {
   return position >= range.from && position <= range.to;
 }
@@ -100,11 +114,21 @@ export function mapLiveMdRange(
   changes: ChangeDesc,
   state: EditorState,
 ): LiveMdDocRange | null {
+  return mapLiveMdRangeWithAssoc(range, changes, state, 1, -1);
+}
+
+export function mapLiveMdRangeWithAssoc(
+  range: LiveMdDocRange,
+  changes: ChangeDesc,
+  state: EditorState,
+  fromAssoc: -1 | 1,
+  toAssoc: -1 | 1,
+): LiveMdDocRange | null {
   let oldLength = (changes as ChangeDesc & { length: number }).length;
   let oldFrom = clampLiveMdPosition(range.from, 0, oldLength);
   let oldTo = clampLiveMdPosition(range.to, 0, oldLength);
-  let from = clampLiveMdPosition(changes.mapPos(oldFrom, 1), 0, state.doc.length);
-  let to = clampLiveMdPosition(changes.mapPos(oldTo, -1), 0, state.doc.length);
+  let from = clampLiveMdPosition(changes.mapPos(oldFrom, fromAssoc), 0, state.doc.length);
+  let to = clampLiveMdPosition(changes.mapPos(oldTo, toAssoc), 0, state.doc.length);
   return from <= to ? { from, to } : null;
 }
 

@@ -182,9 +182,53 @@ describe("LiveMD analysis snapshot", () => {
     expect(canonicalAnalysis(view.state, patched)).toEqual(
       canonicalAnalysis(view.state, __testBuildVisibleLiveMdAnalysis(view.state, patched.ranges)),
     );
+    expect(canonicalSemanticUnits(patched)).toEqual(
+      canonicalSemanticUnits(__testBuildVisibleLiveMdAnalysis(view.state, patched.ranges)),
+    );
     expect(Math.max(...patched.semanticIndex.queryRanges.map((range) => range.to))).toBeLessThan(
       farHeadingFrom,
     );
+    view.destroy();
+  });
+
+  it("keeps incremental semantic units equivalent to a fresh rebuild after appending text past EOF blanks", async () => {
+    let cases = [
+      "- item\n\n\n\n",
+      "- [ ] item\n\n\n\n",
+      "> quote\n\n\n\n",
+      "| A | B |\n| - | - |\n| 1 | 2 |\n\n\n",
+      "# Heading\n\n\n\n",
+    ];
+
+    for (let doc of cases) {
+      let view = await markdownAnalysisView(doc);
+      view.dispatch({ changes: { from: doc.length, insert: "text" } });
+      let patched = __testLiveMdAnalysis(view);
+
+      expect(canonicalSemanticUnits(patched), doc).toEqual(
+        canonicalSemanticUnits(__testBuildVisibleLiveMdAnalysis(view.state, patched.ranges)),
+      );
+      view.destroy();
+    }
+  });
+
+  it("removes stale zero-width list continuation units after clearing an empty list item", async () => {
+    let doc = "- item\n- ";
+    let view = await markdownAnalysisView(doc);
+    view.dispatch({ changes: { from: "- item\n".length, to: doc.length } });
+    let patched = __testLiveMdAnalysis(view);
+
+    expect(canonicalSemanticUnits(patched)).toEqual(
+      canonicalSemanticUnits(__testBuildVisibleLiveMdAnalysis(view.state, patched.ranges)),
+    );
+    expect(
+      patched.semanticIndex.units.some(
+        (unit) =>
+          (unit.kind == "listItem" || unit.kind == "listMarker") &&
+          unit.range.from == "- item\n".length &&
+          unit.range.to == "- item\n".length,
+      ),
+    ).toBe(false);
     view.destroy();
   });
 
@@ -555,11 +599,24 @@ describe("LiveMD analysis snapshot", () => {
     ).decorations;
 
     expect(
+      decorations.filter((decoration) =>
+        (decoration.spec as { class?: string }).class?.split(/\s+/).includes("cm-md-list-line"),
+      ),
+    ).toHaveLength(2);
+    expect(
       decorations.filter(
         (decoration) =>
           (decoration.spec as { widget?: { name?: string } }).widget?.name == "TaskCheckboxWidget",
       ),
     ).toHaveLength(2);
+  });
+
+  it("trims list line projection before following paragraphs without dropping nested content", async () => {
+    let doc = "- parent\n  continued\n  - child\n    child continued\n\nparagraph";
+    let state = await markdownAnalysisState(doc);
+    let analysis = __testBuildVisibleLiveMdAnalysis(state, [{ from: 0, to: doc.length }]);
+
+    expect(countDecorationClass(state, analysis, "cm-md-list-line")).toBe(4);
   });
 
   it("keeps visible line ranges open through EOF blank lines", async () => {
@@ -912,6 +969,60 @@ function canonicalAnalysis(state: EditorState, analysis = __testBuildLiveMdAnaly
   atomicRanges.sort(compareCanonicalRange);
 
   return { atomicRanges, decorations };
+}
+
+type CanonicalSemanticUnit = {
+  childFrom: number | undefined;
+  childTo: number | undefined;
+  containerKind: string | undefined;
+  kind: string;
+  ownerFrom: number;
+  ownerNode: string;
+  ownerTo: number;
+  rangeFrom: number;
+  rangeTo: number;
+};
+
+function canonicalSemanticUnits(
+  analysis: ReturnType<typeof __testBuildVisibleLiveMdAnalysis>,
+): CanonicalSemanticUnit[] {
+  return analysis.semanticIndex.units
+    .filter((unit) => !isGlobalParagraphContainer(unit))
+    .map((unit) => ({
+      childFrom: unit.kind == "paragraphContainer" ? unit.childRange.from : undefined,
+      childTo: unit.kind == "paragraphContainer" ? unit.childRange.to : undefined,
+      containerKind: unit.kind == "paragraphContainer" ? unit.containerKind : undefined,
+      kind: unit.kind,
+      ownerFrom: unit.ownerRange.from,
+      ownerNode: unit.source.nodeName,
+      ownerTo: unit.ownerRange.to,
+      rangeFrom: unit.range.from,
+      rangeTo: unit.range.to,
+    }))
+    .sort(compareCanonicalSemanticUnit);
+}
+
+function isGlobalParagraphContainer(
+  unit: ReturnType<typeof __testBuildVisibleLiveMdAnalysis>["semanticIndex"]["units"][number],
+) {
+  return (
+    unit.kind == "paragraphContainer" &&
+    (unit.containerKind == "document" ||
+      (unit.containerKind == "block" && unit.source.nodeName == "section"))
+  );
+}
+
+function compareCanonicalSemanticUnit(left: CanonicalSemanticUnit, right: CanonicalSemanticUnit) {
+  return (
+    left.rangeFrom - right.rangeFrom ||
+    left.rangeTo - right.rangeTo ||
+    left.ownerFrom - right.ownerFrom ||
+    left.ownerTo - right.ownerTo ||
+    (left.childFrom ?? -1) - (right.childFrom ?? -1) ||
+    (left.childTo ?? -1) - (right.childTo ?? -1) ||
+    left.kind.localeCompare(right.kind) ||
+    String(left.containerKind ?? "").localeCompare(String(right.containerKind ?? ""))
+  );
 }
 
 function compareCanonicalRange(

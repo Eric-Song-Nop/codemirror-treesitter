@@ -9,6 +9,7 @@ import type {
   LiveMdUnitId,
   LiveMdUnitIndex,
   LiveMdUnitIndexPatchDocLength,
+  LiveMdUnitIndexReconcilePlan,
 } from "./types.js";
 
 export function createLiveMdUnitIndex(units: readonly LiveMdSemanticUnit[]): LiveMdUnitIndex {
@@ -69,6 +70,25 @@ export function patchLiveMdUnitIndex(
   }
 
   let patchedUnits = index.units.filter((unit) => !liveMdUnitOverlapsRanges(unit, patchWindows));
+  patchedUnits.push(...newUnits);
+  return createLiveMdUnitIndex(patchedUnits);
+}
+
+export function reconcileLiveMdUnitIndex(
+  index: LiveMdUnitIndex,
+  plan: LiveMdUnitIndexReconcilePlan,
+  newUnits: readonly LiveMdSemanticUnit[],
+  stateOrDocLength: LiveMdUnitIndexPatchDocLength,
+): LiveMdUnitIndex {
+  let deleteRanges = liveMdPatchWindows(plan.deleteRanges, stateOrDocLength);
+  let deleteUnitIds = new Set(plan.oldTouchedUnits.map((unit) => unit.id));
+  if (!deleteRanges.length && !deleteUnitIds.size && !plan.deleteOwnerIds.size) {
+    return newUnits.length ? createLiveMdUnitIndex([...index.units, ...newUnits]) : index;
+  }
+
+  let patchedUnits = index.units.filter(
+    (unit) => !deleteUnitIds.has(unit.id) && !plan.deleteOwnerIds.has(unit.ownerId),
+  );
   patchedUnits.push(...newUnits);
   return createLiveMdUnitIndex(patchedUnits);
 }

@@ -156,6 +156,12 @@ export type LiveMdGlobalState = {
 
 export type LiveMdUnitIndexPatchDocLength = EditorState | number;
 
+export type LiveMdUnitIndexReconcilePlan = {
+  deleteOwnerIds: ReadonlySet<LiveMdUnitId>;
+  deleteRanges: readonly LiveMdDocRange[];
+  oldTouchedUnits: readonly LiveMdSemanticUnit[];
+};
+
 export type LiveMdUnitIndex = {
   ownerRanges: readonly LiveMdOwnerRange[];
   units: readonly LiveMdSemanticUnit[];
@@ -168,6 +174,19 @@ export type LiveMdUnitIndex = {
     newUnits: readonly LiveMdSemanticUnit[],
     stateOrDocLength: LiveMdUnitIndexPatchDocLength,
   ): LiveMdUnitIndex;
+};
+
+export type LiveMdSemanticPatchPlan = LiveMdUnitIndexReconcilePlan & {
+  dirtyOwnerRanges: readonly LiveMdDocRange[];
+  mappedPreviousIndex: LiveMdUnitIndex;
+  queryRanges: readonly LiveMdDocRange[];
+  semanticDirtyRanges: readonly LiveMdDocRange[];
+};
+
+export type LiveMdSemanticPatchReconcile = {
+  newUnits: readonly LiveMdSemanticUnit[];
+  plan: LiveMdSemanticPatchPlan;
+  unitIndex: LiveMdUnitIndex;
 };
 
 export type LiveMdSemanticIndex = {

@@ -21,7 +21,11 @@ export {
   liveMdUnitsById,
   liveMdUnitsByOwnerId,
 } from "./owners.js";
-export { patchLiveMdSemanticIndex, type PatchLiveMdSemanticIndexOptions } from "./patch.js";
+export {
+  __testCreateLiveMdPatchPlan,
+  patchLiveMdSemanticIndex,
+  type PatchLiveMdSemanticIndexOptions,
+} from "./patch.js";
 export {
   activeLiveMdLineRanges,
   activeLiveMdLines,
@@ -59,6 +63,7 @@ export {
   liveMdUnitIndexTouching,
   mapLiveMdUnitIndex,
   patchLiveMdUnitIndex,
+  reconcileLiveMdUnitIndex,
 } from "./unit-index.js";
 export type {
   LiveMdBlockquoteUnit,
@@ -88,6 +93,8 @@ export type {
   LiveMdRuntimeSnapshot,
   LiveMdSemanticCapture,
   LiveMdSemanticIndex,
+  LiveMdSemanticPatchPlan,
+  LiveMdSemanticPatchReconcile,
   LiveMdSemanticSource,
   LiveMdSemanticUnit,
   LiveMdSemanticUnitBase,
@@ -95,6 +102,7 @@ export type {
   LiveMdTaskMarkerUnit,
   LiveMdUnitIndex,
   LiveMdUnitIndexPatchDocLength,
+  LiveMdUnitIndexReconcilePlan,
   LiveMdUnitId,
   LiveMdUnknownCaptureUnit,
   LiveMdUriAutolinkUnit,
