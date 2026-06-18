@@ -92,6 +92,22 @@ describe("LiveMD analysis snapshot", () => {
     expect(patched.unitsById.has(taskMarker.id)).toBe(false);
   });
 
+  it("patches runtime semantic indexes during selection-only invalidations", async () => {
+    let doc = "# Heading\n\n- [ ] Task\n\nparagraph\n";
+    let view = await markdownAnalysisView(doc, "Heading");
+    let beforeTaskMarker = __testLiveMdAnalysis(view).semanticIndex.units.find(
+      (unit) => unit.kind == "taskMarker",
+    );
+    if (!beforeTaskMarker) throw new Error("Expected task marker unit");
+
+    view.dispatch({ selection: { anchor: doc.indexOf("paragraph") } });
+
+    expect(__testLiveMdAnalysis(view).semanticIndex.unitsById.get(beforeTaskMarker.id)).toBe(
+      beforeTaskMarker,
+    );
+    view.destroy();
+  });
+
   it("builds decorations through query captures without tree iteration", async () => {
     let state = await markdownAnalysisState(liveMdKitchenSinkDoc(), "After anchor");
     expect(canonicalAnalysis(state).decorations.length).toBeGreaterThan(0);
@@ -126,6 +142,27 @@ describe("LiveMD analysis snapshot", () => {
         view.state,
         __testBuildVisibleLiveMdAnalysis(view.state, __testLiveMdAnalysis(view).ranges),
       ),
+    );
+    view.destroy();
+  });
+
+  it("patches semantic units with bounded query windows after document edits", async () => {
+    let doc = "# First\n\nParagraph with [link](https://example.com).\n\n# Far Heading\n\nAfter\n";
+    let view = await markdownAnalysisView(doc, "After");
+    let editFrom = doc.indexOf("First");
+    view.dispatch({
+      changes: { from: editFrom, to: editFrom + "First".length, insert: "Updated" },
+      selection: { anchor: editFrom + "Updated".length },
+    });
+
+    let patched = __testLiveMdAnalysis(view);
+    let farHeadingFrom = view.state.doc.toString().indexOf("# Far Heading");
+
+    expect(canonicalAnalysis(view.state, patched)).toEqual(
+      canonicalAnalysis(view.state, __testBuildVisibleLiveMdAnalysis(view.state, patched.ranges)),
+    );
+    expect(Math.max(...patched.semanticIndex.queryRanges.map((range) => range.to))).toBeLessThan(
+      farHeadingFrom,
     );
     view.destroy();
   });

@@ -182,6 +182,7 @@ export type LiveMdInvalidation = {
   dirtyRanges: readonly LiveMdDocRange[];
   mappedPreviousUnits: readonly LiveMdSemanticUnit[];
   reasons: readonly LiveMdInvalidationReason[];
+  semanticDirtyRanges: readonly LiveMdDocRange[];
 };
 
 export type LiveMdCodeFenceHighlightTree = {

@@ -3,9 +3,11 @@ import {
   activeLiveMdLines,
   buildLiveMdSemanticIndex,
   createLiveMdInvalidation,
+  patchLiveMdSemanticIndex,
   type LiveMdDocRange,
   type LiveMdInvalidation,
   type LiveMdRuntimeSnapshot,
+  type LiveMdSemanticIndex,
 } from "../analysis/index.js";
 import { LiveMdProjectionCache } from "../projection/index.js";
 import { readLiveMdRuntimeConfig, type LiveMdRuntimeConfig } from "./config.js";
@@ -24,10 +26,6 @@ export function createLiveMdRuntimeSnapshot(
   options: CreateLiveMdRuntimeSnapshotOptions,
 ): LiveMdRuntimeSnapshot {
   let activeLines = options.activeLines ?? activeLiveMdLines(state);
-  let semanticIndex = buildLiveMdSemanticIndex(state, {
-    activeLines,
-    ranges: options.visibleRanges,
-  });
   let config = options.config ?? readLiveMdRuntimeConfig(state);
   let invalidation =
     options.invalidation ??
@@ -36,6 +34,12 @@ export function createLiveMdRuntimeSnapshot(
       state,
       visibleRanges: options.visibleRanges,
     });
+  let semanticIndex = buildLiveMdRuntimeSemanticIndex(state, {
+    activeLines,
+    invalidation,
+    previous: options.previous ?? null,
+    visibleRanges: options.visibleRanges,
+  });
   let projectionCache = options.previous?.projectionCache ?? new LiveMdProjectionCache();
   let projection = projectLiveMdRuntime({
     cache: projectionCache,
@@ -58,4 +62,38 @@ export function createLiveMdRuntimeSnapshot(
     version: (options.previous?.version ?? 0) + 1,
     visibleRanges: options.visibleRanges,
   };
+}
+
+type BuildLiveMdRuntimeSemanticIndexOptions = {
+  activeLines: ReadonlySet<number>;
+  invalidation: LiveMdInvalidation;
+  previous: LiveMdRuntimeSnapshot | null;
+  visibleRanges: readonly LiveMdDocRange[];
+};
+
+function buildLiveMdRuntimeSemanticIndex(
+  state: EditorState,
+  options: BuildLiveMdRuntimeSemanticIndexOptions,
+): LiveMdSemanticIndex {
+  let previous = options.previous;
+  if (!shouldPatchLiveMdRuntimeSemanticIndex(previous, options.invalidation)) {
+    return buildLiveMdSemanticIndex(state, {
+      activeLines: options.activeLines,
+      ranges: options.visibleRanges,
+    });
+  }
+
+  return patchLiveMdSemanticIndex(state, {
+    activeLines: options.activeLines,
+    invalidation: options.invalidation,
+    previousIndex: previous.semanticIndex,
+    ranges: options.visibleRanges,
+  });
+}
+
+function shouldPatchLiveMdRuntimeSemanticIndex(
+  previous: LiveMdRuntimeSnapshot | null,
+  invalidation: LiveMdInvalidation,
+): previous is LiveMdRuntimeSnapshot {
+  return !!previous && !invalidation.reasons.includes("init");
 }

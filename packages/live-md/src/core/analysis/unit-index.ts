@@ -68,7 +68,7 @@ export function patchLiveMdUnitIndex(
     return newUnits.length ? createLiveMdUnitIndex([...index.units, ...newUnits]) : index;
   }
 
-  let patchedUnits = index.units.filter((unit) => !liveMdUnitTouchesRanges(unit, patchWindows));
+  let patchedUnits = index.units.filter((unit) => !liveMdUnitOverlapsRanges(unit, patchWindows));
   patchedUnits.push(...newUnits);
   return createLiveMdUnitIndex(patchedUnits);
 }
@@ -91,6 +91,17 @@ function liveMdUnitTouchesRanges(unit: LiveMdSemanticUnit, ranges: readonly Live
     liveMdRangeTouchesRanges(unit.range.from, unit.range.to, ranges) ||
     liveMdRangeTouchesRanges(unit.ownerRange.from, unit.ownerRange.to, ranges)
   );
+}
+
+function liveMdUnitOverlapsRanges(unit: LiveMdSemanticUnit, ranges: readonly LiveMdDocRange[]) {
+  return (
+    liveMdRangeOverlapsRanges(unit.range.from, unit.range.to, ranges) ||
+    liveMdRangeOverlapsRanges(unit.ownerRange.from, unit.ownerRange.to, ranges)
+  );
+}
+
+function liveMdRangeOverlapsRanges(from: number, to: number, ranges: readonly LiveMdDocRange[]) {
+  return ranges.some((range) => from < range.to && to > range.from);
 }
 
 function liveMdPatchWindows(

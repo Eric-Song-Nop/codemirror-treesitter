@@ -607,7 +607,7 @@ function projectParagraphBreaks(
       from: unit.openRange?.from ?? unit.range.from,
       to: unit.closeRange?.to ?? unit.range.to,
     }));
-  for (let range of semantic.queryRanges) {
+  for (let range of semantic.ranges) {
     projectParagraphBreaksInRange(input, emitter, range, skipRanges);
   }
 }

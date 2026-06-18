@@ -20,6 +20,7 @@ export {
   liveMdUnitsById,
   liveMdUnitsByOwnerId,
 } from "./owners.js";
+export { patchLiveMdSemanticIndex, type PatchLiveMdSemanticIndexOptions } from "./patch.js";
 export {
   activeLiveMdLineRanges,
   activeLiveMdLines,

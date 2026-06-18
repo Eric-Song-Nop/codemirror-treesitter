@@ -1,6 +1,7 @@
 import { type EditorState } from "@codemirror/state";
 import {
   syntaxTree,
+  type Tree,
   type SyntaxNode,
   type TreeSitterQueryMatch,
 } from "@codemirror-treesitter/language";
@@ -28,11 +29,21 @@ import type {
   LiveMdSemanticIndex,
   LiveMdSemanticUnit,
   LiveMdSemanticUnitBase,
+  LiveMdUnitIndex,
 } from "./types.js";
 
 export type BuildLiveMdSemanticIndexOptions = {
   activeLines?: ReadonlySet<number>;
+  queryRanges?: readonly LiveMdDocRange[];
   ranges?: readonly LiveMdDocRange[];
+};
+
+export type CreateLiveMdSemanticIndexFromUnitIndexOptions = {
+  activeLines?: ReadonlySet<number>;
+  queryRanges: readonly LiveMdDocRange[];
+  ranges: readonly LiveMdDocRange[];
+  tree?: Tree;
+  unitIndex: LiveMdUnitIndex;
 };
 
 export function buildLiveMdSemanticIndex(
@@ -41,10 +52,27 @@ export function buildLiveMdSemanticIndex(
 ): LiveMdSemanticIndex {
   let tree = syntaxTree(state);
   let ranges = normalizeLiveMdRanges(state, options.ranges ?? fullLiveMdDocRange(state));
-  let queryRanges = expandLiveMdQueryRanges(state, ranges);
+  let queryRanges = expandLiveMdQueryRanges(state, options.queryRanges ?? ranges);
   let units = collectLiveMdSemanticUnits(state, queryLiveMdSemanticMatches(tree, queryRanges));
   let unitIndex = createLiveMdUnitIndex(units);
 
+  return createLiveMdSemanticIndexFromUnitIndex(state, {
+    activeLines: options.activeLines,
+    queryRanges,
+    ranges,
+    tree,
+    unitIndex,
+  });
+}
+
+export function createLiveMdSemanticIndexFromUnitIndex(
+  state: EditorState,
+  options: CreateLiveMdSemanticIndexFromUnitIndexOptions,
+): LiveMdSemanticIndex {
+  let ranges = normalizeLiveMdRanges(state, options.ranges);
+  let queryRanges = normalizeLiveMdRanges(state, options.queryRanges);
+  let tree = options.tree ?? syntaxTree(state);
+  let unitIndex = options.unitIndex;
   return {
     activeLines: options.activeLines ?? activeLiveMdLines(state),
     docLength: state.doc.length,
@@ -59,7 +87,7 @@ export function buildLiveMdSemanticIndex(
   };
 }
 
-function collectLiveMdSemanticUnits(
+export function collectLiveMdSemanticUnits(
   state: EditorState,
   matches: ReturnType<typeof queryLiveMdSemanticMatches>,
 ) {

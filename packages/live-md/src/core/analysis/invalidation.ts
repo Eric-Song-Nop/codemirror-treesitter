@@ -35,16 +35,21 @@ export function createLiveMdInvalidation(
 ): LiveMdInvalidation {
   let reasons: LiveMdInvalidationReason[] = [];
   let dirtyRanges: LiveMdDocRange[] = [];
+  let semanticDirtyRanges: LiveMdDocRange[] = [];
   let previousIndex = options.previousIndex ?? null;
   let transactions = options.transactions ?? [];
 
   if (!previousIndex) addLiveMdInvalidationReason(reasons, "init");
   if (transactions.some((transaction) => transaction.docChanged)) {
     addLiveMdInvalidationReason(reasons, "doc");
-    dirtyRanges.push(...liveMdTransactionDirtyRanges(transactions, options.state));
+    let transactionDirtyRanges = liveMdTransactionDirtyRanges(transactions, options.state);
+    dirtyRanges.push(...transactionDirtyRanges);
+    semanticDirtyRanges.push(...transactionDirtyRanges);
   } else if (options.treeChanged) {
     addLiveMdInvalidationReason(reasons, "tree");
-    dirtyRanges.push(...liveMdTransactionDirtyRanges(transactions, options.state));
+    let transactionDirtyRanges = liveMdTransactionDirtyRanges(transactions, options.state);
+    dirtyRanges.push(...transactionDirtyRanges);
+    semanticDirtyRanges.push(...transactionDirtyRanges);
   }
 
   if (options.selectionChanged) {
@@ -63,6 +68,7 @@ export function createLiveMdInvalidation(
   if (options.viewportChanged) {
     addLiveMdInvalidationReason(reasons, "viewport");
     dirtyRanges.push(...options.visibleRanges);
+    semanticDirtyRanges.push(...options.visibleRanges);
   }
 
   if (options.configChanged) {
@@ -72,11 +78,18 @@ export function createLiveMdInvalidation(
 
   if (!dirtyRanges.length && !previousIndex) dirtyRanges.push(...fullLiveMdDocRange(options.state));
   if (!dirtyRanges.length && options.treeChanged) dirtyRanges.push(...options.visibleRanges);
+  if (!semanticDirtyRanges.length && !previousIndex) {
+    semanticDirtyRanges.push(...fullLiveMdDocRange(options.state));
+  }
+  if (!semanticDirtyRanges.length && options.treeChanged) {
+    semanticDirtyRanges.push(...options.visibleRanges);
+  }
 
   let mappedPreviousUnits = previousIndex
     ? mapLiveMdPreviousUnits(previousIndex.units, transactions)
     : [];
   let normalizedDirtyRanges = mergeLiveMdRanges(dirtyRanges);
+  let normalizedSemanticDirtyRanges = mergeLiveMdRanges(semanticDirtyRanges);
   return {
     dirtyOwnerRanges: previousIndex
       ? liveMdDirtyOwnerRanges(previousIndex.ownerRanges, normalizedDirtyRanges)
@@ -84,6 +97,7 @@ export function createLiveMdInvalidation(
     dirtyRanges: normalizedDirtyRanges,
     mappedPreviousUnits,
     reasons,
+    semanticDirtyRanges: normalizedSemanticDirtyRanges,
   };
 }
 
@@ -93,6 +107,7 @@ export function emptyLiveMdInvalidation(): LiveMdInvalidation {
     dirtyRanges: [],
     mappedPreviousUnits: [],
     reasons: [],
+    semanticDirtyRanges: [],
   };
 }
 
@@ -104,7 +119,7 @@ function liveMdTransactionDirtyRanges(
   for (let transaction of transactions) {
     let treeRanges = syntaxTreeChangedRanges(transaction);
     if (transaction.docChanged) {
-      dirtyRanges.push(...lineRangesForChanges(transaction.state, transaction.changes, treeRanges));
+      dirtyRanges.push(...lineRangesForChanges(transaction.state, transaction.changes, []));
     } else {
       dirtyRanges.push(...treeRanges);
     }

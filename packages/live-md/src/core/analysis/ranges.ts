@@ -155,7 +155,22 @@ export function liveMdLineRangeFor(state: EditorState, from: number, to: number)
 }
 
 export function expandLiveMdQueryRanges(state: EditorState, ranges: readonly LiveMdDocRange[]) {
-  return expandLiveMdPipeTableRanges(state, expandLiveMdLeadingBlankRanges(state, ranges));
+  return expandLiveMdRangeLineBreaks(
+    state,
+    expandLiveMdPipeTableRanges(state, expandLiveMdLeadingBlankRanges(state, ranges)),
+  );
+}
+
+export function expandLiveMdRangeLineBreaks(state: EditorState, ranges: readonly LiveMdDocRange[]) {
+  return mergeLiveMdRanges(
+    ranges.map((range) => {
+      let from = clampLiveMdPosition(range.from, 0, state.doc.length);
+      let to = clampLiveMdPosition(range.to, 0, state.doc.length);
+      if (from >= to || to >= state.doc.length) return { from, to };
+      let lastLine = state.doc.lineAt(Math.max(from, to - 1));
+      return { from, to: lastLine.to < state.doc.length ? lastLine.to + 1 : lastLine.to };
+    }),
+  );
 }
 
 export function expandLiveMdLeadingBlankRanges(
