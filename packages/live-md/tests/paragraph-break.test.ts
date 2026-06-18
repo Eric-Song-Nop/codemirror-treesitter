@@ -56,6 +56,18 @@ describe("paragraph breaks", () => {
     expect(countLineClass(editor.view, "cm-md-block-separator-fill")).toBe(0);
   });
 
+  it("decorates repeated trailing paragraph separators after consecutive Enter at document end", async () => {
+    let editor = await mountEditor("first");
+
+    pressKey(editor.view, "Enter");
+    pressKey(editor.view, "Enter");
+    pressKey(editor.view, "Enter");
+
+    expect(editor.value).toBe("first\n\n\n\n\n\n");
+    expect(countLineClass(editor.view, "cm-md-block-separator")).toBe(3);
+    expect(countLineClass(editor.view, "cm-md-block-separator-fill")).toBe(0);
+  });
+
   it("inserts a soft line break for Shift+Enter", async () => {
     let editor = await mountEditor("first");
 

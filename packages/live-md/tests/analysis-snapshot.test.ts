@@ -574,6 +574,50 @@ describe("LiveMD analysis snapshot", () => {
     expect(__testVisibleLineRanges(view)).toEqual([{ from: 0, to: doc.length }]);
   });
 
+  it("keeps the final EOF blank line visible range non-empty", async () => {
+    let doc = "first\n\n\n\n";
+    let state = (await markdownAnalysisState(doc)).update({
+      selection: { anchor: doc.length },
+    }).state;
+    let view = {
+      scrollDOM: { clientHeight: 100 },
+      state,
+      visibleRanges: [{ from: doc.length, to: doc.length }],
+    } as unknown as EditorView;
+    let ranges = __testVisibleLineRanges(view);
+
+    expect(ranges).toEqual([{ from: doc.length - 1, to: doc.length }]);
+    expect(
+      countDecorationClass(
+        state,
+        __testBuildVisibleLiveMdAnalysis(state, ranges),
+        "cm-md-block-separator",
+      ),
+    ).toBe(1);
+  });
+
+  it("projects paragraph separators when visible ranges start in EOF blank lines", async () => {
+    let doc = "first\n\n\n\n";
+    let state = await markdownAnalysisState(doc);
+    let firstTrailingBlankLine = state.doc.line(2);
+    let analysis = __testBuildVisibleLiveMdAnalysis(state, [
+      { from: firstTrailingBlankLine.from, to: doc.length },
+    ]);
+
+    expect(countDecorationClass(state, analysis, "cm-md-block-separator")).toBe(2);
+  });
+
+  it("projects paragraph separators after appending text past EOF blank lines", async () => {
+    let doc = "first\n\n\n\nsecond";
+    let state = await markdownAnalysisState(doc);
+    let firstTrailingBlankLine = state.doc.line(2);
+    let analysis = __testBuildVisibleLiveMdAnalysis(state, [
+      { from: firstTrailingBlankLine.from, to: doc.length },
+    ]);
+
+    expect(countDecorationClass(state, analysis, "cm-md-block-separator")).toBe(2);
+  });
+
   it("keeps the preceding task list item decorated when only EOF blank lines are visible", async () => {
     let doc = "- [x] done\n- [ ] todo\n\n\n";
     let state = (await markdownAnalysisState(doc)).update({
@@ -791,6 +835,20 @@ function decorationClasses(
     }
   });
   return classes;
+}
+
+function countDecorationClass(
+  state: EditorState,
+  analysis: ReturnType<typeof __testBuildVisibleLiveMdAnalysis>,
+  className: string,
+) {
+  let count = 0;
+  analysis.decorations.between(0, state.doc.length, (_from, _to, value) => {
+    if ((value.spec as { class?: string }).class?.split(/\s+/).includes(className)) {
+      count++;
+    }
+  });
+  return count;
 }
 
 function markHeadingFeature(className: string) {

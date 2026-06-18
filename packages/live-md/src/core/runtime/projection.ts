@@ -1,5 +1,5 @@
-import { RangeSet, type EditorState, type RangeValue } from "@codemirror/state";
-import { Decoration, type DecorationSet } from "@codemirror/view";
+import type { EditorState, RangeSet, RangeValue } from "@codemirror/state";
+import type { DecorationSet } from "@codemirror/view";
 import type { LiveMdInvalidation, LiveMdSemanticIndex } from "../analysis/index.js";
 import {
   projectLiveMdSemantics,
@@ -22,14 +22,7 @@ export type LiveMdProjectionResult = {
   decorations: DecorationSet;
 };
 
-const emptyLiveMdProjection: LiveMdProjectionResult = {
-  atomicRanges: RangeSet.empty,
-  codeFenceParses: [],
-  decorations: Decoration.none,
-};
-
 export function projectLiveMdRuntime(input: LiveMdRuntimeProjectionInput): LiveMdProjectionResult {
-  if (!input.semanticIndex.units.length) return emptyLiveMdProjection;
   return projectLiveMdSemantics(
     {
       activeLines: input.semanticIndex.activeLines,

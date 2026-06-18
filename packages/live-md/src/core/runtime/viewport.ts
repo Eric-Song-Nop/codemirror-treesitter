@@ -2,6 +2,7 @@ import type { EditorView } from "@codemirror/view";
 import {
   clampLiveMdPosition,
   fullLiveMdDocRange,
+  liveMdLineRangeFor,
   liveMdRangeContains,
   mergeLiveMdRanges,
 } from "../analysis/index.js";
@@ -18,12 +19,7 @@ export function visibleLiveMdLineRanges(view: EditorView): readonly LiveMdDocRan
     let from = clampLiveMdPosition(range.from, 0, view.state.doc.length);
     let to = clampLiveMdPosition(range.to, 0, view.state.doc.length);
     if (from > to) continue;
-    let firstLine = view.state.doc.lineAt(from);
-    let lastLine = view.state.doc.lineAt(Math.max(from, to - 1));
-    ranges.push({
-      from: firstLine.from,
-      to: to >= view.state.doc.length ? to : lastLine.to,
-    });
+    ranges.push(liveMdLineRangeFor(view.state, from, to));
   }
   return mergeLiveMdRanges(ranges);
 }

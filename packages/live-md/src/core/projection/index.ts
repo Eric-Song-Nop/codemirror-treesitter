@@ -3,6 +3,7 @@ import { highlightTree, syntaxTree } from "@codemirror-treesitter/language";
 import type { TreeSitterQueryMatch } from "@codemirror-treesitter/language";
 import { Decoration } from "@codemirror/view";
 import {
+  expandLiveMdLeadingBlankRanges,
   type LiveMdCodeFenceUnit,
   type LiveMdDocRange,
   type LiveMdImageUnit,
@@ -607,7 +608,7 @@ function projectParagraphBreaks(
       from: unit.openRange?.from ?? unit.range.from,
       to: unit.closeRange?.to ?? unit.range.to,
     }));
-  for (let range of semantic.ranges) {
+  for (let range of expandLiveMdLeadingBlankRanges(input.state, semantic.ranges)) {
     projectParagraphBreaksInRange(input, emitter, range, skipRanges);
   }
 }

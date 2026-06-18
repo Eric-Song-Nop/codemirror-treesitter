@@ -150,6 +150,14 @@ export function liveMdLineRangeFor(state: EditorState, from: number, to: number)
   let rangeFrom = clampLiveMdPosition(from, 0, state.doc.length);
   let rangeTo = clampLiveMdPosition(to, 0, state.doc.length);
   let firstLine = state.doc.lineAt(rangeFrom);
+  if (
+    rangeFrom == rangeTo &&
+    rangeTo == state.doc.length &&
+    firstLine.from == firstLine.to &&
+    firstLine.number > 1
+  ) {
+    return { from: state.doc.line(firstLine.number - 1).to, to: state.doc.length };
+  }
   let lastLine = state.doc.lineAt(Math.max(rangeFrom, rangeTo - 1));
   return { from: firstLine.from, to: rangeTo >= state.doc.length ? rangeTo : lastLine.to };
 }
