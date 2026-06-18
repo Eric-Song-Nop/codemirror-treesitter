@@ -226,6 +226,50 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("preserves unchanged widget instances across unrelated text edits", async () => {
+    let doc = "# Heading\n\n- [ ] Todo\n\nAfter\n";
+    let view = await markdownAnalysisView(doc, "Heading");
+    let before = widgetInstances(view.state, "TaskCheckboxWidget")[0];
+    let editFrom = doc.indexOf("Heading");
+
+    view.dispatch({
+      changes: { from: editFrom, to: editFrom + "Heading".length, insert: "Title" },
+      selection: { anchor: editFrom + "Title".length },
+    });
+
+    expect(widgetInstances(view.state, "TaskCheckboxWidget")[0]).toBe(before);
+    view.destroy();
+  });
+
+  it("does not reparse unchanged code fences after unrelated edits", async () => {
+    let doc = "```ts\nlet a = 1;\n```\n\nparagraph\n";
+    let parseCalls = 0;
+    let languages = new Map(await loadCodeFenceLanguages());
+    let tsParser = languages.get("ts");
+    if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
+    languages.set("ts", {
+      parse(input) {
+        parseCalls++;
+        return tsParser.parse(input);
+      },
+    } as typeof tsParser);
+
+    let state = await markdownAnalysisState(doc, "paragraph");
+    state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
+    expect(__testLiveMdAnalysis({ state } as EditorView).codeFenceHighlightTrees).toHaveLength(1);
+    expect(parseCalls).toBe(1);
+
+    parseCalls = 0;
+    let editFrom = doc.indexOf("paragraph");
+    state = state.update({
+      changes: { from: editFrom, insert: "edited " },
+      selection: { anchor: editFrom + "edited ".length },
+    }).state;
+
+    expect(__testLiveMdAnalysis({ state } as EditorView).codeFenceHighlightTrees).toHaveLength(1);
+    expect(parseCalls).toBe(0);
+  });
+
   it("reuses active syntax highlighters for code fence highlights", async () => {
     let highlighterCompartment = new Compartment();
     let view = await markdownAnalysisView("```ts\nlet answer = 1;\n```\n", "", [
@@ -529,6 +573,19 @@ function codeFenceClasses(state: EditorState) {
     },
   );
   return classes;
+}
+
+function widgetInstances(state: EditorState, name: string) {
+  let widgets: unknown[] = [];
+  __testLiveMdAnalysis({ state } as EditorView).decorations.between(
+    0,
+    state.doc.length,
+    (_from, _to, value) => {
+      let widget = (value.spec as { widget?: unknown }).widget;
+      if (widget && widget.constructor.name == name) widgets.push(widget);
+    },
+  );
+  return widgets;
 }
 
 function decorationClasses(

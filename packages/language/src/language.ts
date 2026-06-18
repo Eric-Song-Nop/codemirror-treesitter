@@ -861,11 +861,11 @@ function computeSyntaxTreeChangedRanges(transaction: Transaction): readonly DocR
 
   let oldTree = syntaxTree(transaction.startState);
   let newTree = syntaxTree(transaction.state);
-  if (!transaction.docChanged) {
-    return oldTree != newTree ? [{ from: 0, to: transaction.state.doc.length }] : [];
-  }
-
   if (!oldTree.tree || !newTree.tree) return [{ from: 0, to: transaction.state.doc.length }];
+
+  if (!transaction.docChanged) {
+    return oldTree != newTree ? normalizeRanges(collectChangedRanges(oldTree, newTree)) : [];
+  }
 
   let editedOldTree = nextLanguage.parser.editWrappedTree(
     oldTree,

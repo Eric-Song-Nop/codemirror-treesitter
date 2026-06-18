@@ -491,8 +491,7 @@
 }
 
 .live-md-codemirror .cm-md-code-block-start {
-  margin-top: 0.45em;
-  padding-top: 8px;
+  padding-top: calc(8px + 0.45em);
   border-radius: 7px 7px 0 0;
   box-shadow:
     inset 0 1px var(--live-md-code-border),
@@ -501,8 +500,7 @@
 }
 
 .live-md-codemirror .cm-md-code-block-end {
-  margin-bottom: 0.55em;
-  padding-bottom: 8px;
+  padding-bottom: calc(8px + 0.55em);
   border-radius: 0 0 7px 7px;
   box-shadow:
     inset 0 -1px var(--live-md-code-border),

@@ -603,6 +603,22 @@ describe("tree-sitter tree wrapper", () => {
     expect(syntaxTreeChangedRanges(transaction)).toEqual([{ from: 0, to: doc.length }]);
   });
 
+  it("reports nested dirty ranges when deferred parsing completes without text edits", async () => {
+    let prefix = `<main><p>${"x".repeat(3_400)}</p>`;
+    let script = "<script>let delayed = true;</script>";
+    let doc = `${prefix}${script}</main>`;
+    let scriptFrom = doc.indexOf("let delayed");
+    let scriptTo = doc.indexOf("</script>");
+    let { state } = await deferredMixedHtmlState(doc);
+
+    expect(syntaxTreeAvailable(state, scriptTo)).toBe(false);
+    ensureSyntaxTree(state, scriptTo, 5_000);
+    let transaction = state.update({});
+
+    expect(transaction.docChanged).toBe(false);
+    expect(syntaxTreeChangedRanges(transaction)).toEqual([{ from: scriptFrom, to: scriptTo }]);
+  });
+
   it("does not materialize every sibling for ranged tree iteration", async () => {
     let doc = Array.from({ length: 80 }, (_, index) => `let value${index} = ${index};`).join("\n");
     let state = await javascriptState(doc);
