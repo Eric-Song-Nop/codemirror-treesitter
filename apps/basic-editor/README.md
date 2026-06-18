@@ -32,5 +32,17 @@ vp run basic-editor#build
 vp run basic-editor#preview
 ```
 
+README editing smoke:
+
+```bash
+node apps/basic-editor/smoke/readme-edit-smoke.mjs
+node apps/basic-editor/smoke/readme-edit-smoke.mjs --collect
+```
+
+The smoke starts the basic editor app unless `BASIC_EDITOR_SMOKE_URL` points at
+an already running instance. Strict mode is the default and fails on visible
+instability while editing the root `README.md`; `--collect` prints the same
+frame, mutation, and screenshot-diff report without failing.
+
 This app has no package-local test task. Use it with `vp run ready` or the
 LiveMD package tests when changing editor runtime behavior.

@@ -12,6 +12,8 @@
     "@codemirror-treesitter/live-md": "workspace:*"
   },
   "devDependencies": {
+    "pixelmatch": "^7.2.0",
+    "pngjs": "^7.0.0",
     "vite-plus": "catalog:"
   }
 }

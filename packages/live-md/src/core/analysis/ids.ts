@@ -127,6 +127,10 @@ export function mapPreviousLiveMdSemanticUnit(
     mapped[property] = next;
   }
 
+  if (unit.kind == "paragraphContainer" && !isLiveMdDocRange(mapped.childRange)) {
+    return null;
+  }
+
   let signature = mapLiveMdSemanticUnitSignature(unit, mapped);
   if (signature != unit.signature) changed = true;
 

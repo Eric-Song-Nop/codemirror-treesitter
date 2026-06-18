@@ -28,6 +28,7 @@ import {
   loadMarkdownExtension,
   setCodeFenceLanguages,
 } from "../src/core/languages.js";
+import rootReadme from "../../../README.md?raw";
 
 let locationDescriptor: PropertyDescriptor | undefined;
 
@@ -126,6 +127,25 @@ describe("LiveMD analysis snapshot", () => {
     let snapshot = __testLiveMdAnalysis(view);
     expect(snapshot.semanticIndex.queryRanges).toEqual([]);
     expect(snapshot.semanticIndex.unitsById.get(beforeHeading.id)).toBe(beforeHeading);
+    view.destroy();
+  });
+
+  it("patches semantic indexes when a short document is replaced with the project README", async () => {
+    let view = await markdownAnalysisView("# Draft\n\n- [ ] short task\n", "Draft");
+
+    expect(() =>
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: rootReadme },
+        selection: { anchor: 0 },
+        userEvent: "setValue",
+      }),
+    ).not.toThrow();
+    ensureSyntaxTree(view.state, rootReadme.length, 5_000);
+    view.dispatch({});
+
+    let analysis = __testLiveMdAnalysis(view);
+    expect(analysis.semanticIndex.units.length).toBeGreaterThan(0);
+    expect(analysis.semanticIndex.units.some((unit) => unit.kind == "heading")).toBe(true);
     view.destroy();
   });
 
