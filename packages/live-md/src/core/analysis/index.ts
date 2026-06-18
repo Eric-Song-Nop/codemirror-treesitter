@@ -52,6 +52,12 @@ export {
   queryLiveMdMatchesFromSource,
   queryLiveMdSemanticMatches,
 } from "./query.js";
+export {
+  createLiveMdUnitIndex,
+  liveMdUnitIndexTouching,
+  mapLiveMdUnitIndex,
+  patchLiveMdUnitIndex,
+} from "./unit-index.js";
 export type {
   LiveMdBlockquoteUnit,
   LiveMdCodeFenceHighlightTree,
@@ -83,6 +89,8 @@ export type {
   LiveMdSemanticUnitBase,
   LiveMdTableUnit,
   LiveMdTaskMarkerUnit,
+  LiveMdUnitIndex,
+  LiveMdUnitIndexPatchDocLength,
   LiveMdUnitId,
   LiveMdUnknownCaptureUnit,
   LiveMdUriAutolinkUnit,

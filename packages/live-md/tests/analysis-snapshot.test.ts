@@ -17,6 +17,7 @@ import {
   __testVisibleLineRanges,
   liveMdAnalysis,
 } from "../src/core/decorations.js";
+import { buildLiveMdSemanticIndex, createLiveMdUnitIndex } from "../src/core/analysis/index.js";
 import { liveMdMarkdownFeatures } from "../src/core/features.js";
 import { liveMdImageSource, normalizeMarkdownImageSource } from "../src/core/images.js";
 import {
@@ -53,6 +54,44 @@ afterEach(() => {
 });
 
 describe("LiveMD analysis snapshot", () => {
+  it("exposes a persistent unit index alongside legacy semantic fields", async () => {
+    let state = await markdownAnalysisState("# Title\n\n- [ ] Task\n");
+    let semanticIndex = buildLiveMdSemanticIndex(state);
+    let heading = semanticIndex.units.find((unit) => unit.kind == "heading");
+    if (!heading) throw new Error("Expected heading unit");
+
+    expect(semanticIndex.unitIndex.units).toBe(semanticIndex.units);
+    expect(semanticIndex.unitIndex.unitsById).toBe(semanticIndex.unitsById);
+    expect(semanticIndex.unitIndex.unitsByOwnerId).toBe(semanticIndex.unitsByOwnerId);
+    expect(semanticIndex.unitIndex.ownerRanges).toBe(semanticIndex.ownerRanges);
+    expect(semanticIndex.unitIndex.touching([heading.range]).map((unit) => unit.id)).toContain(
+      heading.id,
+    );
+  });
+
+  it("maps and patches unit indexes without reading past document bounds", async () => {
+    let doc = "- [x] done\n\n";
+    let state = await markdownAnalysisState(doc);
+    let semanticIndex = buildLiveMdSemanticIndex(state);
+    let taskMarker = semanticIndex.units.find((unit) => unit.kind == "taskMarker");
+    if (!taskMarker) throw new Error("Expected task marker unit");
+
+    let unsafeIndex = createLiveMdUnitIndex([
+      {
+        ...taskMarker,
+        ownerRange: { from: taskMarker.ownerRange.from, to: state.doc.length + 1 },
+        range: { from: taskMarker.range.from, to: state.doc.length + 1 },
+      },
+    ]);
+    let transaction = state.update({ changes: { from: state.doc.length, insert: "\n" } });
+    let mapped = unsafeIndex.map(transaction.changes, transaction.state);
+
+    expect(mapped.units[0]?.range.to).toBeLessThanOrEqual(transaction.state.doc.length);
+
+    let patched = semanticIndex.unitIndex.patch([taskMarker.ownerRange], [], state);
+    expect(patched.unitsById.has(taskMarker.id)).toBe(false);
+  });
+
   it("builds decorations through query captures without tree iteration", async () => {
     let state = await markdownAnalysisState(liveMdKitchenSinkDoc(), "After anchor");
     expect(canonicalAnalysis(state).decorations.length).toBeGreaterThan(0);

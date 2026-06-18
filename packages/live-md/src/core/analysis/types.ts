@@ -1,4 +1,4 @@
-import type { RangeSet, RangeValue, Text } from "@codemirror/state";
+import type { ChangeDesc, EditorState, RangeSet, RangeValue, Text } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 import type {
   SyntaxNode,
@@ -140,6 +140,22 @@ export type LiveMdOwnerRange = {
   range: LiveMdDocRange;
 };
 
+export type LiveMdUnitIndexPatchDocLength = EditorState | number;
+
+export type LiveMdUnitIndex = {
+  ownerRanges: readonly LiveMdOwnerRange[];
+  units: readonly LiveMdSemanticUnit[];
+  unitsById: ReadonlyMap<LiveMdUnitId, LiveMdSemanticUnit>;
+  unitsByOwnerId: ReadonlyMap<LiveMdUnitId, readonly LiveMdSemanticUnit[]>;
+  touching(ranges: readonly LiveMdDocRange[]): readonly LiveMdSemanticUnit[];
+  map(changes: ChangeDesc, state: EditorState): LiveMdUnitIndex;
+  patch(
+    windows: readonly LiveMdDocRange[],
+    newUnits: readonly LiveMdSemanticUnit[],
+    stateOrDocLength: LiveMdUnitIndexPatchDocLength,
+  ): LiveMdUnitIndex;
+};
+
 export type LiveMdSemanticIndex = {
   activeLines: ReadonlySet<number>;
   docLength: number;
@@ -147,6 +163,7 @@ export type LiveMdSemanticIndex = {
   queryRanges: readonly LiveMdDocRange[];
   ranges: readonly LiveMdDocRange[];
   tree: Tree;
+  unitIndex: LiveMdUnitIndex;
   units: readonly LiveMdSemanticUnit[];
   unitsById: ReadonlyMap<LiveMdUnitId, LiveMdSemanticUnit>;
   unitsByOwnerId: ReadonlyMap<LiveMdUnitId, readonly LiveMdSemanticUnit[]>;

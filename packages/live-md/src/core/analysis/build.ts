@@ -20,7 +20,7 @@ import {
   normalizeLiveMdRanges,
 } from "./ranges.js";
 import { liveMdCapture, liveMdMatchKind, queryLiveMdSemanticMatches } from "./query.js";
-import { liveMdOwnerRangesForUnits, liveMdUnitsById, liveMdUnitsByOwnerId } from "./owners.js";
+import { createLiveMdUnitIndex } from "./unit-index.js";
 import type {
   LiveMdDocRange,
   LiveMdInlineMarkKind,
@@ -43,17 +43,19 @@ export function buildLiveMdSemanticIndex(
   let ranges = normalizeLiveMdRanges(state, options.ranges ?? fullLiveMdDocRange(state));
   let queryRanges = expandLiveMdQueryRanges(state, ranges);
   let units = collectLiveMdSemanticUnits(state, queryLiveMdSemanticMatches(tree, queryRanges));
+  let unitIndex = createLiveMdUnitIndex(units);
 
   return {
     activeLines: options.activeLines ?? activeLiveMdLines(state),
     docLength: state.doc.length,
-    ownerRanges: liveMdOwnerRangesForUnits(units),
+    ownerRanges: unitIndex.ownerRanges,
     queryRanges,
     ranges,
     tree,
-    units,
-    unitsById: liveMdUnitsById(units),
-    unitsByOwnerId: liveMdUnitsByOwnerId(units),
+    unitIndex,
+    units: unitIndex.units,
+    unitsById: unitIndex.unitsById,
+    unitsByOwnerId: unitIndex.unitsByOwnerId,
   };
 }
 
