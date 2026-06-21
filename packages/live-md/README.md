@@ -14,6 +14,10 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Built as an ES module package with Vite+ `vp pack`.
 - Keeps collaboration optional. Loro-specific code belongs in
   `@codemirror-treesitter/live-md-loro`, not this package.
+- LiveMD currently uses full-document query-based decoration analysis as a clean
+  baseline. Incremental analysis is expected to be rebuilt in follow-up work on
+  top of TreeCursor leaf discovery and leaf-local analysis caches, not
+  viewport-driven analysis ranges.
 
 ## Responsibilities
 
@@ -176,6 +180,14 @@ through `extensions`.
 need to override fenced-code highlighting explicitly. The controller exposes `view`, `value`,
 `ready`, `setValue()`, `setConfig()`, `setExtensions()`, `setPersistKey()`,
 `setPlaceholder()`, `setReadOnly()`, and `destroy()`.
+
+This v3 migration baseline intentionally uses full-document LiveMD decoration
+analysis. It is a correctness reset, not a performance improvement. The old
+viewport/dirty-range feature API was removed with that reset:
+`LiveMdFeatureDecorateContext` no longer exposes `ranges`, and the
+`LiveMdFeatureDocRange` type is no longer exported. Query-driven features should
+emit decorations for their matched syntax and use `activeLines` plus
+`rangeTouchesActiveLine(...)` when they need active-line-specific behavior.
 
 `prepareLiveMd(options?)` preloads Markdown language support and warms the
 LiveMD Markdown decoration queries before the first editor render. Pass

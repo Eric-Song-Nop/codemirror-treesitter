@@ -71,6 +71,41 @@ describe("LiveMD analysis snapshot", () => {
     }
   });
 
+  it("keeps full-document analysis equivalent after edits", async () => {
+    let view = await markdownAnalysisView(liveMdKitchenSinkDoc(), "After anchor");
+    let editFrom = view.state.doc.toString().indexOf("alpha | 1");
+    let transaction = view.state.update({
+      changes: {
+        from: editFrom,
+        insert: "alpha | 9",
+        to: editFrom + "alpha | 1".length,
+      },
+    });
+    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
+
+    view.dispatch(transaction);
+
+    expect(canonicalAnalysis(view.state, __testLiveMdAnalysis(view))).toEqual(
+      canonicalAnalysis(view.state),
+    );
+    view.destroy();
+  });
+
+  it("keeps full-document analysis equivalent after selection-only updates", async () => {
+    let view = await markdownAnalysisView(liveMdKitchenSinkDoc(), "After anchor");
+
+    for (let target of ["Heading One", "Alt image", "E = mc^2", "After anchor"]) {
+      view.dispatch({
+        selection: { anchor: view.state.doc.toString().indexOf(target) },
+      });
+
+      expect(canonicalAnalysis(view.state, __testLiveMdAnalysis(view)), target).toEqual(
+        canonicalAnalysis(view.state),
+      );
+    }
+    view.destroy();
+  });
+
   it("renders table previews for a larger README table", async () => {
     let doc =
       "before\n\n" +
