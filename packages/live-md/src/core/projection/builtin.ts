@@ -131,8 +131,7 @@ function createLiveMdFeatureDecorateContext(
       addMark(build, from, to, liveMdFeatureDecoration(decoration));
     },
     addReplace(from, to, widget, options) {
-      addReplace(build, from, to, widget, options?.block ?? false);
-      if (options?.atomic) addAtom(build, from, to);
+      addReplace(build, from, to, widget, options?.block ?? false, options?.atomic ?? false);
     },
     addSyntax(from, to, decoration) {
       addSyntax(build, from, to, decoration ? liveMdFeatureDecoration(decoration) : undefined);
