@@ -286,6 +286,11 @@ starts `prepareLiveMd()` in the background, and dispatches a global
   Markdown extension, full-document query-based decoration analysis, feature
   registration, image source resolution, link interactions, search, widget
   rendering, and language loading.
+- `src/core/analysis`, `src/core/projection`, and `src/core/runtime`: staging
+  split for query/table helpers, projection helpers, and StateField lifecycle.
+  The current `analysis` directory is not yet the final DOM-free semantic
+  analysis layer; it still feeds CodeMirror projection types and widget-backed
+  effects until leaf-local semantic analysis is introduced later.
 - `src/core/markdown-html.ts`: Tree-sitter Markdown-to-HTML renderer and scoped
   document CSS helpers for hosts that need sanitized document export.
 - `src/element/*`: custom element implementation and style installation.
@@ -314,6 +319,10 @@ Cloudflare-specific code, and concrete theme packages.
   `createInitialMarkdown(...)`.
 - The custom element installs package CSS into Shadow DOM; hosts can also import
   `./style.css` for bundler-visible styling.
+- The PR63 module split preserves the PR62 full-document rebuild behavior. It
+  only separates ownership boundaries so later work can replace analysis,
+  projection, and runtime pieces independently; it does not introduce semantic
+  caching or a pure semantic-to-projection dependency direction yet.
 
 ## Validation
 
