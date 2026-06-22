@@ -27,6 +27,13 @@ type AssetLoader = () => Promise<string>;
 type AssetModule = { default: string };
 type NodeRequire = { resolve: (specifier: string) => string };
 
+export type MarkdownParserService = {
+  blockLanguage: LanguageSupport;
+  blockParser: TreeSitterParser;
+  inlineParser: TreeSitterParser;
+  inlineRanges: (tree: Tree, within?: DocRange) => DocRange[][];
+};
+
 const packageUrlAsset =
   (specifier: string, load: () => Promise<AssetModule>): AssetLoader =>
   async () =>
@@ -1424,11 +1431,16 @@ const rawTextCaptureByParent = new Map([
 ]);
 
 function markdownInlineRangeGroups() {
-  return (tree: Tree): DocRange[][] => {
-    let exclusions = queryTreeCaptures(tree, markdownInlineInjectionExclusionQuerySource, {
+  return (tree: Tree, within?: DocRange): DocRange[][] => {
+    let rangeOptions = {
+      from: within?.from,
       includeNested: false,
+      to: within?.to,
+    };
+    let exclusions = queryTreeCaptures(tree, markdownInlineInjectionExclusionQuerySource, {
+      ...rangeOptions,
     });
-    return queryTreeMatches(tree, markdownInlineInjectionQuerySource, { includeNested: false })
+    return queryTreeMatches(tree, markdownInlineInjectionQuerySource, rangeOptions)
       .filter((match) => match.setProperties?.["injection.language"] == "markdown_inline")
       .flatMap((match) =>
         match.captures
@@ -1486,6 +1498,45 @@ const markdownInlineSpec: LanguageSpec = {
   languageData: markdownData,
   highlightQuery: markdownInlineHighlights,
 };
+
+const markdownBlockSpec: LanguageSpec = {
+  name: "Markdown",
+  extensions: ["md", "markdown", "mkd"],
+  implicitFinalNewline: true,
+  wasm: markdownWasm,
+  languageData: markdownData,
+  highlightQuery: markdownHighlights,
+};
+
+const markdownSpec: LanguageSpec = {
+  ...markdownBlockSpec,
+  nested: async () => [
+    { parser: await nestedParser(markdownInlineSpec), ranges: markdownInlineRangeGroups() },
+  ],
+};
+
+let markdownParserServicePromise: Promise<MarkdownParserService> | null = null;
+
+export function loadMarkdownParserService(): Promise<MarkdownParserService> {
+  markdownParserServicePromise ??= loadMarkdownParserServiceOnce();
+  return markdownParserServicePromise;
+}
+
+async function loadMarkdownParserServiceOnce(): Promise<MarkdownParserService> {
+  let [blockLanguage, inlineParser] = await Promise.all([
+    load(markdownBlockSpec),
+    nestedParser(markdownInlineSpec),
+  ]);
+  if (!(blockLanguage.language instanceof TreeSitterLanguage)) {
+    throw new Error("Markdown block language is not tree-sitter backed");
+  }
+  return {
+    blockLanguage,
+    blockParser: blockLanguage.language.parser,
+    inlineParser,
+    inlineRanges: markdownInlineRangeGroups(),
+  };
+}
 
 const angularWasm = localAsset(new URL("./wasm/tree-sitter-angular.wasm", import.meta.url));
 const angularHighlights = packageRawAsset(
@@ -1972,15 +2023,7 @@ export const languages = [
     extensions: undefined,
   }),
   desc({
-    name: "Markdown",
-    extensions: ["md", "markdown", "mkd"],
-    implicitFinalNewline: true,
-    wasm: markdownWasm,
-    languageData: markdownData,
-    highlightQuery: markdownHighlights,
-    nested: async () => [
-      { parser: await nestedParser(markdownInlineSpec), ranges: markdownInlineRangeGroups() },
-    ],
+    ...markdownSpec,
   }),
   desc({
     ...sqlSpec,

@@ -28,6 +28,9 @@ Tree-sitter grammars and highlight queries instead of Lezer language packages.
   folding props through the local language package.
 - Wire mixed-language parsing for entries such as HTML, Vue, and Markdown
   inline regions.
+- Expose an explicit Markdown parser service for LiveMD callers that need a
+  block-only Markdown language plus a separate Markdown inline parser without
+  using the generic nested Markdown language entry.
 - Provide compact in-repo grammar/style shims for upstream entries that do not
   have a direct published Tree-sitter grammar.
 
@@ -38,6 +41,16 @@ import { languages } from "@codemirror-treesitter/language-data";
 
 const markdown = languages.find((language) => language.name == "Markdown");
 const support = await markdown?.load();
+```
+
+LiveMD uses the explicit Markdown parser service when it needs to keep block
+and inline parsing separate:
+
+```ts
+import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
+
+const { blockLanguage, blockParser, inlineParser, inlineRanges } =
+  await loadMarkdownParserService();
 ```
 
 The root entry point is `src/index.ts`.
@@ -71,7 +84,7 @@ loaders.
   upstream-style language catalog, with local shims where published grammars or
   highlight queries are not directly available.
 - `src/queries/*` currently contains Markdown inline injection and raw-text
-  queries used for nested parsing.
+  queries used for nested parsing and explicit Markdown inline range discovery.
 - `src/wasm/*` contains bundled fallback grammars copied into the built package
   by `vite.config.ts`.
 

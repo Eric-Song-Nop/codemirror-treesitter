@@ -1,4 +1,4 @@
-import { EditorState } from "@codemirror/state";
+import { EditorState, Text } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
 import {
   LanguageDescription,
@@ -16,13 +16,17 @@ import {
   type TreeSitterLanguage,
 } from "@codemirror-treesitter/language";
 import { __testHighlightTree } from "../../language/src/highlight.js";
-import { languages } from "../src/index.js";
+import { languages, loadMarkdownParserService } from "../src/index.js";
 import codeFenceDelimiterQuerySource from "./queries/code-fence-delimiters.scm?raw";
 
 function ancestorNames(node: SyntaxNode) {
   let names: string[] = [];
   for (let cur: SyntaxNode | null = node; cur; cur = cur.parent) names.push(cur.name);
   return names;
+}
+
+function hasAncestorNamed(tree: Tree, position: number, name: string) {
+  return ancestorNames(tree.resolveInner(position)).includes(name);
 }
 
 describe("tree-sitter language data", () => {
@@ -800,6 +804,44 @@ describe("tree-sitter language data", () => {
       );
     } finally {
       Object.defineProperty(Tree.prototype, "iterate", iterateDescriptor);
+    }
+  });
+
+  it("exposes block-only Markdown parser service without changing generic Markdown nesting", async () => {
+    let service = await loadMarkdownParserService();
+    let generic = await languages.find((lang) => lang.name == "Markdown")!.load();
+
+    expect(service.blockLanguage.language.allowsNesting).toBe(false);
+    expect(service.blockParser.nestedParsers).toHaveLength(0);
+    expect(service.inlineParser.nestedParsers).toHaveLength(0);
+    expect(generic.language.allowsNesting).toBe(true);
+
+    let doc = "Text with *emphasis*.\n\n| _cell text_ | next |\n| --- | --- |\n";
+    let text = Text.of(doc.split("\n"));
+    let blockTree = service.blockParser.parse(text);
+
+    expect(blockTree.nested).toHaveLength(0);
+    expect(service.inlineRanges(blockTree, { from: 0, to: doc.indexOf("\n\n") })).toHaveLength(1);
+
+    let parser = service.inlineParser.createParser();
+    let inlineTrees: Tree[] = [];
+    try {
+      inlineTrees = service.inlineRanges(blockTree).map((ranges) => {
+        let parsed = service.inlineParser.parseWith(parser, text, null, undefined, ranges);
+        expect(parsed).toBeTruthy();
+        return service.inlineParser.wrapTree(parsed!, text)!;
+      });
+
+      expect(inlineTrees.length).toBeGreaterThanOrEqual(2);
+      expect(
+        inlineTrees.some((tree) => hasAncestorNamed(tree, doc.indexOf("emphasis"), "emphasis")),
+      ).toBe(true);
+      expect(
+        inlineTrees.some((tree) => hasAncestorNamed(tree, doc.indexOf("cell text"), "emphasis")),
+      ).toBe(true);
+    } finally {
+      for (let tree of inlineTrees) tree.tree?.delete();
+      parser.delete();
     }
   });
 

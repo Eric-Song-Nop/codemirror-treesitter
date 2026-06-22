@@ -1,5 +1,10 @@
 import { EditorState, RangeSet, StateField, type Extension } from "@codemirror/state";
-import { syntaxHighlighters, syntaxTree, type Highlighter } from "@codemirror-treesitter/language";
+import {
+  syntaxHighlighters,
+  syntaxTree,
+  type Highlighter,
+  type Tree,
+} from "@codemirror-treesitter/language";
 import { EditorView } from "@codemirror/view";
 import { isInsideSkippedRange, matchRoot, queryLiveMdMatches } from "../analysis/query.js";
 import { collectTable } from "../analysis/tables.js";
@@ -10,7 +15,9 @@ import {
   codeFenceHighlighterFacet,
   codeFenceLanguagesField,
   emptyCodeFenceLanguages,
+  liveMdMarkdownParserServiceFacet,
   liveMdDefaultCodeFenceHighlighter,
+  withLiveMdMarkdownInlineTrees,
   type CodeFenceLanguageMap,
 } from "../languages.js";
 import { liveMdLinkBaseUrl } from "../links.js";
@@ -32,6 +39,7 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
       sameNumbers(activeLines, value.activeLines) &&
       !codeFenceHighlightersChanged(transaction.startState, transaction.state) &&
       !codeFenceLanguagesChanged(transaction.startState, transaction.state) &&
+      !markdownParserServiceChanged(transaction.startState, transaction.state) &&
       !markdownFeaturesChanged(transaction.startState, transaction.state) &&
       transaction.startState.facet(liveMdImageSourceResolver) ==
         transaction.state.facet(liveMdImageSourceResolver) &&
@@ -93,8 +101,25 @@ function buildLiveMdBuild(
   });
 
   let tree = syntaxTree(state);
+  let markdownParserService = state.facet(liveMdMarkdownParserServiceFacet);
+  if (markdownParserService) {
+    withLiveMdMarkdownInlineTrees(markdownParserService, state.doc, tree, (inlineTrees) =>
+      processMatches(build, queryLiveMdMatches(tree, inlineTrees), inlineTrees),
+    );
+    return build;
+  }
+
+  processMatches(build, queryLiveMdMatches(tree), []);
+
+  return build;
+}
+
+function processMatches(
+  build: ReturnType<typeof createLiveMdBuild>,
+  matches: ReturnType<typeof queryLiveMdMatches>,
+  inlineTrees: readonly Tree[],
+) {
   let skipped: DocRange[] = [];
-  let matches = queryLiveMdMatches(tree);
   let tables = new Map<string, CapturedTable>();
   for (let match of matches) {
     collectTable(match, tables);
@@ -107,9 +132,7 @@ function buildLiveMdBuild(
       skipped.push({ from: root.from, to: root.to });
     }
   }
-  applyLiveMdMarkdownFeatures(build);
-
-  return build;
+  applyLiveMdMarkdownFeatures(build, inlineTrees);
 }
 
 function sameNumbers(left: ReadonlySet<number>, right: ReadonlySet<number>) {
@@ -129,6 +152,13 @@ function sameArrayItems<T>(left: readonly T[], right: readonly T[]) {
 function codeFenceLanguagesChanged(startState: EditorState, state: EditorState) {
   return (
     startState.field(codeFenceLanguagesField, false) != state.field(codeFenceLanguagesField, false)
+  );
+}
+
+function markdownParserServiceChanged(startState: EditorState, state: EditorState) {
+  return (
+    startState.facet(liveMdMarkdownParserServiceFacet) !=
+    state.facet(liveMdMarkdownParserServiceFacet)
   );
 }
 

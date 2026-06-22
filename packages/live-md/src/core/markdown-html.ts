@@ -3,12 +3,15 @@ import {
   queryTreeMatches,
   type SyntaxNode,
   type Tree,
-  type TreeSitterParser,
   type TreeSitterQueryCapture,
   type TreeSitterQueryMatch,
 } from "@codemirror-treesitter/language";
-import { languages } from "@codemirror-treesitter/language-data";
+import {
+  loadMarkdownParserService,
+  type MarkdownParserService,
+} from "@codemirror-treesitter/language-data";
 import { liveMdThemeVariableNames } from "@codemirror-treesitter/live-md-theme";
+import { withLiveMdParserTree } from "./languages.js";
 import {
   sortLiveMdMarkdownFeatures,
   type LiveMdFeatureHtmlRenderContext,
@@ -40,11 +43,9 @@ type MarkdownHtmlParsers = {
   inline: MarkdownHtmlInlineParser;
 };
 
-type MarkdownHtmlBlockParser = Pick<TreeSitterParser, "parse"> & {
-  nestedParsers: readonly { parser: unknown }[];
-};
+type MarkdownHtmlBlockParser = MarkdownParserService["blockParser"];
 
-type MarkdownHtmlInlineParser = Pick<TreeSitterParser, "parse">;
+type MarkdownHtmlInlineParser = MarkdownParserService["inlineParser"];
 
 type MarkdownHtmlRenderContext = {
   featureMatches: ReadonlyMap<string, readonly MarkdownHtmlFeatureMatch[]>;
@@ -82,18 +83,19 @@ export async function renderMarkdownToHtml(
   let parsers = await loadMarkdownHtmlParsers();
   let source = normalizeMarkdownLineEndings(markdown);
   let text = Text.of(source.split("\n"));
-  let tree = parsers.block.parse(text);
   let features = sortLiveMdMarkdownFeatures(options.markdown?.features ?? []);
-  let nodeKeys = createMarkdownHtmlNodeKeys();
-  let context: MarkdownHtmlRenderContext = {
-    featureMatches: collectMarkdownHtmlFeatureMatches(features, tree, nodeKeys),
-    inlineParser: parsers.inline,
-    nodeKeys,
-    options,
-    source,
-    text,
-  };
-  return renderBlockChildren(context, tree.topNode);
+  return withLiveMdParserTree(parsers.block, text, (tree) => {
+    let nodeKeys = createMarkdownHtmlNodeKeys();
+    let context: MarkdownHtmlRenderContext = {
+      featureMatches: collectMarkdownHtmlFeatureMatches(features, tree, nodeKeys),
+      inlineParser: parsers.inline,
+      nodeKeys,
+      options,
+      source,
+      text,
+    };
+    return renderBlockChildren(context, tree.topNode);
+  });
 }
 
 export function liveMdMarkdownDocumentCss() {
@@ -372,37 +374,11 @@ async function loadMarkdownHtmlParsers() {
 }
 
 async function loadMarkdownHtmlParsersOnce(): Promise<MarkdownHtmlParsers> {
-  let description = languages.find((language) => language.name == "Markdown");
-  if (!description) throw new Error("Markdown language support is unavailable");
-
-  let support = await description.load();
-  let block = (support.language as { parser?: unknown }).parser;
-  if (!isMarkdownHtmlBlockParser(block)) {
-    throw new Error("Markdown language support is not tree-sitter backed");
-  }
-
-  let inline = block.nestedParsers.map((source) => source.parser).find(isMarkdownHtmlInlineParser);
-  if (!inline) throw new Error("Markdown inline parser is unavailable");
-
+  let service = await loadMarkdownParserService();
   return {
-    block,
-    inline,
+    block: service.blockParser,
+    inline: service.inlineParser,
   };
-}
-
-function isMarkdownHtmlBlockParser(value: unknown): value is MarkdownHtmlBlockParser {
-  return (
-    isMarkdownHtmlInlineParser(value) &&
-    Array.isArray((value as { nestedParsers?: unknown }).nestedParsers)
-  );
-}
-
-function isMarkdownHtmlInlineParser(value: unknown): value is MarkdownHtmlInlineParser {
-  return (
-    typeof value == "object" &&
-    value != null &&
-    typeof (value as { parse?: unknown }).parse == "function"
-  );
 }
 
 async function renderBlockChildren(context: MarkdownHtmlRenderContext, node: SyntaxNode) {
@@ -501,7 +477,7 @@ function collectMarkdownHtmlFeatureMatches(
     if (!feature.query || !feature.renderHtml) continue;
 
     let matches = queryTreeMatches(tree, feature.query, {
-      includeNested: feature.includeNested ?? false,
+      includeNested: false,
     });
     for (let match of matches) {
       let target = featureHtmlTarget(match);
@@ -732,8 +708,9 @@ async function renderInlineSyntaxNode(context: MarkdownHtmlRenderContext, node: 
 
 async function renderInlineSource(context: MarkdownHtmlRenderContext, source: string) {
   if (!source) return "";
-  let tree = context.inlineParser.parse(Text.of(source.split("\n")));
-  return renderInlineChildren({ options: context.options, source }, tree.topNode);
+  return withLiveMdParserTree(context.inlineParser, Text.of(source.split("\n")), (tree) =>
+    renderInlineChildren({ options: context.options, source }, tree.topNode),
+  );
 }
 
 function inlineSyntaxNodeSource(context: MarkdownHtmlRenderContext, node: SyntaxNode) {

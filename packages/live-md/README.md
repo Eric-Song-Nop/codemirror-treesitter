@@ -25,10 +25,12 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Provide the `liveMarkdown(...)` extension for live Markdown editing.
 - Define and register `<live-md-editor>` through `defineLiveMdEditor(...)` and
   the side-effect `./register` entry.
-- Load Markdown language support and a focused set of code-fence languages from
+- Load block-only Markdown language support, an explicit Markdown inline parser
+  service, and a focused set of code-fence languages from
   `@codemirror-treesitter/language-data`.
 - Render Markdown documents to sanitized HTML through
-  `renderMarkdownToHtml(...)` using the same Tree-sitter Markdown grammar.
+  `renderMarkdownToHtml(...)` using explicit block parsing followed by
+  leaf-local inline parsing with the Tree-sitter Markdown grammars.
 - Provide scoped document CSS through `liveMdMarkdownDocumentCss()` so host apps
   can style exported HTML with the same `--live-md-*` theme tokens as the
   editor without importing app-level styles.
@@ -194,7 +196,10 @@ inside structural Markdown contexts: `Enter` keeps list, task-list, and
 blockquote continuation behavior, while `Shift+Enter` inserts a raw newline.
 
 `prepareLiveMd(options?)` preloads Markdown language support and warms the
-LiveMD Markdown decoration queries before the first editor render. Pass
+LiveMD Markdown decoration queries before the first editor render. The editor
+installs a block-only Markdown language and keeps inline parsing inside the
+LiveMD analysis/export layer instead of depending on the generic nested
+Markdown language entry. Pass
 `{ codeFences: true }` when a host also wants to preload the bundled
 code-fence language parsers during startup.
 
@@ -204,8 +209,9 @@ HTML with the package Tree-sitter Markdown parser. Hosts can pass the same
 customize block-level export output with `renderHtml(...)`. Inline query
 replacement during export is intentionally not part of this hook yet; use
 `renderInline(...)` from a block-level feature when custom output needs nested
-inline Markdown. The export hook is separate from editor-only `decorate(...)`
-callbacks:
+inline Markdown. `renderHtml(...)` always queries the block tree; a feature's
+`includeNested` setting only affects editor `decorate(...)` queries. The export
+hook is separate from editor-only `decorate(...)` callbacks:
 
 ```ts
 const callouts = liveMdMarkdownFeature({
