@@ -295,6 +295,11 @@ starts `prepareLiveMd()` in the background, and dispatches a global
   The current `analysis` directory is not yet the final DOM-free semantic
   analysis layer; it still feeds CodeMirror projection types and widget-backed
   effects until leaf-local semantic analysis is introduced later.
+- `src/core/analysis/markdown-leaf-spike.ts`: Gate B1 validation spike for
+  local Markdown leaf discovery. It compares a bounded TreeCursor walk against a
+  full-walk oracle and records trace data. Passing this spike means Gate B1 is
+  complete; it does not mean full Gate B is complete, and it is not the
+  production incremental analysis cache.
 - `src/core/markdown-html.ts`: Tree-sitter Markdown-to-HTML renderer and scoped
   document CSS helpers for hosts that need sanitized document export.
 - `src/element/*`: custom element implementation and style installation.
@@ -327,6 +332,12 @@ Cloudflare-specific code, and concrete theme packages.
   only separates ownership boundaries so later work can replace analysis,
   projection, and runtime pieces independently; it does not introduce semantic
   caching or a pure semantic-to-projection dependency direction yet.
+- The changed-leaf spike result is `Gate B1: PASS` when local changed leaves
+  match the full-walk oracle. The full Gate B remains incomplete in this PR:
+  the cache transition, marker-only state model, production reducer integration,
+  and final ancestor/context ownership model are deliberately left to later
+  work. Its `sourceHash` is diagnostic only; exact source text is used for the
+  spike oracle so hash collisions cannot hide changed leaves.
 
 ## Validation
 
