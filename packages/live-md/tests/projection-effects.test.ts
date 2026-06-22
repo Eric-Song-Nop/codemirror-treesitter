@@ -1,8 +1,13 @@
 // @vitest-environment happy-dom
 
-import { EditorState } from "@codemirror/state";
+import { EditorState, Text } from "@codemirror/state";
 import { Decoration, WidgetType } from "@codemirror/view";
 import { describe, expect, it } from "vite-plus/test";
+import {
+  type LeafAnalysisRecord,
+  type LiveMdDescriptor,
+} from "../src/core/analysis/descriptors.js";
+import { type DocRange } from "../src/core/analysis/types.js";
 import {
   addAtom,
   addLineClass,
@@ -13,7 +18,8 @@ import {
   finishAtomicRanges,
   finishDecorations,
 } from "../src/core/projection/emit.js";
-import { type LiveMdBuild } from "../src/core/analysis/types.js";
+import { projectLeaf, projectLeafRecords } from "../src/core/projection/project-leaf.js";
+import { type LiveMdBuild, type LiveMdRenderStatus } from "../src/core/projection/types.js";
 
 class TestWidget extends WidgetType {
   constructor(private readonly label: string) {
@@ -94,17 +100,107 @@ describe("LiveMD projection effects", () => {
       atomicRanges(full).filter((range) => range.from >= 6 && range.to <= 10),
     );
   });
+
+  it("projects editable leaf markers as source-safe specs instead of replacements", () => {
+    let doc = "- item\n\nnext";
+    let record = leafRecord(doc, [
+      { className: "cm-md-list-line", kind: "lineClass", range: { from: 0, to: 6 } },
+      { kind: "listMarker", marker: "-", range: { from: 0, to: 1 } },
+    ]);
+
+    expect(projectLeaf(record, false, renderStatus(doc))).toEqual([
+      { className: "cm-md-list-line", from: 0, kind: "lineClass", to: 6 },
+      { from: 0, kind: "replace", to: 1, widget: { kind: "listMarker", marker: "-" } },
+    ]);
+    expect(projectLeaf(record, true, renderStatus(doc))).toEqual([
+      { className: "cm-md-list-line", from: 0, kind: "lineClass", to: 6 },
+      { from: 0, kind: "syntax", to: 1 },
+    ]);
+  });
+
+  it("skips table cell inline specs when an inactive table is replaced", () => {
+    let doc = "| A | B |\n| - | - |\n| **x** | y |";
+    let bold = docRange(doc, "**x**");
+    let record = tableRecord(doc, [{ kind: "textMark", mark: "strong", range: bold }]);
+    let specs = projectLeaf(record, false, renderStatus(doc));
+
+    expect(specs).toEqual([
+      {
+        block: true,
+        from: 0,
+        kind: "replace",
+        to: doc.length,
+        widget: {
+          kind: "tablePreview",
+          table: { alignments: ["default", "default"], header: ["A", "B"], rows: [["x", "y"]] },
+        },
+      },
+    ]);
+  });
+
+  it("keeps table cell inline specs for active source tables", () => {
+    let doc = "| A | B |\n| - | - |\n| **x** | y |";
+    let bold = docRange(doc, "**x**");
+    let record = tableRecord(doc, [{ kind: "textMark", mark: "strong", range: bold }]);
+    let specs = projectLeaf(
+      record,
+      false,
+      renderStatus(doc, { activeSource: true, activeSourceRanges: [{ from: 0, to: doc.length }] }),
+    );
+
+    expect(specs.some((spec) => spec.kind == "replace")).toBe(false);
+    expect(specs).toContainEqual({
+      className: "cm-md-table-line",
+      from: 0,
+      kind: "lineClass",
+      to: doc.length,
+    });
+    expect(specs).toContainEqual({
+      from: bold.from,
+      kind: "mark",
+      mark: { kind: "text", mark: "strong" },
+      to: bold.to,
+    });
+  });
+
+  it("materializes leaf specs through the build adapter", () => {
+    let doc = "- item\n\nnext";
+    let build = testBuild(doc, { sourceIslandMode: true });
+    projectLeafRecords(build, [
+      leafRecord(doc, [{ kind: "listMarker", marker: "-", range: { from: 0, to: 1 } }], {
+        kind: "marker",
+        range: { from: 0, to: 1 },
+        sourceRange: { from: 0, to: 6 },
+      }),
+    ]);
+
+    expect(decorationRanges(build)).toEqual([
+      { className: undefined, from: 0, to: 1, widget: "ListMarkerWidget" },
+    ]);
+  });
 });
 
-function testBuild(doc: string): LiveMdBuild {
-  return createLiveMdBuild({
-    activeLines: new Set([2]),
+function testBuild(
+  doc: string,
+  options: {
+    activeLines?: Set<number>;
+    activeSourceRanges?: readonly DocRange[];
+    sourceIslandMode?: boolean;
+  } = {},
+): LiveMdBuild {
+  let config = {
+    activeLines: options.activeLines ?? new Set([2]),
     codeFenceHighlighters: [],
     codeFenceLanguages: new Map(),
     imageSourceResolver: null,
     linkBaseUrl: null,
     markdownFeatures: [],
     state: EditorState.create({ doc }),
+  };
+  return createLiveMdBuild({
+    ...config,
+    ...(options.activeSourceRanges ? { activeSourceRanges: options.activeSourceRanges } : {}),
+    ...(options.sourceIslandMode == null ? {} : { sourceIslandMode: options.sourceIslandMode }),
   });
 }
 
@@ -125,6 +221,90 @@ function decorationRanges(build: LiveMdBuild) {
       widget: widget && typeof widget == "object" ? widget.constructor.name : undefined,
     });
   });
+  return ranges;
+}
+
+function renderStatus(
+  doc: string,
+  options: {
+    activeLines?: ReadonlySet<number>;
+    activeSource?: boolean;
+    activeSourceRanges?: readonly DocRange[];
+    sourceIslandMode?: boolean;
+  } = {},
+): LiveMdRenderStatus {
+  return {
+    activeLines: options.activeLines ?? new Set(),
+    activeSource: options.activeSource ?? false,
+    activeSourceRanges: options.activeSourceRanges ?? [],
+    doc: Text.of(doc.split("\n")),
+    sourceIslandMode: options.sourceIslandMode ?? true,
+  };
+}
+
+function leafRecord(
+  doc: string,
+  descriptors: readonly LiveMdDescriptor[],
+  options: {
+    kind?: LeafAnalysisRecord["kind"];
+    range?: DocRange;
+    sourceRange?: DocRange;
+    structuralEffects?: readonly LiveMdDescriptor[];
+  } = {},
+): LeafAnalysisRecord {
+  let range = options.range ?? { from: 0, to: doc.length };
+  return {
+    analysis: {
+      analysisKey: "test",
+      descriptors,
+      renderKey: "test",
+      structuralEffects: options.structuralEffects ?? [],
+    },
+    context: { listPath: [], quoteDepth: 0, quoteMarkers: [] },
+    contextKey: "test",
+    kind: options.kind ?? "paragraph",
+    range,
+    sourceRange: options.sourceRange ?? range,
+  };
+}
+
+function tableRecord(
+  doc: string,
+  cellDescriptors: readonly LiveMdDescriptor[] = [],
+): LeafAnalysisRecord {
+  let delimiterFrom = doc.indexOf("| - | - |");
+  let pipes = pipeRanges(doc);
+  return leafRecord(
+    doc,
+    [
+      {
+        delimiterRowRange: { from: delimiterFrom, to: delimiterFrom + "| - | - |".length },
+        kind: "table",
+        pipeRanges: pipes,
+        range: { from: 0, to: doc.length },
+        table: {
+          alignments: ["default", "default"],
+          header: ["A", "B"],
+          rows: [["x", "y"]],
+        },
+      },
+      ...cellDescriptors,
+    ],
+    { kind: "table" },
+  );
+}
+
+function docRange(doc: string, text: string): DocRange {
+  let from = doc.indexOf(text);
+  if (from < 0) throw new Error(`Missing test text: ${text}`);
+  return { from, to: from + text.length };
+}
+
+function pipeRanges(doc: string): DocRange[] {
+  let ranges: DocRange[] = [];
+  for (let index = 0; index < doc.length; index++) {
+    if (doc[index] == "|") ranges.push({ from: index, to: index + 1 });
+  }
   return ranges;
 }
 

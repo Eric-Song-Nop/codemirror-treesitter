@@ -14,10 +14,11 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Built as an ES module package with Vite+ `vp pack`.
 - Keeps collaboration optional. Loro-specific code belongs in
   `@codemirror-treesitter/live-md-loro`, not this package.
-- LiveMD currently uses full-document query-based decoration analysis as a clean
-  baseline. Incremental analysis is expected to be rebuilt in follow-up work on
-  top of TreeCursor leaf discovery and leaf-local analysis caches, not
-  viewport-driven analysis ranges.
+- LiveMD currently uses a full-walk, leaf-local semantic analysis baseline:
+  the production Markdown block cursor owns leaf/context/marker discovery,
+  each leaf produces DOM-free descriptors, and projection maps those
+  descriptors to CodeMirror decorations and widgets. Incremental semantic
+  caching and direct incremental projection remain follow-up work.
 
 ## Responsibilities
 
@@ -297,17 +298,19 @@ starts `prepareLiveMd()` in the background, and dispatches a global
 - `src/core/extension.ts`, `src/core/decorations.ts`,
   `src/core/features.ts`, `src/core/widgets.ts`, `src/core/images.ts`,
   `src/core/links.ts`, `src/core/search.ts`, and `src/core/languages.ts`: live
-  Markdown extension, full-document query-based decoration analysis, feature
-  registration, image source resolution, link interactions, search, widget
-  rendering, and language loading.
+  Markdown extension, StateField export bridge, feature registration, image
+  source resolution, link interactions, search, widget rendering, and language
+  loading.
 - `src/core/analysis`, `src/core/projection`, and `src/core/runtime`: staging
-  split for block/query/table helpers, projection helpers, and StateField
-  lifecycle. `markdown-block-types.ts` and `markdown-block-cursor.ts` are the
-  production Markdown block snapshot path for leaf classification, structured
-  quote/list/task context, marker records, and sorted lookup inputs. The
-  directory is not yet the final DOM-free semantic analysis layer; it still
-  feeds CodeMirror projection types and widget-backed effects until leaf-local
-  semantic analysis is introduced later.
+  split for block/query/table helpers, DOM-free leaf semantic descriptors,
+  projection helpers, and StateField lifecycle. `markdown-block-types.ts` and
+  `markdown-block-cursor.ts` are the production Markdown block snapshot path
+  for leaf classification, structured quote/list/task context, marker records,
+  and sorted lookup inputs. `descriptors.ts`,
+  `markdown-leaf-analysis.ts`, `markdown-inline-analysis.ts`,
+  `markdown-table-analysis.ts`, and `markdown-fence-analysis.ts` implement the
+  full-walk leaf-local semantic baseline. `projection/project-leaf.ts` maps
+  semantic descriptors to existing CodeMirror effects and widgets.
 - `src/core/analysis/markdown-leaf-spike.ts`: Gate B validation harness for
   local Markdown leaf discovery. It now calls the production block cursor and
   keeps only edit-range seeding, fixed-point retry, full-walk oracle comparison,
@@ -340,17 +343,17 @@ Cloudflare-specific code, and concrete theme packages.
   `createInitialMarkdown(...)`.
 - The custom element installs package CSS into Shadow DOM; hosts can also import
   `./style.css` for bundler-visible styling.
-- The PR63 module split preserves the PR62 full-document rebuild behavior. It
-  only separates ownership boundaries so later work can replace analysis,
-  projection, and runtime pieces independently; it does not introduce semantic
-  caching or a pure semantic-to-projection dependency direction yet.
+- The PR72 runtime still rebuilds the current semantic view with a full block
+  walk, but built-in Markdown behavior now flows through leaf-local
+  descriptors before projection. Custom query-driven Markdown features remain
+  on the compatibility full-query path.
 - The changed-leaf harness remains a range-local oracle check on top of the
   production block cursor. Its result is `Gate B: PASS` for range-local
   changed-leaf discovery: local changed leaves match the full-walk oracle, and
   ordinary edits stay local. Its `sourceHash` is diagnostic only; exact source
   text is used for the oracle so hash collisions cannot hide changed leaves.
-  Immutable semantic caches, leaf-local analysis, and direct incremental
-  projection remain future work.
+  Immutable semantic caches and direct incremental projection remain future
+  work.
 
 ## Validation
 
@@ -363,5 +366,6 @@ vp run @codemirror-treesitter/live-md#build
 ```
 
 The LiveMD test suite covers web component behavior, readonly commands,
-full-document decoration analysis, feature registration, code fences, LaTeX,
-Mermaid, paragraph breaks, Markdown HTML rendering, and style installation.
+leaf-local analysis equivalence against the canonical full-query oracle,
+feature registration, code fences, LaTeX, Mermaid, paragraph breaks, Markdown
+HTML rendering, and style installation.

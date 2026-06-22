@@ -2,12 +2,8 @@ import { RangeSet, RangeSetBuilder, RangeValue, type Range } from "@codemirror/s
 import { Decoration, type WidgetType } from "@codemirror/view";
 import { isWhitespaceOnly, forEachLineInRange, splitRangeByLine } from "../util.js";
 import { type MarkdownTable } from "../widgets.js";
-import {
-  type DocRange,
-  type LiveMdBuild,
-  type LiveMdBuildConfig,
-  type LiveMdEffect,
-} from "../analysis/types.js";
+import { emptyLiveMdLeafAnalysisTrace, type DocRange } from "../analysis/types.js";
+import { type LiveMdBuild, type LiveMdBuildConfig, type LiveMdEffect } from "./types.js";
 
 const visibleSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-active" });
 const hiddenSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-hidden" });
@@ -24,7 +20,6 @@ export function createLiveMdBuild(config: LiveMdBuildConfig): LiveMdBuild {
   return {
     activeLines: config.activeLines,
     activeSourceRanges: config.activeSourceRanges ?? [],
-    codeFenceHighlightTrees: [],
     codeFenceHighlighters: config.codeFenceHighlighters,
     codeFenceLanguages: config.codeFenceLanguages,
     effects: [],
@@ -33,6 +28,7 @@ export function createLiveMdBuild(config: LiveMdBuildConfig): LiveMdBuild {
     markdownFeatures: config.markdownFeatures,
     sourceIslandMode: config.sourceIslandMode ?? false,
     state: config.state,
+    trace: config.trace ?? emptyLiveMdLeafAnalysisTrace(),
   };
 }
 

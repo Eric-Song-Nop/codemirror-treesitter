@@ -8,22 +8,28 @@ import {
   syntaxHighlighting,
   tags as t,
   Tree,
+  type DocRange,
 } from "@codemirror-treesitter/language";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
+  __testBuildCanonicalLiveMdAnalysis,
   __testBuildLiveMdAnalysis,
   __testLiveMdAnalysis,
   liveMdAnalysis,
 } from "../src/core/decorations.js";
 import { liveMdMarkdownFeatures } from "../src/core/features.js";
 import { liveMdImageSource, normalizeMarkdownImageSource } from "../src/core/images.js";
+import { analyzeMarkdownLeafSemantics } from "../src/core/analysis/markdown-leaf-analysis.js";
 import {
   codeFenceLanguagesField,
+  deleteLiveMdTree,
   liveMdCodeFenceHighlighting,
   loadCodeFenceLanguages,
   loadMarkdownExtension,
+  liveMdMarkdownParserServiceFacet,
   setCodeFenceLanguages,
 } from "../src/core/languages.js";
+import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
 
 let locationDescriptor: PropertyDescriptor | undefined;
 
@@ -86,7 +92,7 @@ describe("LiveMD analysis snapshot", () => {
     view.dispatch(transaction);
 
     expect(canonicalAnalysis(view.state, __testLiveMdAnalysis(view))).toEqual(
-      canonicalAnalysis(view.state),
+      canonicalAnalysis(view.state, __testBuildCanonicalLiveMdAnalysis(view.state)),
     );
     view.destroy();
   });
@@ -100,10 +106,260 @@ describe("LiveMD analysis snapshot", () => {
       });
 
       expect(canonicalAnalysis(view.state, __testLiveMdAnalysis(view)), target).toEqual(
-        canonicalAnalysis(view.state),
+        canonicalAnalysis(view.state, __testBuildCanonicalLiveMdAnalysis(view.state)),
       );
     }
     view.destroy();
+  });
+
+  it("keeps leaf-local projection equivalent to the canonical full-query projection", async () => {
+    let docs = [
+      liveMdKitchenSinkDoc(),
+      "![Alt](image.png)\n\n| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\n```mermaid\ngraph TD\nA-->B\n```\n",
+      "> - [ ] quoted task\n>\n> paragraph with **bold**\n\n---\n",
+    ];
+
+    for (let doc of docs) {
+      let state = await markdownAnalysisState(doc);
+
+      expect(canonicalAnalysis(state, __testBuildLiveMdAnalysis(state))).toEqual(
+        canonicalAnalysis(state, __testBuildCanonicalLiveMdAnalysis(state)),
+      );
+    }
+  });
+
+  it("keeps active table inline projection equivalent to the canonical full-query projection", async () => {
+    let doc =
+      "before\n\n" +
+      "| Name | Value |\n" +
+      "| --- | ---: |\n" +
+      "| _alpha_ | **1** |\n" +
+      "| [beta](https://example.com) | `2` |\n\n" +
+      "after\n";
+    let state = await markdownAnalysisState(doc, "_alpha_");
+    let leafLocal = __testBuildLiveMdAnalysis(state);
+
+    expect(canonicalAnalysis(state, leafLocal)).toEqual(
+      canonicalAnalysis(state, __testBuildCanonicalLiveMdAnalysis(state)),
+    );
+    expect(decorationClasses(state, leafLocal).has("cm-md-emphasis")).toBe(true);
+    expect(decorationClasses(state, leafLocal).has("cm-md-strong")).toBe(true);
+    expect(decorationClasses(state, leafLocal).has("cm-md-inline-code")).toBe(true);
+  });
+
+  it("balances leaf-local inline parser and tree lifetimes including table cells", async () => {
+    let service = await loadMarkdownParserService();
+    let created = 0;
+    let deleted = 0;
+    let createdTrees = 0;
+    let deletedTrees = 0;
+    let parsedRanges: DocRange[][] = [];
+    let inlineParser = Object.create(service.inlineParser) as typeof service.inlineParser;
+    inlineParser.createParser = () => {
+      created++;
+      let parser = service.inlineParser.createParser();
+      let deleteParser = parser.delete.bind(parser);
+      parser.delete = () => {
+        deleted++;
+        deleteParser();
+      };
+      return parser;
+    };
+    inlineParser.parseWith = (...args: Parameters<typeof service.inlineParser.parseWith>) => {
+      let ranges = args[4];
+      if (ranges) parsedRanges.push(ranges.map((range) => ({ from: range.from, to: range.to })));
+      return service.inlineParser.parseWith(...args);
+    };
+    inlineParser.wrapTree = (...args: Parameters<typeof service.inlineParser.wrapTree>) => {
+      let tree = service.inlineParser.wrapTree(...args);
+      if (tree?.tree) {
+        createdTrees++;
+        let wrappedTree = tree.tree;
+        let deleteTree = wrappedTree.delete.bind(wrappedTree);
+        wrappedTree.delete = () => {
+          deletedTrees++;
+          deleteTree();
+        };
+      }
+      return tree;
+    };
+    let trackedService = { ...service, inlineParser };
+    let doc =
+      "one **two**\n\n" +
+      "| Name | Value |\n" +
+      "| --- | --- |\n" +
+      "| _alpha_ | **1** |\n\n" +
+      "three _four_\n\n" +
+      "![Alt](image.png)\n";
+    let state = EditorState.create({
+      doc,
+      extensions: [
+        service.blockLanguage.extension,
+        liveMdMarkdownParserServiceFacet.of(trackedService),
+        codeFenceLanguagesField,
+      ],
+    });
+    ensureSyntaxTree(state, doc.length, 5_000);
+
+    let analysis = __testBuildLiveMdAnalysis(state);
+
+    expect(created).toBe(1);
+    expect(deleted).toBe(created);
+    expect(createdTrees).toBeGreaterThan(0);
+    expect(deletedTrees).toBe(createdTrees);
+    expect(analysis.trace.inlineParserSessions).toBe(1);
+    expect(analysis.trace.inlineParseCalls).toBe(parsedRanges.length);
+    expect(analysis.trace.inlineParsedChars).toBeGreaterThan(0);
+    expect(analysis.trace.recordsVisited).toBeGreaterThan(0);
+    expect(analysis.trace.recordsAnalyzed).toBe(analysis.trace.recordsVisited);
+    expect(analysis.trace.tableCellsParsed).toBe(4);
+    expect(parsedRanges.flat().some((range) => doc.slice(range.from, range.to) == "_alpha_")).toBe(
+      true,
+    );
+  });
+
+  it("keeps inline range group examination linear for many paragraphs", async () => {
+    let service = await loadMarkdownParserService();
+    let doc =
+      Array.from({ length: 10_000 }, (_value, index) => `paragraph ${index} **bold**`).join(
+        "\n\n",
+      ) + "\n";
+    let state = EditorState.create({ doc });
+    let tree = service.blockParser.parse(state.doc);
+    try {
+      let analysis = analyzeMarkdownLeafSemantics({ service, state, tree });
+      let trace = analysis.trace as typeof analysis.trace & {
+        inlineRangeGroupsExamined: number;
+      };
+
+      expect(analysis.records).toHaveLength(10_000);
+      expect(trace.recordsAnalyzed).toBe(10_000);
+      expect(typeof trace.inlineRangeGroupsExamined).toBe("number");
+      expect(trace.inlineRangeGroupsExamined).toBeGreaterThan(0);
+      expect(trace.inlineRangeGroupsExamined).toBeLessThanOrEqual(trace.recordsAnalyzed + 2);
+      expect(trace.inlineHostsWithoutRanges).toBe(0);
+    } finally {
+      deleteLiveMdTree(tree);
+    }
+  }, 60_000);
+
+  it("keeps raw inline Markdown visible when the parser service reports no inline ranges", async () => {
+    let service = await loadMarkdownParserService();
+    let inlineParser = Object.create(service.inlineParser) as typeof service.inlineParser;
+    inlineParser.parseWith = () => {
+      throw new Error("Inline parser must not parse without service-provided ranges");
+    };
+    let trackedService = {
+      ...service,
+      inlineParser,
+      inlineRanges: () => [],
+    };
+    let doc = "paragraph **bold** [link](https://example.com) `code`\n";
+    let state = EditorState.create({
+      doc,
+      extensions: [
+        service.blockLanguage.extension,
+        liveMdMarkdownParserServiceFacet.of(trackedService),
+        codeFenceLanguagesField,
+      ],
+    });
+    ensureSyntaxTree(state, doc.length, 5_000);
+
+    let analysis = __testBuildLiveMdAnalysis(state);
+
+    expect(analysis.trace.inlineHostsWithoutRanges).toBeGreaterThan(0);
+    expect(analysis.trace.inlineParseCalls).toBe(0);
+    expect(canonicalAnalysis(state, analysis)).toEqual({ atomicRanges: [], decorations: [] });
+  });
+
+  it("releases inline parser and parsed tree when inline wrapping throws", async () => {
+    let service = await loadMarkdownParserService();
+    let created = 0;
+    let deleted = 0;
+    let parsedTreeDeletes = 0;
+    let inlineParser = Object.create(service.inlineParser) as typeof service.inlineParser;
+    inlineParser.createParser = () => {
+      created++;
+      let parser = service.inlineParser.createParser();
+      let deleteParser = parser.delete.bind(parser);
+      parser.delete = () => {
+        deleted++;
+        deleteParser();
+      };
+      return parser;
+    };
+    inlineParser.parseWith = (...args: Parameters<typeof service.inlineParser.parseWith>) => {
+      let parsed = service.inlineParser.parseWith(...args);
+      if (parsed) {
+        let deleteParsed = parsed.delete.bind(parsed);
+        parsed.delete = () => {
+          parsedTreeDeletes++;
+          deleteParsed();
+        };
+      }
+      return parsed;
+    };
+    inlineParser.wrapTree = () => {
+      throw new Error("inline wrap failed");
+    };
+    let trackedService = { ...service, inlineParser };
+    let doc = "one **two**\n";
+    let state = EditorState.create({
+      doc,
+      extensions: [
+        service.blockLanguage.extension,
+        liveMdMarkdownParserServiceFacet.of(trackedService),
+        codeFenceLanguagesField,
+      ],
+    });
+    ensureSyntaxTree(state, doc.length, 5_000);
+
+    expect(() => __testBuildLiveMdAnalysis(state)).toThrow("inline wrap failed");
+    expect(created).toBe(1);
+    expect(deleted).toBe(1);
+    expect(parsedTreeDeletes).toBe(1);
+  });
+
+  it("parses setext heading inline content without parsing the underline", async () => {
+    let service = await loadMarkdownParserService();
+    let parsedRanges: DocRange[][] = [];
+    let inlineParser = Object.create(service.inlineParser) as typeof service.inlineParser;
+    inlineParser.parseWith = (...args: Parameters<typeof service.inlineParser.parseWith>) => {
+      let ranges = args[4];
+      if (ranges) parsedRanges.push(ranges.map((range) => ({ from: range.from, to: range.to })));
+      return service.inlineParser.parseWith(...args);
+    };
+    let trackedService = { ...service, inlineParser };
+    let doc = "Setext **Heading**\n---\n\nnext";
+    let state = EditorState.create({ doc });
+    let tree = service.blockParser.parse(state.doc);
+    try {
+      analyzeMarkdownLeafSemantics({ service: trackedService, state, tree });
+    } finally {
+      deleteLiveMdTree(tree);
+    }
+
+    let underline = { from: doc.indexOf("---"), to: doc.indexOf("---") + 3 };
+    expect(
+      parsedRanges.flat().some((range) => doc.slice(range.from, range.to).includes("**")),
+    ).toBe(true);
+    expect(parsedRanges.flat().some((range) => rangesOverlap(range, underline))).toBe(false);
+  });
+
+  it("skips analysis for leaves with descendant ERROR or MISSING nodes", async () => {
+    let service = await loadMarkdownParserService();
+    let doc = "| a | b |\n| --- | ---\n||";
+    let state = EditorState.create({ doc });
+    let tree = service.blockParser.parse(state.doc);
+    try {
+      let tableRecord = analyzeMarkdownLeafSemantics({ service, state, tree }).records.find(
+        (record) => record.kind == "table",
+      );
+
+      expect(tableRecord?.analysis.descriptors).toEqual([]);
+    } finally {
+      deleteLiveMdTree(tree);
+    }
   });
 
   it("renders table previews for a larger README table", async () => {
@@ -155,31 +411,101 @@ describe("LiveMD analysis snapshot", () => {
   });
 
   it("parses code fence highlights after edits", async () => {
-    let doc = "```ts\nlet a = 1;\n```\n";
+    let doc = "```html\n<script>let a = 1;</script>\n```\n";
     let parseCalls = 0;
+    let parserCreate = 0;
+    let parserDelete = 0;
+    let nestedOwnerMaps = 0;
+    let nestedParserCreate = 0;
+    let nestedParserDelete = 0;
+    let treeCreate = 0;
+    let treeDelete = 0;
     let languages = new Map(await loadCodeFenceLanguages());
-    let tsParser = languages.get("ts");
-    if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
-    languages.set("ts", {
-      parse(input) {
-        parseCalls++;
-        return tsParser.parse(input);
-      },
-    } as typeof tsParser);
+    let htmlParser = languages.get("html");
+    if (!htmlParser) throw new Error("HTML code fence parser is unavailable");
+    let trackedParser = Object.create(htmlParser) as typeof htmlParser;
+    trackedParser.createParser = () => {
+      parserCreate++;
+      let parser = htmlParser.createParser();
+      let deleteParser = parser.delete.bind(parser);
+      parser.delete = () => {
+        parserDelete++;
+        deleteParser();
+      };
+      return parser;
+    };
+    trackedParser.parseWith = (...args: Parameters<typeof htmlParser.parseWith>) => {
+      parseCalls++;
+      return htmlParser.parseWith(...args);
+    };
+    trackedParser.wrapTree = (...args: Parameters<typeof htmlParser.wrapTree>) => {
+      let nestedParsers = args[4];
+      if (!nestedParsers) throw new Error("Expected code fence nested parser owner map");
+      let tree = htmlParser.wrapTree(...args);
+      nestedOwnerMaps++;
+      nestedParserCreate += nestedParsers.size;
+      for (let parser of nestedParsers.values()) {
+        let deleteParser = parser.delete.bind(parser);
+        parser.delete = () => {
+          nestedParserDelete++;
+          deleteParser();
+        };
+      }
+      if (tree) treeCreate += trackNativeTreeDeletes(tree, () => treeDelete++);
+      return tree;
+    };
+    languages.set("html", trackedParser);
 
     let view = await markdownAnalysisView(doc);
     view.dispatch({ effects: setCodeFenceLanguages.of(languages) });
-    expect(__testLiveMdAnalysis(view).codeFenceHighlightTrees).toHaveLength(1);
+    let initialAnalysis = __testLiveMdAnalysis(view);
     expect(parseCalls).toBe(1);
+    expect(parserCreate).toBe(1);
+    expect(nestedOwnerMaps).toBe(1);
+    expect(nestedParserCreate).toBeGreaterThan(0);
+    expect(parserDelete).toBe(1);
+    expect(nestedParserDelete).toBe(nestedParserCreate);
+    expect(treeCreate).toBeGreaterThan(1);
+    expect(treeDelete).toBe(treeCreate);
+    expect(initialAnalysis.trace.codeFenceParserSessionsCreated).toBe(
+      parserCreate + nestedParserCreate,
+    );
+    expect(initialAnalysis.trace.codeFenceParserSessionsDeleted).toBe(
+      parserDelete + nestedParserDelete,
+    );
+    expect(initialAnalysis.trace.codeFenceTreesCreated).toBe(treeCreate);
+    expect(initialAnalysis.trace.codeFenceTreesDeleted).toBe(treeDelete);
 
     parseCalls = 0;
+    parserCreate = 0;
+    parserDelete = 0;
+    nestedOwnerMaps = 0;
+    nestedParserCreate = 0;
+    nestedParserDelete = 0;
+    treeCreate = 0;
+    treeDelete = 0;
     let editFrom = doc.indexOf("a = 1");
     view.dispatch({
       changes: { from: editFrom, to: editFrom + 1, insert: "aa" },
     });
 
-    expect(__testLiveMdAnalysis(view).codeFenceHighlightTrees).toHaveLength(1);
+    let editedAnalysis = __testLiveMdAnalysis(view);
     expect(parseCalls).toBe(1);
+    expect(parserCreate).toBe(1);
+    expect(nestedOwnerMaps).toBe(1);
+    expect(nestedParserCreate).toBeGreaterThan(0);
+    expect(parserDelete).toBe(1);
+    expect(nestedParserDelete).toBe(nestedParserCreate);
+    expect(treeCreate).toBeGreaterThan(1);
+    expect(treeDelete).toBe(treeCreate);
+    expect(editedAnalysis.trace.codeFenceParserSessionsCreated).toBe(
+      parserCreate + nestedParserCreate,
+    );
+    expect(editedAnalysis.trace.codeFenceParserSessionsDeleted).toBe(
+      parserDelete + nestedParserDelete,
+    );
+    expect(editedAnalysis.trace.codeFenceTreesCreated).toBe(treeCreate);
+    expect(editedAnalysis.trace.codeFenceTreesDeleted).toBe(treeDelete);
     view.destroy();
   });
 
@@ -447,6 +773,23 @@ function codeFenceClasses(state: EditorState) {
   return classes;
 }
 
+function trackNativeTreeDeletes(tree: Tree, onDelete: () => void): number {
+  let count = 0;
+  if (tree.tree) {
+    count++;
+    let wrappedTree = tree.tree;
+    let deleteTree = wrappedTree.delete.bind(wrappedTree);
+    wrappedTree.delete = () => {
+      onDelete();
+      deleteTree();
+    };
+  }
+  for (let nested of tree.nested) {
+    count += trackNativeTreeDeletes(nested.tree, onDelete);
+  }
+  return count;
+}
+
 function decorationClasses(
   state: EditorState,
   analysis = __testLiveMdAnalysis({ state } as EditorView),
@@ -528,11 +871,19 @@ function compareCanonicalRange(
   );
 }
 
+function rangesOverlap(left: DocRange, right: DocRange) {
+  return left.from < right.to && right.from < left.to;
+}
+
 function canonicalDecorationSpec(spec: Record<string, unknown>) {
+  let normalized = { ...spec };
+  if (typeof normalized.class == "string") {
+    normalized.class = normalized.class.split(/\s+/).filter(Boolean).sort().join(" ");
+  }
   let widget = spec.widget;
   if (widget && typeof widget == "object") {
     return {
-      ...spec,
+      ...normalized,
       widget: {
         name: widget.constructor.name,
         props: Object.fromEntries(
@@ -543,5 +894,5 @@ function canonicalDecorationSpec(spec: Record<string, unknown>) {
       },
     };
   }
-  return spec;
+  return normalized;
 }

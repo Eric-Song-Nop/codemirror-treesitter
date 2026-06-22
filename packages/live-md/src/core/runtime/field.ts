@@ -11,9 +11,14 @@ import {
   analyzeLiveMdSourceIslands,
   type LiveMdSourceIslandAnalysis,
 } from "../analysis/markdown-source-islands.js";
+import { analyzeMarkdownLeafSemantics } from "../analysis/markdown-leaf-analysis.js";
 import { isInsideSkippedRange, matchRoot, queryLiveMdMatches } from "../analysis/query.js";
 import { collectTable } from "../analysis/tables.js";
-import { type CapturedTable, type DocRange, type LiveMdAnalysis } from "../analysis/types.js";
+import {
+  emptyLiveMdLeafAnalysisTrace,
+  type CapturedTable,
+  type DocRange,
+} from "../analysis/types.js";
 import { liveMdMarkdownFeatureFacet } from "../features.js";
 import { liveMdImageSourceResolver } from "../images.js";
 import {
@@ -24,10 +29,13 @@ import {
   liveMdDefaultCodeFenceHighlighter,
   withLiveMdMarkdownInlineTrees,
   type CodeFenceLanguageMap,
+  type LiveMdMarkdownParserService,
 } from "../languages.js";
 import { liveMdLinkBaseUrl } from "../links.js";
 import { createLiveMdBuild, finishAtomicRanges, finishDecorations } from "../projection/emit.js";
 import { applyLiveMdMarkdownFeatures, processLiveMdMatch } from "../projection/builtin.js";
+import { projectLeafRecords } from "../projection/project-leaf.js";
+import { type LiveMdAnalysis } from "./types.js";
 
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
 
@@ -85,15 +93,46 @@ function buildLiveMdAnalysis(
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
   let tree = syntaxTree(state);
   let markdownParserService = state.facet(liveMdMarkdownParserServiceFacet);
-  let markdownAnalysis = markdownParserService ? analyzeLiveMdSourceIslands({ state, tree }) : null;
-  let build = buildLiveMdBuild(state, activeLines, codeFenceLanguages, markdownAnalysis, tree);
+
+  if (markdownParserService) {
+    let semanticAnalysis = analyzeMarkdownLeafSemantics({
+      service: markdownParserService,
+      state,
+      tree,
+    });
+    let build = createLiveMdBuild({
+      activeLines,
+      activeSourceRanges: semanticAnalysis.activeSourceRanges,
+      codeFenceHighlighters: codeFenceHighlighters(state),
+      codeFenceLanguages,
+      imageSourceResolver: state.facet(liveMdImageSourceResolver),
+      linkBaseUrl: state.facet(liveMdLinkBaseUrl),
+      markdownFeatures: state.facet(liveMdMarkdownFeatureFacet),
+      sourceIslandMode: true,
+      state,
+      trace: semanticAnalysis.trace,
+    });
+    projectLeafRecords(build, semanticAnalysis.records);
+    applyLegacyMarkdownFeatures(build, markdownParserService, tree);
+    return {
+      activeLines,
+      activeSourceRanges: semanticAnalysis.activeSourceRanges,
+      atomicRanges: finishAtomicRanges(build),
+      decorations: finishDecorations(build),
+      sourceIslandLeaves: semanticAnalysis.sourceIslandLeaves,
+      trace: build.trace,
+      tree,
+    };
+  }
+
+  let build = buildLegacyLiveMdBuild(state, activeLines, codeFenceLanguages, null, tree);
   return {
     activeLines,
-    activeSourceRanges: markdownAnalysis?.activeSourceRanges ?? [],
+    activeSourceRanges: [],
     atomicRanges: finishAtomicRanges(build),
-    codeFenceHighlightTrees: build.codeFenceHighlightTrees,
     decorations: finishDecorations(build),
-    sourceIslandLeaves: markdownAnalysis?.leaves ?? [],
+    sourceIslandLeaves: [],
+    trace: build.trace,
     tree,
   };
 }
@@ -102,11 +141,39 @@ export function __testBuildLiveMdAnalysis(state: EditorState) {
   return buildLiveMdAnalysis(state);
 }
 
+export function __testBuildCanonicalLiveMdAnalysis(state: EditorState) {
+  return buildCanonicalLiveMdAnalysis(state);
+}
+
 export function __testLiveMdAnalysis(view: EditorView): LiveMdAnalysis {
   return view.state.field(liveMdAnalysisField);
 }
 
-function buildLiveMdBuild(
+function buildCanonicalLiveMdAnalysis(state: EditorState): LiveMdAnalysis {
+  let activeLines = getActiveLines(state);
+  let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
+  let tree = syntaxTree(state);
+  let markdownParserService = state.facet(liveMdMarkdownParserServiceFacet);
+  let markdownAnalysis = markdownParserService ? analyzeLiveMdSourceIslands({ state, tree }) : null;
+  let build = buildLegacyLiveMdBuild(
+    state,
+    activeLines,
+    codeFenceLanguages,
+    markdownAnalysis,
+    tree,
+  );
+  return {
+    activeLines,
+    activeSourceRanges: markdownAnalysis?.activeSourceRanges ?? [],
+    atomicRanges: finishAtomicRanges(build),
+    decorations: finishDecorations(build),
+    sourceIslandLeaves: markdownAnalysis?.leaves ?? [],
+    trace: build.trace,
+    tree,
+  };
+}
+
+function buildLegacyLiveMdBuild(
   state: EditorState,
   activeLines: Set<number>,
   codeFenceLanguages: CodeFenceLanguageMap,
@@ -123,6 +190,7 @@ function buildLiveMdBuild(
     markdownFeatures: state.facet(liveMdMarkdownFeatureFacet),
     sourceIslandMode: Boolean(markdownAnalysis),
     state,
+    trace: emptyLiveMdLeafAnalysisTrace(),
   });
 
   let markdownParserService = state.facet(liveMdMarkdownParserServiceFacet);
@@ -136,6 +204,17 @@ function buildLiveMdBuild(
   processMatches(build, queryLiveMdMatches(tree), []);
 
   return build;
+}
+
+function applyLegacyMarkdownFeatures(
+  build: ReturnType<typeof createLiveMdBuild>,
+  markdownParserService: LiveMdMarkdownParserService,
+  tree: ReturnType<typeof syntaxTree>,
+) {
+  if (!build.markdownFeatures.length) return;
+  withLiveMdMarkdownInlineTrees(markdownParserService, build.state.doc, tree, (inlineTrees) => {
+    applyLiveMdMarkdownFeatures(build, inlineTrees);
+  });
 }
 
 function processMatches(

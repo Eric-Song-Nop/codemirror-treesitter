@@ -816,12 +816,29 @@ describe("tree-sitter language data", () => {
     expect(service.inlineParser.nestedParsers).toHaveLength(0);
     expect(generic.language.allowsNesting).toBe(true);
 
-    let doc = "Text with *emphasis*.\n\n| _cell text_ | next |\n| --- | --- |\n";
+    let doc =
+      "Text with *emphasis*.\n\n" +
+      "- list **bold**\n\n" +
+      "> quote `code`\n\n" +
+      "| _cell text_ | next |\n" +
+      "| --- | --- |\n";
     let text = Text.of(doc.split("\n"));
     let blockTree = service.blockParser.parse(text);
 
     expect(blockTree.nested).toHaveLength(0);
     expect(service.inlineRanges(blockTree, { from: 0, to: doc.indexOf("\n\n") })).toHaveLength(1);
+    expect(
+      service.inlineRanges(blockTree, {
+        from: doc.indexOf("list"),
+        to: doc.indexOf("list **bold**") + "list **bold**".length,
+      }),
+    ).toEqual([[{ from: doc.indexOf("list"), to: doc.indexOf("\n\n", doc.indexOf("list")) }]]);
+    expect(
+      service.inlineRanges(blockTree, {
+        from: doc.indexOf("quote"),
+        to: doc.indexOf("quote `code`") + "quote `code`".length,
+      }),
+    ).toEqual([[{ from: doc.indexOf("quote"), to: doc.indexOf("\n\n", doc.indexOf("quote")) }]]);
 
     let parser = service.inlineParser.createParser();
     let inlineTrees: Tree[] = [];

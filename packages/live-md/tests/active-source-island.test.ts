@@ -1,12 +1,19 @@
 // @vitest-environment happy-dom
 
-import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
+import {
+  EditorSelection,
+  EditorState,
+  RangeSet,
+  StateField,
+  type Extension,
+} from "@codemirror/state";
 import { undo, redo } from "@codemirror-treesitter/commands";
 import { ensureSyntaxTree, type Tree } from "@codemirror-treesitter/language";
 import { EditorView } from "@codemirror/view";
 import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
+  __testBuildCanonicalLiveMdAnalysis,
   __testBuildLiveMdAnalysis,
   __testLiveMdAnalysis,
   liveMdAnalysis,
@@ -22,7 +29,7 @@ import {
   activeMarkdownSourceRanges,
   type LiveMdSourceIslandLeaf,
 } from "../src/core/analysis/markdown-source-islands.js";
-import { type LiveMdAnalysis } from "../src/core/analysis/types.js";
+import { type LiveMdAnalysis } from "../src/core/runtime/types.js";
 
 type SelectionSpec = number | { anchor: number; head: number };
 
@@ -43,6 +50,21 @@ afterEach(() => {
   }
 });
 
+const canonicalLiveMdAnalysisField = StateField.define<LiveMdAnalysis>({
+  create: __testBuildCanonicalLiveMdAnalysis,
+  update(_value, transaction) {
+    return __testBuildCanonicalLiveMdAnalysis(transaction.state);
+  },
+  provide(field) {
+    return [
+      EditorView.decorations.from(field, (analysis) => analysis.decorations),
+      EditorView.atomicRanges.of(
+        (view) => view.state.field(field, false)?.atomicRanges ?? RangeSet.empty,
+      ),
+    ];
+  },
+});
+
 describe("LiveMD active source islands", () => {
   it("keeps paragraph and heading syntax visible inside the active leaf", async () => {
     let paragraph = await mountEditor("Use *emphasis* here\n\nnext", {
@@ -60,11 +82,18 @@ describe("LiveMD active source islands", () => {
   });
 
   it("keeps table and fence blocks as source while their leaf is active", async () => {
-    let tableDoc = "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\nnext";
+    let tableDoc =
+      "| Name | Value |\n" +
+      "| --- | ---: |\n" +
+      "| **alpha** | [one](https://one.example) |\n\n" +
+      "next";
     let table = await mountEditor(tableDoc, { selection: tableDoc.indexOf("alpha") });
+    let tableAnalysis = __testLiveMdAnalysis(table.view);
 
     expect(table.view.dom.querySelector(".cm-md-table-preview")).toBeNull();
     expect(table.view.contentDOM.textContent).toContain("| Name | Value |");
+    expect(table.view.dom.querySelector(".cm-md-syntax-hidden")).toBeNull();
+    expect(atomicRangeTexts(table.view.state, tableAnalysis)).toEqual([]);
     table.destroy();
 
     let fenceDoc = "```ts\nconst x = 1;\n```\n\nnext";
@@ -74,6 +103,50 @@ describe("LiveMD active source islands", () => {
     expect(closingFence?.classList.contains("cm-md-syntax-active")).toBe(true);
     expect(closingFence?.classList.contains("cm-md-syntax-hidden")).toBe(false);
     fence.destroy();
+  });
+
+  it("keeps canonical active table cell inline marks and links in source", async () => {
+    let doc =
+      "| Name | Value |\n" +
+      "| --- | ---: |\n" +
+      "| **alpha** | [docs](https://docs.example) |\n\n" +
+      "next";
+    let view = await mountCanonicalEditor(doc, { selection: doc.indexOf("alpha") });
+    let analysis = view.state.field(canonicalLiveMdAnalysisField);
+    let classes = decorationClasses(view.state, analysis);
+    let strong = view.dom.querySelector<HTMLElement>(".cm-md-strong");
+    let link = view.dom.querySelector<HTMLElement>(".cm-md-link[data-live-md-href]");
+
+    expect(view.dom.querySelector(".cm-md-table-preview")).toBeNull();
+    expect(strong?.textContent).toContain("alpha");
+    expect(link?.textContent).toContain("docs");
+    expect(link?.dataset.liveMdHref).toBe("https://docs.example");
+    expect(classes.has("cm-md-strong")).toBe(true);
+    expect(classes.has("cm-md-link")).toBe(true);
+    expect(view.dom.querySelector(".cm-md-syntax-hidden")).toBeNull();
+    expect(
+      syntaxSpans(view, "**").every((span) => span.classList.contains("cm-md-syntax-active")),
+    ).toBe(true);
+    expect(atomicRangeTexts(view.state, analysis)).toEqual([]);
+    view.destroy();
+  });
+
+  it("does not layer canonical cell inline marks over inactive table previews", async () => {
+    let doc =
+      "| Name | Value |\n" +
+      "| --- | ---: |\n" +
+      "| **alpha** | [docs](https://docs.example) |\n\n" +
+      "next";
+    let view = await mountCanonicalEditor(doc, { selection: doc.indexOf("next") });
+    let analysis = view.state.field(canonicalLiveMdAnalysisField);
+    let classes = decorationClasses(view.state, analysis);
+
+    expect(view.dom.querySelector(".cm-md-table-preview")).toBeTruthy();
+    expect(view.dom.querySelector(".cm-md-strong")).toBeNull();
+    expect(view.dom.querySelector(".cm-md-link")).toBeNull();
+    expect(classes.has("cm-md-strong")).toBe(false);
+    expect(classes.has("cm-md-link")).toBe(false);
+    view.destroy();
   });
 
   it("expands only the active leaf inside list and quote containers", async () => {
@@ -356,6 +429,28 @@ async function mountEditor(
   return editor;
 }
 
+async function mountCanonicalEditor(
+  doc: string,
+  options: { selection: SelectionSpec } = { selection: 0 },
+): Promise<EditorView> {
+  let parent = document.body.appendChild(document.createElement("div"));
+  let view = new EditorView({
+    parent,
+    state: EditorState.create({
+      doc,
+      selection: selectionFromSpec(options.selection),
+      extensions: [
+        EditorState.allowMultipleSelections.of(true),
+        await loadMarkdownExtension(),
+        canonicalLiveMdAnalysisField,
+      ],
+    }),
+  });
+  ensureSyntaxTree(view.state, doc.length, 5_000);
+  view.dispatch({});
+  return view;
+}
+
 async function markdownState(
   doc: string,
   options: { extensions?: Extension; selection?: EditorSelection } = {},
@@ -374,8 +469,15 @@ async function markdownState(
   return state.update({}).state;
 }
 
-function syntaxSpans(editor: LiveMdEditorController, text: string) {
-  return Array.from(editor.view.contentDOM.querySelectorAll<HTMLElement>(".cm-md-syntax")).filter(
+function selectionFromSpec(selection: SelectionSpec) {
+  return typeof selection == "number"
+    ? EditorSelection.cursor(selection)
+    : EditorSelection.range(selection.anchor, selection.head);
+}
+
+function syntaxSpans(editor: EditorView | LiveMdEditorController, text: string) {
+  let contentDOM = editor instanceof EditorView ? editor.contentDOM : editor.view.contentDOM;
+  return Array.from(contentDOM.querySelectorAll<HTMLElement>(".cm-md-syntax")).filter(
     (span) => span.textContent == text,
   );
 }
@@ -422,6 +524,14 @@ function decorationClasses(state: EditorState, analysis = __testBuildLiveMdAnaly
     }
   });
   return classes;
+}
+
+function atomicRangeTexts(state: EditorState, analysis = __testBuildLiveMdAnalysis(state)) {
+  let texts: string[] = [];
+  analysis.atomicRanges.between(0, state.doc.length, (from, to) => {
+    texts.push(state.sliceDoc(from, to));
+  });
+  return texts;
 }
 
 function trackInlineResources(
