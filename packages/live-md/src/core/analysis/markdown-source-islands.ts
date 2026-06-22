@@ -1,10 +1,11 @@
 import { type EditorState, type SelectionRange, type Text } from "@codemirror/state";
 import { type DocRange, type Tree } from "@codemirror-treesitter/language";
+import { walkMarkdownBlocks } from "./markdown-block-cursor.js";
 import {
+  type MarkdownLeaf,
   type MarkdownLeafKind,
-  type MarkdownLeafRecord,
-  walkMarkdownLeaves,
-} from "./markdown-leaf-spike.js";
+  type MarkdownMarkerRecord,
+} from "./markdown-block-types.js";
 import { isWhitespaceOnly } from "../util.js";
 
 export type LiveMdSourceIslandLeaf = {
@@ -22,10 +23,11 @@ export function analyzeLiveMdSourceIslands(input: {
   state: EditorState;
   tree: Tree;
 }): LiveMdSourceIslandAnalysis {
-  let walked = walkMarkdownLeaves(input.tree, input.state.doc);
+  let walked = walkMarkdownBlocks(input.tree, input.state.doc);
   let leaves = withMarkerOnlySourceIslands(
     input.state.doc,
-    walked.leaves.map((leaf) => sourceIslandLeaf(input.state.doc, leaf)),
+    walked.snapshot.leaves.map(sourceIslandLeaf),
+    walked.snapshot.markers,
   );
 
   return {
@@ -52,21 +54,30 @@ export function activeMarkdownSourceRanges(
   return active;
 }
 
+export function findSourceIslandLeaf(
+  doc: Text,
+  leaves: readonly LiveMdSourceIslandLeaf[],
+  position: number,
+  assoc: -1 | 0 | 1,
+) {
+  let index = lastLeafStartingAtOrBefore(leaves, position);
+  if (index >= 0) {
+    let leaf = leaves[index]!;
+    if (leafOwnsCaret(doc, leaf, position, assoc)) return leaf;
+    if (leaf.sourceRange.from == position && index > 0) {
+      let previous = leaves[index - 1]!;
+      if (leafOwnsCaret(doc, previous, position, assoc)) return previous;
+    }
+  }
+  return null;
+}
+
 function leafAtSelectionHead(
   doc: Text,
   leaves: readonly LiveMdSourceIslandLeaf[],
   range: SelectionRange,
 ) {
-  let index = lastLeafStartingAtOrBefore(leaves, range.head);
-  if (index >= 0) {
-    let leaf = leaves[index]!;
-    if (leafOwnsSelectionHead(doc, leaf, range)) return leaf;
-    if (leaf.sourceRange.from == range.head && index > 0) {
-      let previous = leaves[index - 1]!;
-      if (leafOwnsSelectionHead(doc, previous, range)) return previous;
-    }
-  }
-  return null;
+  return findSourceIslandLeaf(doc, leaves, range.head, range.assoc);
 }
 
 function lastLeafStartingAtOrBefore(leaves: readonly LiveMdSourceIslandLeaf[], position: number) {
@@ -106,48 +117,55 @@ export function leafOwnsCaret(
   return doc.lineAt(position).number == doc.lineAt(to - 1).number;
 }
 
-function sourceIslandLeaf(doc: Text, leaf: MarkdownLeafRecord): LiveMdSourceIslandLeaf {
+function sourceIslandLeaf(leaf: MarkdownLeaf): LiveMdSourceIslandLeaf {
   return {
     contextKey: leaf.contextKey,
     kind: leaf.kind,
-    sourceRange: leafSourceRange(doc, leaf),
+    sourceRange: leaf.sourceRange,
   };
-}
-
-function leafSourceRange(doc: Text, leaf: MarkdownLeafRecord): DocRange {
-  if (leaf.from >= leaf.to) return { from: leaf.from, to: leaf.to };
-  let firstLine = doc.lineAt(leaf.from);
-  let lastLine = doc.lineAt(Math.max(leaf.from, leaf.to - 1));
-  while (
-    lastLine.number > firstLine.number &&
-    isWhitespaceOnly(doc.sliceString(lastLine.from, lastLine.to))
-  ) {
-    lastLine = doc.line(lastLine.number - 1);
-  }
-  return { from: firstLine.from, to: lastLine.to };
 }
 
 function withMarkerOnlySourceIslands(
   doc: Text,
   leaves: readonly LiveMdSourceIslandLeaf[],
+  markers: readonly MarkdownMarkerRecord[],
 ): LiveMdSourceIslandLeaf[] {
   let markerLeaves: LiveMdSourceIslandLeaf[] = [];
   let leafIndex = 0;
-  for (let lineNumber = 1; lineNumber <= doc.lines; lineNumber++) {
-    let line = doc.line(lineNumber);
+  for (let group of markerLineGroups(markers)) {
+    let line = group[0]!.lineRange;
     while (leafIndex < leaves.length && leaves[leafIndex]!.sourceRange.to <= line.from) {
       leafIndex++;
     }
-    if (!isMarkerOnlyLine(doc.sliceString(line.from, line.to))) continue;
     if (lineOverlapsLeaf(line.from, line.to, leaves, leafIndex)) continue;
+    if (!lineContainsOnlyMarkers(doc, line, group)) continue;
+    let owner = group[group.length - 1]!;
     markerLeaves.push({
-      contextKey: "marker",
+      contextKey: owner.contextKey,
       kind: "marker",
       sourceRange: { from: line.from, to: line.to },
     });
   }
   if (!markerLeaves.length) return [...leaves];
   return [...leaves, ...markerLeaves].sort(compareSourceIslandLeaf);
+}
+
+function markerLineGroups(markers: readonly MarkdownMarkerRecord[]) {
+  let groups = new Map<string, MarkdownMarkerRecord[]>();
+  for (let marker of markers) {
+    let key = `${marker.lineRange.from}:${marker.lineRange.to}`;
+    let group = groups.get(key);
+    if (group) {
+      group.push(marker);
+    } else {
+      groups.set(key, [marker]);
+    }
+  }
+  return Array.from(groups.values()).map((group) =>
+    group.sort(
+      (left, right) => left.range.from - right.range.from || left.range.to - right.range.to,
+    ),
+  );
 }
 
 function lineOverlapsLeaf(
@@ -164,14 +182,17 @@ function lineOverlapsLeaf(
   return false;
 }
 
-function isMarkerOnlyLine(source: string) {
-  let rest = source.trimEnd().replace(/^\s+/u, "");
-  if (!rest) return false;
-  while (rest.startsWith(">")) {
-    rest = rest.slice(1).replace(/^\s*/u, "");
-    if (!rest) return true;
+function lineContainsOnlyMarkers(
+  doc: Text,
+  line: DocRange,
+  markers: readonly MarkdownMarkerRecord[],
+) {
+  let position = line.from;
+  for (let marker of markers) {
+    if (!isWhitespaceOnly(doc.sliceString(position, marker.range.from))) return false;
+    position = Math.max(position, marker.range.to);
   }
-  return /^(?:[-+*]|\d+[.)])(?:\s*(?:\[[ xX]\])?)?$/u.test(rest);
+  return isWhitespaceOnly(doc.sliceString(position, line.to));
 }
 
 function compareSourceIslandLeaf(left: LiveMdSourceIslandLeaf, right: LiveMdSourceIslandLeaf) {

@@ -301,15 +301,17 @@ starts `prepareLiveMd()` in the background, and dispatches a global
   registration, image source resolution, link interactions, search, widget
   rendering, and language loading.
 - `src/core/analysis`, `src/core/projection`, and `src/core/runtime`: staging
-  split for query/table helpers, projection helpers, and StateField lifecycle.
-  The current `analysis` directory is not yet the final DOM-free semantic
-  analysis layer; it still feeds CodeMirror projection types and widget-backed
-  effects until leaf-local semantic analysis is introduced later.
-- `src/core/analysis/markdown-leaf-spike.ts`: Gate B validation spike for local
-  Markdown leaf discovery. It compares a bounded TreeCursor walk against a
-  full-walk oracle and records trace data. Passing this spike means Gate B is
-  complete for range-local changed-leaf discovery, and it is not the production
-  immutable analysis cache transition.
+  split for block/query/table helpers, projection helpers, and StateField
+  lifecycle. `markdown-block-types.ts` and `markdown-block-cursor.ts` are the
+  production Markdown block snapshot path for leaf classification, structured
+  quote/list/task context, marker records, and sorted lookup inputs. The
+  directory is not yet the final DOM-free semantic analysis layer; it still
+  feeds CodeMirror projection types and widget-backed effects until leaf-local
+  semantic analysis is introduced later.
+- `src/core/analysis/markdown-leaf-spike.ts`: Gate B validation harness for
+  local Markdown leaf discovery. It now calls the production block cursor and
+  keeps only edit-range seeding, fixed-point retry, full-walk oracle comparison,
+  and trace data. It is not the production incremental analysis cache.
 - `src/core/markdown-html.ts`: Tree-sitter Markdown-to-HTML renderer and scoped
   document CSS helpers for hosts that need sanitized document export.
 - `src/element/*`: custom element implementation and style installation.
@@ -342,12 +344,13 @@ Cloudflare-specific code, and concrete theme packages.
   only separates ownership boundaries so later work can replace analysis,
   projection, and runtime pieces independently; it does not introduce semantic
   caching or a pure semantic-to-projection dependency direction yet.
-- The changed-leaf spike result is `Gate B: PASS` for range-local changed-leaf
-  discovery: local changed leaves match the full-walk oracle, and ordinary edits
-  stay local. The immutable cache transition, production marker/context model,
-  and final reducer integration are deliberately left to later PRs. Its
-  `sourceHash` is diagnostic only; exact source text is used for the spike oracle
-  so hash collisions cannot hide changed leaves.
+- The changed-leaf harness remains a range-local oracle check on top of the
+  production block cursor. Its result is `Gate B: PASS` for range-local
+  changed-leaf discovery: local changed leaves match the full-walk oracle, and
+  ordinary edits stay local. Its `sourceHash` is diagnostic only; exact source
+  text is used for the oracle so hash collisions cannot hide changed leaves.
+  Immutable semantic caches, leaf-local analysis, and direct incremental
+  projection remain future work.
 
 ## Validation
 
