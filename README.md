@@ -48,7 +48,9 @@ collaboration flows.
   Lezer is not part of the contract.
 - **Parser layer**: `web-tree-sitter`, Tree-sitter grammar packages, bundled
   WASM assets, highlight queries, incremental reparsing, and included ranges
-  for nested languages.
+  for nested languages. The root package override currently points
+  `web-tree-sitter` at `vendor/web-tree-sitter` so cursor range navigation uses
+  the local binding patch documented in `vendor/web-tree-sitter/PATCH_NOTES.md`.
 - **Markdown product layer**: LiveMD composes the local language, commands,
   autocomplete, basic setup, and language-data packages with KaTeX, Mermaid,
   and `beautiful-mermaid`. Host apps or theme packages provide concrete editor
@@ -131,7 +133,9 @@ this repository replace the language-aware layers above those primitives.
    CodeMirror's language interfaces. It owns parser scheduling, incremental
    parsing, syntax-tree wrappers, nested parsing, syntax highlighting,
    indentation, folding, bracket matching, bidi isolation, and stream-parser
-   support.
+   support. The workspace override uses the vendored `web-tree-sitter` runtime
+   in `vendor/web-tree-sitter` until the cursor range navigation binding fix is
+   available upstream.
 2. **Language registry**:
    `@codemirror-treesitter/language-data` builds `LanguageDescription` entries
    on top of the language runtime. Each entry owns aliases, filename and
@@ -510,6 +514,7 @@ vp run ready
 Useful task selectors:
 
 ```bash
+vp run verify:web-tree-sitter
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
 vp run @codemirror-treesitter/opendal-wasm-browser#auth:dropbox-token

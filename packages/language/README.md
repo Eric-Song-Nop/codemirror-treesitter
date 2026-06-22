@@ -9,6 +9,9 @@ parsers while keeping the public CodeMirror language surface.
 
 - Depends on `@codemirror/state`, `@codemirror/view`, `style-mod`, and
   `web-tree-sitter`.
+- Uses the root `web-tree-sitter` override, which currently resolves to the
+  vendored runtime in `vendor/web-tree-sitter` for a cursor range navigation
+  binding patch.
 - Built as an ES module package with Vite+ `vp pack`.
 - Intentionally does not depend on Lezer or `@codemirror/language`.
 - Exports only `.` and `./package.json` from the built package.
@@ -90,11 +93,14 @@ by `language-data`, `commands`, `autocomplete`, `basic-setup`, `merge`,
 Run from the workspace root:
 
 ```bash
+vp run verify:web-tree-sitter
 vp run @codemirror-treesitter/language#check
 vp run @codemirror-treesitter/language#test
 vp run audit
 ```
 
-The audit checks that this package exposes the upstream
-`@codemirror/language` public names and that Tree-sitter highlight helpers are
-available.
+`verify:web-tree-sitter` replays the vendored cursor range navigation patch
+against a clean `web-tree-sitter@0.26.9` package and checks the patched wasm
+checksums before the language tests run Gate A. The audit checks that this
+package exposes the upstream `@codemirror/language` public names and that
+Tree-sitter highlight helpers are available.

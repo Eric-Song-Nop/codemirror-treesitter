@@ -29,7 +29,9 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   `@codemirror/search`, and `@codemirror/lint` are allowed where they do not
   bring in Lezer-specific language behavior.
 - Parser/runtime layer: `web-tree-sitter`, Tree-sitter grammar packages, WASM
-  assets, highlight queries, and local CodeMirror-compatible wrappers.
+  assets, highlight queries, and local CodeMirror-compatible wrappers. The root
+  override currently resolves `web-tree-sitter` to `vendor/web-tree-sitter` for
+  a local cursor range navigation binding patch.
 - Product/runtime integrations: LiveMD uses KaTeX, Mermaid, and
   `beautiful-mermaid`; optional collaboration uses `loro-crdt` and
   `loro-codemirror`; `apps/local-md-workspace` uses React 19, shadcn/radix UI,
@@ -75,6 +77,9 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `packages/live-md-loro`: Optional Loro collaboration bindings for LiveMD.
 - `packages/opendal-wasm-browser`: Experimental browser WASM wrapper for
   OpenDAL-backed cloud workspace storage.
+- `vendor/web-tree-sitter`: Vendored `web-tree-sitter` runtime package used by
+  the root override while the local cursor range navigation binding patch is
+  needed.
 - `apps/basic-editor`: Minimal `<live-md-editor>` smoke app.
 - `apps/local-md-workspace`: Grove React shadcn/radix local-first Markdown
   workspace using LiveMD, the browser File System Access API, optional Dropbox

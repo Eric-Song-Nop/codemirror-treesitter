@@ -20,6 +20,7 @@ import { SyntaxNode } from "../src/tree.js";
 import declarationMatchQuerySource from "./queries/declaration-match.scm?raw";
 import type { Tree } from "../src/index.js";
 import type { NodeIterator } from "../src/tree.js";
+import type { Node as TSNode, Point } from "web-tree-sitter";
 
 const javascriptWasm = new URL(
   "../../../node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm",
@@ -29,14 +30,26 @@ const htmlWasm = new URL(
   "../../../node_modules/tree-sitter-html/tree-sitter-html.wasm",
   import.meta.url,
 ).pathname;
+const markdownWasm = new URL(
+  "../../language-data/src/wasm/tree-sitter-markdown.wasm",
+  import.meta.url,
+).pathname;
 
 let javascriptParser: Promise<TreeSitterParser> | null = null;
 let htmlParser: Promise<TreeSitterParser> | null = null;
+let markdownParser: Promise<TreeSitterParser> | null = null;
 
 async function javascriptState(doc: string) {
   javascriptParser ??= TreeSitterParser.load(javascriptWasm);
   let parser = await javascriptParser;
   let language = TreeSitterLanguage.define({ name: "javascript", parser });
+  return EditorState.create({ doc, extensions: [language.extension] });
+}
+
+async function markdownState(doc: string) {
+  markdownParser ??= TreeSitterParser.load(markdownWasm);
+  let parser = await markdownParser;
+  let language = TreeSitterLanguage.define({ name: "markdown", parser });
   return EditorState.create({ doc, extensions: [language.extension] });
 }
 
@@ -46,6 +59,57 @@ function stackNames(state: EditorState, pos: number) {
     names.push(cur.node.name);
   }
   return names;
+}
+
+function pointAt(doc: string, index: number): Point {
+  let row = 0;
+  let lineStart = 0;
+  let limit = Math.min(index, doc.length);
+  for (let i = 0; i < limit; i++) {
+    if (doc.charCodeAt(i) == 10) {
+      row++;
+      lineStart = i + 1;
+    }
+  }
+  return { row, column: index - lineStart };
+}
+
+function expectNativeCursorFirstChildForIndex(parent: TSNode, index: number) {
+  let expected = parent.firstChildForIndex(index);
+  let cursor = parent.walk();
+  try {
+    expect(cursor.gotoFirstChildForIndex(index)).toBe(!!expected);
+    if (expected) {
+      expect(cursor.currentNode.id).toBe(expected.id);
+      expect(cursor.currentNode.startIndex).toBe(expected.startIndex);
+      expect(cursor.currentNode.endIndex).toBe(expected.endIndex);
+      expect(cursor.gotoParent()).toBe(true);
+      expect(cursor.currentNode.id).toBe(parent.id);
+    } else {
+      expect(cursor.currentNode.id).toBe(parent.id);
+    }
+  } finally {
+    cursor.delete();
+  }
+}
+
+function expectNativeCursorFirstChildForPosition(parent: TSNode, doc: string, index: number) {
+  let expected = parent.firstChildForIndex(index);
+  let cursor = parent.walk();
+  try {
+    expect(cursor.gotoFirstChildForPosition(pointAt(doc, index))).toBe(!!expected);
+    if (expected) {
+      expect(cursor.currentNode.id).toBe(expected.id);
+      expect(cursor.currentNode.startIndex).toBe(expected.startIndex);
+      expect(cursor.currentNode.endIndex).toBe(expected.endIndex);
+      expect(cursor.gotoParent()).toBe(true);
+      expect(cursor.currentNode.id).toBe(parent.id);
+    } else {
+      expect(cursor.currentNode.id).toBe(parent.id);
+    }
+  } finally {
+    cursor.delete();
+  }
 }
 
 async function mixedHtmlState(doc: string) {
@@ -379,6 +443,79 @@ describe("tree-sitter tree wrapper", () => {
     cursor.gotoDescendant(cursor.descendantIndex + 1);
     expect(cursor.name).toBe("identifier");
     copy.delete();
+  });
+
+  it("uses native cursor range jumps for all child index results", async () => {
+    let doc = "let first = 1;\nlet second = 2;\nlet third = 3;\nlet last = 4;\n";
+    let state = await javascriptState(doc);
+    let parsed = ensureSyntaxTree(state, doc.length, 5_000)!;
+    let root = parsed.tree!.rootNode;
+    let children = root.children;
+
+    expect(children.map((child) => child.type)).toEqual([
+      "lexical_declaration",
+      "lexical_declaration",
+      "lexical_declaration",
+      "lexical_declaration",
+    ]);
+    for (let index of [
+      children[0]!.startIndex,
+      children[1]!.startIndex + 4,
+      children[2]!.startIndex + 4,
+      children[3]!.startIndex + 4,
+      children[0]!.endIndex,
+      root.endIndex,
+      root.endIndex + 1,
+    ]) {
+      expectNativeCursorFirstChildForIndex(root, index);
+      expectNativeCursorFirstChildForPosition(root, doc, index);
+    }
+  });
+
+  it("jumps to a middle markdown list item without changing cursor roots", async () => {
+    let itemCount = 10_000;
+    let doc = Array.from({ length: itemCount }, (_, index) => `- item ${index}`).join("\n") + "\n";
+    let state = await markdownState(doc);
+    let parsed = ensureSyntaxTree(state, doc.length, 10_000)!;
+    let root = parsed.tree!.rootNode;
+    let list = root.child(0)!.child(0)!;
+    let target = doc.indexOf("- item 5000");
+    let expected = list.firstChildForIndex(target)!;
+
+    expect(list.type).toBe("list");
+    expect(list.childCount).toBe(itemCount);
+    expect(expected.type).toBe("list_item");
+    expect(expected.startIndex).toBe(target);
+
+    let materializedChildren = 0;
+    let siblingReads = 0;
+    let nodePrototype = Object.getPrototypeOf(list);
+    let childrenDescriptor = Object.getOwnPropertyDescriptor(nodePrototype, "children")!;
+    let nextSiblingDescriptor = Object.getOwnPropertyDescriptor(nodePrototype, "nextSibling")!;
+    Object.defineProperty(nodePrototype, "children", {
+      configurable: true,
+      get(this: TSNode) {
+        let children = childrenDescriptor.get!.call(this) as TSNode[];
+        materializedChildren += children.length;
+        return children;
+      },
+    });
+    Object.defineProperty(nodePrototype, "nextSibling", {
+      configurable: true,
+      get(this: TSNode) {
+        siblingReads++;
+        return nextSiblingDescriptor.get!.call(this) as TSNode | null;
+      },
+    });
+    try {
+      expectNativeCursorFirstChildForIndex(list, target);
+      expectNativeCursorFirstChildForPosition(list, doc, target);
+    } finally {
+      Object.defineProperty(nodePrototype, "children", childrenDescriptor);
+      Object.defineProperty(nodePrototype, "nextSibling", nextSiblingDescriptor);
+    }
+    expect(materializedChildren).toBe(0);
+    expect(siblingReads).toBe(0);
   });
 
   it("surfaces tree-sitter error state", async () => {
