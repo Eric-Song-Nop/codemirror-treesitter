@@ -89,9 +89,135 @@ export type LeafAnalysis = {
 
 export type LeafAnalysisRecord = {
   analysis: LeafAnalysis;
+  cacheId: number;
+  cacheSourceHash?: number;
+  cacheSourceRange?: DocRange;
+  cacheStructuralKey?: string;
   context: MarkdownBlockContext;
   contextKey: string;
+  effectRange: DocRange;
   kind: MarkdownLeafKind | "marker";
   range: DocRange;
+  sourceHash: number;
   sourceRange: DocRange;
+  structuralKey: string;
 };
+
+export type LeafAnalysisCache = {
+  records: readonly LeafAnalysisRecord[];
+  byId: ReadonlyMap<number, LeafAnalysisRecord>;
+  nextCacheId: number;
+};
+
+export type LiveMdSemanticState = {
+  cache: LeafAnalysisCache;
+  revision: number;
+};
+
+export function offsetLiveMdDescriptor(
+  descriptor: LiveMdDescriptor,
+  offset: number,
+): LiveMdDescriptor {
+  switch (descriptor.kind) {
+    case "lineClass":
+      return { ...descriptor, range: offsetRange(descriptor.range, offset) };
+    case "syntax":
+      return { ...descriptor, range: offsetRange(descriptor.range, offset) };
+    case "textMark":
+      return { ...descriptor, range: offsetRange(descriptor.range, offset) };
+    case "linkMark":
+      return { ...descriptor, range: offsetRange(descriptor.range, offset) };
+    case "listMarker":
+      return { ...descriptor, range: offsetRange(descriptor.range, offset) };
+    case "taskMarker":
+      return { ...descriptor, range: offsetRange(descriptor.range, offset) };
+    case "image":
+      return {
+        ...descriptor,
+        descriptionRange: descriptor.descriptionRange
+          ? offsetRange(descriptor.descriptionRange, offset)
+          : null,
+        destinationRange: descriptor.destinationRange
+          ? offsetRange(descriptor.destinationRange, offset)
+          : null,
+        lineRange: offsetRange(descriptor.lineRange, offset),
+        range: offsetRange(descriptor.range, offset),
+      };
+    case "latex":
+      return {
+        ...descriptor,
+        formula: {
+          ...descriptor.formula,
+          replacementRange: {
+            ...offsetRange(descriptor.formula.replacementRange, offset),
+            block: descriptor.formula.replacementRange.block,
+          },
+        },
+        range: offsetRange(descriptor.range, offset),
+      };
+    case "table":
+      return {
+        ...descriptor,
+        delimiterRowRange: descriptor.delimiterRowRange
+          ? offsetRange(descriptor.delimiterRowRange, offset)
+          : null,
+        pipeRanges: descriptor.pipeRanges.map((range) => offsetRange(range, offset)),
+        range: offsetRange(descriptor.range, offset),
+      };
+    case "codeFence":
+      return {
+        ...descriptor,
+        closingDelimiterRange: descriptor.closingDelimiterRange
+          ? offsetRange(descriptor.closingDelimiterRange, offset)
+          : null,
+        contentRange: descriptor.contentRange ? offsetRange(descriptor.contentRange, offset) : null,
+        openingDelimiterRange: offsetRange(descriptor.openingDelimiterRange, offset),
+        range: offsetRange(descriptor.range, offset),
+      };
+  }
+}
+
+export function offsetLiveMdDescriptors(
+  descriptors: readonly LiveMdDescriptor[],
+  offset: number,
+): LiveMdDescriptor[] {
+  return descriptors.map((descriptor) => offsetLiveMdDescriptor(descriptor, offset));
+}
+
+export function liveMdDescriptorRanges(descriptor: LiveMdDescriptor): DocRange[] {
+  switch (descriptor.kind) {
+    case "lineClass":
+    case "syntax":
+    case "textMark":
+    case "linkMark":
+    case "listMarker":
+    case "taskMarker":
+      return [descriptor.range];
+    case "image":
+      return [
+        descriptor.range,
+        descriptor.lineRange,
+        ...(descriptor.descriptionRange ? [descriptor.descriptionRange] : []),
+        ...(descriptor.destinationRange ? [descriptor.destinationRange] : []),
+      ];
+    case "latex":
+      return [descriptor.range, descriptor.formula.replacementRange];
+    case "table":
+      return [
+        descriptor.range,
+        ...descriptor.pipeRanges,
+        ...(descriptor.delimiterRowRange ? [descriptor.delimiterRowRange] : []),
+      ];
+    case "codeFence":
+      return [
+        descriptor.range,
+        descriptor.openingDelimiterRange,
+        ...(descriptor.closingDelimiterRange ? [descriptor.closingDelimiterRange] : []),
+        ...(descriptor.contentRange ? [descriptor.contentRange] : []),
+      ];
+  }
+}
+
+function offsetRange(range: DocRange, offset: number): DocRange {
+  return { from: range.from + offset, to: range.to + offset };
+}

@@ -260,11 +260,15 @@ function leafRecord(
       renderKey: "test",
       structuralEffects: options.structuralEffects ?? [],
     },
+    cacheId: 1,
     context: { listPath: [], quoteDepth: 0, quoteMarkers: [] },
     contextKey: "test",
+    effectRange: options.sourceRange ?? range,
     kind: options.kind ?? "paragraph",
     range,
+    sourceHash: 0,
     sourceRange: options.sourceRange ?? range,
+    structuralKey: "test",
   };
 }
 

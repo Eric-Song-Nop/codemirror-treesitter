@@ -5,6 +5,7 @@ import {
   type LeafAnalysisRecord,
   type LiveMdDescriptor,
   type LiveMdTableModel,
+  offsetLiveMdDescriptors,
 } from "../analysis/descriptors.js";
 import { type DocRange } from "../analysis/types.js";
 import { resolveLiveMdImageSource } from "../images.js";
@@ -50,12 +51,17 @@ export function projectLeaf(
 ): readonly LiveMdEffectSpec[] {
   let specs: LiveMdEffectSpec[] = [];
   let seen = new Set<string>();
-  let inactiveTableRanges = inactiveTableReplacementRanges(record, active, renderStatus);
+  let structuralEffects = offsetLiveMdDescriptors(
+    record.analysis.structuralEffects,
+    record.sourceRange.from,
+  );
+  let descriptors = offsetLiveMdDescriptors(record.analysis.descriptors, record.sourceRange.from);
+  let inactiveTableRanges = inactiveTableReplacementRanges(descriptors, active, renderStatus);
 
-  for (let descriptor of record.analysis.structuralEffects) {
+  for (let descriptor of structuralEffects) {
     projectDescriptorOnce(specs, descriptor, active, renderStatus, inactiveTableRanges, seen);
   }
-  for (let descriptor of record.analysis.descriptors) {
+  for (let descriptor of descriptors) {
     projectDescriptorOnce(specs, descriptor, active, renderStatus, inactiveTableRanges, seen);
   }
 
@@ -76,6 +82,7 @@ export function projectLeafRecord(
 
 export function projectLeafRecords(build: LiveMdBuild, records: readonly LeafAnalysisRecord[]) {
   let seen = new Set<string>();
+  build.trace.projectionRecords += records.length;
   for (let record of records) projectLeafRecord(build, record, seen);
 }
 
@@ -393,14 +400,14 @@ function projectCodeFence(
 }
 
 function inactiveTableReplacementRanges(
-  record: LeafAnalysisRecord,
+  descriptors: readonly LiveMdDescriptor[],
   active: boolean,
   renderStatus: LiveMdRenderStatus,
 ): readonly DocRange[] {
   if (isEditableSource(active, renderStatus)) return [];
 
   let ranges: DocRange[] = [];
-  for (let descriptor of record.analysis.descriptors) {
+  for (let descriptor of descriptors) {
     if (
       descriptor.kind == "table" &&
       descriptor.table &&
@@ -651,6 +658,7 @@ function addCodeFenceHighlights(
   let tree: Tree | null = null;
   build.trace.codeFenceParserSessionsCreated++;
   try {
+    build.trace.codeFenceParses++;
     parsed = parser.parseWith(nativeParser, sourceText);
     if (!parsed) return;
     tree = parser.wrapTree(parsed, sourceText, null, undefined, nestedParsers);

@@ -1,4 +1,4 @@
-import { type EditorState } from "@codemirror/state";
+import { type EditorState, type Text } from "@codemirror/state";
 import { type SyntaxNode, type Tree } from "@codemirror-treesitter/language";
 import { walkMarkdownBlocks } from "./markdown-block-cursor.js";
 import {
@@ -16,6 +16,8 @@ import {
   type LeafAnalysis,
   type LeafAnalysisRecord,
   type LiveMdDescriptor,
+  liveMdDescriptorRanges,
+  offsetLiveMdDescriptors,
 } from "./descriptors.js";
 import { analyzeMarkdownFenceDescriptor } from "./markdown-fence-analysis.js";
 import {
@@ -38,10 +40,43 @@ export type LiveMdLeafSemanticAnalysis = {
 };
 
 export type LiveMdLeafSemanticAnalysisInput = {
+  inlineSession?: MarkdownInlineAnalysisSession;
   service: LiveMdMarkdownParserService;
   state: EditorState;
   tree: Tree;
 };
+
+export type MarkdownLeafAnalysisUnit =
+  | {
+      cacheSourceHash: number;
+      cacheSourceRange: DocRange;
+      cacheStructuralKey: string;
+      context: MarkdownBlockContext;
+      contextKey: string;
+      kind: MarkdownLeaf["kind"];
+      leaf: MarkdownLeaf;
+      range: DocRange;
+      sourceHash: number;
+      sourceRange: DocRange;
+      structuralKey: string;
+      structuralEffects: readonly LiveMdDescriptor[];
+      type: "leaf";
+    }
+  | {
+      cacheSourceHash: number;
+      cacheSourceRange: DocRange;
+      cacheStructuralKey: string;
+      context: MarkdownBlockContext;
+      contextKey: string;
+      kind: "marker";
+      marker: MarkdownMarkerRecord;
+      range: DocRange;
+      sourceHash: number;
+      sourceRange: DocRange;
+      structuralKey: string;
+      structuralEffects: readonly LiveMdDescriptor[];
+      type: "marker";
+    };
 
 export function analyzeMarkdownLeafSemantics(
   input: LiveMdLeafSemanticAnalysisInput,
@@ -59,7 +94,7 @@ export function analyzeMarkdownLeafSemantics(
   });
   let records: LeafAnalysisRecord[];
   try {
-    records = analyzeSnapshotRecords(input, walked.snapshot, inlineSession, trace);
+    records = analyzeSnapshotRecords({ ...input, inlineSession }, walked.snapshot, 1, trace);
   } finally {
     inlineSession.dispose();
   }
@@ -71,68 +106,141 @@ export function analyzeMarkdownLeafSemantics(
   };
 }
 
-function analyzeSnapshotRecords(
+export function analyzeSnapshotRecords(
   input: LiveMdLeafSemanticAnalysisInput,
   snapshot: MarkdownBlockSnapshot,
-  inlineSession: MarkdownInlineAnalysisSession,
-  trace: LiveMdLeafAnalysisTrace,
+  startCacheId = 1,
+  trace: LiveMdLeafAnalysisTrace = emptyLiveMdLeafAnalysisTrace(),
 ): LeafAnalysisRecord[] {
+  let inlineSession =
+    input.inlineSession ??
+    createMarkdownInlineAnalysisSession({
+      blockTree: input.tree,
+      doc: input.state.doc,
+      service: input.service,
+      trace,
+    });
+  let analysisInput = input.inlineSession ? input : { ...input, inlineSession };
   let records: LeafAnalysisRecord[] = [];
-  let problemSourceRanges: DocRange[] = [];
+  let nextCacheId = startCacheId;
+  let units = markdownLeafAnalysisUnits(input.state.doc, snapshot);
+  trace.recordsVisited = units.length;
+  try {
+    for (let unit of units) {
+      records.push(analyzeMarkdownLeafAnalysisUnit(analysisInput, unit, nextCacheId++, trace));
+      trace.recordsAnalyzed++;
+    }
+  } finally {
+    if (!input.inlineSession) inlineSession.dispose();
+  }
+  return records;
+}
+
+export function markdownLeafAnalysisUnits(
+  doc: Text,
+  snapshot: MarkdownBlockSnapshot,
+): MarkdownLeafAnalysisUnit[] {
+  let units: MarkdownLeafAnalysisUnit[] = [];
+  let problemSourceRanges = snapshot.leaves
+    .filter((leaf) => hasProblemNode(leaf.node))
+    .map((leaf) => leaf.sourceRange);
   for (let leaf of snapshot.leaves) {
-    let hasProblem = hasProblemNode(leaf.node);
-    if (hasProblem) problemSourceRanges.push(leaf.sourceRange);
-    records.push(analyzeLeafRecord(input, leaf, hasProblem, inlineSession, trace));
-    trace.recordsAnalyzed++;
+    let structuralEffects = relativeDescriptors(
+      contextDescriptors(leaf.context, leaf.sourceRange),
+      leaf.sourceRange,
+    );
+    let structuralKey = descriptorKey(structuralEffects);
+    let sourceHash = hashDocRange(doc, leaf.sourceRange);
+    units.push({
+      cacheSourceHash: sourceHash,
+      cacheSourceRange: leaf.sourceRange,
+      cacheStructuralKey: structuralKey,
+      context: leaf.context,
+      contextKey: leaf.contextKey,
+      kind: leaf.kind,
+      leaf,
+      range: leaf.range,
+      sourceHash,
+      sourceRange: leaf.sourceRange,
+      structuralKey,
+      structuralEffects,
+      type: "leaf",
+    });
   }
   for (let marker of snapshot.markers) {
-    records.push(analyzeMarkerRecord(marker, problemSourceRanges));
-    trace.recordsAnalyzed++;
+    let sourceSafeOnly = hasOverlappingProblemSourceRange(marker.lineRange, problemSourceRanges);
+    let structuralEffects = relativeDescriptors(
+      markerDescriptors(marker, sourceSafeOnly),
+      marker.lineRange,
+    );
+    let structuralKey = descriptorKey(structuralEffects);
+    units.push({
+      cacheSourceHash: hashDocRange(doc, marker.range),
+      cacheSourceRange: marker.range,
+      cacheStructuralKey: markerCacheStructuralKey(marker, sourceSafeOnly),
+      context: marker.context,
+      contextKey: marker.contextKey,
+      kind: "marker",
+      marker,
+      range: marker.range,
+      sourceHash: hashDocRange(doc, marker.lineRange),
+      sourceRange: marker.lineRange,
+      structuralKey,
+      structuralEffects,
+      type: "marker",
+    });
   }
-  return records.sort(compareRecords);
+  return units.sort(compareUnits);
 }
 
-function analyzeLeafRecord(
+export function analyzeMarkdownLeafAnalysisUnit(
   input: LiveMdLeafSemanticAnalysisInput,
-  leaf: MarkdownLeaf,
-  hasProblem: boolean,
-  inlineSession: MarkdownInlineAnalysisSession,
-  trace: LiveMdLeafAnalysisTrace,
+  unit: MarkdownLeafAnalysisUnit,
+  cacheId: number,
+  trace?: LiveMdLeafAnalysisTrace,
 ): LeafAnalysisRecord {
-  let structuralEffects = contextDescriptors(leaf.context, leaf.sourceRange);
-  let descriptors = hasProblem ? [] : leafDescriptors(input, leaf, inlineSession, trace);
-  return {
-    analysis: leafAnalysis(leaf.kind, leaf.sourceRange, structuralEffects, descriptors),
-    context: leaf.context,
-    contextKey: leaf.contextKey,
-    kind: leaf.kind,
-    range: leaf.range,
-    sourceRange: leaf.sourceRange,
-  };
+  if (unit.type == "marker") {
+    return createAnalysisRecord(unit, leafAnalysis(unit.kind, unit.structuralEffects, []), cacheId);
+  }
+
+  let descriptors = hasProblemNode(unit.leaf.node)
+    ? []
+    : relativeDescriptors(leafDescriptors(input, unit.leaf, trace), unit.sourceRange);
+  return createAnalysisRecord(
+    unit,
+    leafAnalysis(unit.kind, unit.structuralEffects, descriptors),
+    cacheId,
+  );
 }
 
-function analyzeMarkerRecord(
-  marker: MarkdownMarkerRecord,
-  problemSourceRanges: readonly DocRange[],
+export function createAnalysisRecord(
+  unit: MarkdownLeafAnalysisUnit,
+  analysis: LeafAnalysis,
+  cacheId: number,
 ): LeafAnalysisRecord {
-  let sourceSafeOnly = hasOverlappingProblemSourceRange(marker.lineRange, problemSourceRanges);
-  let structuralEffects = markerDescriptors(marker, sourceSafeOnly);
   return {
-    analysis: leafAnalysis("marker", marker.lineRange, structuralEffects, []),
-    context: marker.context,
-    contextKey: marker.contextKey,
-    kind: "marker",
-    range: marker.range,
-    sourceRange: marker.lineRange,
+    analysis,
+    cacheId,
+    cacheSourceHash: unit.cacheSourceHash,
+    cacheSourceRange: unit.cacheSourceRange,
+    cacheStructuralKey: unit.cacheStructuralKey,
+    context: unit.context,
+    contextKey: unit.contextKey,
+    effectRange: analysisEffectRange(analysis, unit.sourceRange),
+    kind: unit.kind,
+    range: unit.range,
+    sourceHash: unit.sourceHash,
+    sourceRange: unit.sourceRange,
+    structuralKey: unit.structuralKey,
   };
 }
 
 function leafDescriptors(
   input: LiveMdLeafSemanticAnalysisInput,
   leaf: MarkdownLeaf,
-  inlineSession: MarkdownInlineAnalysisSession,
-  trace: LiveMdLeafAnalysisTrace,
+  trace?: LiveMdLeafAnalysisTrace,
 ): LiveMdDescriptor[] {
+  let inlineSession = inlineSessionFor(input);
   switch (leaf.kind) {
     case "paragraph":
       return leafInlineDescriptors(inlineSession, leaf);
@@ -140,7 +248,7 @@ function leafDescriptors(
       return [...headingDescriptors(leaf.node), ...headingInlineDescriptors(inlineSession, leaf)];
     case "table": {
       let table = analyzeMarkdownTableAnalysis(input.state.doc, input.tree, leaf.range);
-      trace.tableCellsParsed += table.inlineRanges.length;
+      if (trace) trace.tableCellsParsed += table.inlineRanges.length;
       return dedupeDescriptors([
         ...(table.descriptor ? [table.descriptor] : []),
         ...table.inlineRanges.flatMap((range) => inlineSession.analyze(range)),
@@ -180,6 +288,11 @@ function leafInlineDescriptors(
     descriptors = dedupeDescriptors([...descriptors, ...inlineSession.analyze(leaf.sourceRange)]);
   }
   return descriptors;
+}
+
+function inlineSessionFor(input: LiveMdLeafSemanticAnalysisInput): MarkdownInlineAnalysisSession {
+  if (!input.inlineSession) throw new RangeError("Markdown inline analysis session is required");
+  return input.inlineSession;
 }
 
 function setextHeadingContentParagraph(node: SyntaxNode): SyntaxNode | null {
@@ -240,7 +353,7 @@ function markerDescriptors(
     descriptors.push({
       className: "cm-md-blockquote",
       kind: "lineClass",
-      range: marker.lineRange,
+      range: marker.range,
     });
   }
 
@@ -249,7 +362,7 @@ function markerDescriptors(
       descriptors.push({
         className: "cm-md-list-line",
         kind: "lineClass",
-        range: marker.lineRange,
+        range: marker.range,
       });
       if (!sourceSafeOnly) {
         descriptors.push({
@@ -263,19 +376,19 @@ function markerDescriptors(
       descriptors.push({
         className: "cm-md-list-line",
         kind: "lineClass",
-        range: marker.lineRange,
+        range: marker.range,
       });
       descriptors.push({
         className: "cm-md-task-line",
         kind: "lineClass",
-        range: marker.lineRange,
+        range: marker.range,
       });
-      if (marker.text.includes("x") || marker.text.includes("X")) {
-        descriptors.push({ className: "is-checked", kind: "lineClass", range: marker.lineRange });
+      if (markerChecked(marker)) {
+        descriptors.push({ className: "is-checked", kind: "lineClass", range: marker.range });
       }
       if (!sourceSafeOnly) {
         descriptors.push({
-          checked: marker.text.includes("x") || marker.text.includes("X"),
+          checked: markerChecked(marker),
           kind: "taskMarker",
           range: marker.range,
         });
@@ -289,13 +402,24 @@ function markerDescriptors(
   return descriptors;
 }
 
+function markerCacheStructuralKey(marker: MarkdownMarkerRecord, sourceSafeOnly: boolean) {
+  return JSON.stringify({
+    checked: marker.kind == "taskMarker" ? markerChecked(marker) : null,
+    kind: marker.kind,
+    sourceSafeOnly,
+  });
+}
+
+function markerChecked(marker: MarkdownMarkerRecord) {
+  return marker.text.includes("x") || marker.text.includes("X");
+}
+
 function leafAnalysis(
   kind: string,
-  range: DocRange,
   structuralEffects: readonly LiveMdDescriptor[],
   descriptors: readonly LiveMdDescriptor[],
 ): LeafAnalysis {
-  let key = stableAnalysisKey(kind, range, structuralEffects, descriptors);
+  let key = stableAnalysisKey(kind, structuralEffects, descriptors);
   return {
     analysisKey: key,
     descriptors,
@@ -306,11 +430,14 @@ function leafAnalysis(
 
 function stableAnalysisKey(
   kind: string,
-  range: DocRange,
   structuralEffects: readonly LiveMdDescriptor[],
   descriptors: readonly LiveMdDescriptor[],
 ) {
-  return hashString(JSON.stringify([kind, range, structuralEffects, descriptors]));
+  return hashString(JSON.stringify([kind, structuralEffects, descriptors]));
+}
+
+function descriptorKey(descriptors: readonly LiveMdDescriptor[]) {
+  return JSON.stringify(descriptors);
 }
 
 function hashString(value: string) {
@@ -336,7 +463,7 @@ function rangesOverlap(left: DocRange, right: DocRange) {
   return left.from < right.to && right.from < left.to;
 }
 
-function compareRecords(left: LeafAnalysisRecord, right: LeafAnalysisRecord) {
+function compareUnits(left: MarkdownLeafAnalysisUnit, right: MarkdownLeafAnalysisUnit) {
   return (
     left.range.from - right.range.from ||
     left.range.to - right.range.to ||
@@ -346,6 +473,45 @@ function compareRecords(left: LeafAnalysisRecord, right: LeafAnalysisRecord) {
 
 function nodeRange(node: SyntaxNode): DocRange {
   return { from: node.from, to: node.to };
+}
+
+function relativeDescriptors(
+  descriptors: readonly LiveMdDescriptor[],
+  sourceRange: DocRange,
+): LiveMdDescriptor[] {
+  return offsetLiveMdDescriptors(descriptors, -sourceRange.from);
+}
+
+function analysisEffectRange(analysis: LeafAnalysis, sourceRange: DocRange): DocRange {
+  let from = sourceRange.from;
+  let to = sourceRange.to;
+  for (let descriptor of [...analysis.structuralEffects, ...analysis.descriptors]) {
+    for (let range of liveMdDescriptorRanges(descriptor)) {
+      from = Math.min(from, range.from + sourceRange.from);
+      to = Math.max(to, range.to + sourceRange.from);
+    }
+  }
+  return { from, to };
+}
+
+export function hashDocRange(doc: Text, range: DocRange): number {
+  let hash = 0x811c9dc5;
+  for (let iter = doc.iterRange(range.from, range.to); !iter.next().done; ) {
+    if (iter.lineBreak) {
+      hash = hashChar(hash, 10);
+      continue;
+    }
+    let value = iter.value;
+    for (let index = 0; index < value.length; index++) {
+      hash = hashChar(hash, value.charCodeAt(index));
+    }
+  }
+  return hash >>> 0;
+}
+
+function hashChar(hash: number, value: number) {
+  hash ^= value;
+  return Math.imul(hash, 0x01000193);
 }
 
 function dedupeDescriptors(descriptors: readonly LiveMdDescriptor[]) {

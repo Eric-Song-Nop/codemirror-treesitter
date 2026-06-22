@@ -107,6 +107,7 @@ function addCodeFenceHighlights(
   let tree: Tree | null = null;
   build.trace.codeFenceParserSessionsCreated++;
   try {
+    build.trace.codeFenceParses++;
     parsed = parser.parseWith(nativeParser, sourceText);
     if (!parsed) return;
     tree = parser.wrapTree(parsed, sourceText, null, undefined, nestedParsers);
