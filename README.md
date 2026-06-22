@@ -383,6 +383,10 @@ improvement. The old viewport/dirty-range feature API was removed:
 `LiveMdFeatureDocRange` is no longer exported. Query-driven features should use
 their matched syntax plus `activeLines` and `rangeTouchesActiveLine(...)` for
 active-line-specific behavior.
+Blank lines are ordinary editable Markdown text. In a normal paragraph,
+`Enter` and `Shift+Enter` both insert one newline; their behavior differs only
+inside structural Markdown contexts, where `Enter` keeps list, task-list, and
+blockquote continuation while `Shift+Enter` inserts a raw newline.
 `extensions` remains the direct CodeMirror escape hatch and is applied after
 plugin extensions. `imageSource` and `linkBaseUrl` remain available for simple
 hosts, but package-style integrations should prefer `config.plugins`. Link

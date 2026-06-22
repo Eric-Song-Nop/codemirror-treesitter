@@ -13,7 +13,7 @@ type LineMarkers = {
 };
 
 export const liveMdKeymap = keymap.of([
-  { key: "Enter", run: continueMarkdownBlock, shift: insertMarkdownSoftBreak },
+  { key: "Enter", run: continueMarkdownBlock, shift: insertMarkdownRawNewline },
   { key: "Mod-b", run: surroundSelection("**", "**", "strong text") },
   { key: "Mod-i", run: surroundSelection("_", "_", "emphasis") },
   { key: "Mod-e", run: surroundSelection("`", "`", "code") },
@@ -124,7 +124,7 @@ function continueMarkdownBlock(view: EditorView) {
   }
 
   if (cursor == line.to) {
-    return insertParagraphBreak(view, cursor);
+    return insertMarkdownNewline(view, cursor);
   }
 
   return false;
@@ -154,25 +154,25 @@ function insertContinuation(view: EditorView, cursor: number, prefix: string) {
   return true;
 }
 
-function insertParagraphBreak(view: EditorView, cursor: number) {
+function insertMarkdownNewline(view: EditorView, cursor: number) {
   if (view.state.readOnly) return true;
 
   view.dispatch({
-    changes: { from: cursor, insert: "\n\n" },
-    selection: { anchor: cursor + 2 },
+    changes: { from: cursor, insert: "\n" },
+    selection: { anchor: cursor + 1 },
     scrollIntoView: true,
-    userEvent: "input.markdownParagraphBreak",
+    userEvent: "input.markdownNewline",
   });
   return true;
 }
 
-function insertMarkdownSoftBreak(view: EditorView) {
+function insertMarkdownRawNewline(view: EditorView) {
   if (view.state.readOnly) return true;
 
   view.dispatch(
     view.state.update(view.state.replaceSelection(view.state.lineBreak), {
       scrollIntoView: true,
-      userEvent: "input.markdownSoftBreak",
+      userEvent: "input.markdownRawNewline",
     }),
   );
   return true;

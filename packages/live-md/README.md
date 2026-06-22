@@ -188,6 +188,10 @@ viewport/dirty-range feature API was removed with that reset:
 `LiveMdFeatureDocRange` type is no longer exported. Query-driven features should
 emit decorations for their matched syntax and use `activeLines` plus
 `rangeTouchesActiveLine(...)` when they need active-line-specific behavior.
+Blank lines are ordinary editable document text. In a normal paragraph,
+`Enter` and `Shift+Enter` both insert one newline. Their behavior differs only
+inside structural Markdown contexts: `Enter` keeps list, task-list, and
+blockquote continuation behavior, while `Shift+Enter` inserts a raw newline.
 
 `prepareLiveMd(options?)` preloads Markdown language support and warms the
 LiveMD Markdown decoration queries before the first editor render. Pass

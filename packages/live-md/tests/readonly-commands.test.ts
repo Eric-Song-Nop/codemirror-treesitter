@@ -35,16 +35,16 @@ afterEach(() => {
 describe("readonly LiveMD edit commands", () => {
   let keyCommandCases: KeyCommandCase[] = [
     {
-      expected: "first\n\n",
+      expected: "first\n",
       key: "Enter",
-      name: "paragraph break",
+      name: "newline",
       start: "first",
     },
     {
       expected: "first\n",
       init: () => ({ shiftKey: true }),
       key: "Enter",
-      name: "soft break",
+      name: "raw newline",
       start: "first",
     },
     {
