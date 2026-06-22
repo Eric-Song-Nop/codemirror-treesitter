@@ -265,21 +265,39 @@ export class Tree {
         if (start >= from && (includeTo ? start <= to : start < to)) emitNested(entry);
       }
     };
-    let visit = (node: SyntaxNode) => {
+    let visit = (cursor: TreeCursor) => {
+      let node = cursor.node;
       if (node.to < from || node.from > to) return;
       if (spec.enter?.(node) === false) return;
       let pos = node.from;
-      for (let child = firstIteratedChild(node, from); child && child.from <= to; ) {
-        emitNestedIn(pos, Math.min(child.from, node.to), false);
-        visit(child);
-        emitNestedIn(child.from, child.to, false);
-        pos = child.to;
-        child = child.nextSibling;
+      let child = cursor.copy();
+      try {
+        if (firstIteratedCursorChild(child, from)) {
+          do {
+            if (child.from > to) break;
+            emitNestedIn(pos, Math.min(child.from, node.to), false);
+            visit(child);
+            emitNestedIn(child.from, child.to, false);
+            pos = child.to;
+          } while (child.nextSibling());
+        }
+      } finally {
+        child.delete();
       }
       emitNestedIn(pos, node.to, false);
       spec.leave?.(node);
     };
-    visit(this.topNode);
+    let cursor = this.cursor();
+    if (cursor) {
+      try {
+        visit(cursor);
+      } finally {
+        cursor.delete();
+      }
+    } else {
+      let node = this.topNode;
+      if (node.to >= from && node.from <= to && spec.enter?.(node) !== false) spec.leave?.(node);
+    }
     for (let entry of nestedRanges) emitNested(entry);
   }
 
@@ -292,23 +310,13 @@ export class Tree {
   }
 }
 
-function firstIteratedChild(node: SyntaxNode, from: number): SyntaxNode | null {
-  let index = from > node.from ? from - 1 : from;
-  let child = node.firstChildForIndex(index);
-  while (child && child.to < from) {
-    let next = child.nextSibling;
-    if (!next) break;
-    child = next;
+function firstIteratedCursorChild(cursor: TreeCursor, from: number): boolean {
+  let index = cursorSearchIndex(cursor, from, -1);
+  if (!cursor.firstChildForIndex(index)) return false;
+  while (cursor.to < from) {
+    if (!cursor.nextSibling()) return false;
   }
-  if (child && child.to >= from) return child;
-  child = node.firstChildForIndex(from);
-  while (child && child.to < from) {
-    let next = child.nextSibling;
-    if (!next) break;
-    child = next;
-  }
-  if (child && child.to >= from) return child;
-  return node.children.find((child) => child.to >= from) ?? null;
+  return true;
 }
 
 function nestedStart(nest: NestedTree | { range: DocRange }) {
@@ -321,6 +329,13 @@ function rangeContains(range: DocRange, pos: number, side: -1 | 0 | 1) {
     : pos == range.from
       ? side >= 0
       : pos == range.to && side <= 0;
+}
+
+function cursorSearchIndex(range: DocRange, pos: number, side: -1 | 0 | 1) {
+  let index = side < 0 && pos > range.from ? pos - 1 : pos;
+  if (index >= range.to && range.to > range.from) index = range.to - 1;
+  if (index < range.from) index = range.from;
+  return index;
 }
 
 function stackFor(node: SyntaxNode): NodeIterator {
@@ -718,12 +733,13 @@ export class SyntaxNode {
   }
 
   iterate(enter: (node: SyntaxNode) => boolean | void, leave?: (node: SyntaxNode) => void) {
-    let visit = (node: SyntaxNode) => {
-      if (enter(node) === false) return;
-      for (let child of node.children) visit(child);
-      leave?.(node);
-    };
-    visit(this);
+    let cursor = this.cursor();
+    if (!cursor) return;
+    try {
+      iterateSyntaxCursor(cursor, enter, leave);
+    } finally {
+      cursor.delete();
+    }
   }
 
   toString() {
@@ -822,25 +838,11 @@ export class TreeCursor {
     return this.cursor.copy();
   }
 
-  private resetToNode(node: TSNode) {
+  private resetToRoot() {
     let root = this.ownerTree.topNode.node;
     if (!root) return false;
-    let scan = root.walk();
-    try {
-      for (;;) {
-        if (scan.currentNode.id == node.id) {
-          this.cursor.resetTo(scan);
-          return true;
-        }
-        if (scan.gotoFirstChild()) continue;
-        for (;;) {
-          if (scan.gotoNextSibling()) break;
-          if (!scan.gotoParent()) return false;
-        }
-      }
-    } finally {
-      scan.delete();
-    }
+    this.cursor.reset(root);
+    return true;
   }
 
   copy() {
@@ -888,9 +890,15 @@ export class TreeCursor {
   }
 
   enter(pos: number, side: -1 | 0 | 1 = 0) {
-    let found = this.node.children.find((child) => rangeContains(child, pos, side));
-    if (!found?.node) return false;
-    return this.resetToNode(found.node);
+    let start = this.copyCursor();
+    let index = cursorSearchIndex(this, pos, side);
+    if (this.cursor.gotoFirstChildForIndex(index) && rangeContains(this, pos, side)) {
+      start.delete();
+      return true;
+    }
+    this.cursor.resetTo(start);
+    start.delete();
+    return false;
   }
 
   nextSibling() {
@@ -906,20 +914,7 @@ export class TreeCursor {
   }
 
   firstChildForIndex(index: number) {
-    let start = this.copyCursor();
-    if (!this.cursor.gotoFirstChild()) {
-      start.delete();
-      return false;
-    }
-    do {
-      if (this.cursor.endIndex > index || this.cursor.startIndex >= index) {
-        start.delete();
-        return true;
-      }
-    } while (this.cursor.gotoNextSibling());
-    this.cursor.resetTo(start);
-    start.delete();
-    return false;
+    return this.cursor.gotoFirstChildForIndex(index);
   }
 
   firstChildForPosition(position: Point) {
@@ -927,13 +922,21 @@ export class TreeCursor {
   }
 
   moveTo(pos: number, side: -1 | 0 | 1 = 0) {
-    let found = this.ownerTree.resolve(pos, side);
-    if (found.node) this.resetToNode(found.node);
-    return this;
+    if (!this.resetToRoot()) return this;
+    for (;;) {
+      let start = this.copyCursor();
+      let index = cursorSearchIndex(this, pos, side);
+      if (!this.cursor.gotoFirstChildForIndex(index) || !rangeContains(this, pos, side)) {
+        this.cursor.resetTo(start);
+        start.delete();
+        return this;
+      }
+      start.delete();
+    }
   }
 
   reset(node: SyntaxNode) {
-    if (node.node) this.resetToNode(node.node);
+    if (node.node) this.cursor.reset(node.node);
   }
 
   resetTo(cursor: TreeCursor) {
@@ -957,12 +960,37 @@ export class TreeCursor {
   }
 
   iterate(enter: (node: SyntaxNodeRef) => boolean | void, leave?: (node: SyntaxNodeRef) => void) {
-    this.node.iterate(enter, leave);
+    let cursor = this.copy();
+    try {
+      iterateSyntaxCursor(cursor, enter, leave);
+    } finally {
+      cursor.delete();
+    }
   }
 
   matchContext(context: readonly string[]) {
     return this.node.matchContext(context);
   }
+}
+
+function iterateSyntaxCursor(
+  cursor: TreeCursor,
+  enter: (node: SyntaxNodeRef) => boolean | void,
+  leave?: (node: SyntaxNodeRef) => void,
+) {
+  let node = cursor.node;
+  if (enter(node) === false) return;
+  let child = cursor.copy();
+  try {
+    if (child.firstChild()) {
+      do {
+        iterateSyntaxCursor(child, enter, leave);
+      } while (child.nextSibling());
+    }
+  } finally {
+    child.delete();
+  }
+  leave?.(node);
 }
 
 export function pointAfterText(start: Point, text: string): Point {

@@ -88,6 +88,28 @@ by `language-data`, `commands`, `autocomplete`, `basic-setup`, `merge`,
 - The tests include parser, tree, highlighting, indentation, folding,
   fold-gutter, bidi isolation, incremental range, and stream-parser coverage.
 
+## TreeCursor Contract
+
+`TreeCursor` wraps a native `web-tree-sitter` cursor and must preserve native
+ownership rules:
+
+- `copy()` returns an independent native cursor handle. Callers that create a
+  copy must call `delete()` when they are done with it.
+- `reset(node)` changes the native cursor root to that node. The old parent
+  path is not recoverable after this call, so `parent()` cannot climb back to
+  the node's former parent.
+- `resetTo(cursor)` copies the full native cursor state, including root and
+  parent path. Use it when a traversal needs to restore a cursor position
+  without losing parent access.
+- `firstChildForIndex(...)` and `firstChildForPosition(...)` delegate to the
+  native Tree-sitter range navigation APIs. Success means the cursor moved to
+  the same child that `SyntaxNode.firstChildForIndex(...)` would return, and
+  `parent()` must return to the original parent after a successful jump.
+- Range-navigation hot paths such as `Tree.iterate(...)`, `Tree.cursorAt(...)`,
+  `TreeCursor.moveTo(...)`, `TreeCursor.enter(...)`, and LiveMD leaf walks must
+  not materialize `SyntaxNode.children`, `SyntaxNode.namedChildren`, or scan
+  large sibling lists from the beginning.
+
 ## Validation
 
 Run from the workspace root:
