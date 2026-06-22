@@ -26,6 +26,7 @@ export type LiveMdPendingAnalysis = {
   changes: ChangeDesc;
   epochs: LiveMdRuntimeEpochs;
   revision: number;
+  syntaxChangedRanges: readonly DocRange[];
 };
 
 export type LiveMdAnalysis = {

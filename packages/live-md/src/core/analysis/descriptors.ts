@@ -1,3 +1,4 @@
+import { type RangeSet, type RangeValue } from "@codemirror/state";
 import { type MarkdownBlockContext, type MarkdownLeafKind } from "./markdown-block-types.js";
 import { type DocRange } from "./types.js";
 
@@ -104,27 +105,10 @@ export type LeafAnalysisRecord = {
   structuralKey: string;
 };
 
-export type LeafAnalysisRangeIndexEntry = {
-  range: DocRange;
-  record: LeafAnalysisRecord;
-};
-
-export type LeafAnalysisRangeIndexNode = {
-  byEnd: readonly LeafAnalysisRangeIndexEntry[];
-  byStart: readonly LeafAnalysisRangeIndexEntry[];
-  center: number;
-  left: LeafAnalysisRangeIndexNode | null;
-  right: LeafAnalysisRangeIndexNode | null;
-};
-
-export type LeafAnalysisRangeIndex = {
-  root: LeafAnalysisRangeIndexNode | null;
-};
-
 export type LeafAnalysisCache = {
-  records: readonly LeafAnalysisRecord[];
-  byId: ReadonlyMap<number, LeafAnalysisRecord>;
-  safetyIndex: LeafAnalysisRangeIndex;
+  records: RangeSet<RangeValue>;
+  safety: RangeSet<RangeValue>;
+  recordCount: number;
   nextCacheId: number;
 };
 

@@ -2,11 +2,16 @@ import { Text } from "@codemirror/state";
 import { highlightTree, type Tree, type TreeSitterParser } from "@codemirror-treesitter/language";
 import { Decoration } from "@codemirror/view";
 import {
+  type LeafAnalysisCache,
   type LeafAnalysisRecord,
   type LiveMdDescriptor,
   type LiveMdTableModel,
   offsetLiveMdDescriptors,
 } from "../analysis/descriptors.js";
+import {
+  forEachLeafAnalysisCacheRecord,
+  leafAnalysisCacheRecordCount,
+} from "../analysis/markdown-leaf-cache.js";
 import { type DocRange } from "../analysis/types.js";
 import { resolveLiveMdImageSource } from "../images.js";
 import { deleteLiveMdTree } from "../languages.js";
@@ -87,6 +92,16 @@ export function projectLeafRecords(build: LiveMdBuild, records: readonly LeafAna
     if (index % 32 == 0) build.yieldCheck?.();
     projectLeafRecord(build, records[index]!, seen);
   }
+}
+
+export function projectLeafCacheRecords(build: LiveMdBuild, cache: LeafAnalysisCache) {
+  let seen = new Set<string>();
+  let count = leafAnalysisCacheRecordCount(cache);
+  build.trace.projectionRecords += count;
+  forEachLeafAnalysisCacheRecord(cache, (record, index) => {
+    if (index % 32 == 0) build.yieldCheck?.();
+    projectLeafRecord(build, record, seen);
+  });
 }
 
 function projectDescriptorOnce(
