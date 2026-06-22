@@ -83,7 +83,10 @@ export function projectLeafRecord(
 export function projectLeafRecords(build: LiveMdBuild, records: readonly LeafAnalysisRecord[]) {
   let seen = new Set<string>();
   build.trace.projectionRecords += records.length;
-  for (let record of records) projectLeafRecord(build, record, seen);
+  for (let index = 0; index < records.length; index++) {
+    if (index % 32 == 0) build.yieldCheck?.();
+    projectLeafRecord(build, records[index]!, seen);
+  }
 }
 
 function projectDescriptorOnce(

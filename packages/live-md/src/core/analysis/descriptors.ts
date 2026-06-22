@@ -38,6 +38,7 @@ export type LiveMdDescriptor =
       destination: string | null;
       kind: "linkMark";
       range: DocRange;
+      sourceRange: DocRange;
     }
   | {
       kind: "listMarker";
@@ -103,9 +104,27 @@ export type LeafAnalysisRecord = {
   structuralKey: string;
 };
 
+export type LeafAnalysisRangeIndexEntry = {
+  range: DocRange;
+  record: LeafAnalysisRecord;
+};
+
+export type LeafAnalysisRangeIndexNode = {
+  byEnd: readonly LeafAnalysisRangeIndexEntry[];
+  byStart: readonly LeafAnalysisRangeIndexEntry[];
+  center: number;
+  left: LeafAnalysisRangeIndexNode | null;
+  right: LeafAnalysisRangeIndexNode | null;
+};
+
+export type LeafAnalysisRangeIndex = {
+  root: LeafAnalysisRangeIndexNode | null;
+};
+
 export type LeafAnalysisCache = {
   records: readonly LeafAnalysisRecord[];
   byId: ReadonlyMap<number, LeafAnalysisRecord>;
+  safetyIndex: LeafAnalysisRangeIndex;
   nextCacheId: number;
 };
 
@@ -126,7 +145,11 @@ export function offsetLiveMdDescriptor(
     case "textMark":
       return { ...descriptor, range: offsetRange(descriptor.range, offset) };
     case "linkMark":
-      return { ...descriptor, range: offsetRange(descriptor.range, offset) };
+      return {
+        ...descriptor,
+        range: offsetRange(descriptor.range, offset),
+        sourceRange: offsetRange(descriptor.sourceRange, offset),
+      };
     case "listMarker":
       return { ...descriptor, range: offsetRange(descriptor.range, offset) };
     case "taskMarker":
@@ -189,10 +212,11 @@ export function liveMdDescriptorRanges(descriptor: LiveMdDescriptor): DocRange[]
     case "lineClass":
     case "syntax":
     case "textMark":
-    case "linkMark":
     case "listMarker":
     case "taskMarker":
       return [descriptor.range];
+    case "linkMark":
+      return [descriptor.range, descriptor.sourceRange];
     case "image":
       return [
         descriptor.range,

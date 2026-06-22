@@ -4,8 +4,13 @@ import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 const allowedLinkProtocols = new Set(["http:", "https:", "mailto:", "tel:"]);
 const allowedBaseProtocols = new Set(["http:", "https:"]);
 const shiftHoverClass = "cm-md-link-shift-hover";
+const interactiveLinkDecorationSpec = Symbol("liveMdInteractiveLinkDecoration");
 const linkMarkCache = new Map<string, Decoration>();
 const plainLinkMark = Decoration.mark({ class: "cm-md-link" });
+
+type InteractiveLinkDecorationSpec = {
+  [interactiveLinkDecorationSpec]?: true;
+};
 
 export type LiveMdLinkBaseUrl = string | URL;
 export type LiveMdLinkOpenHandler = (href: string) => void;
@@ -42,7 +47,8 @@ export function liveMdLinkMark(destination: null | string | undefined, baseUrl: 
         "data-live-md-href": href,
       },
       class: "cm-md-link",
-    });
+      [interactiveLinkDecorationSpec]: true,
+    } as Parameters<typeof Decoration.mark>[0] & InteractiveLinkDecorationSpec);
     linkMarkCache.set(href, cached);
   }
   return cached;
@@ -67,6 +73,10 @@ export function liveMdLinkInteractions(): Extension {
       },
     }),
   ];
+}
+
+export function isLiveMdInteractiveLinkDecoration(decoration: Decoration) {
+  return (decoration.spec as InteractiveLinkDecorationSpec)[interactiveLinkDecorationSpec] === true;
 }
 
 const liveMdShiftHoverCursor = ViewPlugin.fromClass(

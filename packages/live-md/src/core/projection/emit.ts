@@ -3,6 +3,7 @@ import { Decoration, type WidgetType } from "@codemirror/view";
 import { isWhitespaceOnly, forEachLineInRange, splitRangeByLine } from "../util.js";
 import { type MarkdownTable } from "../widgets.js";
 import { emptyLiveMdLeafAnalysisTrace, type DocRange } from "../analysis/types.js";
+import { isLiveMdInteractiveLinkDecoration } from "../links.js";
 import { type LiveMdBuild, type LiveMdBuildConfig, type LiveMdEffect } from "./types.js";
 
 const visibleSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-active" });
@@ -29,6 +30,7 @@ export function createLiveMdBuild(config: LiveMdBuildConfig): LiveMdBuild {
     sourceIslandMode: config.sourceIslandMode ?? false,
     state: config.state,
     trace: config.trace ?? emptyLiveMdLeafAnalysisTrace(),
+    yieldCheck: config.yieldCheck,
   };
 }
 
@@ -79,23 +81,38 @@ export function addSyntax(build: LiveMdBuild, from: number, to: number, decorati
 }
 
 export function finishDecorations(build: LiveMdBuild) {
+  return finishDecorationSets(build).decorations;
+}
+
+export function finishDecorationSets(build: LiveMdBuild) {
   let lineDecorations = new RangeSetBuilder<Decoration>();
   let lineClasses = collectLineClasses(build);
   for (let [lineFrom, classes] of lineClasses) {
     lineDecorations.add(lineFrom, lineFrom, Decoration.line({ class: [...classes].join(" ") }));
   }
 
-  let decorations: Array<Range<Decoration>> = [];
+  let allDecorations: Array<Range<Decoration>> = [];
+  let interactiveDecorations: Array<Range<Decoration>> = [];
+  let sourceSafeDecorations: Array<Range<Decoration>> = [];
+  let destructiveDecorations: Array<Range<Decoration>> = [];
   for (let effect of build.effects) {
     switch (effect.kind) {
       case "lineClass":
       case "atomic":
         break;
       case "mark":
-        decorations.push(effect.decoration.range(effect.from, effect.to));
+        addProjectedDecoration(
+          allDecorations,
+          isLiveMdInteractiveLinkDecoration(effect.decoration)
+            ? interactiveDecorations
+            : sourceSafeDecorations,
+          effect.decoration.range(effect.from, effect.to),
+        );
         break;
       case "replace":
-        decorations.push(
+        addProjectedDecoration(
+          allDecorations,
+          destructiveDecorations,
           Decoration.replace({ block: effect.block ?? false, widget: effect.widget }).range(
             effect.from,
             effect.to,
@@ -103,11 +120,26 @@ export function finishDecorations(build: LiveMdBuild) {
         );
         break;
       case "syntax":
-        addSyntaxDecorations(build, decorations, effect);
+        addSyntaxDecorations(
+          build,
+          allDecorations,
+          sourceSafeDecorations,
+          destructiveDecorations,
+          effect,
+        );
         break;
     }
   }
-  return RangeSet.join([lineDecorations.finish(), RangeSet.of(decorations, true)]);
+  let lineDecorationSet = lineDecorations.finish();
+  let interactive = RangeSet.of(interactiveDecorations, true);
+  let sourceSafe = RangeSet.join([lineDecorationSet, RangeSet.of(sourceSafeDecorations, true)]);
+  let destructive = RangeSet.of(destructiveDecorations, true);
+  return {
+    decorations: RangeSet.join([lineDecorationSet, RangeSet.of(allDecorations, true)]),
+    destructiveDecorations: destructive,
+    interactiveDecorations: interactive,
+    sourceSafeDecorations: sourceSafe,
+  };
 }
 
 export function finishAtomicRanges(build: LiveMdBuild) {
@@ -151,7 +183,9 @@ function collectAtomicRange(ranges: DocRange[], seen: Set<string>, from: number,
 
 function addSyntaxDecorations(
   build: LiveMdBuild,
-  decorations: Array<Range<Decoration>>,
+  allDecorations: Array<Range<Decoration>>,
+  sourceSafeDecorations: Array<Range<Decoration>>,
+  destructiveDecorations: Array<Range<Decoration>>,
   effect: Extract<LiveMdEffect, { kind: "syntax" }>,
 ) {
   forEachLineDecoration(
@@ -164,8 +198,20 @@ function addSyntaxDecorations(
       if (build.sourceIslandMode) return hiddenSyntax;
       return build.activeLines.has(lineNumber) ? visibleSyntax : hiddenSyntax;
     },
-    (from, to, decoration) => decorations.push(decoration.range(from, to)),
+    (from, to, decoration) => {
+      let target = decoration == hiddenSyntax ? destructiveDecorations : sourceSafeDecorations;
+      addProjectedDecoration(allDecorations, target, decoration.range(from, to));
+    },
   );
+}
+
+function addProjectedDecoration(
+  allDecorations: Array<Range<Decoration>>,
+  targetDecorations: Array<Range<Decoration>>,
+  decoration: Range<Decoration>,
+) {
+  allDecorations.push(decoration);
+  targetDecorations.push(decoration);
 }
 
 export function rangeTouchesActiveLine(build: LiveMdBuild, from: number, to: number) {

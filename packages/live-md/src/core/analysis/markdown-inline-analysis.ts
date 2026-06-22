@@ -250,6 +250,7 @@ function applyInlineLink(
     destination: destination ? doc.sliceString(destination.from, destination.to) : null,
     kind: "linkMark",
     range: nodeRange(text),
+    sourceRange: nodeRange(node),
   });
   addSyntax(descriptors, { from: text.to, to: node.to });
   return false;
@@ -262,6 +263,7 @@ function applyUriAutolink(doc: Text, descriptors: LiveMdDescriptor[], node: Synt
     destination: doc.sliceString(node.from + 1, node.to - 1),
     kind: "linkMark",
     range: { from: node.from + 1, to: node.to - 1 },
+    sourceRange: nodeRange(node),
   });
   addSyntax(descriptors, { from: node.to - 1, to: node.to });
 }

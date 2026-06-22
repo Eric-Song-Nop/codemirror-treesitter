@@ -2,6 +2,7 @@
 
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { __testFlushLiveMdAnalysis } from "../src/core/decorations.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
 
 type SelectionSpec = number | { anchor: number; head: number };
@@ -139,6 +140,7 @@ describe("readonly LiveMD edit commands", () => {
     let editor = await mountEditor("intro\n- [ ] task\n\nnext");
 
     editor.view.dispatch({ changes: { from: 0, insert: "new " } });
+    await __testFlushLiveMdAnalysis(editor.view);
     clickTaskCheckbox(editor.view);
 
     expect(editor.value).toBe("new intro\n- [x] task\n\nnext");
@@ -149,6 +151,7 @@ describe("readonly LiveMD edit commands", () => {
     let editor = await mountEditor(doc);
 
     editor.view.dispatch({ changes: { from: 0, insert: "new " } });
+    await __testFlushLiveMdAnalysis(editor.view);
     clickTablePreview(editor.view);
 
     expect(editor.view.state.selection.main.head).toBe(editor.value.indexOf("| Name"));

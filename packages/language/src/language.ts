@@ -825,6 +825,12 @@ const Work = {
 
 let currentContext: ParseContext | null = null;
 const syntaxTreeChangedRangeCache = new WeakMap<Transaction, readonly DocRange[]>();
+const syntaxTreeApplyTraceCache = new WeakMap<Transaction, SyntaxTreeApplyTrace>();
+
+export type SyntaxTreeApplyTrace = {
+  applyMs: number;
+  workIterations: number;
+};
 
 export function syntaxTree(state: EditorState): Tree {
   return state.field(Language.state, false)?.tree ?? Tree.empty;
@@ -851,6 +857,10 @@ export function syntaxTreeChangedRanges(transaction: Transaction): readonly DocR
   let ranges = computeSyntaxTreeChangedRanges(transaction);
   syntaxTreeChangedRangeCache.set(transaction, ranges);
   return ranges;
+}
+
+export function syntaxTreeApplyTrace(transaction: Transaction): SyntaxTreeApplyTrace {
+  return syntaxTreeApplyTraceCache.get(transaction) ?? { applyMs: 0, workIterations: 0 };
 }
 
 function computeSyntaxTreeChangedRanges(transaction: Transaction): readonly DocRange[] {
@@ -1059,6 +1069,10 @@ function withParseContext<T>(context: ParseContext, callback: () => T): T {
   }
 }
 
+function now() {
+  return typeof performance == "undefined" ? Date.now() : performance.now();
+}
+
 class LanguageState {
   readonly tree: Tree;
 
@@ -1070,7 +1084,12 @@ class LanguageState {
     if (!tr.docChanged)
       return this.tree == this.context.tree ? this : new LanguageState(this.context);
     let context = this.context.changes(tr.changes, tr.startState, tr.state);
+    let start = now();
     context.work(Work.Apply);
+    syntaxTreeApplyTraceCache.set(tr, {
+      applyMs: now() - start,
+      workIterations: 1,
+    });
     return new LanguageState(context);
   }
 

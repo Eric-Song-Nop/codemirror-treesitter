@@ -3,6 +3,7 @@
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { __testFlushLiveMdAnalysis, __testLiveMdAnalysis } from "../src/core/decorations.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
 import { liveMdLinkOpen, type LiveMdLinkBaseUrl } from "../src/core/links.js";
 
@@ -158,12 +159,90 @@ describe("LiveMD links", () => {
       userEvent: "input.test",
     });
 
+    expect(__testLiveMdAnalysis(editor.view).pending).toBeTruthy();
+    expect(clickableLinks(editor.view)).toHaveLength(0);
+    for (let link of styledLinks(editor.view)) shiftClick(link);
+    expect(openLink).not.toHaveBeenCalled();
+
+    await __testFlushLiveMdAnalysis(editor.view);
+
     let link = firstClickableLink(editor.view);
     expect(link.dataset.liveMdHref).toBe("https://two.example");
 
     shiftClick(link);
 
     expect(openLink).toHaveBeenCalledWith("https://two.example", "_blank", "noopener,noreferrer");
+  });
+
+  it("keeps unchanged links clickable during pending paragraph edits", async () => {
+    let doc = "keep **bold** and [link](https://example.com) tail";
+    let editor = await mountEditor(doc);
+
+    let editFrom = doc.indexOf("tail");
+    editor.view.dispatch({ changes: { from: editFrom, insert: "new " } });
+
+    expect(__testLiveMdAnalysis(editor.view).pending).toBeTruthy();
+    expect(editor.view.dom.querySelector(".cm-md-strong")).toBeTruthy();
+
+    let link = firstClickableLink(editor.view);
+    expect(link.dataset.liveMdHref).toBe("https://example.com");
+
+    shiftClick(link);
+
+    expect(openLink).toHaveBeenCalledWith("https://example.com", "_blank", "noopener,noreferrer");
+  });
+
+  it("removes dirty link decorations while link labels are pending", async () => {
+    let doc = "[docs](https://example.com) tail";
+    let editor = await mountEditor(doc);
+
+    editor.view.dispatch({ changes: { from: doc.indexOf("docs") + 1, insert: "x" } });
+
+    expect(__testLiveMdAnalysis(editor.view).pending).toBeTruthy();
+    expect(clickableLinks(editor.view)).toHaveLength(0);
+    expect(styledLinks(editor.view)).toHaveLength(0);
+
+    await __testFlushLiveMdAnalysis(editor.view);
+
+    expect(firstClickableLink(editor.view).dataset.liveMdHref).toBe("https://example.com");
+  });
+
+  it("removes dirty link decorations while link delimiters are pending", async () => {
+    let doc = "[docs](https://example.com) tail";
+    let editor = await mountEditor(doc);
+
+    let delimiterFrom = doc.indexOf("]");
+    editor.view.dispatch({ changes: { from: delimiterFrom, to: delimiterFrom + 1 } });
+
+    expect(__testLiveMdAnalysis(editor.view).pending).toBeTruthy();
+    expect(clickableLinks(editor.view)).toHaveLength(0);
+    expect(styledLinks(editor.view)).toHaveLength(0);
+
+    await __testFlushLiveMdAnalysis(editor.view);
+
+    expect(clickableLinks(editor.view)).toHaveLength(0);
+    expect(styledLinks(editor.view)).toHaveLength(0);
+  });
+
+  it("does not expose stale safe hrefs while unsafe destination edits are pending", async () => {
+    let doc = "[docs](https://safe.example)\n\nnext";
+    let editor = await mountEditor(doc);
+
+    let destinationFrom = doc.indexOf("https://safe.example");
+    editor.view.dispatch({
+      changes: {
+        from: destinationFrom,
+        to: destinationFrom + "https://safe.example".length,
+        insert: "javascript:alert",
+      },
+    });
+
+    expect(__testLiveMdAnalysis(editor.view).pending).toBeTruthy();
+    expect(clickableLinks(editor.view)).toHaveLength(0);
+
+    await __testFlushLiveMdAnalysis(editor.view);
+
+    expect(firstStyledLink(editor.view).hasAttribute("data-live-md-href")).toBe(false);
   });
 });
 
@@ -194,15 +273,23 @@ async function mountEditor(
 }
 
 function firstClickableLink(view: EditorView) {
-  let link = view.dom.querySelector<HTMLElement>(".cm-md-link[data-live-md-href]");
+  let link = clickableLinks(view)[0];
   expect(link).toBeTruthy();
   return link!;
 }
 
 function firstStyledLink(view: EditorView) {
-  let link = view.dom.querySelector<HTMLElement>(".cm-md-link");
+  let link = styledLinks(view)[0];
   expect(link).toBeTruthy();
   return link!;
+}
+
+function clickableLinks(view: EditorView) {
+  return Array.from(view.dom.querySelectorAll<HTMLElement>(".cm-md-link[data-live-md-href]"));
+}
+
+function styledLinks(view: EditorView) {
+  return Array.from(view.dom.querySelectorAll<HTMLElement>(".cm-md-link"));
 }
 
 function clickLink(link: HTMLElement, init: MouseEventInit = {}) {

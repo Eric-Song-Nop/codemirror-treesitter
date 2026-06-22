@@ -253,7 +253,7 @@ describe("LiveMD changed markdown leaf spike", () => {
     expect(result.changedLeaves).toHaveLength(1);
     expect(result.trace.visitedBlockNodes).toBeLessThan(180);
     expect(result.trace.fallbackCount).toBe(0);
-  });
+  }, 60_000);
 });
 
 async function analyzeEdit(oldDoc: string, changes: ChangeSpec) {

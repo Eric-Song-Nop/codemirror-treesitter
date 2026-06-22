@@ -8,13 +8,14 @@ import {
   type Extension,
 } from "@codemirror/state";
 import { undo, redo } from "@codemirror-treesitter/commands";
-import { ensureSyntaxTree, type Tree } from "@codemirror-treesitter/language";
+import { ensureSyntaxTree, syntaxTree, type Tree } from "@codemirror-treesitter/language";
 import { EditorView } from "@codemirror/view";
 import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   __testBuildCanonicalLiveMdAnalysis,
   __testBuildLiveMdAnalysis,
+  __testFlushLiveMdAnalysis,
   __testLiveMdAnalysis,
   liveMdAnalysis,
 } from "../src/core/decorations.js";
@@ -27,6 +28,7 @@ import {
 } from "../src/core/languages.js";
 import {
   activeMarkdownSourceRanges,
+  analyzeLiveMdSourceIslands,
   type LiveMdSourceIslandLeaf,
 } from "../src/core/analysis/markdown-source-islands.js";
 import { type LiveMdAnalysis } from "../src/core/runtime/types.js";
@@ -217,12 +219,14 @@ describe("LiveMD active source islands", () => {
     let entered = await mountEditor("- item", { selection: "- item".length });
     pressKey(entered.view, "Enter");
     expect(entered.value).toBe("- item\n- ");
+    await __testFlushLiveMdAnalysis(entered.view);
     expectMarkerOnlySource(entered, "- ");
     entered.destroy();
 
     let deleted = await mountEditor("- ", { selection: "- ".length });
     pressKey(deleted.view, "Backspace");
     expect(deleted.value).toBe("-");
+    await __testFlushLiveMdAnalysis(deleted.view);
     expectMarkerOnlySource(deleted, "-");
     deleted.destroy();
 
@@ -232,14 +236,17 @@ describe("LiveMD active source islands", () => {
       selection: { anchor: "- ".length },
       userEvent: "input",
     });
+    await __testFlushLiveMdAnalysis(history.view);
     expectMarkerOnlySource(history, "- ");
 
     expect(undo(history.view)).toBe(true);
     expect(history.value).toBe("-");
+    await __testFlushLiveMdAnalysis(history.view);
     expectMarkerOnlySource(history, "-");
 
     expect(redo(history.view)).toBe(true);
     expect(history.value).toBe("- ");
+    await __testFlushLiveMdAnalysis(history.view);
     expectMarkerOnlySource(history, "- ");
     history.destroy();
   });
@@ -346,12 +353,17 @@ describe("LiveMD active source islands", () => {
 
   it("keeps source island ownership linear for many paragraphs", async () => {
     let doc = Array.from({ length: 10_000 }, (_value, index) => `paragraph ${index}`).join("\n\n");
-    let state = await markdownState(doc);
-    let analysis = __testBuildLiveMdAnalysis(state);
+    let state = EditorState.create({
+      doc,
+      extensions: [await loadMarkdownExtension()],
+    });
+    ensureSyntaxTree(state, doc.length, 5_000);
+    state = state.update({}).state;
+    let analysis = analyzeLiveMdSourceIslands({ state, tree: syntaxTree(state) });
 
-    expect(analysis.sourceIslandLeaves).toHaveLength(10_000);
+    expect(analysis.leaves).toHaveLength(10_000);
     expect(
-      analysis.sourceIslandLeaves
+      analysis.leaves
         .slice(0, 2)
         .map((leaf) => state.sliceDoc(leaf.sourceRange.from, leaf.sourceRange.to)),
     ).toEqual(["paragraph 0", "paragraph 1"]);

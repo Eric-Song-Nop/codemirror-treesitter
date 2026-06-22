@@ -1,5 +1,11 @@
 import { type ChangeDesc, type Text } from "@codemirror/state";
-import { type LeafAnalysisCache, type LeafAnalysisRecord } from "./descriptors.js";
+import {
+  type LeafAnalysisCache,
+  type LeafAnalysisRangeIndex,
+  type LeafAnalysisRangeIndexEntry,
+  type LeafAnalysisRangeIndexNode,
+  type LeafAnalysisRecord,
+} from "./descriptors.js";
 import {
   analyzeMarkdownLeafAnalysisUnit,
   createAnalysisRecord,
@@ -52,13 +58,34 @@ export function createLeafAnalysisCache(
     byId,
     nextCacheId,
     records: Object.freeze(frozen),
+    safetyIndex: buildSafetyIndex(frozen),
   };
+}
+
+export function findLeafAnalysisRecordsTouchingRanges(
+  cache: LeafAnalysisCache,
+  ranges: readonly DocRange[],
+): readonly LeafAnalysisRecord[] {
+  if (!ranges.length) return [];
+  let records: LeafAnalysisRecord[] = [];
+  let seen = new Set<number>();
+  for (let range of ranges) {
+    for (let entry of safetyIndexEntriesTouching(cache.safetyIndex, range)) {
+      if (seen.has(entry.record.cacheId)) continue;
+      seen.add(entry.record.cacheId);
+      records.push(entry.record);
+    }
+  }
+  return records.sort(
+    (left, right) => left.range.from - right.range.from || left.range.to - right.range.to,
+  );
 }
 
 export function buildFreshLeafAnalysisCache(input: {
   analysisInput: LiveMdLeafSemanticAnalysisInput;
   snapshot: MarkdownBlockSnapshot;
   startCacheId?: number;
+  yieldCheck?: () => void;
 }): LeafAnalysisCacheTransition {
   let nextCacheId = input.startCacheId ?? 1;
   let trace = emptyLeafAnalysisCacheTrace();
@@ -67,7 +94,9 @@ export function buildFreshLeafAnalysisCache(input: {
   let records: LeafAnalysisRecord[] = [];
   let inlineSession: MarkdownInlineAnalysisSession | null = null;
   try {
-    for (let unit of units) {
+    for (let index = 0; index < units.length; index++) {
+      if (index % 32 == 0) input.yieldCheck?.();
+      let unit = units[index]!;
       trace.recordsAnalyzed++;
       records.push(
         analyzeMarkdownLeafAnalysisUnit(
@@ -102,9 +131,14 @@ export function transitionLeafAnalysisCache(input: {
   oldCache: LeafAnalysisCache;
   oldDoc: Text;
   snapshot: MarkdownBlockSnapshot;
+  yieldCheck?: () => void;
 }): LeafAnalysisCacheTransition {
   let units = markdownLeafAnalysisUnits(input.analysisInput.state.doc, input.snapshot);
-  let oldCandidates = mappedOldRecordCandidates(input.oldCache.records, input.changes);
+  let oldCandidates = mappedOldRecordCandidates(
+    input.oldCache.records,
+    input.changes,
+    input.yieldCheck,
+  );
   let nextCacheId = input.oldCache.nextCacheId;
   let trace = emptyLeafAnalysisCacheTrace();
   trace.recordsVisited = units.length;
@@ -113,7 +147,9 @@ export function transitionLeafAnalysisCache(input: {
   let inlineSession: MarkdownInlineAnalysisSession | null = null;
 
   try {
-    for (let unit of units) {
+    for (let index = 0; index < units.length; index++) {
+      if (index % 32 == 0) input.yieldCheck?.();
+      let unit = units[index]!;
       let reused = reusableOldRecord(
         input.oldDoc,
         input.analysisInput.state.doc,
@@ -172,9 +208,12 @@ export function transitionLeafAnalysisCache(input: {
 function mappedOldRecordCandidates(
   records: readonly LeafAnalysisRecord[],
   changes: ChangeDesc,
+  yieldCheck?: () => void,
 ): ReadonlyMap<string, readonly MappedOldRecord[]> {
   let candidates = new Map<string, MappedOldRecord[]>();
-  for (let record of records) {
+  for (let index = 0; index < records.length; index++) {
+    if (index % 32 == 0) yieldCheck?.();
+    let record = records[index]!;
     let mapped: MappedOldRecord = {
       cacheSourceRange: mapRange(recordCacheSourceRange(record), changes),
       range: mapRange(recordIdentityRange(record), changes),
@@ -197,6 +236,146 @@ function mappedOldRecordCandidates(
     }
   }
   return candidates;
+}
+
+function buildSafetyIndex(records: readonly LeafAnalysisRecord[]) {
+  let entries = records.map((record) => ({
+    range: unionRanges(record.range, record.sourceRange, record.effectRange),
+    record,
+  }));
+  return Object.freeze({ root: buildSafetyIndexNode(entries) });
+}
+
+function safetyIndexEntriesTouching(index: LeafAnalysisRangeIndex, range: DocRange) {
+  let entries: LeafAnalysisRangeIndexEntry[] = [];
+  collectSafetyIndexEntriesTouching(index.root, range, entries);
+  return entries;
+}
+
+function buildSafetyIndexNode(
+  entries: readonly LeafAnalysisRangeIndexEntry[],
+): LeafAnalysisRangeIndexNode | null {
+  if (!entries.length) return null;
+
+  let center = medianRangeCenter(entries);
+  let left: LeafAnalysisRangeIndexEntry[] = [];
+  let right: LeafAnalysisRangeIndexEntry[] = [];
+  let spanning: LeafAnalysisRangeIndexEntry[] = [];
+  for (let entry of entries) {
+    if (entry.range.to < center) {
+      left.push(entry);
+    } else if (entry.range.from > center) {
+      right.push(entry);
+    } else {
+      spanning.push(entry);
+    }
+  }
+
+  return Object.freeze({
+    byEnd: Object.freeze(
+      spanning
+        .slice()
+        .sort(
+          (a, b) =>
+            b.range.to - a.range.to ||
+            a.range.from - b.range.from ||
+            a.record.cacheId - b.record.cacheId,
+        ),
+    ),
+    byStart: Object.freeze(
+      spanning
+        .slice()
+        .sort(
+          (a, b) =>
+            a.range.from - b.range.from ||
+            a.range.to - b.range.to ||
+            a.record.cacheId - b.record.cacheId,
+        ),
+    ),
+    center,
+    left: buildSafetyIndexNode(left),
+    right: buildSafetyIndexNode(right),
+  });
+}
+
+function collectSafetyIndexEntriesTouching(
+  node: LeafAnalysisRangeIndexNode | null,
+  range: DocRange,
+  entries: LeafAnalysisRangeIndexEntry[],
+) {
+  if (!node) return;
+
+  if (range.from == range.to) {
+    collectSafetyIndexEntriesTouchingPoint(node, range.from, entries);
+    return;
+  }
+
+  if (range.to <= node.center) {
+    for (let entry of node.byStart) {
+      if (entry.range.from >= range.to) break;
+      if (rangesTouch(entry.range, range)) entries.push(entry);
+    }
+    collectSafetyIndexEntriesTouching(node.left, range, entries);
+    return;
+  }
+
+  if (range.from >= node.center) {
+    for (let entry of node.byEnd) {
+      if (entry.range.to <= range.from) break;
+      if (rangesTouch(entry.range, range)) entries.push(entry);
+    }
+    collectSafetyIndexEntriesTouching(node.right, range, entries);
+    return;
+  }
+
+  for (let entry of node.byStart) {
+    if (rangesTouch(entry.range, range)) entries.push(entry);
+  }
+  collectSafetyIndexEntriesTouching(node.left, range, entries);
+  collectSafetyIndexEntriesTouching(node.right, range, entries);
+}
+
+function collectSafetyIndexEntriesTouchingPoint(
+  node: LeafAnalysisRangeIndexNode,
+  position: number,
+  entries: LeafAnalysisRangeIndexEntry[],
+) {
+  if (position < node.center) {
+    for (let entry of node.byStart) {
+      if (entry.range.from > position) break;
+      if (rangesTouch(entry.range, { from: position, to: position })) entries.push(entry);
+    }
+    collectSafetyIndexEntriesTouching(node.left, { from: position, to: position }, entries);
+    return;
+  }
+
+  if (position > node.center) {
+    for (let entry of node.byEnd) {
+      if (entry.range.to < position) break;
+      if (rangesTouch(entry.range, { from: position, to: position })) entries.push(entry);
+    }
+    collectSafetyIndexEntriesTouching(node.right, { from: position, to: position }, entries);
+    return;
+  }
+
+  for (let entry of node.byStart) entries.push(entry);
+}
+
+function medianRangeCenter(entries: readonly LeafAnalysisRangeIndexEntry[]) {
+  let centers = entries
+    .map((entry) => entry.range.from + Math.floor((entry.range.to - entry.range.from) / 2))
+    .sort((left, right) => left - right);
+  return centers[centers.length >> 1]!;
+}
+
+function unionRanges(...ranges: readonly DocRange[]): DocRange {
+  let from = Number.POSITIVE_INFINITY;
+  let to = 0;
+  for (let range of ranges) {
+    from = Math.min(from, range.from);
+    to = Math.max(to, range.to);
+  }
+  return { from, to };
 }
 
 function reusableOldRecord(
@@ -317,6 +496,13 @@ function disposeInlineSession(session: MarkdownInlineAnalysisSession | null) {
 
 function rangesSame(left: DocRange, right: DocRange) {
   return left.from == right.from && left.to == right.to;
+}
+
+function rangesTouch(left: DocRange, right: DocRange) {
+  if (left.from == left.to && right.from == right.to) return left.from == right.from;
+  if (left.from == left.to) return left.from >= right.from && left.from < right.to;
+  if (right.from == right.to) return left.from <= right.from && left.to >= right.from;
+  return left.from < right.to && right.from < left.to;
 }
 
 function clamp(value: number, min: number, max: number) {
