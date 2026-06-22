@@ -377,9 +377,13 @@ controller.destroy();
 `config.markdown.features` is the query-driven Markdown syntax layer for editor
 decorations and block-level HTML export hooks. `renderHtml(...)` queries the
 block tree only; a feature's `includeNested` setting only affects editor
-`decorate(...)` queries. `config.plugins` is the host
-behavior layer for CodeMirror extensions and lifecycle hooks such as theme,
-image asset, link behavior, or collaboration integration. Markdown syntax
+`decorate(...)` queries. Editor `decorate(...)` hooks still run inside an active
+LiveMD source island; built-in destructive replacements are suppressed by the
+active source range, while custom features use `activeLines` and
+`rangeTouchesActiveLine(...)` when they need active-source-specific behavior.
+`config.plugins` is the host behavior layer for CodeMirror extensions and
+lifecycle hooks such as theme, image asset, link behavior, or collaboration
+integration. Markdown syntax
 extensions are called features, not plugins. The controller exposes `view`,
 `value`, `ready`, `setValue()`, `setConfig()`, `setExtensions()`,
 `setPersistKey()`, `setPlaceholder()`, `setReadOnly()`, and `destroy()`.

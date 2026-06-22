@@ -264,13 +264,15 @@ describe("LiveMD analysis snapshot", () => {
 
     expect(view.contentDOM.querySelectorAll(".cm-md-list-line")).toHaveLength(2);
     expect(view.contentDOM.querySelectorAll(".cm-md-task-line")).toHaveLength(2);
-    expect(view.contentDOM.querySelectorAll(".cm-md-task-toggle")).toHaveLength(2);
+    expect(view.contentDOM.querySelectorAll(".cm-md-task-toggle")).toHaveLength(1);
     view.destroy();
   });
 
   it("renders task list decorations before trailing EOF blank lines", async () => {
     let doc = "- [x] done\n- [ ] todo\n\n\n";
-    let state = await markdownAnalysisState(doc);
+    let state = (await markdownAnalysisState(doc)).update({
+      selection: { anchor: doc.length },
+    }).state;
     let decorations = canonicalAnalysis(state).decorations;
 
     expect(
@@ -349,7 +351,7 @@ describe("LiveMD analysis snapshot", () => {
 
   it("rebuilds markdown feature decorations when features change", async () => {
     let featureCompartment = new Compartment();
-    let view = await markdownAnalysisView("# Dynamic\n\nbody", "", [
+    let view = await markdownAnalysisView("# Dynamic\n\nbody", "body", [
       featureCompartment.of(markHeadingFeature("cm-md-feature-first")),
     ]);
 

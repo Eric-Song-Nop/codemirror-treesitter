@@ -120,28 +120,28 @@ describe("readonly LiveMD edit commands", () => {
   }
 
   it("does not toggle task checkbox widgets when readonly", async () => {
-    let editor = await mountEditor("- [ ] task", { readOnly: true });
+    let editor = await mountEditor("- [ ] task\n\nnext", { readOnly: true });
 
     clickTaskCheckbox(editor.view);
 
-    expect(editor.value).toBe("- [ ] task");
+    expect(editor.value).toBe("- [ ] task\n\nnext");
   });
 
   it("toggles task checkbox widgets when writable", async () => {
-    let editor = await mountEditor("- [ ] task");
+    let editor = await mountEditor("- [ ] task\n\nnext");
 
     clickTaskCheckbox(editor.view);
 
-    expect(editor.value).toBe("- [x] task");
+    expect(editor.value).toBe("- [x] task\n\nnext");
   });
 
   it("toggles task checkbox widgets after earlier edits move the marker", async () => {
-    let editor = await mountEditor("intro\n- [ ] task");
+    let editor = await mountEditor("intro\n- [ ] task\n\nnext");
 
     editor.view.dispatch({ changes: { from: 0, insert: "new " } });
     clickTaskCheckbox(editor.view);
 
-    expect(editor.value).toBe("new intro\n- [x] task");
+    expect(editor.value).toBe("new intro\n- [x] task\n\nnext");
   });
 
   it("selects the current table source after earlier edits move the preview", async () => {

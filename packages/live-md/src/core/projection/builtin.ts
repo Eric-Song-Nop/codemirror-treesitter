@@ -39,6 +39,7 @@ import {
   addReplace,
   addSyntax,
   isOnlyVisibleContentOnLine,
+  rangeTouchesActiveSource,
   rangeTouchesActiveLine,
   tableTouchesActiveLine,
 } from "./emit.js";
@@ -173,7 +174,7 @@ function applyHeading(build: LiveMdBuild, node: SyntaxNode, level: number, marke
 function applyListMarker(build: LiveMdBuild, node: SyntaxNode) {
   let line = build.state.doc.lineAt(node.from);
   addLineClass(build, line.number, "cm-md-list-line");
-  if (build.activeLines.has(line.number)) {
+  if (rangeTouchesActiveSource(build, node.from, node.to)) {
     addSyntax(build, node.from, node.to);
   } else {
     addReplace(
@@ -190,7 +191,11 @@ function applyTaskMarker(build: LiveMdBuild, node: SyntaxNode, checked: boolean)
   addLineClass(build, line.number, "cm-md-list-line");
   addLineClass(build, line.number, "cm-md-task-line");
   if (checked) addLineClass(build, line.number, "is-checked");
-  addReplace(build, node.from, node.to, new TaskCheckboxWidget(checked));
+  if (rangeTouchesActiveSource(build, node.from, node.to)) {
+    addSyntax(build, node.from, node.to);
+  } else {
+    addReplace(build, node.from, node.to, new TaskCheckboxWidget(checked));
+  }
 }
 
 function applyRule(build: LiveMdBuild, node: SyntaxNode): false {
@@ -240,7 +245,7 @@ function applyImage(build: LiveMdBuild, match: TreeSitterQueryMatch): false | vo
   if (!src) return false;
 
   let line = build.state.doc.lineAt(node.from);
-  let active = build.activeLines.has(line.number);
+  let active = rangeTouchesActiveLine(build, node.from, node.to);
   let widget = new ImagePreviewWidget(
     alt,
     resolveLiveMdImageSource(src, build.imageSourceResolver),

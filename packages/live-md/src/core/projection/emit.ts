@@ -23,6 +23,7 @@ const atomicRangeValue = new AtomicRange();
 export function createLiveMdBuild(config: LiveMdBuildConfig): LiveMdBuild {
   return {
     activeLines: config.activeLines,
+    activeSourceRanges: config.activeSourceRanges ?? [],
     codeFenceHighlightTrees: [],
     codeFenceHighlighters: config.codeFenceHighlighters,
     codeFenceLanguages: config.codeFenceLanguages,
@@ -30,6 +31,7 @@ export function createLiveMdBuild(config: LiveMdBuildConfig): LiveMdBuild {
     imageSourceResolver: config.imageSourceResolver,
     linkBaseUrl: config.linkBaseUrl,
     markdownFeatures: config.markdownFeatures,
+    sourceIslandMode: config.sourceIslandMode ?? false,
     state: config.state,
   };
 }
@@ -162,6 +164,8 @@ function addSyntaxDecorations(
     effect.to,
     (lineNumber) => {
       if (effect.decoration) return effect.decoration;
+      if (rangeTouchesActiveSource(build, effect.from, effect.to)) return visibleSyntax;
+      if (build.sourceIslandMode) return hiddenSyntax;
       return build.activeLines.has(lineNumber) ? visibleSyntax : hiddenSyntax;
     },
     (from, to, decoration) => decorations.push(decoration.range(from, to)),
@@ -169,6 +173,8 @@ function addSyntaxDecorations(
 }
 
 export function rangeTouchesActiveLine(build: LiveMdBuild, from: number, to: number) {
+  if (rangeTouchesActiveSource(build, from, to)) return true;
+  if (build.sourceIslandMode) return false;
   let firstLine = build.state.doc.lineAt(from).number;
   let lastLine = build.state.doc.lineAt(Math.max(from, to - 1)).number;
   for (let lineNumber of build.activeLines) {
@@ -177,12 +183,17 @@ export function rangeTouchesActiveLine(build: LiveMdBuild, from: number, to: num
   return false;
 }
 
+export function rangeTouchesActiveSource(build: LiveMdBuild, from: number, to: number) {
+  return build.activeSourceRanges.some((range) => rangesOverlap(range, from, to));
+}
+
 export function tableTouchesActiveLine(
   build: LiveMdBuild,
   from: number,
   to: number,
   table: MarkdownTable,
 ) {
+  if (build.sourceIslandMode) return rangeTouchesActiveSource(build, from, to);
   if (rangeTouchesActiveLine(build, from, to)) return true;
   if (table.rows.length) return false;
   let end = Math.min(to, build.state.doc.length);
@@ -193,6 +204,10 @@ export function tableTouchesActiveLine(
   }
   let nextLine = build.state.doc.line(nextLineNumber);
   return isWhitespaceOnly(build.state.sliceDoc(nextLine.from, nextLine.to));
+}
+
+function rangesOverlap(range: DocRange, from: number, to: number) {
+  return range.from < to && from < range.to;
 }
 
 export function isOnlyVisibleContentOnLine(

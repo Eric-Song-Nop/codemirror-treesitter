@@ -4,6 +4,7 @@ import { type Decoration, type DecorationSet, type WidgetType } from "@codemirro
 import { type LiveMdMarkdownFeature } from "../features.js";
 import { type LiveMdImageSourceResolver } from "../images.js";
 import { type CodeFenceLanguageMap } from "../languages.js";
+import { type LiveMdSourceIslandLeaf } from "./markdown-source-islands.js";
 
 export type DocRange = {
   from: number;
@@ -12,6 +13,7 @@ export type DocRange = {
 
 export type LiveMdBuild = {
   activeLines: Set<number>;
+  activeSourceRanges: readonly DocRange[];
   codeFenceHighlightTrees: CodeFenceHighlightTree[];
   codeFenceHighlighters: readonly Highlighter[];
   codeFenceLanguages: CodeFenceLanguageMap;
@@ -19,16 +21,19 @@ export type LiveMdBuild = {
   imageSourceResolver: LiveMdImageSourceResolver | null;
   linkBaseUrl: string | null;
   markdownFeatures: readonly LiveMdMarkdownFeature[];
+  sourceIslandMode: boolean;
   state: EditorState;
 };
 
 export type LiveMdBuildConfig = {
   activeLines: Set<number>;
+  activeSourceRanges?: readonly DocRange[];
   codeFenceHighlighters: readonly Highlighter[];
   codeFenceLanguages: CodeFenceLanguageMap;
   imageSourceResolver: LiveMdImageSourceResolver | null;
   linkBaseUrl: string | null;
   markdownFeatures: readonly LiveMdMarkdownFeature[];
+  sourceIslandMode?: boolean;
   state: EditorState;
 };
 
@@ -79,9 +84,11 @@ export type CodeFenceHighlightTree = {
 
 export type LiveMdAnalysis = {
   activeLines: ReadonlySet<number>;
+  activeSourceRanges: readonly DocRange[];
   atomicRanges: RangeSet<RangeValue>;
   codeFenceHighlightTrees: readonly CodeFenceHighlightTree[];
   decorations: DecorationSet;
+  sourceIslandLeaves: readonly LiveMdSourceIslandLeaf[];
   tree: Tree;
 };
 
