@@ -23,6 +23,12 @@ export type LiveMdBuild = {
   yieldCheck?: () => void;
 };
 
+export type LiveMdEffectOwnerKey = string;
+
+type LiveMdOwnedEffect = {
+  ownerKeys?: readonly LiveMdEffectOwnerKey[];
+};
+
 export type LiveMdBuildConfig = {
   activeLines: Set<number>;
   activeSourceRanges?: readonly DocRange[];
@@ -41,37 +47,37 @@ export type CodeFenceParser =
   CodeFenceLanguageMap extends ReadonlyMap<string, infer Parser> ? Parser : never;
 
 export type LiveMdEffect =
-  | {
+  | ({
       decoration: Decoration;
       from: number;
       kind: "mark";
       to: number;
-    }
-  | {
+    } & LiveMdOwnedEffect)
+  | ({
       block?: boolean;
       from: number;
       kind: "replace";
       atomic?: boolean;
       to: number;
       widget: WidgetType;
-    }
-  | {
+    } & LiveMdOwnedEffect)
+  | ({
       className: string;
       from: number;
       kind: "lineClass";
       to: number;
-    }
-  | {
+    } & LiveMdOwnedEffect)
+  | ({
       decoration?: Decoration;
       from: number;
       kind: "syntax";
       to: number;
-    }
-  | {
+    } & LiveMdOwnedEffect)
+  | ({
       from: number;
       kind: "atomic";
       to: number;
-    };
+    } & LiveMdOwnedEffect);
 
 export type LiveMdRenderStatus = {
   activeLines: ReadonlySet<number>;

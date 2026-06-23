@@ -103,7 +103,9 @@ export function projectLeafRecord(
   let renderStatus = renderStatusForRecord(build, record);
   let active = buildRangeTouchesActiveLine(build, record.sourceRange.from, record.sourceRange.to);
   for (let spec of projectLeaf(record, active, renderStatus)) {
-    for (let mapped of mapSpec(spec, record, build)) materializeEffectSpecOnce(build, mapped, seen);
+    for (let mapped of mapSpec(spec, record, build)) {
+      materializeEffectSpecOnce(build, mapped, seen, liveMdEffectOwnerKeys(record, mapped));
+    }
   }
 }
 
@@ -123,6 +125,7 @@ export function projectLeafRecords(
     projectLeafRecord(build, record, seen, mapSpec);
   }
   build.trace.projectionRecords += projected;
+  return projected;
 }
 
 export function projectLeafCacheRecords(
@@ -140,6 +143,7 @@ export function projectLeafCacheRecords(
     projectLeafRecord(build, record, seen, mapSpec);
   });
   build.trace.projectionRecords += projected;
+  return projected;
 }
 
 export function projectLeafCacheRecordsTouchingRanges(
@@ -147,13 +151,18 @@ export function projectLeafCacheRecordsTouchingRanges(
   cache: LeafAnalysisCache,
   ranges: readonly DocRange[],
   mapSpec?: LiveMdEffectSpecMapper,
+  shouldProjectRecord?: (record: LeafAnalysisRecord) => boolean,
 ) {
   let seen = new Set<string>();
-  let count = forEachLeafAnalysisCacheRecordTouchingRanges(cache, ranges, (record, index) => {
+  let count = 0;
+  forEachLeafAnalysisCacheRecordTouchingRanges(cache, ranges, (record, index) => {
     if (index % 32 == 0) build.yieldCheck?.();
+    if (shouldProjectRecord && !shouldProjectRecord(record)) return;
+    count++;
     projectLeafRecord(build, record, seen, mapSpec);
   });
   build.trace.projectionRecords += count;
+  return count;
 }
 
 function identityEffectSpec(spec: LiveMdEffectSpec) {
@@ -656,11 +665,31 @@ function renderStatusForRecord(build: LiveMdBuild, record: LeafAnalysisRecord): 
   };
 }
 
-function materializeEffectSpecOnce(build: LiveMdBuild, spec: LiveMdEffectSpec, seen: Set<string>) {
+function materializeEffectSpecOnce(
+  build: LiveMdBuild,
+  spec: LiveMdEffectSpec,
+  seen: Set<string>,
+  ownerKeys: readonly string[] = [],
+) {
   let key = liveMdEffectSpecKey(spec);
   if (seen.has(key)) return;
   seen.add(key);
-  materializeEffectSpec(build, spec);
+  materializeEffectSpec(build, spec, ownerKeys);
+}
+
+export function liveMdRecordOwnerKey(cacheId: number) {
+  return `record:${cacheId}`;
+}
+
+export function liveMdEffectOwnerKeys(
+  record: LeafAnalysisRecord,
+  spec: LiveMdEffectSpec,
+): readonly string[] {
+  let recordKey = liveMdRecordOwnerKey(record.cacheId);
+  return [
+    recordKey,
+    `${recordKey}:effect:${liveMdRelativeEffectSpecKey(spec, record.sourceRange.from)}`,
+  ];
 }
 
 function liveMdDescriptorKey(descriptor: LiveMdDescriptor) {
@@ -746,6 +775,34 @@ function liveMdEffectSpecKey(spec: LiveMdEffectSpec) {
   }
 }
 
+function liveMdRelativeEffectSpecKey(spec: LiveMdEffectSpec, offset: number) {
+  switch (spec.kind) {
+    case "atomic":
+      return keyParts("atomic", relativeRangeKey(spec, offset));
+    case "codeFenceHighlight":
+      return keyParts(
+        "codeFenceHighlight",
+        spec.contentFrom - offset,
+        spec.contentTo - offset,
+        spec.language,
+      );
+    case "lineClass":
+      return keyParts("lineClass", relativeRangeKey(spec, offset), spec.className);
+    case "mark":
+      return keyParts("mark", relativeRangeKey(spec, offset), markSpecKey(spec.mark));
+    case "replace":
+      return keyParts(
+        "replace",
+        relativeRangeKey(spec, offset),
+        spec.block ? 1 : 0,
+        spec.atomic ? 1 : 0,
+        widgetSpecKey(spec.widget),
+      );
+    case "syntax":
+      return keyParts("syntax", relativeRangeKey(spec, offset), spec.className);
+  }
+}
+
 function markSpecKey(mark: LiveMdMarkSpec) {
   switch (mark.kind) {
     case "class":
@@ -794,6 +851,10 @@ function rangeKey(range: DocRange) {
   return `${range.from}-${range.to}`;
 }
 
+function relativeRangeKey(range: DocRange, offset: number) {
+  return `${range.from - offset}-${range.to - offset}`;
+}
+
 function optionalRangeKey(range: DocRange | null) {
   return range ? rangeKey(range) : "";
 }
@@ -807,19 +868,23 @@ function keyParts(...parts: readonly (boolean | number | string | null | undefin
     .join("|");
 }
 
-function materializeEffectSpec(build: LiveMdBuild, spec: LiveMdEffectSpec) {
+function materializeEffectSpec(
+  build: LiveMdBuild,
+  spec: LiveMdEffectSpec,
+  ownerKeys: readonly string[] = [],
+) {
   switch (spec.kind) {
     case "atomic":
-      addAtom(build, spec.from, spec.to);
+      addAtom(build, spec.from, spec.to, ownerKeys);
       break;
     case "codeFenceHighlight":
       addCodeFenceHighlights(build, spec.contentFrom, spec.contentTo, spec.language);
       break;
     case "lineClass":
-      addLineRangeClass(build, spec.from, spec.to, spec.className);
+      addLineRangeClass(build, spec.from, spec.to, spec.className, ownerKeys);
       break;
     case "mark":
-      addMark(build, spec.from, spec.to, markDecoration(build, spec.mark));
+      addMark(build, spec.from, spec.to, markDecoration(build, spec.mark), ownerKeys);
       break;
     case "replace":
       addReplace(
@@ -829,6 +894,7 @@ function materializeEffectSpec(build: LiveMdBuild, spec: LiveMdEffectSpec) {
         widgetFromSpec(build, spec.widget),
         spec.block ?? false,
         spec.atomic ?? false,
+        ownerKeys,
       );
       break;
     case "syntax":
@@ -837,6 +903,7 @@ function materializeEffectSpec(build: LiveMdBuild, spec: LiveMdEffectSpec) {
         spec.from,
         spec.to,
         spec.className ? Decoration.mark({ class: spec.className }) : undefined,
+        ownerKeys,
       );
       break;
   }

@@ -30,7 +30,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { walkMarkdownBlocks } from "../analysis/markdown-block-cursor.js";
-import { type LiveMdDescriptor } from "../analysis/descriptors.js";
+import { type LeafAnalysisRecord, type LiveMdDescriptor } from "../analysis/descriptors.js";
 import {
   buildFreshLeafAnalysisCache,
   emptyLeafAnalysisCacheTrace,
@@ -39,6 +39,7 @@ import {
   materializeLeafAnalysisCacheRecords,
   transitionLeafAnalysisCacheLocal,
   transitionLeafAnalysisCache,
+  type LeafAnalysisCacheTransition,
 } from "../analysis/markdown-leaf-cache.js";
 import {
   activeMarkdownSourceRanges,
@@ -70,6 +71,8 @@ import {
 } from "../languages.js";
 import { liveMdLinkBaseUrl } from "../links.js";
 import {
+  compileFullDirectLayoutProjection,
+  compileIncrementalDirectLayoutProjection,
   compileVisibleSurfaceProjection,
   type LiveMdProjectionCompileInput,
 } from "../projection/compilers.js";
@@ -1211,20 +1214,33 @@ function buildLiveMdAnalysis(
         yieldCheck: options.yieldCheck,
       },
     );
-    let build = createLiveMdBuild(compileInput);
-    projectLeafCacheRecords(
-      build,
-      semanticAnalysis.semantic.cache,
-      liveMdEffectSpecLayerMapper("direct"),
-      liveMdRecordMayProduceDirectLayout,
-    );
-    let legacyFeatureFullQueryCount = applyLegacyMarkdownFeatures(
-      build,
-      markdownParserService,
-      tree,
-    );
-    let projection = finishProjectionLayers(build);
-    let direct = projection.direct;
+    let legacyFeatureFullQueryCount = 0;
+    let legacySurface: SurfaceProjection | null = null;
+    let direct: LiveMdProjectionLayer;
+    if (hasLegacyDocumentQueryFeature(state)) {
+      let build = createLiveMdBuild(compileInput);
+      let projected = projectLeafCacheRecords(
+        build,
+        semanticAnalysis.semantic.cache,
+        liveMdEffectSpecLayerMapper("direct"),
+        liveMdRecordMayProduceDirectLayout,
+      );
+      build.trace.directProjectionRecords += projected;
+      build.trace.directProjectionWindows = mergeDocRanges([
+        ...build.trace.directProjectionWindows,
+        { from: 0, to: state.doc.length },
+      ]);
+      legacyFeatureFullQueryCount = applyLegacyMarkdownFeatures(build, markdownParserService, tree);
+      let projection = finishProjectionLayers(build);
+      direct = projection.direct;
+      legacySurface = legacyFeatureFullQueryCount ? projection.surface : null;
+    } else {
+      direct = compileRuntimeDirectLayoutProjection(compileInput, semanticAnalysis, {
+        previous: options.previous,
+        transaction: options.transaction,
+        transitionBase: options.transitionBase,
+      });
+    }
     let trace = liveMdSemanticTrace(semanticAnalysis.trace, legacyFeatureFullQueryCount);
     let analysis: LiveMdRuntimeState = {
       activeLines,
@@ -1233,7 +1249,7 @@ function buildLiveMdAnalysis(
       directDecorations: direct.decorations,
       directDestructiveDecorations: direct.destructiveDecorations,
       directSourceSafeDecorations: direct.sourceSafeDecorations,
-      legacySurface: legacyFeatureFullQueryCount ? projection.surface : null,
+      legacySurface,
       pending: null,
       revision: options.revision ?? options.previous?.revision ?? 0,
       semantic: semanticAnalysis.semantic,
@@ -1299,6 +1315,190 @@ function projectionCompileInput(
     trace: options.trace,
     yieldCheck: options.yieldCheck,
   };
+}
+
+function compileRuntimeDirectLayoutProjection(
+  input: LiveMdProjectionCompileInput,
+  semanticAnalysis: {
+    activeSourceRanges: readonly DocRange[];
+    semantic: NonNullable<LiveMdRuntimeState["semantic"]>;
+    transition?: LeafAnalysisCacheTransition | null;
+  },
+  options: {
+    previous?: LiveMdRuntimeState;
+    transaction?: Transaction;
+    transitionBase?: LiveMdPendingAnalysis;
+  },
+): LiveMdProjectionLayer {
+  let patch = directProjectionPatchInput(input.state, semanticAnalysis, options);
+  if (patch && options.previous) {
+    return compileIncrementalDirectLayoutProjection(input, semanticAnalysis.semantic.cache, {
+      changes: patch.changes,
+      previous: {
+        atomicRanges: options.previous.directAtomicRanges,
+        destructiveDecorations: options.previous.directDestructiveDecorations,
+        sourceSafeDecorations: options.previous.directSourceSafeDecorations,
+      },
+      ranges: patch.ranges,
+      records: patch.records,
+      removeRecordIds: patch.removeRecordIds,
+    });
+  }
+  return compileFullDirectLayoutProjection(input, semanticAnalysis.semantic.cache);
+}
+
+function directProjectionPatchInput(
+  state: EditorState,
+  semanticAnalysis: {
+    activeSourceRanges: readonly DocRange[];
+    semantic: NonNullable<LiveMdRuntimeState["semantic"]>;
+    transition?: LeafAnalysisCacheTransition | null;
+  },
+  options: {
+    previous?: LiveMdRuntimeState;
+    transaction?: Transaction;
+    transitionBase?: LiveMdPendingAnalysis;
+  },
+): {
+  changes?: ChangeDesc;
+  ranges: readonly DocRange[];
+  records: readonly LeafAnalysisRecord[];
+  removeRecordIds: readonly number[];
+} | null {
+  let previous = options.previous;
+  if (!previous?.semantic) return null;
+
+  let transition = semanticAnalysis.transition;
+  if (
+    options.transitionBase &&
+    transition &&
+    !transition.fallback &&
+    !runtimeEpochsChanged(options.transitionBase.epochs, runtimeEpochs(state))
+  ) {
+    let activePatch = activeDirectProjectionPatch({
+      changes: options.transitionBase.changes,
+      currentActiveSourceRanges: semanticAnalysis.activeSourceRanges,
+      currentCache: semanticAnalysis.semantic.cache,
+      previous,
+    });
+    return {
+      changes: options.transitionBase.changes,
+      ranges: mergeDocRanges([
+        ...(transition.mappedOldEffectRanges ?? []),
+        ...(transition.newEffectRanges ?? []),
+        ...activePatch.ranges,
+      ]),
+      records: uniqueLeafAnalysisRecords([
+        ...(transition.changedRecords ?? []),
+        ...activePatch.records,
+      ]),
+      removeRecordIds: uniqueNumbers([
+        ...(transition.changedRecordIds ?? []),
+        ...(transition.removedRecordIds ?? []),
+        ...activePatch.removeRecordIds,
+      ]),
+    };
+  }
+
+  let transaction = options.transaction;
+  if (
+    transaction &&
+    !transaction.docChanged &&
+    previous.semantic.cache == semanticAnalysis.semantic.cache &&
+    !directProjectionInputsChanged(transaction.startState, transaction.state)
+  ) {
+    let activePatch = activeDirectProjectionPatch({
+      currentActiveSourceRanges: semanticAnalysis.activeSourceRanges,
+      currentCache: semanticAnalysis.semantic.cache,
+      previous,
+    });
+    return {
+      ranges: activePatch.ranges,
+      records: activePatch.records,
+      removeRecordIds: activePatch.removeRecordIds,
+    };
+  }
+
+  return null;
+}
+
+function activeDirectProjectionPatch(input: {
+  changes?: ChangeDesc;
+  currentActiveSourceRanges: readonly DocRange[];
+  currentCache: NonNullable<LiveMdRuntimeState["semantic"]>["cache"];
+  previous: LiveMdRuntimeState;
+}): {
+  ranges: readonly DocRange[];
+  records: readonly LeafAnalysisRecord[];
+  removeRecordIds: readonly number[];
+} {
+  let previousActiveRanges = input.changes
+    ? input.previous.activeSourceRanges.map((range) => mapRange(range, input.changes!))
+    : input.previous.activeSourceRanges;
+  if (sameRanges(previousActiveRanges, input.currentActiveSourceRanges)) {
+    return { ranges: [], records: [], removeRecordIds: [] };
+  }
+
+  let ranges: DocRange[] = [];
+  let oldRecords: LeafAnalysisRecord[] = [];
+  if (input.previous.semantic) {
+    for (let record of findLeafAnalysisRecordsTouchingRanges(
+      input.previous.semantic.cache,
+      input.previous.activeSourceRanges,
+    )) {
+      if (!liveMdRecordMayProduceDirectLayout(record)) continue;
+      oldRecords.push(record);
+      ranges.push(input.changes ? mapRange(record.effectRange, input.changes) : record.effectRange);
+    }
+  }
+  let currentReprojectRanges = mergeDocRanges([
+    ...previousActiveRanges,
+    ...input.currentActiveSourceRanges,
+  ]);
+  let records: LeafAnalysisRecord[] = [];
+  for (let record of findLeafAnalysisRecordsTouchingRanges(
+    input.currentCache,
+    currentReprojectRanges,
+  )) {
+    if (!liveMdRecordMayProduceDirectLayout(record)) continue;
+    records.push(record);
+    ranges.push(record.effectRange);
+  }
+  return {
+    ranges: mergeDocRanges(ranges),
+    records: uniqueLeafAnalysisRecords(records),
+    removeRecordIds: uniqueNumbers([
+      ...oldRecords.map((record) => record.cacheId),
+      ...records.map((record) => record.cacheId),
+    ]),
+  };
+}
+
+function uniqueLeafAnalysisRecords(records: readonly LeafAnalysisRecord[]) {
+  let unique: LeafAnalysisRecord[] = [];
+  let seen = new Set<number>();
+  for (let record of records) {
+    if (seen.has(record.cacheId)) continue;
+    seen.add(record.cacheId);
+    unique.push(record);
+  }
+  return unique.sort(
+    (left, right) => left.range.from - right.range.from || left.range.to - right.range.to,
+  );
+}
+
+function uniqueNumbers(values: readonly number[]) {
+  return [...new Set(values)].sort((left, right) => left - right);
+}
+
+function directProjectionInputsChanged(startState: EditorState, state: EditorState) {
+  return (
+    codeFenceHighlightersChanged(startState, state) ||
+    codeFenceLanguagesChanged(startState, state) ||
+    markdownFeaturesChanged(startState, state) ||
+    startState.facet(liveMdImageSourceResolver) != state.facet(liveMdImageSourceResolver) ||
+    startState.facet(liveMdLinkBaseUrl) != state.facet(liveMdLinkBaseUrl)
+  );
 }
 
 function mergeProjectionLayers(
@@ -1400,6 +1600,7 @@ function buildLiveMdSemanticAnalysis(input: {
       semantic: previousSemantic,
       sourceIslandLeaves,
       trace: emptyLeafAnalysisCacheTrace(),
+      transition: null,
     };
   }
 
@@ -1438,6 +1639,7 @@ function buildLiveMdSemanticAnalysis(input: {
         },
         sourceIslandLeaves,
         trace: transition.trace,
+        transition,
       };
     }
 
@@ -1473,6 +1675,7 @@ function buildLiveMdSemanticAnalysis(input: {
       },
       sourceIslandLeaves,
       trace: fallback.trace,
+      transition: null,
     };
   }
 
@@ -1522,6 +1725,7 @@ function buildLiveMdSemanticAnalysis(input: {
     },
     sourceIslandLeaves,
     trace: transition.trace,
+    transition,
   };
 }
 
@@ -1560,7 +1764,8 @@ function canReuseDirectProjectionForSelectionOnly(
     !transaction ||
     transaction.docChanged ||
     tree != previous.tree ||
-    markdownParserServiceChanged(transaction.startState, state)
+    markdownParserServiceChanged(transaction.startState, state) ||
+    directProjectionInputsChanged(transaction.startState, state)
   ) {
     return false;
   }
@@ -1642,48 +1847,54 @@ function liveMdAnalysisSnapshot(
   return snapshot;
 }
 
-type LiveMdTraceNumericKey = Exclude<
-  keyof LiveMdLeafAnalysisTrace,
-  "checkedRanges" | "surfaceCompileRanges"
->;
+type LiveMdTraceNumericKey = {
+  [Key in keyof LiveMdLeafAnalysisTrace]: LiveMdLeafAnalysisTrace[Key] extends number ? Key : never;
+}[keyof LiveMdLeafAnalysisTrace];
 
-const liveMdTraceNumericKeys: readonly LiveMdTraceNumericKey[] = [
-  "blockNodesVisited",
-  "codeFenceParserSessionsCreated",
-  "codeFenceParserSessionsDeleted",
-  "codeFenceParses",
-  "codeFenceTreesCreated",
-  "codeFenceTreesDeleted",
-  "inlineHostsWithoutRanges",
-  "inlineRangeGroupsExamined",
-  "exactSourceComparisons",
-  "exactSourceComparedChars",
-  "fallbackCount",
-  "fixedPointRounds",
-  "inlineParsedChars",
-  "inlineParseCalls",
-  "inlineParserSessions",
-  "languageApplyMs",
-  "languageWorkIterations",
-  "leavesCollected",
-  "legacyFeatureFullQueryCount",
-  "projectionRecords",
-  "recordsAnalyzed",
-  "cacheFullMaterializations",
-  "recordsCollected",
-  "recordsMappedIndividually",
-  "recordsReused",
-  "recordsVisited",
-  "cacheIndexQueries",
-  "sourceHashCollisions",
-  "staleResultDrops",
-  "surfaceCompileCalls",
-  "surfaceDescriptorsMapped",
-  "surfaceMapOnlyUpdates",
-  "surfaceRecordsVisited",
-  "tableCellsParsed",
-  "widgetConstructions",
-];
+const liveMdTraceNumericKeyMap = {
+  blockNodesVisited: true,
+  codeFenceParserSessionsCreated: true,
+  codeFenceParserSessionsDeleted: true,
+  codeFenceParses: true,
+  codeFenceTreesCreated: true,
+  codeFenceTreesDeleted: true,
+  inlineHostsWithoutRanges: true,
+  inlineRangeGroupsExamined: true,
+  exactSourceComparisons: true,
+  exactSourceComparedChars: true,
+  fallbackCount: true,
+  fixedPointRounds: true,
+  inlineParsedChars: true,
+  inlineParseCalls: true,
+  inlineParserSessions: true,
+  languageApplyMs: true,
+  languageWorkIterations: true,
+  leavesCollected: true,
+  legacyFeatureFullQueryCount: true,
+  directProjectionRecords: true,
+  projectionRecords: true,
+  recordsAnalyzed: true,
+  cacheFullMaterializations: true,
+  recordsCollected: true,
+  recordsMappedIndividually: true,
+  recordsReused: true,
+  recordsVisited: true,
+  cacheIndexCallbacks: true,
+  cacheIndexQueries: true,
+  heavyRenderStarts: true,
+  recordIndexQueries: true,
+  safetyIndexQueries: true,
+  sourceHashCollisions: true,
+  staleResultDrops: true,
+  surfaceCompileCalls: true,
+  surfaceDescriptorsMapped: true,
+  surfaceMapOnlyUpdates: true,
+  surfaceRecordsVisited: true,
+  tableCellsParsed: true,
+  widgetConstructions: true,
+} satisfies Record<LiveMdTraceNumericKey, true>;
+
+const liveMdTraceNumericKeys = Object.keys(liveMdTraceNumericKeyMap) as LiveMdTraceNumericKey[];
 
 function mergeLiveMdLeafAnalysisTraces(
   primary: LiveMdLeafAnalysisTrace,
@@ -1692,6 +1903,10 @@ function mergeLiveMdLeafAnalysisTraces(
   let merged: LiveMdLeafAnalysisTrace = {
     ...primary,
     checkedRanges: mergeDocRanges([...primary.checkedRanges, ...secondary.checkedRanges]),
+    directProjectionWindows: mergeDocRanges([
+      ...primary.directProjectionWindows,
+      ...secondary.directProjectionWindows,
+    ]),
     surfaceCompileRanges: mergeDocRanges([
       ...primary.surfaceCompileRanges,
       ...secondary.surfaceCompileRanges,
