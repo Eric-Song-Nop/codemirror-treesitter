@@ -6,6 +6,11 @@ import {
   type Tree,
 } from "@codemirror-treesitter/language";
 import { EditorView } from "@codemirror/view";
+import {
+  activeMarkdownSourceRanges,
+  analyzeLiveMdSourceIslands,
+  type LiveMdSourceIslandAnalysis,
+} from "../analysis/markdown-source-islands.js";
 import { isInsideSkippedRange, matchRoot, queryLiveMdMatches } from "../analysis/query.js";
 import { collectTable } from "../analysis/tables.js";
 import { type CapturedTable, type DocRange, type LiveMdAnalysis } from "../analysis/types.js";
@@ -33,10 +38,21 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
   update(value, transaction) {
     let tree = syntaxTree(transaction.state);
     let activeLines = getActiveLines(transaction.state);
+    let activeSourceRanges =
+      tree == value.tree && !transaction.docChanged
+        ? activeMarkdownSourceRanges(transaction.state, value.sourceIslandLeaves)
+        : null;
+    let activeLinesStable = sameSetItems(activeLines, value.activeLines);
+    let selectionProjectionStable =
+      value.sourceIslandLeaves.length > 0
+        ? activeSourceRanges != null &&
+          sameRanges(activeSourceRanges, value.activeSourceRanges) &&
+          (!transaction.state.facet(liveMdMarkdownFeatureFacet).length || activeLinesStable)
+        : activeLinesStable;
     if (
       tree == value.tree &&
       !transaction.docChanged &&
-      sameNumbers(activeLines, value.activeLines) &&
+      selectionProjectionStable &&
       !codeFenceHighlightersChanged(transaction.startState, transaction.state) &&
       !codeFenceLanguagesChanged(transaction.startState, transaction.state) &&
       !markdownParserServiceChanged(transaction.startState, transaction.state) &&
@@ -67,13 +83,18 @@ function buildLiveMdAnalysis(
   activeLines = getActiveLines(state),
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
-  let build = buildLiveMdBuild(state, activeLines, codeFenceLanguages);
+  let tree = syntaxTree(state);
+  let markdownParserService = state.facet(liveMdMarkdownParserServiceFacet);
+  let markdownAnalysis = markdownParserService ? analyzeLiveMdSourceIslands({ state, tree }) : null;
+  let build = buildLiveMdBuild(state, activeLines, codeFenceLanguages, markdownAnalysis, tree);
   return {
     activeLines,
+    activeSourceRanges: markdownAnalysis?.activeSourceRanges ?? [],
     atomicRanges: finishAtomicRanges(build),
     codeFenceHighlightTrees: build.codeFenceHighlightTrees,
     decorations: finishDecorations(build),
-    tree: syntaxTree(state),
+    sourceIslandLeaves: markdownAnalysis?.leaves ?? [],
+    tree,
   };
 }
 
@@ -89,23 +110,26 @@ function buildLiveMdBuild(
   state: EditorState,
   activeLines: Set<number>,
   codeFenceLanguages: CodeFenceLanguageMap,
+  markdownAnalysis: LiveMdSourceIslandAnalysis | null,
+  tree: ReturnType<typeof syntaxTree>,
 ) {
   let build = createLiveMdBuild({
     activeLines,
+    activeSourceRanges: markdownAnalysis?.activeSourceRanges ?? [],
     codeFenceHighlighters: codeFenceHighlighters(state),
     codeFenceLanguages,
     imageSourceResolver: state.facet(liveMdImageSourceResolver),
     linkBaseUrl: state.facet(liveMdLinkBaseUrl),
     markdownFeatures: state.facet(liveMdMarkdownFeatureFacet),
+    sourceIslandMode: Boolean(markdownAnalysis),
     state,
   });
 
-  let tree = syntaxTree(state);
   let markdownParserService = state.facet(liveMdMarkdownParserServiceFacet);
   if (markdownParserService) {
-    withLiveMdMarkdownInlineTrees(markdownParserService, state.doc, tree, (inlineTrees) =>
-      processMatches(build, queryLiveMdMatches(tree, inlineTrees), inlineTrees),
-    );
+    withLiveMdMarkdownInlineTrees(markdownParserService, state.doc, tree, (inlineTrees) => {
+      processMatches(build, queryLiveMdMatches(tree, inlineTrees), inlineTrees);
+    });
     return build;
   }
 
@@ -120,11 +144,11 @@ function processMatches(
   inlineTrees: readonly Tree[],
 ) {
   let skipped: DocRange[] = [];
+  let processed = new Set<string>();
   let tables = new Map<string, CapturedTable>();
   for (let match of matches) {
     collectTable(match, tables);
   }
-  let processed = new Set<string>();
   for (let match of matches) {
     let root = matchRoot(match);
     if (root && isInsideSkippedRange(root, skipped)) continue;
@@ -135,9 +159,13 @@ function processMatches(
   applyLiveMdMarkdownFeatures(build, inlineTrees);
 }
 
-function sameNumbers(left: ReadonlySet<number>, right: ReadonlySet<number>) {
-  if (left.size != right.size) return false;
-  for (let value of left) if (!right.has(value)) return false;
+function sameRanges(left: readonly DocRange[], right: readonly DocRange[]) {
+  if (left.length != right.length) return false;
+  for (let index = 0; index < left.length; index++) {
+    let leftRange = left[index]!;
+    let rightRange = right[index]!;
+    if (leftRange.from != rightRange.from || leftRange.to != rightRange.to) return false;
+  }
   return true;
 }
 
@@ -145,6 +173,14 @@ function sameArrayItems<T>(left: readonly T[], right: readonly T[]) {
   if (left.length != right.length) return false;
   for (let index = 0; index < left.length; index++) {
     if (left[index] != right[index]) return false;
+  }
+  return true;
+}
+
+function sameSetItems<T>(left: ReadonlySet<T>, right: ReadonlySet<T>) {
+  if (left.size != right.size) return false;
+  for (let value of left) {
+    if (!right.has(value)) return false;
   }
   return true;
 }

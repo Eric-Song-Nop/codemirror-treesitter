@@ -51,7 +51,7 @@ describe("code fence at end of document", () => {
     expect(fencedBlocksWithNewline[0]).toEqual({ delimiters: 2, hasContent: true });
   });
 
-  it("closing delimiter should be hidden when cursor is not on that line (no trailing newline)", async () => {
+  it("keeps the closing delimiter visible in an active fence source island at EOF", async () => {
     let parent = document.createElement("div");
     document.body.append(parent);
 
@@ -70,7 +70,8 @@ describe("code fence at end of document", () => {
     );
 
     expect(closingSpan).toBeTruthy();
-    expect(closingSpan?.classList.contains("cm-md-syntax-hidden")).toBe(true);
+    expect(closingSpan?.classList.contains("cm-md-syntax-active")).toBe(true);
+    expect(closingSpan?.classList.contains("cm-md-syntax-hidden")).toBe(false);
     expect(openingLine.classList.contains("cm-md-code-block-start")).toBe(true);
     expect(closingLine.classList.contains("cm-md-code-fence-line")).toBe(true);
     expect(closingLine.classList.contains("cm-md-code-block-end")).toBe(true);
@@ -88,6 +89,7 @@ describe("code fence at end of document", () => {
     });
 
     await editor.ready;
+    editor.view.dispatch({ selection: { anchor: editor.value.length } });
 
     let closingLine = editor.view.contentDOM.querySelectorAll(".cm-line").item(2);
     let openingLine = editor.view.contentDOM.querySelectorAll(".cm-line").item(0);

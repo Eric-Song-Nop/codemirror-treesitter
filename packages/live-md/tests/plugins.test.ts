@@ -86,7 +86,7 @@ describe("LiveMD plugins", () => {
         markdown: { features: [headingClassFeature("cm-md-config-first")] },
         plugins: [first],
       },
-      doc: "# Dynamic",
+      doc: "intro\n\n# Dynamic",
       focus: false,
       parent,
     });
@@ -159,7 +159,7 @@ describe("LiveMD plugins", () => {
     };
     let plugins = [plugin];
     let editor = createLiveMdEditor({
-      doc: "# Dynamic",
+      doc: "intro\n\n# Dynamic",
       focus: false,
       parent,
       config: {
@@ -234,7 +234,7 @@ describe("LiveMD plugins", () => {
   it("reconfigures markdown features through setConfig", async () => {
     let parent = document.body.appendChild(document.createElement("div"));
     let editor = createLiveMdEditor({
-      doc: "# Dynamic",
+      doc: "intro\n\n# Dynamic",
       focus: false,
       parent,
       config: {

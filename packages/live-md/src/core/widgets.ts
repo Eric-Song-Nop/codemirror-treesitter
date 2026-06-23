@@ -224,9 +224,23 @@ export class ImagePreviewWidget extends WidgetType {
     return other.alt == this.alt && other.src == this.src;
   }
 
-  toDOM() {
+  toDOM(view: EditorView) {
     let figure = document.createElement("figure");
     figure.className = "cm-md-image-preview";
+    figure.tabIndex = 0;
+    figure.setAttribute("role", "button");
+    figure.setAttribute("aria-label", "Edit Markdown image");
+    figure.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
+    figure.addEventListener("click", () => {
+      view.dispatch({
+        selection: { anchor: view.posAtDOM(figure) },
+        scrollIntoView: true,
+        userEvent: "select.imagePreview",
+      });
+      view.focus();
+    });
 
     let image = document.createElement("img");
     image.alt = this.alt;
@@ -240,6 +254,10 @@ export class ImagePreviewWidget extends WidgetType {
     }
 
     return figure;
+  }
+
+  ignoreEvent() {
+    return false;
   }
 }
 

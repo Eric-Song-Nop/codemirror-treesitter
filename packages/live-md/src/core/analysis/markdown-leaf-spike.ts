@@ -2,12 +2,12 @@ import { type ChangeDesc, type Text } from "@codemirror/state";
 import { type DocRange, type SyntaxNode, type Tree } from "@codemirror-treesitter/language";
 
 /**
- * B1 validation spike for Markdown leaf discovery after local edits.
+ * Gate B validation spike for Markdown leaf discovery after local edits.
  *
- * Gate B1 is complete when the bounded walk matches the full-walk oracle on
- * the covered cases. Full Gate B is not complete here: this module does not
- * install the production incremental cache, marker-only state, or final
- * ancestor/context ownership model.
+ * Gate B is complete when the bounded walk matches the full-walk oracle on the
+ * covered cases and ordinary edits stay local. This module does not install the
+ * production immutable cache transition, marker/context model, or final reducer
+ * integration.
  *
  * This module is intentionally an oracle/trace harness, not the production
  * incremental LiveMD analysis cache. It keeps exact leaf source in records so
