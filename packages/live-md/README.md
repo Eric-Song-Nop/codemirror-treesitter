@@ -14,11 +14,12 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Built as an ES module package with Vite+ `vp pack`.
 - Keeps collaboration optional. Loro-specific code belongs in
   `@codemirror-treesitter/live-md-loro`, not this package.
-- LiveMD currently uses a full-walk, leaf-local semantic analysis baseline:
-  the production Markdown block cursor owns leaf/context/marker discovery,
-  each leaf produces DOM-free descriptors, and projection maps those
-  descriptors to CodeMirror decorations and widgets. Incremental semantic
-  caching and direct incremental projection remain follow-up work.
+- LiveMD currently uses a full-walk immutable semantic cache baseline: the
+  production Markdown block cursor owns leaf/context/marker discovery, each
+  leaf produces DOM-free descriptors, unchanged leaf records can reuse their
+  prior analysis objects across edits, and projection maps descriptors to
+  CodeMirror decorations and widgets. Range-local changed-leaf analysis and
+  direct incremental projection remain follow-up work.
 
 ## Responsibilities
 
@@ -343,17 +344,22 @@ Cloudflare-specific code, and concrete theme packages.
   `createInitialMarkdown(...)`.
 - The custom element installs package CSS into Shadow DOM; hosts can also import
   `./style.css` for bundler-visible styling.
-- The PR72 runtime still rebuilds the current semantic view with a full block
-  walk, but built-in Markdown behavior now flows through leaf-local
-  descriptors before projection. Custom query-driven Markdown features remain
-  on the compatibility full-query path.
+- The PR73 runtime still performs a full block walk, but built-in Markdown
+  behavior flows through an immutable leaf semantic cache before projection.
+  Unchanged leaf records can retain `cacheId` and analysis object identity after
+  ordinary edits. Custom query-driven Markdown features remain on the
+  compatibility full-query path and are conservatively recomputed for
+  correctness when present.
 - The changed-leaf harness remains a range-local oracle check on top of the
   production block cursor. Its result is `Gate B: PASS` for range-local
   changed-leaf discovery: local changed leaves match the full-walk oracle, and
   ordinary edits stay local. Its `sourceHash` is diagnostic only; exact source
   text is used for the oracle so hash collisions cannot hide changed leaves.
-  Immutable semantic caches and direct incremental projection remain future
-  work.
+  Direct incremental projection, range-local production analysis, and
+  input-to-paint latency reduction remain future work. PR73's `renderKey` is a
+  placeholder equal to `analysisKey`; it must not be used for KaTeX, Mermaid,
+  code, image, async-result, or other content caches before those caches include
+  source identity plus renderer, resolver, and theme epochs.
 
 ## Validation
 

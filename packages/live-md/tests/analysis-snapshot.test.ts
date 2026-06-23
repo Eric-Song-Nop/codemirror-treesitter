@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 
-import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import {
+  Compartment,
+  EditorState,
+  StateEffect,
+  StateField,
+  type Extension,
+} from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
   ensureSyntaxTree,
@@ -19,7 +25,16 @@ import {
 } from "../src/core/decorations.js";
 import { liveMdMarkdownFeatures } from "../src/core/features.js";
 import { liveMdImageSource, normalizeMarkdownImageSource } from "../src/core/images.js";
-import { analyzeMarkdownLeafSemantics } from "../src/core/analysis/markdown-leaf-analysis.js";
+import { walkMarkdownBlocks } from "../src/core/analysis/markdown-block-cursor.js";
+import {
+  buildFreshLeafAnalysisCache,
+  createLeafAnalysisCache,
+  transitionLeafAnalysisCache,
+} from "../src/core/analysis/markdown-leaf-cache.js";
+import {
+  analyzeMarkdownLeafSemantics,
+  hashDocRange,
+} from "../src/core/analysis/markdown-leaf-analysis.js";
 import {
   codeFenceLanguagesField,
   deleteLiveMdTree,
@@ -97,6 +112,32 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("keeps transitioned semantic cache equivalent to a fresh full rebuild", async () => {
+    let view = await markdownAnalysisView(liveMdKitchenSinkDoc(), "After anchor");
+    let editFrom = view.state.doc.toString().indexOf("alpha | 1");
+    let transaction = view.state.update({
+      changes: {
+        from: editFrom,
+        insert: "alpha | 9",
+        to: editFrom + "alpha | 1".length,
+      },
+    });
+    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
+
+    view.dispatch(transaction);
+
+    let transitioned = __testLiveMdAnalysis(view);
+    let fresh = __testBuildLiveMdAnalysis(view.state);
+    expect(transitioned.semanticTrace?.recordsReused).toBeGreaterThan(0);
+    expect(canonicalSemanticCache(view.state, transitioned)).toEqual(
+      canonicalSemanticCache(view.state, fresh),
+    );
+    expect(canonicalAnalysis(view.state, transitioned)).toEqual(
+      canonicalAnalysis(view.state, fresh),
+    );
+    view.destroy();
+  });
+
   it("keeps full-document analysis equivalent after selection-only updates", async () => {
     let view = await markdownAnalysisView(liveMdKitchenSinkDoc(), "After anchor");
 
@@ -110,6 +151,294 @@ describe("LiveMD analysis snapshot", () => {
       );
     }
     view.destroy();
+  });
+
+  it("reuses unchanged cache records after front inserts", async () => {
+    let doc = "first *one*\n\nsecond **two**\n\nthird _three_";
+    let view = await markdownAnalysisView(doc, "first");
+    let before = __testLiveMdAnalysis(view);
+    let beforeRecord = recordBySource(view.state, before, "second **two**");
+
+    let transaction = view.state.update({ changes: { from: 0, insert: "intro\n\n" } });
+    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
+    view.dispatch(transaction);
+
+    let after = __testLiveMdAnalysis(view);
+    let afterRecord = recordBySource(view.state, after, "second **two**");
+
+    expect(afterRecord.cacheId).toBe(beforeRecord.cacheId);
+    expect(afterRecord.analysis).toBe(beforeRecord.analysis);
+    expect(after.semanticTrace?.recordsReused).toBeGreaterThan(0);
+    expect(after.semanticTrace?.recordsVisited).toBe(after.semantic?.cache.records.length);
+    expect(after.semanticTrace?.exactSourceComparisons).toBeGreaterThan(0);
+    expect(after.semanticTrace?.exactSourceComparedChars).toBeGreaterThan(0);
+    expect(after.semanticTrace?.inlineParserSessions).toBeLessThanOrEqual(1);
+    expect(after.semanticTrace?.projectionRecords).toBe(after.semantic?.cache.records.length);
+    expect(legacyFeatureFullQueryCount(after)).toBe(0);
+    view.destroy();
+  });
+
+  it("keeps task list marker cache ids stable when editing only the task body", async () => {
+    let doc = "before\n\n- [ ] todo\n\nafter";
+    let view = await markdownAnalysisView(doc, "before");
+    let before = __testLiveMdAnalysis(view);
+    let beforeList = markerRecordBySource(view.state, before, "- [ ] todo", "listMarker");
+    let beforeTask = markerRecordBySource(view.state, before, "- [ ] todo", "taskMarker");
+    let editFrom = doc.indexOf("todo") + "todo".length;
+    let transaction = view.state.update({
+      changes: { from: editFrom, insert: " with more detail" },
+    });
+    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
+
+    view.dispatch(transaction);
+
+    let afterLineText = "- [ ] todo with more detail";
+    let after = __testLiveMdAnalysis(view);
+    let fresh = __testBuildLiveMdAnalysis(view.state);
+    let afterList = markerRecordBySource(view.state, after, afterLineText, "listMarker");
+    let afterTask = markerRecordBySource(view.state, after, afterLineText, "taskMarker");
+    let afterLine = lineBySource(view.state, afterLineText);
+
+    expect(afterList.cacheId).toBe(beforeList.cacheId);
+    expect(afterTask.cacheId).toBe(beforeTask.cacheId);
+    expect(afterList.analysis).toBe(beforeList.analysis);
+    expect(afterTask.analysis).toBe(beforeTask.analysis);
+    expect(afterList.sourceRange).toEqual({ from: afterLine.from, to: afterLine.to });
+    expect(afterTask.sourceRange).toEqual({ from: afterLine.from, to: afterLine.to });
+    expectRelativeLineClassRange(afterList, "cm-md-list-line", { from: 0, to: 2 });
+    expectRelativeLineClassRange(afterTask, "cm-md-list-line", { from: 2, to: 5 });
+    expectRelativeLineClassRange(afterTask, "cm-md-task-line", { from: 2, to: 5 });
+    expect(lineClasses(view.state, after).get(afterLine.from)?.has("cm-md-list-line")).toBe(true);
+    expect(lineClasses(view.state, after).get(afterLine.from)?.has("cm-md-task-line")).toBe(true);
+    expect(canonicalSemanticCache(view.state, after)).toEqual(
+      canonicalSemanticCache(view.state, fresh),
+    );
+    expect(canonicalAnalysis(view.state, after)).toEqual(canonicalAnalysis(view.state, fresh));
+    view.destroy();
+  });
+
+  it("does not reuse unchecked task marker analysis when the check state changes", async () => {
+    let doc = "before\n\n- [ ] todo\n\nafter";
+    let view = await markdownAnalysisView(doc, "before");
+    let before = __testLiveMdAnalysis(view);
+    let beforeTask = markerRecordBySource(view.state, before, "- [ ] todo", "taskMarker");
+    let editFrom = doc.indexOf("[ ]") + 1;
+    let transaction = view.state.update({
+      changes: { from: editFrom, insert: "x", to: editFrom + 1 },
+    });
+    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
+
+    view.dispatch(transaction);
+
+    let after = __testLiveMdAnalysis(view);
+    let fresh = __testBuildLiveMdAnalysis(view.state);
+    let afterTask = markerRecordBySource(view.state, after, "- [x] todo", "taskMarker");
+
+    expect(taskMarkerChecked(beforeTask)).toBe(false);
+    expect(taskMarkerChecked(afterTask)).toBe(true);
+    expect(afterTask.analysis.analysisKey).not.toBe(beforeTask.analysis.analysisKey);
+    expect(canonicalSemanticCache(view.state, after)).toEqual(
+      canonicalSemanticCache(view.state, fresh),
+    );
+    expect(canonicalAnalysis(view.state, after)).toEqual(canonicalAnalysis(view.state, fresh));
+    view.destroy();
+  });
+
+  it("assigns new cache ids when leaves merge", async () => {
+    let doc = "alpha\n\nbeta";
+    let view = await markdownAnalysisView(doc, "alpha");
+    let before = __testLiveMdAnalysis(view);
+    let alpha = recordBySource(view.state, before, "alpha");
+    let beta = recordBySource(view.state, before, "beta");
+    let blank = doc.indexOf("\n\n");
+
+    let transaction = view.state.update({
+      changes: { from: blank, insert: "\n", to: blank + 2 },
+    });
+    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
+    view.dispatch(transaction);
+
+    let after = __testLiveMdAnalysis(view);
+    let merged = recordBySource(view.state, after, "alpha\nbeta");
+
+    expect([alpha.cacheId, beta.cacheId]).not.toContain(merged.cacheId);
+    expect(after.semanticTrace?.recordsAnalyzed).toBeGreaterThan(0);
+    view.destroy();
+  });
+
+  it("assigns new cache ids when leaves split", async () => {
+    let doc = "alpha\nbeta";
+    let view = await markdownAnalysisView(doc, "alpha");
+    let before = __testLiveMdAnalysis(view);
+    let original = recordBySource(view.state, before, "alpha\nbeta");
+    let lineBreak = doc.indexOf("\n");
+
+    let transaction = view.state.update({
+      changes: { from: lineBreak + 1, insert: "\n" },
+    });
+    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
+    view.dispatch(transaction);
+
+    let after = __testLiveMdAnalysis(view);
+    let alpha = recordBySource(view.state, after, "alpha");
+    let beta = recordBySource(view.state, after, "beta");
+
+    expect(alpha.cacheId).not.toBe(original.cacheId);
+    expect(beta.cacheId).not.toBe(original.cacheId);
+    expect(after.semanticTrace?.recordsAnalyzed).toBeGreaterThanOrEqual(2);
+    view.destroy();
+  });
+
+  it("skips block walking and inline parsing for selection-only cache reuse", async () => {
+    let service = await loadMarkdownParserService();
+    let parseCalls = 0;
+    let inlineParser = Object.create(service.inlineParser) as typeof service.inlineParser;
+    inlineParser.parseWith = (...args: Parameters<typeof service.inlineParser.parseWith>) => {
+      parseCalls++;
+      return service.inlineParser.parseWith(...args);
+    };
+    let trackedService = { ...service, inlineParser };
+    let doc = "first *one*\n\nsecond **two**\n\nthird _three_";
+    let view = new EditorView({
+      parent: document.body.appendChild(document.createElement("div")),
+      state: EditorState.create({
+        doc,
+        extensions: [
+          service.blockLanguage.extension,
+          liveMdMarkdownParserServiceFacet.of(trackedService),
+          codeFenceLanguagesField,
+          liveMdAnalysis,
+        ],
+      }),
+    });
+    ensureSyntaxTree(view.state, doc.length, 5_000);
+    view.dispatch({});
+    let before = __testLiveMdAnalysis(view);
+
+    parseCalls = 0;
+    view.dispatch({ selection: { anchor: doc.indexOf("second") } });
+    let after = __testLiveMdAnalysis(view);
+
+    expect(parseCalls).toBe(0);
+    expect(after.semantic?.cache).toBe(before.semantic?.cache);
+    expect(after.semantic?.revision).toBe(before.semantic?.revision);
+    expect(after.semanticTrace?.blockNodesVisited).toBe(0);
+    expect(after.semanticTrace?.recordsVisited).toBe(0);
+    expect(after.semanticTrace?.inlineParseCalls).toBe(0);
+    expect(after.semanticTrace?.projectionRecords).toBe(after.semantic?.cache.records.length);
+    view.destroy();
+  });
+
+  it("recomputes active-dependent legacy feature decorations on selection changes", async () => {
+    let doc = "# First\n\nparagraph with *one*\n\n# Second\n";
+    let view = await markdownAnalysisView(doc, "First", [
+      liveMdMarkdownFeatures([
+        {
+          name: "test-active-heading-feature",
+          query: "(atx_heading) @target",
+          decorate({ addLineClass, node, rangeTouchesActiveLine }) {
+            let target = node("target");
+            if (target && rangeTouchesActiveLine(target.from, target.to)) {
+              addLineClass(target.from, target.to, "is-active");
+            }
+          },
+        },
+      ]),
+    ]);
+
+    expect(lineHasClass(view.state, "# First", "is-active")).toBe(true);
+    expect(lineHasClass(view.state, "# Second", "is-active")).toBe(false);
+
+    view.dispatch({ selection: { anchor: doc.indexOf("Second") } });
+
+    expect(lineHasClass(view.state, "# First", "is-active")).toBe(false);
+    expect(lineHasClass(view.state, "# Second", "is-active")).toBe(true);
+    expect(__testLiveMdAnalysis(view).semanticTrace?.legacyFeatureFullQueryCount).toBe(1);
+    expect(canonicalAnalysis(view.state, __testLiveMdAnalysis(view))).toEqual(
+      canonicalAnalysis(view.state, __testBuildCanonicalLiveMdAnalysis(view.state)),
+    );
+    view.destroy();
+  });
+
+  it("recomputes legacy feature decorations for arbitrary StateField changes", async () => {
+    let setClass = StateEffect.define<string>();
+    let classField = StateField.define<string>({
+      create() {
+        return "cm-md-feature-first";
+      },
+      update(value, transaction) {
+        for (let effect of transaction.effects) {
+          if (effect.is(setClass)) return effect.value;
+        }
+        return value;
+      },
+    });
+    let view = await markdownAnalysisView("# Dynamic\n\nbody", "body", [
+      classField,
+      liveMdMarkdownFeatures([
+        {
+          name: "test-state-field-feature",
+          query: "(atx_heading) @heading",
+          decorate({ addMark, node, state }) {
+            let heading = node("heading");
+            if (!heading) return;
+            addMark(heading.from, heading.to, state.field(classField));
+          },
+        },
+      ]),
+    ]);
+
+    expect(decorationClasses(view.state).has("cm-md-feature-first")).toBe(true);
+    expect(decorationClasses(view.state).has("cm-md-feature-second")).toBe(false);
+
+    view.dispatch({ effects: setClass.of("cm-md-feature-second") });
+
+    expect(decorationClasses(view.state).has("cm-md-feature-first")).toBe(false);
+    expect(decorationClasses(view.state).has("cm-md-feature-second")).toBe(true);
+    expect(__testLiveMdAnalysis(view).semanticTrace?.legacyFeatureFullQueryCount).toBe(1);
+    view.destroy();
+  });
+
+  it("uses exact source comparison after source hash candidate matches", async () => {
+    let service = await loadMarkdownParserService();
+    let oldState = EditorState.create({ doc: "alpha" });
+    let newState = EditorState.create({ doc: "bravo" });
+    let oldTree = service.blockParser.parse(oldState.doc);
+    let newTree = service.blockParser.parse(newState.doc);
+
+    try {
+      let oldSnapshot = walkMarkdownBlocks(oldTree, oldState.doc).snapshot;
+      let oldTransition = buildFreshLeafAnalysisCache({
+        analysisInput: { service, state: oldState, tree: oldTree },
+        snapshot: oldSnapshot,
+      });
+      let newSnapshot = walkMarkdownBlocks(newTree, newState.doc).snapshot;
+      let newHash = hashDocRange(newState.doc, { from: 0, to: newState.doc.length });
+      expect(typeof newHash).toBe("number");
+      let tamperedRecords = oldTransition.cache.records.map((record) => ({
+        ...record,
+        sourceHash: newHash,
+      }));
+      let tamperedCache = createLeafAnalysisCache(tamperedRecords, oldTransition.cache.nextCacheId);
+      let changes = oldState.update({
+        changes: { from: 0, insert: "bravo", to: oldState.doc.length },
+      }).changes;
+      let transitioned = transitionLeafAnalysisCache({
+        analysisInput: { service, state: newState, tree: newTree },
+        changes,
+        oldCache: tamperedCache,
+        oldDoc: oldState.doc,
+        snapshot: newSnapshot,
+      });
+
+      expect(transitioned.cache.records[0]?.cacheId).not.toBe(tamperedRecords[0]?.cacheId);
+      expect(transitioned.trace.sourceHashCollisions).toBe(1);
+      expect(transitioned.trace.exactSourceComparisons).toBe(1);
+      expect(transitioned.trace.exactSourceComparedChars).toBe(5);
+    } finally {
+      deleteLiveMdTree(oldTree);
+      deleteLiveMdTree(newTree);
+    }
   });
 
   it("keeps leaf-local projection equivalent to the canonical full-query projection", async () => {
@@ -473,6 +802,7 @@ describe("LiveMD analysis snapshot", () => {
     expect(initialAnalysis.trace.codeFenceParserSessionsDeleted).toBe(
       parserDelete + nestedParserDelete,
     );
+    expect(initialAnalysis.trace.codeFenceParses).toBe(1);
     expect(initialAnalysis.trace.codeFenceTreesCreated).toBe(treeCreate);
     expect(initialAnalysis.trace.codeFenceTreesDeleted).toBe(treeDelete);
 
@@ -504,6 +834,7 @@ describe("LiveMD analysis snapshot", () => {
     expect(editedAnalysis.trace.codeFenceParserSessionsDeleted).toBe(
       parserDelete + nestedParserDelete,
     );
+    expect(editedAnalysis.trace.codeFenceParses).toBe(1);
     expect(editedAnalysis.trace.codeFenceTreesCreated).toBe(treeCreate);
     expect(editedAnalysis.trace.codeFenceTreesDeleted).toBe(treeDelete);
     view.destroy();
@@ -675,6 +1006,43 @@ describe("LiveMD analysis snapshot", () => {
     expect(decorationClasses(state).has("cm-md-feature-heading-line")).toBe(true);
   });
 
+  it("counts legacy feature full-query projection after document changes", async () => {
+    let decoratedHeadings: string[] = [];
+    let doc = "# First\n\nbody\n\n# Second\n";
+    let view = await markdownAnalysisView(doc, "body", [
+      liveMdMarkdownFeatures([
+        {
+          name: "test-heading-feature",
+          query: "(atx_heading) @heading",
+          decorate({ addMark, node, slice }) {
+            let heading = node("heading");
+            if (!heading) return;
+            decoratedHeadings.push(slice(heading).trimEnd());
+            addMark(heading.from, heading.to, "cm-md-feature-heading");
+          },
+        },
+      ]),
+    ]);
+
+    decoratedHeadings = [];
+    let replaceFrom = doc.indexOf("# Second");
+    let transaction = view.state.update({
+      changes: {
+        from: replaceFrom,
+        insert: "# Updated\n\n# Third\n",
+        to: doc.length,
+      },
+    });
+    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
+    view.dispatch(transaction);
+
+    let after = __testLiveMdAnalysis(view);
+    expect(legacyFeatureFullQueryCount(after)).toBe(1);
+    expect(decoratedHeadings).toEqual(["# First", "# Updated", "# Third"]);
+    expect(decorationClasses(view.state).has("cm-md-feature-heading")).toBe(true);
+    view.destroy();
+  });
+
   it("rebuilds markdown feature decorations when features change", async () => {
     let featureCompartment = new Compartment();
     let view = await markdownAnalysisView("# Dynamic\n\nbody", "body", [
@@ -790,6 +1158,62 @@ function trackNativeTreeDeletes(tree: Tree, onDelete: () => void): number {
   return count;
 }
 
+function recordBySource(
+  state: EditorState,
+  analysis: ReturnType<typeof __testLiveMdAnalysis>,
+  source: string,
+) {
+  let record = analysis.semantic?.cache.records.find(
+    (candidate) => state.sliceDoc(candidate.sourceRange.from, candidate.sourceRange.to) == source,
+  );
+  if (!record) throw new Error(`Missing semantic record for source: ${source}`);
+  return record;
+}
+
+function markerRecordBySource(
+  state: EditorState,
+  analysis: ReturnType<typeof __testLiveMdAnalysis>,
+  source: string,
+  markerKind: "listMarker" | "taskMarker",
+) {
+  let record = analysis.semantic?.cache.records.find(
+    (candidate) =>
+      candidate.kind == "marker" &&
+      state.sliceDoc(candidate.sourceRange.from, candidate.sourceRange.to) == source &&
+      candidate.analysis.structuralEffects.some((descriptor) => descriptor.kind == markerKind),
+  );
+  if (!record) throw new Error(`Missing ${markerKind} semantic record for source: ${source}`);
+  return record;
+}
+
+function taskMarkerChecked(record: ReturnType<typeof recordBySource>) {
+  let taskMarker = record.analysis.structuralEffects.find(
+    (descriptor) => descriptor.kind == "taskMarker",
+  );
+  if (!taskMarker || taskMarker.kind != "taskMarker") {
+    throw new Error("Missing task marker descriptor");
+  }
+  return taskMarker.checked;
+}
+
+function expectRelativeLineClassRange(
+  record: ReturnType<typeof recordBySource>,
+  className: string,
+  range: DocRange,
+) {
+  let lineClass = record.analysis.structuralEffects.find(
+    (descriptor) => descriptor.kind == "lineClass" && descriptor.className == className,
+  );
+  if (!lineClass || lineClass.kind != "lineClass") {
+    throw new Error(`Missing ${className} line class descriptor`);
+  }
+  expect(lineClass.range).toEqual(range);
+}
+
+function legacyFeatureFullQueryCount(analysis: ReturnType<typeof __testLiveMdAnalysis>) {
+  return analysis.semanticTrace?.legacyFeatureFullQueryCount;
+}
+
 function decorationClasses(
   state: EditorState,
   analysis = __testLiveMdAnalysis({ state } as EditorView),
@@ -799,6 +1223,40 @@ function decorationClasses(
     let className = (value.spec as { class?: string }).class;
     for (let name of className?.split(/\s+/) ?? []) {
       if (name) classes.add(name);
+    }
+  });
+  return classes;
+}
+
+function lineBySource(state: EditorState, lineText: string) {
+  let from = state.sliceDoc().indexOf(lineText);
+  if (from < 0) throw new Error(`Missing test line text: ${lineText}`);
+  return state.doc.lineAt(from);
+}
+
+function lineHasClass(
+  state: EditorState,
+  lineText: string,
+  className: string,
+  analysis = __testLiveMdAnalysis({ state } as EditorView),
+) {
+  let from = state.sliceDoc().indexOf(lineText);
+  if (from < 0) throw new Error(`Missing test line text: ${lineText}`);
+  let line = state.doc.lineAt(from);
+  return lineClasses(state, analysis).get(line.from)?.has(className) ?? false;
+}
+
+function lineClasses(state: EditorState, analysis = __testLiveMdAnalysis({ state } as EditorView)) {
+  let classes = new Map<number, Set<string>>();
+  analysis.decorations.between(0, state.doc.length, (from, to, value) => {
+    if (from != to) return;
+    let className = (value.spec as { class?: string }).class;
+    if (!className) return;
+    let lineFrom = state.doc.lineAt(from).from;
+    let lineClasses = classes.get(lineFrom);
+    if (!lineClasses) classes.set(lineFrom, (lineClasses = new Set()));
+    for (let name of className.split(/\s+/)) {
+      if (name) lineClasses.add(name);
     }
   });
   return classes;
@@ -859,6 +1317,65 @@ function canonicalAnalysis(state: EditorState, analysis = __testBuildLiveMdAnaly
 
   return { atomicRanges, decorations };
 }
+
+function canonicalSemanticCache(
+  state: EditorState,
+  analysis: ReturnType<typeof __testLiveMdAnalysis>,
+): CanonicalSemanticRecord[] {
+  let records =
+    analysis.semantic?.cache.records.map((record) => ({
+      analysis: {
+        analysisKey: record.analysis.analysisKey,
+        descriptors: record.analysis.descriptors,
+        renderKey: record.analysis.renderKey,
+        structuralEffects: record.analysis.structuralEffects,
+      },
+      context: record.context,
+      contextKey: record.contextKey,
+      effectRange: record.effectRange,
+      kind: record.kind,
+      range: record.range,
+      source: state.sliceDoc(record.sourceRange.from, record.sourceRange.to),
+      sourceHash: record.sourceHash.toString(16),
+      sourceRange: record.sourceRange,
+    })) ?? [];
+  return records.sort(compareCanonicalSemanticRecord);
+}
+
+function compareCanonicalSemanticRecord(
+  left: CanonicalSemanticRecord,
+  right: CanonicalSemanticRecord,
+) {
+  return (
+    left.range.from - right.range.from ||
+    left.range.to - right.range.to ||
+    left.sourceRange.from - right.sourceRange.from ||
+    left.sourceRange.to - right.sourceRange.to ||
+    left.effectRange.from - right.effectRange.from ||
+    left.effectRange.to - right.effectRange.to ||
+    left.kind.localeCompare(right.kind) ||
+    left.contextKey.localeCompare(right.contextKey) ||
+    left.source.localeCompare(right.source) ||
+    JSON.stringify(left.analysis).localeCompare(JSON.stringify(right.analysis))
+  );
+}
+
+type CanonicalSemanticRecord = {
+  analysis: {
+    analysisKey: string;
+    descriptors: unknown;
+    renderKey: string;
+    structuralEffects: unknown;
+  };
+  context: unknown;
+  contextKey: string;
+  effectRange: DocRange;
+  kind: string;
+  range: DocRange;
+  source: string;
+  sourceHash: string;
+  sourceRange: DocRange;
+};
 
 function compareCanonicalRange(
   left: { from: number; spec?: unknown; to: number; value?: string },

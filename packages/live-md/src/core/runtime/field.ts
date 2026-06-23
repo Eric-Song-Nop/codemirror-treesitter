@@ -1,4 +1,10 @@
-import { EditorState, RangeSet, StateField, type Extension } from "@codemirror/state";
+import {
+  EditorState,
+  RangeSet,
+  StateField,
+  type Extension,
+  type Transaction,
+} from "@codemirror/state";
 import {
   syntaxHighlighters,
   syntaxTree,
@@ -6,12 +12,18 @@ import {
   type Tree,
 } from "@codemirror-treesitter/language";
 import { EditorView } from "@codemirror/view";
+import { walkMarkdownBlocks } from "../analysis/markdown-block-cursor.js";
+import {
+  buildFreshLeafAnalysisCache,
+  emptyLeafAnalysisCacheTrace,
+  transitionLeafAnalysisCache,
+} from "../analysis/markdown-leaf-cache.js";
 import {
   activeMarkdownSourceRanges,
   analyzeLiveMdSourceIslands,
+  sourceIslandLeavesFromMarkdownSnapshot,
   type LiveMdSourceIslandAnalysis,
 } from "../analysis/markdown-source-islands.js";
-import { analyzeMarkdownLeafSemantics } from "../analysis/markdown-leaf-analysis.js";
 import { isInsideSkippedRange, matchRoot, queryLiveMdMatches } from "../analysis/query.js";
 import { collectTable } from "../analysis/tables.js";
 import {
@@ -35,9 +47,16 @@ import { liveMdLinkBaseUrl } from "../links.js";
 import { createLiveMdBuild, finishAtomicRanges, finishDecorations } from "../projection/emit.js";
 import { applyLiveMdMarkdownFeatures, processLiveMdMatch } from "../projection/builtin.js";
 import { projectLeafRecords } from "../projection/project-leaf.js";
-import { type LiveMdAnalysis } from "./types.js";
+import { type LiveMdAnalysis, type LiveMdSemanticTrace } from "./types.js";
 
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
+
+type BuildLiveMdAnalysisOptions = {
+  activeSourceRanges?: readonly DocRange[] | null;
+  previous?: LiveMdAnalysis;
+  transaction?: Transaction;
+  tree?: Tree;
+};
 
 const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
   create(state) {
@@ -53,11 +72,11 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
     let activeLinesStable = sameSetItems(activeLines, value.activeLines);
     let selectionProjectionStable =
       value.sourceIslandLeaves.length > 0
-        ? activeSourceRanges != null &&
-          sameRanges(activeSourceRanges, value.activeSourceRanges) &&
-          (!transaction.state.facet(liveMdMarkdownFeatureFacet).length || activeLinesStable)
+        ? activeSourceRanges != null && sameRanges(activeSourceRanges, value.activeSourceRanges)
         : activeLinesStable;
+    let hasLegacyFeatures = hasLegacyDocumentQueryFeature(transaction.state);
     if (
+      !hasLegacyFeatures &&
       tree == value.tree &&
       !transaction.docChanged &&
       selectionProjectionStable &&
@@ -72,7 +91,12 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
       return value;
     }
 
-    return buildLiveMdAnalysis(transaction.state, activeLines);
+    return buildLiveMdAnalysis(transaction.state, activeLines, {
+      activeSourceRanges,
+      previous: value,
+      transaction,
+      tree,
+    });
   },
   provide(field) {
     return [
@@ -89,15 +113,19 @@ export const liveMdAnalysis: Extension = liveMdAnalysisField;
 function buildLiveMdAnalysis(
   state: EditorState,
   activeLines = getActiveLines(state),
+  options: BuildLiveMdAnalysisOptions = {},
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
-  let tree = syntaxTree(state);
+  let tree = options.tree ?? syntaxTree(state);
   let markdownParserService = state.facet(liveMdMarkdownParserServiceFacet);
 
   if (markdownParserService) {
-    let semanticAnalysis = analyzeMarkdownLeafSemantics({
+    let semanticAnalysis = buildLiveMdSemanticAnalysis({
+      activeSourceRanges: options.activeSourceRanges,
+      previous: options.previous,
       service: markdownParserService,
       state,
+      transaction: options.transaction,
       tree,
     });
     let build = createLiveMdBuild({
@@ -112,17 +140,25 @@ function buildLiveMdAnalysis(
       state,
       trace: semanticAnalysis.trace,
     });
-    projectLeafRecords(build, semanticAnalysis.records);
-    applyLegacyMarkdownFeatures(build, markdownParserService, tree);
-    return {
+    projectLeafRecords(build, semanticAnalysis.semantic.cache.records);
+    let legacyFeatureFullQueryCount = applyLegacyMarkdownFeatures(
+      build,
+      markdownParserService,
+      tree,
+    );
+    let trace = liveMdSemanticTrace(build.trace, legacyFeatureFullQueryCount);
+    let analysis: LiveMdAnalysis = {
       activeLines,
       activeSourceRanges: semanticAnalysis.activeSourceRanges,
       atomicRanges: finishAtomicRanges(build),
       decorations: finishDecorations(build),
+      semantic: semanticAnalysis.semantic,
+      semanticTrace: trace,
       sourceIslandLeaves: semanticAnalysis.sourceIslandLeaves,
-      trace: build.trace,
+      trace,
       tree,
     };
+    return analysis;
   }
 
   let build = buildLegacyLiveMdBuild(state, activeLines, codeFenceLanguages, null, tree);
@@ -131,10 +167,98 @@ function buildLiveMdAnalysis(
     activeSourceRanges: [],
     atomicRanges: finishAtomicRanges(build),
     decorations: finishDecorations(build),
+    semantic: null,
+    semanticTrace: null,
     sourceIslandLeaves: [],
     trace: build.trace,
     tree,
   };
+}
+
+function buildLiveMdSemanticAnalysis(input: {
+  activeSourceRanges?: readonly DocRange[] | null;
+  previous?: LiveMdAnalysis;
+  service: LiveMdMarkdownParserService;
+  state: EditorState;
+  transaction?: Transaction;
+  tree: Tree;
+}) {
+  let previous = input.previous;
+  let previousSemantic = input.previous?.semantic ?? null;
+  if (previous && previousSemantic && canReuseSemanticState(input)) {
+    let sourceIslandLeaves = previous.sourceIslandLeaves;
+    return {
+      activeSourceRanges:
+        input.activeSourceRanges ?? activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
+      semantic: previousSemantic,
+      sourceIslandLeaves,
+      trace: emptyLeafAnalysisCacheTrace(),
+    };
+  }
+
+  let walked = walkMarkdownBlocks(input.tree, input.state.doc);
+  let sourceIslandLeaves = sourceIslandLeavesFromMarkdownSnapshot(input.state.doc, walked.snapshot);
+  let activeSourceRanges = activeMarkdownSourceRanges(input.state, sourceIslandLeaves);
+  let transaction = input.transaction;
+  let transition =
+    previousSemantic &&
+    transaction &&
+    !markdownParserServiceChanged(transaction.startState, transaction.state)
+      ? transitionLeafAnalysisCache({
+          analysisInput: {
+            service: input.service,
+            state: input.state,
+            tree: input.tree,
+          },
+          changes: transaction.changes,
+          oldCache: previousSemantic.cache,
+          oldDoc: transaction.startState.doc,
+          snapshot: walked.snapshot,
+        })
+      : buildFreshLeafAnalysisCache({
+          analysisInput: {
+            service: input.service,
+            state: input.state,
+            tree: input.tree,
+          },
+          snapshot: walked.snapshot,
+          startCacheId: previousSemantic?.cache.nextCacheId,
+        });
+
+  transition.trace.blockNodesVisited = walked.trace.visitedBlockNodes;
+
+  return {
+    activeSourceRanges,
+    semantic: {
+      cache: transition.cache,
+      revision: (previousSemantic?.revision ?? 0) + 1,
+    },
+    sourceIslandLeaves,
+    trace: transition.trace,
+  };
+}
+
+function liveMdSemanticTrace(
+  trace: LiveMdSemanticTrace,
+  legacyFeatureFullQueryCount: number,
+): LiveMdSemanticTrace {
+  trace.legacyFeatureFullQueryCount = legacyFeatureFullQueryCount;
+  return trace;
+}
+
+function canReuseSemanticState(input: {
+  previous?: LiveMdAnalysis;
+  state: EditorState;
+  transaction?: Transaction;
+  tree: Tree;
+}) {
+  return Boolean(
+    input.previous?.semantic &&
+    input.transaction &&
+    input.tree == input.previous.tree &&
+    !input.transaction.docChanged &&
+    !markdownParserServiceChanged(input.transaction.startState, input.state),
+  );
 }
 
 export function __testBuildLiveMdAnalysis(state: EditorState) {
@@ -167,6 +291,8 @@ function buildCanonicalLiveMdAnalysis(state: EditorState): LiveMdAnalysis {
     activeSourceRanges: markdownAnalysis?.activeSourceRanges ?? [],
     atomicRanges: finishAtomicRanges(build),
     decorations: finishDecorations(build),
+    semantic: null,
+    semanticTrace: null,
     sourceIslandLeaves: markdownAnalysis?.leaves ?? [],
     trace: build.trace,
     tree,
@@ -210,11 +336,19 @@ function applyLegacyMarkdownFeatures(
   build: ReturnType<typeof createLiveMdBuild>,
   markdownParserService: LiveMdMarkdownParserService,
   tree: ReturnType<typeof syntaxTree>,
-) {
-  if (!build.markdownFeatures.length) return;
+): number {
+  if (!hasLegacyDocumentQueryFeature(build.state)) return 0;
+
   withLiveMdMarkdownInlineTrees(markdownParserService, build.state.doc, tree, (inlineTrees) => {
     applyLiveMdMarkdownFeatures(build, inlineTrees);
   });
+  return 1;
+}
+
+function hasLegacyDocumentQueryFeature(state: EditorState) {
+  return state
+    .facet(liveMdMarkdownFeatureFacet)
+    .some((feature) => Boolean(feature.query && feature.decorate));
 }
 
 function processMatches(
