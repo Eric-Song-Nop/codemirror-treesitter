@@ -17,7 +17,7 @@ import {
   sortedNodes,
 } from "../analysis/query.js";
 import { readTableFromCaptures } from "../analysis/tables.js";
-import { type CapturedTable, type DocRange, type LiveMdBuild } from "../analysis/types.js";
+import { type CapturedTable, type DocRange } from "../analysis/types.js";
 import { type LiveMdFeatureDecoration, type LiveMdFeatureDecorateContext } from "../features.js";
 import { resolveLiveMdImageSource } from "../images.js";
 import { liveMdLinkMark } from "../links.js";
@@ -43,6 +43,7 @@ import {
   rangeTouchesActiveLine,
   tableTouchesActiveLine,
 } from "./emit.js";
+import { type LiveMdBuild } from "./types.js";
 
 const strongMark = Decoration.mark({ class: "cm-md-strong" });
 const emphasisMark = Decoration.mark({ class: "cm-md-emphasis" });
@@ -320,7 +321,6 @@ function applyTable(
   for (let pipe of sortedNodes(captured?.pipes.values())) {
     addSyntax(build, pipe.from, pipe.to, tablePipeMark);
   }
-  return false;
 }
 
 function readLatexFormula(

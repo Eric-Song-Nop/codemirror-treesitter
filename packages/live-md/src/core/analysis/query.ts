@@ -7,9 +7,12 @@ import {
   type TreeSitterQueryMatch,
   type TreeSitterQuerySource,
 } from "@codemirror-treesitter/language";
-import liveMdMarkdownInlineQuerySource from "../queries/decorations-markdown-inline.scm?raw";
-import liveMdMarkdownQuerySource from "../queries/decorations-markdown.scm?raw";
+import liveMdMarkdownInlineQuerySourceRaw from "../queries/decorations-markdown-inline.scm?raw";
+import liveMdMarkdownQuerySourceRaw from "../queries/decorations-markdown.scm?raw";
 import { type DocRange, type LiveMdMatchKind } from "./types.js";
+
+export const liveMdMarkdownBlockQuerySource = liveMdMarkdownQuerySourceRaw;
+export const liveMdMarkdownInlineQuerySource = liveMdMarkdownInlineQuerySourceRaw;
 
 export function queryLiveMdMatches(tree: Tree, inlineTrees?: readonly Tree[]) {
   return queryLiveMdMatchesFromSource(tree, liveMdQuerySource, undefined, inlineTrees);
@@ -35,8 +38,8 @@ export function queryLiveMdMatchesFromSource(
 }
 
 function liveMdQuerySource(_parser: TreeSitterParser, tree: Tree) {
-  if (tree.topNode.name == "document") return liveMdMarkdownQuerySource;
-  if (tree.topNode.name == "inline") return liveMdMarkdownInlineQuerySource;
+  if (tree.topNode.name == "document") return liveMdMarkdownQuerySourceRaw;
+  if (tree.topNode.name == "inline") return liveMdMarkdownInlineQuerySourceRaw;
   return null;
 }
 

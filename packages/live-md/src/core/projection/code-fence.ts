@@ -2,14 +2,17 @@ import { Text, type EditorState } from "@codemirror/state";
 import {
   highlightTree,
   type SyntaxNode,
+  type Tree,
+  type TreeSitterParser,
   type TreeSitterQueryMatch,
 } from "@codemirror-treesitter/language";
 import { Decoration } from "@codemirror/view";
 import { capture } from "../analysis/query.js";
-import { type CodeFenceHighlightTree, type LiveMdBuild } from "../analysis/types.js";
+import { deleteLiveMdTree } from "../languages.js";
 import { forEachLineInRange, isWhitespace } from "../util.js";
 import { MermaidWidget, type MermaidDiagram } from "../widgets.js";
 import { addLineClass, addMark, addReplace, addSyntax, rangeTouchesActiveLine } from "./emit.js";
+import { type LiveMdBuild } from "./types.js";
 
 export function applyCodeFence(build: LiveMdBuild, match: TreeSitterQueryMatch): false {
   let node = capture(match, "codeFence")?.node;
@@ -94,46 +97,55 @@ function addCodeFenceHighlights(
   contentTo: number,
   language: string,
 ) {
-  let highlight = getCodeFenceHighlight(build, contentFrom, contentTo, language);
-  if (!highlight) return;
-
-  let { sourceText, tree } = highlight;
-
-  highlightTree(
-    tree,
-    build.codeFenceHighlighters,
-    (from, to, className) => {
-      let decoration = Decoration.mark({ class: className });
-      splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {
-        addMark(build, contentFrom + rangeFrom, contentFrom + rangeTo, decoration);
-      });
-    },
-    0,
-    sourceText.length,
-  );
-}
-
-function getCodeFenceHighlight(
-  build: LiveMdBuild,
-  contentFrom: number,
-  contentTo: number,
-  language: string,
-) {
   let parser = build.codeFenceLanguages.get(language);
-  if (!parser || contentFrom >= contentTo) return null;
+  if (!parser || contentFrom >= contentTo) return;
 
   let sourceText = codeFenceSourceText(build.state, contentFrom, contentTo);
-  let tree = parser.parse(sourceText);
-  let highlight: CodeFenceHighlightTree = {
-    contentFrom,
-    contentTo,
-    language,
-    parser,
-    sourceText,
-    tree,
-  };
-  build.codeFenceHighlightTrees.push(highlight);
-  return highlight;
+  let nativeParser = parser.createParser();
+  let nestedParsers = new Map<TreeSitterParser, ReturnType<TreeSitterParser["createParser"]>>();
+  let parsed: ReturnType<typeof parser.parseWith> | null = null;
+  let tree: Tree | null = null;
+  build.trace.codeFenceParserSessionsCreated++;
+  try {
+    parsed = parser.parseWith(nativeParser, sourceText);
+    if (!parsed) return;
+    tree = parser.wrapTree(parsed, sourceText, null, undefined, nestedParsers);
+    if (!tree) return;
+    highlightTree(
+      tree,
+      build.codeFenceHighlighters,
+      (from, to, className) => {
+        let decoration = Decoration.mark({ class: className });
+        splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {
+          addMark(build, contentFrom + rangeFrom, contentFrom + rangeTo, decoration);
+        });
+      },
+      0,
+      sourceText.length,
+    );
+  } finally {
+    build.trace.codeFenceParserSessionsCreated += nestedParsers.size;
+    let treeCount = tree ? countNativeTrees(tree) : parsed ? 1 : 0;
+    build.trace.codeFenceTreesCreated += treeCount;
+    if (tree) deleteLiveMdTree(tree);
+    else parsed?.delete();
+    build.trace.codeFenceTreesDeleted += treeCount;
+
+    for (let nestedParser of nestedParsers.values()) {
+      build.trace.codeFenceParserSessionsDeleted++;
+      nestedParser.delete();
+    }
+    build.trace.codeFenceParserSessionsDeleted++;
+    nativeParser.delete();
+  }
+}
+
+function countNativeTrees(tree: Tree): number {
+  let count = tree.tree ? 1 : 0;
+  for (let nested of tree.nested) {
+    count += countNativeTrees(nested.tree);
+  }
+  return count;
 }
 
 function codeFenceSourceText(state: EditorState, contentFrom: number, contentTo: number) {

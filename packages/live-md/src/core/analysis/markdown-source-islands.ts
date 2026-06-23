@@ -4,6 +4,7 @@ import { walkMarkdownBlocks } from "./markdown-block-cursor.js";
 import {
   type MarkdownLeaf,
   type MarkdownLeafKind,
+  type MarkdownBlockSnapshot,
   type MarkdownMarkerRecord,
 } from "./markdown-block-types.js";
 import { isWhitespaceOnly } from "../util.js";
@@ -24,16 +25,19 @@ export function analyzeLiveMdSourceIslands(input: {
   tree: Tree;
 }): LiveMdSourceIslandAnalysis {
   let walked = walkMarkdownBlocks(input.tree, input.state.doc);
-  let leaves = withMarkerOnlySourceIslands(
-    input.state.doc,
-    walked.snapshot.leaves.map(sourceIslandLeaf),
-    walked.snapshot.markers,
-  );
+  let leaves = sourceIslandLeavesFromMarkdownSnapshot(input.state.doc, walked.snapshot);
 
   return {
     activeSourceRanges: activeMarkdownSourceRanges(input.state, leaves),
     leaves,
   };
+}
+
+export function sourceIslandLeavesFromMarkdownSnapshot(
+  doc: Text,
+  snapshot: MarkdownBlockSnapshot,
+): LiveMdSourceIslandLeaf[] {
+  return withMarkerOnlySourceIslands(doc, snapshot.leaves.map(sourceIslandLeaf), snapshot.markers);
 }
 
 export function activeMarkdownSourceRanges(
