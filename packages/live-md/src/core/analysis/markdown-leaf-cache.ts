@@ -151,6 +151,18 @@ export function findLeafAnalysisRecordsTouchingRanges(
   return findLeafAnalysisRecordEntriesTouchingRanges(cache, ranges).map((entry) => entry.record);
 }
 
+export function forEachLeafAnalysisCacheRecordTouchingRanges(
+  cache: LeafAnalysisCache,
+  ranges: readonly DocRange[],
+  callback: (record: LeafAnalysisRecord, index: number) => void,
+): number {
+  let entries = findLeafAnalysisRecordEntriesTouchingRanges(cache, ranges);
+  for (let index = 0; index < entries.length; index++) {
+    callback(entries[index]!.record, index);
+  }
+  return entries.length;
+}
+
 export function leafAnalysisCacheRangesInDoc(cache: LeafAnalysisCache, docLength: number): boolean {
   let inDoc = true;
   forEachLeafAnalysisCacheRecord(cache, (record) => {

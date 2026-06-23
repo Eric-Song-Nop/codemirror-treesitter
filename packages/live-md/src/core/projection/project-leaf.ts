@@ -10,7 +10,7 @@ import {
 } from "../analysis/descriptors.js";
 import {
   forEachLeafAnalysisCacheRecord,
-  leafAnalysisCacheRecordCount,
+  forEachLeafAnalysisCacheRecordTouchingRanges,
 } from "../analysis/markdown-leaf-cache.js";
 import { type DocRange } from "../analysis/types.js";
 import { resolveLiveMdImageSource } from "../images.js";
@@ -49,6 +49,27 @@ const strikeMark = Decoration.mark({ class: "cm-md-strike" });
 const inlineCodeMark = Decoration.mark({ class: "cm-md-inline-code" });
 const tablePipeMark = Decoration.mark({ class: "cm-md-table-pipe" });
 
+export type LiveMdEffectSpecMapper = (
+  spec: LiveMdEffectSpec,
+  record: LeafAnalysisRecord,
+  build: LiveMdBuild,
+) => readonly LiveMdEffectSpec[];
+
+export type LiveMdProjectionLayerFilter = "all" | "direct" | "surface";
+
+export function liveMdEffectSpecLayerMapper(
+  layer: LiveMdProjectionLayerFilter,
+): LiveMdEffectSpecMapper {
+  if (layer == "all") return identityEffectSpec;
+  return (spec, _record, build) => (liveMdEffectSpecLayer(build, spec) == layer ? [spec] : []);
+}
+
+export function liveMdRecordMayProduceDirectLayout(record: LeafAnalysisRecord) {
+  return [...record.analysis.structuralEffects, ...record.analysis.descriptors].some(
+    descriptorMayProduceDirectLayout,
+  );
+}
+
 export function projectLeaf(
   record: LeafAnalysisRecord,
   active: boolean,
@@ -77,31 +98,107 @@ export function projectLeafRecord(
   build: LiveMdBuild,
   record: LeafAnalysisRecord,
   seen = new Set<string>(),
+  mapSpec: LiveMdEffectSpecMapper = identityEffectSpec,
 ) {
   let renderStatus = renderStatusForRecord(build, record);
   let active = buildRangeTouchesActiveLine(build, record.sourceRange.from, record.sourceRange.to);
   for (let spec of projectLeaf(record, active, renderStatus)) {
-    materializeEffectSpecOnce(build, spec, seen);
+    for (let mapped of mapSpec(spec, record, build)) materializeEffectSpecOnce(build, mapped, seen);
   }
 }
 
-export function projectLeafRecords(build: LiveMdBuild, records: readonly LeafAnalysisRecord[]) {
+export function projectLeafRecords(
+  build: LiveMdBuild,
+  records: readonly LeafAnalysisRecord[],
+  mapSpec?: LiveMdEffectSpecMapper,
+  shouldProjectRecord?: (record: LeafAnalysisRecord) => boolean,
+) {
   let seen = new Set<string>();
-  build.trace.projectionRecords += records.length;
+  let projected = 0;
   for (let index = 0; index < records.length; index++) {
     if (index % 32 == 0) build.yieldCheck?.();
-    projectLeafRecord(build, records[index]!, seen);
+    let record = records[index]!;
+    if (shouldProjectRecord && !shouldProjectRecord(record)) continue;
+    projected++;
+    projectLeafRecord(build, record, seen, mapSpec);
+  }
+  build.trace.projectionRecords += projected;
+}
+
+export function projectLeafCacheRecords(
+  build: LiveMdBuild,
+  cache: LeafAnalysisCache,
+  mapSpec?: LiveMdEffectSpecMapper,
+  shouldProjectRecord?: (record: LeafAnalysisRecord) => boolean,
+) {
+  let seen = new Set<string>();
+  let projected = 0;
+  forEachLeafAnalysisCacheRecord(cache, (record, index) => {
+    if (index % 32 == 0) build.yieldCheck?.();
+    if (shouldProjectRecord && !shouldProjectRecord(record)) return;
+    projected++;
+    projectLeafRecord(build, record, seen, mapSpec);
+  });
+  build.trace.projectionRecords += projected;
+}
+
+export function projectLeafCacheRecordsTouchingRanges(
+  build: LiveMdBuild,
+  cache: LeafAnalysisCache,
+  ranges: readonly DocRange[],
+  mapSpec?: LiveMdEffectSpecMapper,
+) {
+  let seen = new Set<string>();
+  let count = forEachLeafAnalysisCacheRecordTouchingRanges(cache, ranges, (record, index) => {
+    if (index % 32 == 0) build.yieldCheck?.();
+    projectLeafRecord(build, record, seen, mapSpec);
+  });
+  build.trace.projectionRecords += count;
+}
+
+function identityEffectSpec(spec: LiveMdEffectSpec) {
+  return [spec];
+}
+
+export function liveMdEffectSpecLayer(
+  build: LiveMdBuild,
+  spec: LiveMdEffectSpec,
+): Exclude<LiveMdProjectionLayerFilter, "all"> {
+  switch (spec.kind) {
+    case "atomic":
+    case "lineClass":
+      return "direct";
+    case "replace":
+      return spec.block || crossesLineBreak(build, spec.from, spec.to) ? "direct" : "surface";
+    case "codeFenceHighlight":
+    case "mark":
+    case "syntax":
+      return "surface";
   }
 }
 
-export function projectLeafCacheRecords(build: LiveMdBuild, cache: LeafAnalysisCache) {
-  let seen = new Set<string>();
-  let count = leafAnalysisCacheRecordCount(cache);
-  build.trace.projectionRecords += count;
-  forEachLeafAnalysisCacheRecord(cache, (record, index) => {
-    if (index % 32 == 0) build.yieldCheck?.();
-    projectLeafRecord(build, record, seen);
-  });
+function descriptorMayProduceDirectLayout(descriptor: LiveMdDescriptor) {
+  switch (descriptor.kind) {
+    case "codeFence":
+    case "image":
+    case "latex":
+    case "lineClass":
+    case "table":
+      return true;
+    case "linkMark":
+    case "listMarker":
+    case "syntax":
+    case "taskMarker":
+    case "textMark":
+      return false;
+  }
+}
+
+function crossesLineBreak(build: LiveMdBuild, from: number, to: number) {
+  if (from >= to) return false;
+  let firstLine = build.state.doc.lineAt(from).number;
+  let lastLine = build.state.doc.lineAt(Math.max(from, to - 1)).number;
+  return firstLine != lastLine;
 }
 
 function projectDescriptorOnce(

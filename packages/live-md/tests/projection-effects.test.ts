@@ -8,6 +8,7 @@ import {
   type LiveMdDescriptor,
 } from "../src/core/analysis/descriptors.js";
 import { type DocRange } from "../src/core/analysis/types.js";
+import { liveMdLinkMark } from "../src/core/links.js";
 import {
   addAtom,
   addLineClass,
@@ -119,6 +120,25 @@ describe("LiveMD projection effects", () => {
     ]);
     expect(atomicRanges(build, projection.surface.atomicRanges)).toEqual([{ from: 4, to: 7 }]);
     expect(atomicRanges(build, mergedAtomicRanges)).toEqual(atomicRanges(build));
+  });
+
+  it("keeps interactive link marks in the visible surface layer", () => {
+    let build = testBuild("[docs](https://example.com) and [plain]()");
+    addMark(build, 1, 5, liveMdLinkMark("https://example.com", null));
+    addMark(build, 33, 38, liveMdLinkMark(null, null));
+
+    let projection = finishProjectionLayers(build);
+
+    expect(linkHrefRanges(build, projection.interactiveDecorations)).toEqual([
+      { from: 1, href: "https://example.com", to: 5 },
+    ]);
+    expect(linkHrefRanges(build, projection.surface.interactiveDecorations)).toEqual([
+      { from: 1, href: "https://example.com", to: 5 },
+    ]);
+    expect(linkHrefRanges(build, projection.direct.decorations)).toEqual([]);
+    expect(decorationRanges(build, projection.surface.sourceSafeDecorations)).toEqual([
+      { className: "cm-md-link", from: 33, to: 38, widget: undefined },
+    ]);
   });
 
   it("keeps window materialization equivalent to the same full-build window", () => {
@@ -262,6 +282,17 @@ function decorationRanges(
       to,
       widget: widget && typeof widget == "object" ? widget.constructor.name : undefined,
     });
+  });
+  return ranges;
+}
+
+function linkHrefRanges(build: LiveMdBuild, decorations: DecorationSet) {
+  let ranges: Array<{ from: number; href: string; to: number }> = [];
+  decorations.between(0, build.state.doc.length, (from, to, value) => {
+    let href = (value.spec as { attributes?: { "data-live-md-href"?: string } }).attributes?.[
+      "data-live-md-href"
+    ];
+    if (href) ranges.push({ from, href, to });
   });
   return ranges;
 }

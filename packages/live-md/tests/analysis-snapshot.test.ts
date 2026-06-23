@@ -47,6 +47,10 @@ import {
   hashDocRange,
 } from "../src/core/analysis/markdown-leaf-analysis.js";
 import {
+  compileFullSurfaceProjection,
+  compileVisibleSurfaceProjection,
+} from "../src/core/projection/compilers.js";
+import {
   activeMarkdownSourceRanges,
   sourceIslandLeavesFromLeafAnalysisRecords,
   transitionSourceIslandLeavesFromLeafAnalysisRecords,
@@ -463,7 +467,7 @@ describe("LiveMD analysis snapshot", () => {
     expect(after.semanticTrace?.exactSourceComparisons).toBeGreaterThan(0);
     expect(after.semanticTrace?.exactSourceComparedChars).toBeGreaterThan(0);
     expect(after.semanticTrace?.inlineParserSessions).toBeLessThanOrEqual(1);
-    expect(after.semanticTrace?.projectionRecords).toBe(recordCount);
+    expect(after.semanticTrace?.projectionRecords).toBe(0);
     expect(legacyFeatureFullQueryCount(after)).toBe(0);
     view.destroy();
   });
@@ -811,9 +815,7 @@ describe("LiveMD analysis snapshot", () => {
 
       let reprojected = __testLiveMdAnalysis(view);
       expect(reprojected.semantic?.cache).toBe(after.semantic.cache);
-      expect(reprojected.semanticTrace?.projectionRecords).toBe(
-        leafAnalysisCacheRecordCount(after.semantic.cache),
-      );
+      expect(reprojected.semanticTrace?.projectionRecords).toBe(0);
       expect(reprojected.semanticTrace?.cacheFullMaterializations).toBe(0);
     } finally {
       view.destroy();
@@ -1256,9 +1258,7 @@ describe("LiveMD analysis snapshot", () => {
     expect(after.semanticTrace?.blockNodesVisited).toBe(0);
     expect(after.semanticTrace?.recordsVisited).toBe(0);
     expect(after.semanticTrace?.inlineParseCalls).toBe(0);
-    expect(after.semanticTrace?.projectionRecords).toBe(
-      before.semantic ? leafAnalysisCacheRecordCount(before.semantic.cache) : null,
-    );
+    expect(after.semanticTrace?.projectionRecords).toBe(0);
     view.destroy();
   });
 
@@ -1418,32 +1418,93 @@ describe("LiveMD analysis snapshot", () => {
       "| Name | Value |\n" +
       "| --- | ---: |\n" +
       "| alpha | 1 |\n\n" +
+      "![Alt](https://example.com/image.png)\n\n" +
       "after";
     let state = await markdownAnalysisState(doc, "after");
     let analysis = __testBuildLiveMdAnalysis(state);
+    if (!analysis.semantic) throw new Error("Expected semantic cache for projection oracle");
+    let canonical = __testBuildCanonicalLiveMdAnalysis(state);
+    let surface = compileFullSurfaceProjection(
+      projectionCompileInputForTest(state, analysis),
+      analysis.semantic.cache,
+    );
+    let directProjection = canonicalProjectionFromSets(
+      state,
+      analysis.directDecorations,
+      analysis.directAtomicRanges,
+    );
+    let canonicalDirectProjection = canonicalProjectionFromSets(
+      state,
+      canonical.directDecorations,
+      canonical.directAtomicRanges,
+    );
+    let surfaceProjection = canonicalProjectionFromSets(
+      state,
+      surface.decorations,
+      surface.atomicRanges,
+    );
+    let canonicalSurfaceProjection = canonicalProjectionFromSets(
+      state,
+      canonical.surfaceDecorations,
+      canonical.surfaceAtomicRanges,
+    );
     let mergedProjection = canonicalProjectionFromSets(
       state,
-      RangeSet.join([analysis.directDecorations, analysis.surfaceDecorations]),
-      RangeSet.join([analysis.directAtomicRanges, analysis.surfaceAtomicRanges]),
+      RangeSet.join([analysis.directDecorations, surface.decorations]),
+      RangeSet.join([analysis.directAtomicRanges, surface.atomicRanges]),
     );
 
+    expect(directProjection).toEqual(canonicalDirectProjection);
+    expect(surfaceProjection).toEqual(canonicalSurfaceProjection);
     expect(mergedProjection).toEqual(canonicalAnalysis(state, analysis));
-    expect(canonicalAnalysis(state, analysis)).toEqual(
-      canonicalAnalysis(state, __testBuildCanonicalLiveMdAnalysis(state)),
-    );
-    expect(decorationClassesFromSet(state, analysis.surfaceDecorations).has("cm-md-strong")).toBe(
-      true,
-    );
-    expect(decorationClassesFromSet(state, analysis.surfaceDecorations).has("cm-md-link")).toBe(
-      true,
-    );
+    expect(canonicalAnalysis(state, analysis)).toEqual(canonicalAnalysis(state, canonical));
+    expect(decorationClassesFromSet(state, surface.decorations).has("cm-md-strong")).toBe(true);
+    expect(decorationClassesFromSet(state, surface.decorations).has("cm-md-link")).toBe(true);
     expect(decorationClassesFromSet(state, analysis.directDecorations).has("cm-md-strong")).toBe(
       false,
     );
     expect(widgetNamesFromSet(state, analysis.directDecorations)).toContain("TablePreviewWidget");
-    expect(widgetNamesFromSet(state, analysis.surfaceDecorations)).not.toContain(
-      "TablePreviewWidget",
+    expect(widgetNamesFromSet(state, analysis.directDecorations)).toContain("ImagePreviewWidget");
+    expect(widgetNamesFromSet(state, surface.decorations)).not.toContain("TablePreviewWidget");
+    expect(widgetNamesFromSet(state, surface.decorations)).not.toContain("ImagePreviewWidget");
+  });
+
+  it("clips visible surface projections to viewport ranges without semantic work", async () => {
+    let doc = Array.from(
+      { length: 240 },
+      (_value, index) =>
+        `paragraph ${index} [link ${index}](https://example.com/${index}) **bold**`,
+    ).join("\n\n");
+    let state = await markdownAnalysisState(doc, "paragraph 0");
+    let analysis = __testBuildLiveMdAnalysis(state);
+    if (!analysis.semantic) throw new Error("Expected semantic cache before surface clipping");
+    let visibleLine = state.doc.lineAt(doc.indexOf("paragraph 220"));
+    let visibleRanges = [{ from: visibleLine.from, to: visibleLine.to }];
+    Object.defineProperty(analysis.semantic.cache, "records", {
+      configurable: true,
+      get() {
+        throw new Error("viewport-only surface clipping must not materialize semantic records");
+      },
+    });
+
+    let clipped = compileVisibleSurfaceProjection(
+      projectionCompileInputForTest(state, analysis),
+      analysis.semantic.cache,
+      visibleRanges,
     );
+    let clippedProjection = canonicalProjectionFromSets(
+      state,
+      clipped.decorations,
+      clipped.atomicRanges,
+    );
+
+    expect(clippedProjection.decorations.length).toBeGreaterThan(0);
+    expect(
+      clippedProjection.decorations.every((range) => rangesOverlap(range, visibleRanges[0]!)),
+    ).toBe(true);
+    expect(
+      clippedProjection.atomicRanges.every((range) => rangesOverlap(range, visibleRanges[0]!)),
+    ).toBe(true);
   });
 
   it("balances leaf-local inline parser and tree lifetimes including table cells", async () => {
@@ -2285,6 +2346,24 @@ function expectPr75LocalTrace(
   if (options.recordsReusedGreaterThan != null) {
     expect(trace.recordsReused, label).toBeGreaterThan(options.recordsReusedGreaterThan);
   }
+}
+
+function projectionCompileInputForTest(
+  state: EditorState,
+  analysis: ReturnType<typeof __testBuildLiveMdAnalysis>,
+) {
+  return {
+    activeLines: new Set(analysis.activeLines),
+    activeSourceRanges: analysis.activeSourceRanges,
+    codeFenceHighlighters: [],
+    codeFenceLanguages: state.field(codeFenceLanguagesField, false) ?? new Map(),
+    imageSourceResolver: null,
+    linkBaseUrl: null,
+    markdownFeatures: [],
+    sourceIslandMode: true,
+    state,
+    trace: analysis.trace,
+  };
 }
 
 function imagePreviewSources(state: EditorState) {

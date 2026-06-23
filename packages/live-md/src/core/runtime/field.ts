@@ -29,7 +29,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { walkMarkdownBlocks } from "../analysis/markdown-block-cursor.js";
-import { type LiveMdDescriptor } from "../analysis/descriptors.js";
+import { type LeafAnalysisRecord, type LiveMdDescriptor } from "../analysis/descriptors.js";
 import {
   buildFreshLeafAnalysisCache,
   emptyLeafAnalysisCacheTrace,
@@ -53,6 +53,7 @@ import {
   emptyLiveMdLeafAnalysisTrace,
   type CapturedTable,
   type DocRange,
+  type LiveMdLeafAnalysisTrace,
 } from "../analysis/types.js";
 import { liveMdMarkdownFeatureFacet } from "../features.js";
 import { liveMdImageSourceResolver } from "../images.js";
@@ -67,12 +68,26 @@ import {
   type LiveMdMarkdownParserService,
 } from "../languages.js";
 import { liveMdLinkBaseUrl } from "../links.js";
-import { createLiveMdBuild, finishProjectionLayers } from "../projection/emit.js";
+import {
+  compileVisibleSurfaceProjection,
+  compileVisibleSurfaceProjectionFromRecords,
+  type LiveMdProjectionCompileInput,
+} from "../projection/compilers.js";
+import {
+  createLiveMdBuild,
+  finishProjectionLayers,
+  type LiveMdProjectionLayer,
+} from "../projection/emit.js";
 import { applyLiveMdMarkdownFeatures, processLiveMdMatch } from "../projection/builtin.js";
-import { projectLeafCacheRecords } from "../projection/project-leaf.js";
+import {
+  liveMdEffectSpecLayerMapper,
+  liveMdRecordMayProduceDirectLayout,
+  projectLeafCacheRecords,
+} from "../projection/project-leaf.js";
 import {
   type LiveMdAnalysis,
   type LiveMdPendingAnalysis,
+  type LiveMdRuntimeState,
   type LiveMdRuntimeEpochs,
   type LiveMdSemanticTrace,
 } from "./types.js";
@@ -80,10 +95,11 @@ import {
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
 const liveMdSchedulerQuietDelay = 24;
 const liveMdSchedulerMaxDeadlineYields = 2;
+const liveMdSurfaceMaxViewportLines = 400;
 
 type BuildLiveMdAnalysisOptions = {
   activeSourceRanges?: readonly DocRange[] | null;
-  previous?: LiveMdAnalysis;
+  previous?: LiveMdRuntimeState;
   revision?: number;
   transaction?: Transaction;
   transitionBase?: LiveMdPendingAnalysis;
@@ -92,15 +108,24 @@ type BuildLiveMdAnalysisOptions = {
 };
 
 type LiveMdScheduledAnalysis = {
-  analysis: LiveMdAnalysis;
+  analysis: LiveMdRuntimeState;
   docLength: number;
   epochs: LiveMdRuntimeEpochs;
   revision: number;
 };
 
+type SurfaceProjection = LiveMdProjectionLayer;
+
+type SurfaceProjectionSnapshot = {
+  projection: SurfaceProjection;
+  trace: LiveMdLeafAnalysisTrace;
+};
+
+const liveMdLegacySurfaceProjections = new WeakMap<LiveMdRuntimeState, SurfaceProjection>();
+
 const commitLiveMdScheduledAnalysis = StateEffect.define<LiveMdScheduledAnalysis>();
 
-const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
+const liveMdAnalysisField = StateField.define<LiveMdRuntimeState>({
   create(state) {
     return buildLiveMdAnalysis(state, getActiveLines(state), { revision: 0 });
   },
@@ -231,7 +256,7 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
         deadline,
         this.yieldCount < liveMdSchedulerMaxDeadlineYields,
       );
-      let analysis: LiveMdAnalysis;
+      let analysis: LiveMdRuntimeState;
       try {
         yieldCheck();
         analysis = buildLiveMdAnalysis(this.view.state, getActiveLines(this.view.state), {
@@ -272,6 +297,11 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
   class LiveMdSurfacePlugin {
     atomicRanges = RangeSet.empty;
     decorations: DecorationSet = Decoration.none;
+    surface = emptySurfaceProjection();
+    surfaceTrace = emptyLiveMdLeafAnalysisTrace();
+    private fallbackSurface: SurfaceProjection | null = null;
+    private fallbackSurfaceState: EditorState | null = null;
+    private fallbackSurfaceRuntime: LiveMdRuntimeState | null = null;
 
     constructor(readonly view: EditorView) {
       this.refresh();
@@ -288,19 +318,64 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
 
     private refresh() {
       let analysis = this.view.state.field(liveMdAnalysisField, false);
+      let visibleRanges = liveMdSurfaceVisibleRanges(this.view);
       if (!analysis) {
         this.atomicRanges = RangeSet.empty;
         this.decorations = Decoration.none;
+        this.surface = emptySurfaceProjection();
+        this.surfaceTrace = emptyLiveMdLeafAnalysisTrace();
         return;
       }
-      this.atomicRanges = filterRangeSetToRanges(
-        analysis.surfaceAtomicRanges,
-        this.view.visibleRanges,
+      let surfaceTrace = emptyLiveMdLeafAnalysisTrace();
+      let surface = compileRuntimeVisibleSurfaceProjection(
+        this.view.state,
+        analysis,
+        visibleRanges,
+        surfaceTrace,
       );
-      this.decorations = filterRangeSetToRanges(
-        analysis.surfaceDecorations,
-        this.view.visibleRanges,
-      );
+      let fallback = this.visibleFallbackSurface(analysis, visibleRanges);
+      let merged = mergeSurfaceProjections(surface, fallback);
+      this.surface = merged;
+      this.surfaceTrace = surfaceTrace;
+      this.atomicRanges = merged.atomicRanges;
+      this.decorations = merged.decorations;
+    }
+
+    private visibleFallbackSurface(
+      analysis: LiveMdRuntimeState,
+      visibleRanges: readonly DocRange[],
+    ): SurfaceProjection {
+      let fallback = this.fallbackSurfaceFor(analysis);
+      return {
+        atomicRanges: filterRangeSetToRanges(fallback.atomicRanges, visibleRanges),
+        decorations: filterRangeSetToRanges(fallback.decorations, visibleRanges),
+        destructiveDecorations: filterRangeSetToRanges(
+          fallback.destructiveDecorations,
+          visibleRanges,
+        ),
+        interactiveDecorations: filterRangeSetToRanges(
+          fallback.interactiveDecorations,
+          visibleRanges,
+        ),
+        sourceSafeDecorations: filterRangeSetToRanges(
+          fallback.sourceSafeDecorations,
+          visibleRanges,
+        ),
+      };
+    }
+
+    private fallbackSurfaceFor(analysis: LiveMdRuntimeState): SurfaceProjection {
+      if (
+        this.fallbackSurface &&
+        this.fallbackSurfaceState == this.view.state &&
+        this.fallbackSurfaceRuntime == analysis
+      ) {
+        return this.fallbackSurface;
+      }
+      this.fallbackSurfaceState = this.view.state;
+      this.fallbackSurfaceRuntime = analysis;
+      this.fallbackSurface = compileRuntimeFallbackSurfaceProjection(this.view.state, analysis);
+      return this.fallbackSurface;
     }
   },
   {
@@ -317,6 +392,46 @@ export const liveMdAnalysis: Extension = [
   ),
 ];
 
+function liveMdSurfaceVisibleRanges(view: EditorView): readonly DocRange[] {
+  let viewport = view.viewport;
+  let ranges = view.visibleRanges
+    .map((range) => intersectDocRanges(range, viewport))
+    .filter((range): range is DocRange => Boolean(range));
+  return clampRangesToLineBudget(view.state, ranges.length ? ranges : [viewport]);
+}
+
+function intersectDocRanges(left: DocRange, right: DocRange): DocRange | null {
+  let from = Math.max(left.from, right.from);
+  let to = Math.min(left.to, right.to);
+  return from < to ? { from, to } : null;
+}
+
+function clampRangesToLineBudget(
+  state: EditorState,
+  ranges: readonly DocRange[],
+): readonly DocRange[] {
+  let remaining = liveMdSurfaceMaxViewportLines;
+  let clamped: DocRange[] = [];
+  for (let range of ranges) {
+    if (remaining <= 0) break;
+    let from = clamp(range.from, 0, state.doc.length);
+    let to = clamp(range.to, 0, state.doc.length);
+    if (from >= to) continue;
+    let firstLine = state.doc.lineAt(from);
+    let lastLine = state.doc.lineAt(Math.max(from, to - 1));
+    let lineCount = lastLine.number - firstLine.number + 1;
+    if (lineCount <= remaining) {
+      clamped.push({ from, to });
+      remaining -= lineCount;
+      continue;
+    }
+    let lastVisibleLine = state.doc.line(firstLine.number + remaining - 1);
+    clamped.push({ from, to: Math.min(to, lastVisibleLine.to) });
+    remaining = 0;
+  }
+  return clamped;
+}
+
 type LiveMdScheduledWork = {
   cancel: () => void;
   revision: number;
@@ -328,7 +443,10 @@ class LiveMdScheduledYield extends Error {
   }
 }
 
-function pendingSourceAnalysis(value: LiveMdAnalysis, transaction: Transaction): LiveMdAnalysis {
+function pendingSourceAnalysis(
+  value: LiveMdRuntimeState,
+  transaction: Transaction,
+): LiveMdRuntimeState {
   let previousPending = value.pending;
   let baseAnalysis = previousPending?.baseAnalysis ?? value;
   let baseDoc = previousPending?.baseDoc ?? transaction.startState.doc;
@@ -337,14 +455,6 @@ function pendingSourceAnalysis(value: LiveMdAnalysis, transaction: Transaction):
     : transaction.changes;
   let revision = (previousPending?.revision ?? value.revision) + 1;
   let syntaxChangedRanges = pendingSyntaxChangedRanges(previousPending, transaction);
-  let pending: LiveMdPendingAnalysis = {
-    baseAnalysis,
-    baseDoc,
-    changes,
-    epochs: previousPending?.epochs ?? runtimeEpochs(transaction.startState),
-    revision,
-    syntaxChangedRanges,
-  };
   let safetyRanges = sourceSafetyRanges(baseAnalysis, transaction.state, changes);
   let interactiveSafetyRanges = sourceInteractiveSafetyRanges(
     baseAnalysis,
@@ -352,6 +462,16 @@ function pendingSourceAnalysis(value: LiveMdAnalysis, transaction: Transaction):
     changes,
     safetyRanges,
   );
+  let pending: LiveMdPendingAnalysis = {
+    baseAnalysis,
+    baseDoc,
+    changes,
+    epochs: previousPending?.epochs ?? runtimeEpochs(transaction.startState),
+    interactiveSafetyRanges,
+    revision,
+    safetyRanges,
+    syntaxChangedRanges,
+  };
   let activeLines = getActiveLines(transaction.state);
   let sourceIslandLeaves = baseAnalysis.sourceIslandLeaves;
   let activeSourceRanges = activePendingSourceRanges(
@@ -365,55 +485,26 @@ function pendingSourceAnalysis(value: LiveMdAnalysis, transaction: Transaction):
     value.directDestructiveDecorations.map(transaction.changes),
     safetyRanges,
   );
-  let surfaceSourceSafeDecorations = value.surfaceSourceSafeDecorations.map(transaction.changes);
-  let surfaceInteractiveDecorations = clearDecorationRanges(
-    value.surfaceInteractiveDecorations.map(transaction.changes),
-    interactiveSafetyRanges,
-  );
-  let surfaceDestructiveDecorations = clearDecorationRanges(
-    value.surfaceDestructiveDecorations.map(transaction.changes),
-    safetyRanges,
-  );
   let directAtomicRanges = clearRangeSetRanges(
     value.directAtomicRanges.map(transaction.changes),
     safetyRanges,
   );
-  let surfaceAtomicRanges = clearRangeSetRanges(
-    value.surfaceAtomicRanges.map(transaction.changes),
-    safetyRanges,
-  );
-  let projection = joinProjectionSets({
-    directAtomicRanges,
-    directDestructiveDecorations,
-    directSourceSafeDecorations,
-    surfaceAtomicRanges,
-    surfaceDestructiveDecorations,
-    surfaceInteractiveDecorations,
-    surfaceSourceSafeDecorations,
-  });
   let trace = pendingInputTrace(transaction);
   return {
     activeLines,
     activeSourceRanges,
-    atomicRanges: projection.atomicRanges,
-    decorations: projection.decorations,
-    destructiveDecorations: projection.destructiveDecorations,
     directAtomicRanges,
-    directDecorations: projection.directDecorations,
+    directDecorations: joinDirectProjectionSets({
+      directDestructiveDecorations,
+      directSourceSafeDecorations,
+    }),
     directDestructiveDecorations,
     directSourceSafeDecorations,
-    interactiveDecorations: projection.interactiveDecorations,
     pending,
     revision,
     semantic: baseAnalysis.semantic,
     semanticTrace: baseAnalysis.semantic ? emptyLeafAnalysisCacheTrace() : null,
-    sourceSafeDecorations: projection.sourceSafeDecorations,
     sourceIslandLeaves,
-    surfaceAtomicRanges,
-    surfaceDecorations: projection.surfaceDecorations,
-    surfaceDestructiveDecorations,
-    surfaceInteractiveDecorations,
-    surfaceSourceSafeDecorations,
     trace,
     tree: value.tree,
   };
@@ -436,7 +527,10 @@ function pendingSyntaxChangedRanges(
   return mergeDocRanges([...previousRanges, ...syntaxTreeChangedRanges(transaction)]);
 }
 
-function pendingSelectionAnalysis(value: LiveMdAnalysis, transaction: Transaction): LiveMdAnalysis {
+function pendingSelectionAnalysis(
+  value: LiveMdRuntimeState,
+  transaction: Transaction,
+): LiveMdRuntimeState {
   let activeLines = getActiveLines(transaction.state);
   let pending = value.pending;
   let activeSourceRanges = pending
@@ -458,42 +552,23 @@ function pendingSelectionAnalysis(value: LiveMdAnalysis, transaction: Transactio
     value.directDestructiveDecorations,
     revealRanges,
   );
-  let surfaceDestructiveDecorations = clearDecorationRanges(
-    value.surfaceDestructiveDecorations,
-    revealRanges,
-  );
   let directAtomicRanges = clearRangeSetRanges(value.directAtomicRanges, revealRanges);
-  let surfaceAtomicRanges = clearRangeSetRanges(value.surfaceAtomicRanges, revealRanges);
-  let projection = joinProjectionSets({
-    directAtomicRanges,
-    directDestructiveDecorations,
-    directSourceSafeDecorations: value.directSourceSafeDecorations,
-    surfaceAtomicRanges,
-    surfaceDestructiveDecorations,
-    surfaceInteractiveDecorations: value.surfaceInteractiveDecorations,
-    surfaceSourceSafeDecorations: value.surfaceSourceSafeDecorations,
-  });
   return {
     ...value,
     activeLines,
     activeSourceRanges,
-    atomicRanges: projection.atomicRanges,
-    decorations: projection.decorations,
-    destructiveDecorations: projection.destructiveDecorations,
     directAtomicRanges,
-    directDecorations: projection.directDecorations,
+    directDecorations: joinDirectProjectionSets({
+      directDestructiveDecorations,
+      directSourceSafeDecorations: value.directSourceSafeDecorations,
+    }),
     directDestructiveDecorations,
-    interactiveDecorations: projection.interactiveDecorations,
-    sourceSafeDecorations: projection.sourceSafeDecorations,
-    surfaceAtomicRanges,
-    surfaceDecorations: projection.surfaceDecorations,
-    surfaceDestructiveDecorations,
     trace: emptyLiveMdLeafAnalysisTrace(),
   };
 }
 
 function sourceSafetyRanges(
-  baseAnalysis: LiveMdAnalysis,
+  baseAnalysis: LiveMdRuntimeState,
   state: EditorState,
   changes: ChangeDesc,
 ): readonly DocRange[] {
@@ -523,7 +598,7 @@ function sourceSafetyRanges(
 }
 
 function sourceInteractiveSafetyRanges(
-  baseAnalysis: LiveMdAnalysis,
+  baseAnalysis: LiveMdRuntimeState,
   state: EditorState,
   changes: ChangeDesc,
   fallbackRanges: readonly DocRange[],
@@ -584,6 +659,15 @@ type ProjectionSetInputs = {
   surfaceInteractiveDecorations: DecorationSet;
   surfaceSourceSafeDecorations: DecorationSet;
 };
+
+type DirectProjectionSetInputs = Pick<
+  ProjectionSetInputs,
+  "directDestructiveDecorations" | "directSourceSafeDecorations"
+>;
+
+function joinDirectProjectionSets(input: DirectProjectionSetInputs) {
+  return RangeSet.join([input.directSourceSafeDecorations, input.directDestructiveDecorations]);
+}
 
 function joinProjectionSets(input: ProjectionSetInputs) {
   let directDecorations = RangeSet.join([
@@ -651,7 +735,7 @@ function newlyActiveSourceRanges(
 function activePendingSourceRanges(
   state: EditorState,
   baseDoc: LiveMdPendingAnalysis["baseDoc"],
-  leaves: LiveMdAnalysis["sourceIslandLeaves"],
+  leaves: LiveMdRuntimeState["sourceIslandLeaves"],
   changes: ChangeDesc,
 ): readonly DocRange[] {
   if (!leaves.length) return [];
@@ -686,7 +770,7 @@ function scheduledAnalysisFromEffects(transaction: Transaction): LiveMdScheduled
 }
 
 function canCommitScheduledAnalysis(
-  value: LiveMdAnalysis,
+  value: LiveMdRuntimeState,
   state: EditorState,
   result: LiveMdScheduledAnalysis,
 ) {
@@ -701,7 +785,7 @@ function canCommitScheduledAnalysis(
   );
 }
 
-function withStaleResultDrop(value: LiveMdAnalysis): LiveMdAnalysis {
+function withStaleResultDrop(value: LiveMdRuntimeState): LiveMdRuntimeState {
   let trace = { ...value.trace, staleResultDrops: value.trace.staleResultDrops + 1 };
   return {
     ...value,
@@ -712,7 +796,7 @@ function withStaleResultDrop(value: LiveMdAnalysis): LiveMdAnalysis {
   };
 }
 
-function analysisRangesInDoc(analysis: LiveMdAnalysis, docLength: number) {
+function analysisRangesInDoc(analysis: LiveMdRuntimeState, docLength: number) {
   return (
     rangesInDoc(analysis.activeSourceRanges, docLength) &&
     sourceIslandLeavesInDoc(analysis.sourceIslandLeaves, docLength) &&
@@ -885,7 +969,7 @@ function buildLiveMdAnalysis(
   state: EditorState,
   activeLines = getActiveLines(state),
   options: BuildLiveMdAnalysisOptions = {},
-): LiveMdAnalysis {
+): LiveMdRuntimeState {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
   let tree = options.tree ?? syntaxTree(state);
   let markdownParserService = state.facet(liveMdMarkdownParserServiceFacet);
@@ -901,52 +985,50 @@ function buildLiveMdAnalysis(
       tree,
       yieldCheck: options.yieldCheck,
     });
-    let build = createLiveMdBuild({
-      activeLines,
-      activeSourceRanges: semanticAnalysis.activeSourceRanges,
-      codeFenceHighlighters: codeFenceHighlighters(state),
-      codeFenceLanguages,
-      imageSourceResolver: state.facet(liveMdImageSourceResolver),
-      linkBaseUrl: state.facet(liveMdLinkBaseUrl),
-      markdownFeatures: state.facet(liveMdMarkdownFeatureFacet),
-      sourceIslandMode: true,
+    let compileInput = projectionCompileInput(
       state,
-      trace: semanticAnalysis.trace,
-      yieldCheck: options.yieldCheck,
-    });
-    projectLeafCacheRecords(build, semanticAnalysis.semantic.cache);
+      activeLines,
+      semanticAnalysis.activeSourceRanges,
+      {
+        codeFenceLanguages,
+        sourceIslandMode: true,
+        trace: semanticAnalysis.trace,
+        yieldCheck: options.yieldCheck,
+      },
+    );
+    let build = createLiveMdBuild(compileInput);
+    projectLeafCacheRecords(
+      build,
+      semanticAnalysis.semantic.cache,
+      liveMdEffectSpecLayerMapper("direct"),
+      liveMdRecordMayProduceDirectLayout,
+    );
     let legacyFeatureFullQueryCount = applyLegacyMarkdownFeatures(
       build,
       markdownParserService,
       tree,
     );
-    let trace = liveMdSemanticTrace(build.trace, legacyFeatureFullQueryCount);
     let projection = finishProjectionLayers(build);
-    let analysis: LiveMdAnalysis = {
+    let direct = projection.direct;
+    let trace = liveMdSemanticTrace(semanticAnalysis.trace, legacyFeatureFullQueryCount);
+    let analysis: LiveMdRuntimeState = {
       activeLines,
       activeSourceRanges: semanticAnalysis.activeSourceRanges,
-      atomicRanges: projection.atomicRanges,
-      decorations: projection.decorations,
-      destructiveDecorations: projection.destructiveDecorations,
-      directAtomicRanges: projection.direct.atomicRanges,
-      directDecorations: projection.direct.decorations,
-      directDestructiveDecorations: projection.direct.destructiveDecorations,
-      directSourceSafeDecorations: projection.direct.sourceSafeDecorations,
-      interactiveDecorations: projection.interactiveDecorations,
+      directAtomicRanges: direct.atomicRanges,
+      directDecorations: direct.decorations,
+      directDestructiveDecorations: direct.destructiveDecorations,
+      directSourceSafeDecorations: direct.sourceSafeDecorations,
       pending: null,
       revision: options.revision ?? options.previous?.revision ?? 0,
       semantic: semanticAnalysis.semantic,
       semanticTrace: trace,
-      sourceSafeDecorations: projection.sourceSafeDecorations,
       sourceIslandLeaves: semanticAnalysis.sourceIslandLeaves,
-      surfaceAtomicRanges: projection.surface.atomicRanges,
-      surfaceDecorations: projection.surface.decorations,
-      surfaceDestructiveDecorations: projection.surface.destructiveDecorations,
-      surfaceInteractiveDecorations: projection.surface.interactiveDecorations,
-      surfaceSourceSafeDecorations: projection.surface.sourceSafeDecorations,
       trace,
       tree,
     };
+    if (legacyFeatureFullQueryCount) {
+      liveMdLegacySurfaceProjections.set(analysis, projection.surface);
+    }
     return analysis;
   }
 
@@ -962,33 +1044,325 @@ function buildLiveMdAnalysis(
   return {
     activeLines,
     activeSourceRanges: [],
-    atomicRanges: projection.atomicRanges,
-    decorations: projection.decorations,
-    destructiveDecorations: projection.destructiveDecorations,
     directAtomicRanges: projection.direct.atomicRanges,
     directDecorations: projection.direct.decorations,
     directDestructiveDecorations: projection.direct.destructiveDecorations,
     directSourceSafeDecorations: projection.direct.sourceSafeDecorations,
-    interactiveDecorations: projection.interactiveDecorations,
     pending: null,
     revision: options.revision ?? options.previous?.revision ?? 0,
     semantic: null,
     semanticTrace: null,
-    sourceSafeDecorations: projection.sourceSafeDecorations,
     sourceIslandLeaves: [],
-    surfaceAtomicRanges: projection.surface.atomicRanges,
-    surfaceDecorations: projection.surface.decorations,
-    surfaceDestructiveDecorations: projection.surface.destructiveDecorations,
-    surfaceInteractiveDecorations: projection.surface.interactiveDecorations,
-    surfaceSourceSafeDecorations: projection.surface.sourceSafeDecorations,
     trace: build.trace,
     tree,
   };
 }
 
+function projectionCompileInput(
+  state: EditorState,
+  activeLines: Set<number> | ReadonlySet<number>,
+  activeSourceRanges: readonly DocRange[],
+  options: {
+    codeFenceLanguages?: CodeFenceLanguageMap;
+    sourceIslandMode: boolean;
+    trace: LiveMdSemanticTrace;
+    yieldCheck?: () => void;
+  },
+): LiveMdProjectionCompileInput {
+  return {
+    activeLines: new Set(activeLines),
+    activeSourceRanges,
+    codeFenceHighlighters: codeFenceHighlighters(state),
+    codeFenceLanguages:
+      options.codeFenceLanguages ??
+      state.field(codeFenceLanguagesField, false) ??
+      emptyCodeFenceLanguages,
+    imageSourceResolver: state.facet(liveMdImageSourceResolver),
+    linkBaseUrl: state.facet(liveMdLinkBaseUrl),
+    markdownFeatures: state.facet(liveMdMarkdownFeatureFacet),
+    sourceIslandMode: options.sourceIslandMode,
+    state,
+    trace: options.trace,
+    yieldCheck: options.yieldCheck,
+  };
+}
+
+function mergeProjectionLayers(
+  primary: LiveMdProjectionLayer,
+  secondary: LiveMdProjectionLayer,
+): LiveMdProjectionLayer {
+  return {
+    atomicRanges: RangeSet.join([primary.atomicRanges, secondary.atomicRanges]),
+    decorations: RangeSet.join([primary.decorations, secondary.decorations]),
+    destructiveDecorations: RangeSet.join([
+      primary.destructiveDecorations,
+      secondary.destructiveDecorations,
+    ]),
+    interactiveDecorations: RangeSet.join([
+      primary.interactiveDecorations,
+      secondary.interactiveDecorations,
+    ]),
+    sourceSafeDecorations: RangeSet.join([
+      primary.sourceSafeDecorations,
+      secondary.sourceSafeDecorations,
+    ]),
+  };
+}
+
+function mergeSurfaceProjections(
+  primary: SurfaceProjection,
+  secondary: SurfaceProjection,
+): SurfaceProjection {
+  return mergeProjectionLayers(primary, secondary);
+}
+
+function compileRuntimeVisibleSurfaceProjection(
+  state: EditorState,
+  analysis: LiveMdRuntimeState,
+  ranges: readonly DocRange[],
+  trace = emptyLiveMdLeafAnalysisTrace(),
+): SurfaceProjection {
+  if (!ranges.length) return emptySurfaceProjection();
+  let semantic = analysis.pending?.baseAnalysis.semantic ?? analysis.semantic;
+  if (!semantic) return emptySurfaceProjection();
+
+  let input = projectionCompileInput(state, analysis.activeLines, analysis.activeSourceRanges, {
+    sourceIslandMode: true,
+    trace,
+  });
+  if (!analysis.pending) {
+    return compileVisibleSurfaceProjection(input, semantic.cache, ranges);
+  }
+
+  let oldRanges = ranges.map((range) => mapRange(range, analysis.pending!.changes.invertedDesc));
+  let records = findLeafAnalysisRecordsTouchingRanges(semantic.cache, oldRanges)
+    .map((record) => mapLeafAnalysisRecord(record, analysis.pending!.changes))
+    .filter((record) => leafAnalysisRecordRangesInDoc(record, state.doc.length));
+  let surface = compileVisibleSurfaceProjectionFromRecords(input, records, ranges, {
+    codeFenceHighlights: false,
+  });
+  return clearPendingSurfaceProjection(surface, analysis.pending);
+}
+
+function compileRuntimeFallbackSurfaceProjection(
+  state: EditorState,
+  analysis: LiveMdRuntimeState,
+): SurfaceProjection {
+  if (analysis.pending) return emptySurfaceProjection();
+
+  let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
+  if (analysis.semantic) {
+    let cached = liveMdLegacySurfaceProjections.get(analysis);
+    if (cached) return cached;
+    let markdownParserService = state.facet(liveMdMarkdownParserServiceFacet);
+    if (!markdownParserService || !hasLegacyDocumentQueryFeature(state)) {
+      return emptySurfaceProjection();
+    }
+    let input = projectionCompileInput(state, analysis.activeLines, analysis.activeSourceRanges, {
+      codeFenceLanguages,
+      sourceIslandMode: true,
+      trace: emptyLiveMdLeafAnalysisTrace(),
+    });
+    let build = createLiveMdBuild(input);
+    applyLegacyMarkdownFeatures(build, markdownParserService, syntaxTree(state));
+    let surface = finishProjectionLayers(build).surface;
+    liveMdLegacySurfaceProjections.set(analysis, surface);
+    return surface;
+  }
+
+  let build = buildLegacyLiveMdBuild(
+    state,
+    new Set(analysis.activeLines),
+    codeFenceLanguages,
+    null,
+    syntaxTree(state),
+  );
+  return finishProjectionLayers(build).surface;
+}
+
+function clearPendingSurfaceProjection(
+  surface: SurfaceProjection,
+  pending: LiveMdPendingAnalysis,
+): SurfaceProjection {
+  let destructiveDecorations = clearDecorationRanges(
+    surface.destructiveDecorations,
+    pending.safetyRanges,
+  );
+  let interactiveDecorations = clearDecorationRanges(
+    surface.interactiveDecorations,
+    pending.interactiveSafetyRanges,
+  );
+  let atomicRanges = clearRangeSetRanges(surface.atomicRanges, pending.safetyRanges);
+  return {
+    atomicRanges,
+    decorations: RangeSet.join([
+      surface.sourceSafeDecorations,
+      interactiveDecorations,
+      destructiveDecorations,
+    ]),
+    destructiveDecorations,
+    interactiveDecorations,
+    sourceSafeDecorations: surface.sourceSafeDecorations,
+  };
+}
+
+function emptySurfaceProjection(): SurfaceProjection {
+  return {
+    atomicRanges: RangeSet.empty,
+    decorations: Decoration.none,
+    destructiveDecorations: Decoration.none,
+    interactiveDecorations: Decoration.none,
+    sourceSafeDecorations: Decoration.none,
+  };
+}
+
+function mapLeafAnalysisRecord(
+  record: LeafAnalysisRecord,
+  changes: ChangeDesc,
+): LeafAnalysisRecord {
+  let sourceRange = mapRange(record.sourceRange, changes);
+  let mapped: LeafAnalysisRecord = {
+    ...record,
+    analysis: {
+      ...record.analysis,
+      descriptors: record.analysis.descriptors.map((descriptor) =>
+        mapRelativeDescriptor(descriptor, record.sourceRange.from, sourceRange.from, changes),
+      ),
+      structuralEffects: record.analysis.structuralEffects.map((descriptor) =>
+        mapRelativeDescriptor(descriptor, record.sourceRange.from, sourceRange.from, changes),
+      ),
+    },
+    context: mapMarkdownBlockContext(record.context, changes),
+    effectRange: mapRange(record.effectRange, changes),
+    range: mapRange(record.range, changes),
+    sourceRange,
+  };
+  if (record.cacheSourceRange) {
+    mapped.cacheSourceRange = mapRange(record.cacheSourceRange, changes);
+  }
+  return mapped;
+}
+
+function mapRelativeDescriptor(
+  descriptor: LiveMdDescriptor,
+  oldSourceOffset: number,
+  newSourceOffset: number,
+  changes: ChangeDesc,
+): LiveMdDescriptor {
+  let mapRelativeRange = (range: DocRange) =>
+    offsetRange(mapRange(offsetRange(range, oldSourceOffset), changes), -newSourceOffset);
+  switch (descriptor.kind) {
+    case "lineClass":
+      return { ...descriptor, range: mapRelativeRange(descriptor.range) };
+    case "syntax":
+      return { ...descriptor, range: mapRelativeRange(descriptor.range) };
+    case "textMark":
+      return { ...descriptor, range: mapRelativeRange(descriptor.range) };
+    case "linkMark":
+      return {
+        ...descriptor,
+        range: mapRelativeRange(descriptor.range),
+        sourceRange: mapRelativeRange(descriptor.sourceRange),
+      };
+    case "listMarker":
+      return { ...descriptor, range: mapRelativeRange(descriptor.range) };
+    case "taskMarker":
+      return { ...descriptor, range: mapRelativeRange(descriptor.range) };
+    case "image":
+      return {
+        ...descriptor,
+        descriptionRange: descriptor.descriptionRange
+          ? mapRelativeRange(descriptor.descriptionRange)
+          : null,
+        destinationRange: descriptor.destinationRange
+          ? mapRelativeRange(descriptor.destinationRange)
+          : null,
+        lineRange: mapRelativeRange(descriptor.lineRange),
+        range: mapRelativeRange(descriptor.range),
+      };
+    case "latex":
+      return {
+        ...descriptor,
+        formula: {
+          ...descriptor.formula,
+          replacementRange: {
+            ...mapRelativeRange(descriptor.formula.replacementRange),
+            block: descriptor.formula.replacementRange.block,
+          },
+        },
+        range: mapRelativeRange(descriptor.range),
+      };
+    case "table":
+      return {
+        ...descriptor,
+        delimiterRowRange: descriptor.delimiterRowRange
+          ? mapRelativeRange(descriptor.delimiterRowRange)
+          : null,
+        pipeRanges: descriptor.pipeRanges.map(mapRelativeRange),
+        range: mapRelativeRange(descriptor.range),
+      };
+    case "codeFence":
+      return {
+        ...descriptor,
+        closingDelimiterRange: descriptor.closingDelimiterRange
+          ? mapRelativeRange(descriptor.closingDelimiterRange)
+          : null,
+        contentRange: descriptor.contentRange ? mapRelativeRange(descriptor.contentRange) : null,
+        openingDelimiterRange: mapRelativeRange(descriptor.openingDelimiterRange),
+        range: mapRelativeRange(descriptor.range),
+      };
+  }
+}
+
+function offsetRange(range: DocRange, offset: number): DocRange {
+  return { from: range.from + offset, to: range.to + offset };
+}
+
+function mapMarkdownBlockContext(
+  context: LeafAnalysisRecord["context"],
+  changes: ChangeDesc,
+): LeafAnalysisRecord["context"] {
+  return {
+    listPath: context.listPath.map((item) => ({
+      ...item,
+      itemRange: mapContextOwnerRange(item.itemRange, changes),
+      markerRange: mapRange(item.markerRange, changes),
+      task: item.task
+        ? {
+            ...item.task,
+            range: mapRange(item.task.range, changes),
+          }
+        : null,
+    })),
+    quoteDepth: context.quoteDepth,
+    quoteMarkers: context.quoteMarkers.map((range) => mapRange(range, changes)),
+  };
+}
+
+function mapContextOwnerRange(range: DocRange, changes: ChangeDesc): DocRange {
+  let fromOverhang = Math.max(0, range.from - changes.length);
+  let toOverhang = Math.max(0, range.to - changes.length);
+  let from = changes.mapPos(clamp(range.from, 0, changes.length), 1) + fromOverhang;
+  let to = changes.mapPos(clamp(range.to, 0, changes.length), -1) + toOverhang;
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+function leafAnalysisRecordRangesInDoc(record: LeafAnalysisRecord, docLength: number) {
+  return (
+    rangeInDoc(record.range, docLength) &&
+    rangeInDoc(record.sourceRange, docLength) &&
+    rangeInDoc(record.effectRange, docLength) &&
+    (!record.cacheSourceRange || rangeInDoc(record.cacheSourceRange, docLength))
+  );
+}
+
+function rangeInDoc(range: DocRange, docLength: number) {
+  return range.from >= 0 && range.from <= range.to && range.to <= docLength;
+}
+
 function buildLiveMdSemanticAnalysis(input: {
   activeSourceRanges?: readonly DocRange[] | null;
-  previous?: LiveMdAnalysis;
+  previous?: LiveMdRuntimeState;
   service: LiveMdMarkdownParserService;
   state: EditorState;
   transaction?: Transaction;
@@ -1140,7 +1514,7 @@ function liveMdSemanticTrace(
 }
 
 function canReuseSemanticState(input: {
-  previous?: LiveMdAnalysis;
+  previous?: LiveMdRuntimeState;
   state: EditorState;
   transaction?: Transaction;
   tree: Tree;
@@ -1154,16 +1528,122 @@ function canReuseSemanticState(input: {
   );
 }
 
+const liveMdAnalysisSnapshots = new WeakMap<LiveMdRuntimeState, LiveMdAnalysis>();
+
+function compileRuntimeSurfaceSnapshot(
+  state: EditorState,
+  runtime: LiveMdRuntimeState,
+): SurfaceProjectionSnapshot {
+  let ranges = state.doc.length ? [{ from: 0, to: state.doc.length }] : [];
+  let trace = emptyLiveMdLeafAnalysisTrace();
+  let projection = mergeSurfaceProjections(
+    compileRuntimeVisibleSurfaceProjection(state, runtime, ranges, trace),
+    compileRuntimeFallbackSurfaceProjection(state, runtime),
+  );
+  return { projection, trace };
+}
+
+function liveMdAnalysisSnapshot(
+  state: EditorState,
+  runtime: LiveMdRuntimeState,
+  surfaceSnapshot?: SurfaceProjectionSnapshot,
+): LiveMdAnalysis {
+  let cached = liveMdAnalysisSnapshots.get(runtime);
+  if (cached) return cached;
+
+  surfaceSnapshot ??= compileRuntimeSurfaceSnapshot(state, runtime);
+  let surface = surfaceSnapshot.projection;
+  let projection = joinProjectionSets({
+    directAtomicRanges: runtime.directAtomicRanges,
+    directDestructiveDecorations: runtime.directDestructiveDecorations,
+    directSourceSafeDecorations: runtime.directSourceSafeDecorations,
+    surfaceAtomicRanges: surface.atomicRanges,
+    surfaceDestructiveDecorations: surface.destructiveDecorations,
+    surfaceInteractiveDecorations: surface.interactiveDecorations,
+    surfaceSourceSafeDecorations: surface.sourceSafeDecorations,
+  });
+  let snapshot: LiveMdAnalysis = {
+    ...runtime,
+    atomicRanges: projection.atomicRanges,
+    decorations: projection.decorations,
+    destructiveDecorations: projection.destructiveDecorations,
+    interactiveDecorations: projection.interactiveDecorations,
+    sourceSafeDecorations: projection.sourceSafeDecorations,
+    surfaceAtomicRanges: surface.atomicRanges,
+    surfaceDecorations: surface.decorations,
+    surfaceDestructiveDecorations: surface.destructiveDecorations,
+    surfaceInteractiveDecorations: surface.interactiveDecorations,
+    surfaceSourceSafeDecorations: surface.sourceSafeDecorations,
+    trace: mergeLiveMdLeafAnalysisTraces(runtime.trace, surfaceSnapshot.trace),
+  };
+  liveMdAnalysisSnapshots.set(runtime, snapshot);
+  return snapshot;
+}
+
+type LiveMdTraceNumericKey = Exclude<keyof LiveMdLeafAnalysisTrace, "checkedRanges">;
+
+const liveMdTraceNumericKeys: readonly LiveMdTraceNumericKey[] = [
+  "blockNodesVisited",
+  "codeFenceParserSessionsCreated",
+  "codeFenceParserSessionsDeleted",
+  "codeFenceParses",
+  "codeFenceTreesCreated",
+  "codeFenceTreesDeleted",
+  "inlineHostsWithoutRanges",
+  "inlineRangeGroupsExamined",
+  "exactSourceComparisons",
+  "exactSourceComparedChars",
+  "fallbackCount",
+  "fixedPointRounds",
+  "inlineParsedChars",
+  "inlineParseCalls",
+  "inlineParserSessions",
+  "languageApplyMs",
+  "languageWorkIterations",
+  "leavesCollected",
+  "legacyFeatureFullQueryCount",
+  "projectionRecords",
+  "recordsAnalyzed",
+  "recordsCollected",
+  "recordsMappedIndividually",
+  "recordsReused",
+  "recordsVisited",
+  "cacheIndexQueries",
+  "sourceHashCollisions",
+  "staleResultDrops",
+  "tableCellsParsed",
+];
+
+function mergeLiveMdLeafAnalysisTraces(
+  primary: LiveMdLeafAnalysisTrace,
+  secondary: LiveMdLeafAnalysisTrace,
+): LiveMdLeafAnalysisTrace {
+  let merged: LiveMdLeafAnalysisTrace = {
+    ...primary,
+    checkedRanges: mergeDocRanges([...primary.checkedRanges, ...secondary.checkedRanges]),
+  };
+  let writable = merged as unknown as Record<LiveMdTraceNumericKey, number>;
+  for (let key of liveMdTraceNumericKeys) {
+    writable[key] = primary[key] + secondary[key];
+  }
+  return merged;
+}
+
 export function __testBuildLiveMdAnalysis(state: EditorState) {
-  return buildLiveMdAnalysis(state);
+  return liveMdAnalysisSnapshot(state, buildLiveMdAnalysis(state));
 }
 
 export function __testBuildCanonicalLiveMdAnalysis(state: EditorState) {
   return buildCanonicalLiveMdAnalysis(state);
 }
 
-export function __testLiveMdAnalysis(view: EditorView): LiveMdAnalysis {
-  return view.state.field(liveMdAnalysisField);
+export function __testLiveMdAnalysis(view: EditorView | { state: EditorState }): LiveMdAnalysis {
+  let plugin =
+    "plugin" in view && typeof view.plugin == "function" ? view.plugin(liveMdSurfacePlugin) : null;
+  let surfaceSnapshot = plugin
+    ? { projection: plugin.surface, trace: plugin.surfaceTrace }
+    : undefined;
+  return liveMdAnalysisSnapshot(view.state, view.state.field(liveMdAnalysisField), surfaceSnapshot);
 }
 
 export async function __testFlushLiveMdAnalysis(view: EditorView) {
