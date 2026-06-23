@@ -1,26 +1,37 @@
 import {
+  type ChangeDesc,
   EditorState,
   RangeSet,
+  StateEffect,
   StateField,
   type Extension,
+  type RangeValue,
   type Transaction,
 } from "@codemirror/state";
 import {
+  mergeDocRanges,
+  patchRangeSet,
+  rangesTouch,
   syntaxHighlighters,
   syntaxTree,
+  syntaxTreeApplyTrace,
+  syntaxTreeAvailable,
   type Highlighter,
   type Tree,
 } from "@codemirror-treesitter/language";
-import { EditorView } from "@codemirror/view";
+import { EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { walkMarkdownBlocks } from "../analysis/markdown-block-cursor.js";
+import { type LiveMdDescriptor } from "../analysis/descriptors.js";
 import {
   buildFreshLeafAnalysisCache,
   emptyLeafAnalysisCacheTrace,
+  findLeafAnalysisRecordsTouchingRanges,
   transitionLeafAnalysisCache,
 } from "../analysis/markdown-leaf-cache.js";
 import {
   activeMarkdownSourceRanges,
   analyzeLiveMdSourceIslands,
+  findSourceIslandLeaf,
   sourceIslandLeavesFromMarkdownSnapshot,
   type LiveMdSourceIslandAnalysis,
 } from "../analysis/markdown-source-islands.js";
@@ -44,25 +55,60 @@ import {
   type LiveMdMarkdownParserService,
 } from "../languages.js";
 import { liveMdLinkBaseUrl } from "../links.js";
-import { createLiveMdBuild, finishAtomicRanges, finishDecorations } from "../projection/emit.js";
+import { createLiveMdBuild, finishAtomicRanges, finishDecorationSets } from "../projection/emit.js";
 import { applyLiveMdMarkdownFeatures, processLiveMdMatch } from "../projection/builtin.js";
 import { projectLeafRecords } from "../projection/project-leaf.js";
-import { type LiveMdAnalysis, type LiveMdSemanticTrace } from "./types.js";
+import {
+  type LiveMdAnalysis,
+  type LiveMdPendingAnalysis,
+  type LiveMdRuntimeEpochs,
+  type LiveMdSemanticTrace,
+} from "./types.js";
 
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
+const liveMdSchedulerQuietDelay = 24;
+const liveMdSchedulerMaxDeadlineYields = 2;
 
 type BuildLiveMdAnalysisOptions = {
   activeSourceRanges?: readonly DocRange[] | null;
   previous?: LiveMdAnalysis;
+  revision?: number;
   transaction?: Transaction;
+  transitionBase?: LiveMdPendingAnalysis;
   tree?: Tree;
+  yieldCheck?: () => void;
 };
+
+type LiveMdScheduledAnalysis = {
+  analysis: LiveMdAnalysis;
+  docLength: number;
+  epochs: LiveMdRuntimeEpochs;
+  revision: number;
+};
+
+const commitLiveMdScheduledAnalysis = StateEffect.define<LiveMdScheduledAnalysis>();
 
 const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
   create(state) {
-    return buildLiveMdAnalysis(state, getActiveLines(state));
+    return buildLiveMdAnalysis(state, getActiveLines(state), { revision: 0 });
   },
   update(value, transaction) {
+    let committed = scheduledAnalysisFromEffects(transaction);
+    if (committed) {
+      if (canCommitScheduledAnalysis(value, transaction.state, committed)) {
+        return committed.analysis;
+      }
+      return withStaleResultDrop(value);
+    }
+
+    if (transaction.docChanged) {
+      return pendingSourceAnalysis(value, transaction);
+    }
+
+    if (value.pending) {
+      return pendingSelectionAnalysis(value, transaction);
+    }
+
     let tree = syntaxTree(transaction.state);
     let activeLines = getActiveLines(transaction.state);
     let activeSourceRanges =
@@ -94,6 +140,7 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
     return buildLiveMdAnalysis(transaction.state, activeLines, {
       activeSourceRanges,
       previous: value,
+      revision: value.revision,
       transaction,
       tree,
     });
@@ -108,7 +155,569 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
   },
 });
 
-export const liveMdAnalysis: Extension = liveMdAnalysisField;
+const liveMdSchedulerPlugin = ViewPlugin.fromClass(
+  class LiveMdSchedulerPlugin {
+    private destroyed = false;
+    private scheduled: LiveMdScheduledWork | null = null;
+    private yieldedRevision = -1;
+    private yieldCount = 0;
+
+    constructor(readonly view: EditorView) {
+      this.scheduleIfPending();
+    }
+
+    update(update: ViewUpdate) {
+      if (
+        update.docChanged ||
+        update.transactions.some((transaction) => transaction.effects.length)
+      ) {
+        this.scheduleIfPending();
+      } else if (
+        update.startState.field(liveMdAnalysisField) != update.state.field(liveMdAnalysisField)
+      ) {
+        this.scheduleIfPending();
+      }
+    }
+
+    destroy() {
+      this.destroyed = true;
+      this.scheduled?.cancel();
+      this.scheduled = null;
+    }
+
+    private scheduleIfPending() {
+      let pending = this.view.state.field(liveMdAnalysisField).pending;
+      if (!pending) {
+        this.scheduled?.cancel();
+        this.scheduled = null;
+        this.resetYieldCount();
+        return;
+      }
+      if (this.yieldedRevision != pending.revision) this.resetYieldCount(pending.revision);
+      if (this.scheduled?.revision == pending.revision) return;
+      this.scheduled?.cancel();
+      let allowDeadlineYield = this.yieldCount < liveMdSchedulerMaxDeadlineYields;
+      this.scheduled = scheduleLiveMdWork(
+        pending.revision,
+        (deadline) => this.runScheduled(pending.revision, deadline),
+        allowDeadlineYield,
+      );
+    }
+
+    private runScheduled(revision: number, deadline?: IdleDeadline) {
+      this.scheduled = null;
+      if (this.destroyed) return;
+      let current = this.view.state.field(liveMdAnalysisField, false);
+      let pending = current?.pending;
+      if (!pending || pending.revision != revision) return;
+      if (!syntaxTreeAvailable(this.view.state, this.view.state.doc.length)) {
+        this.scheduleIfPending();
+        return;
+      }
+
+      let yieldCheck = scheduledYieldCheck(
+        deadline,
+        this.yieldCount < liveMdSchedulerMaxDeadlineYields,
+      );
+      let analysis: LiveMdAnalysis;
+      try {
+        yieldCheck();
+        analysis = buildLiveMdAnalysis(this.view.state, getActiveLines(this.view.state), {
+          previous: pending.baseAnalysis,
+          revision,
+          transitionBase: pending,
+          tree: syntaxTree(this.view.state),
+          yieldCheck,
+        });
+        yieldCheck();
+      } catch (error) {
+        if (error instanceof LiveMdScheduledYield) {
+          if (error.reason == "deadline") this.yieldCount++;
+          this.scheduleIfPending();
+          return;
+        }
+        throw error;
+      }
+      this.resetYieldCount();
+      this.view.dispatch({
+        effects: commitLiveMdScheduledAnalysis.of({
+          analysis,
+          docLength: this.view.state.doc.length,
+          epochs: runtimeEpochs(this.view.state),
+          revision,
+        }),
+      });
+    }
+
+    private resetYieldCount(revision = -1) {
+      this.yieldedRevision = revision;
+      this.yieldCount = 0;
+    }
+  },
+);
+
+export const liveMdAnalysis: Extension = [liveMdAnalysisField, liveMdSchedulerPlugin];
+
+type LiveMdScheduledWork = {
+  cancel: () => void;
+  revision: number;
+};
+
+class LiveMdScheduledYield extends Error {
+  constructor(readonly reason: "deadline" | "input") {
+    super(reason);
+  }
+}
+
+function pendingSourceAnalysis(value: LiveMdAnalysis, transaction: Transaction): LiveMdAnalysis {
+  let previousPending = value.pending;
+  let baseAnalysis = previousPending?.baseAnalysis ?? value;
+  let baseDoc = previousPending?.baseDoc ?? transaction.startState.doc;
+  let changes = previousPending
+    ? previousPending.changes.composeDesc(transaction.changes)
+    : transaction.changes;
+  let revision = (previousPending?.revision ?? value.revision) + 1;
+  let pending: LiveMdPendingAnalysis = {
+    baseAnalysis,
+    baseDoc,
+    changes,
+    epochs: previousPending?.epochs ?? runtimeEpochs(transaction.startState),
+    revision,
+  };
+  let safetyRanges = sourceSafetyRanges(baseAnalysis, transaction.state, changes);
+  let interactiveSafetyRanges = sourceInteractiveSafetyRanges(
+    baseAnalysis,
+    transaction.state,
+    changes,
+    safetyRanges,
+  );
+  let activeLines = getActiveLines(transaction.state);
+  let sourceIslandLeaves = baseAnalysis.sourceIslandLeaves;
+  let activeSourceRanges = activePendingSourceRanges(
+    transaction.state,
+    baseDoc,
+    sourceIslandLeaves,
+    changes,
+  );
+  let sourceSafeDecorations = value.sourceSafeDecorations.map(transaction.changes);
+  let interactiveDecorations = clearDecorationRanges(
+    value.interactiveDecorations.map(transaction.changes),
+    interactiveSafetyRanges,
+  );
+  let destructiveDecorations = clearDecorationRanges(
+    value.destructiveDecorations.map(transaction.changes),
+    safetyRanges,
+  );
+  let trace = pendingInputTrace(transaction);
+
+  return {
+    activeLines,
+    activeSourceRanges,
+    atomicRanges: clearRangeSetRanges(value.atomicRanges.map(transaction.changes), safetyRanges),
+    decorations: joinedDecorations(
+      sourceSafeDecorations,
+      interactiveDecorations,
+      destructiveDecorations,
+    ),
+    destructiveDecorations,
+    interactiveDecorations,
+    pending,
+    revision,
+    semantic: baseAnalysis.semantic,
+    semanticTrace: baseAnalysis.semantic ? emptyLeafAnalysisCacheTrace() : null,
+    sourceSafeDecorations,
+    sourceIslandLeaves,
+    trace,
+    tree: value.tree,
+  };
+}
+
+function pendingInputTrace(transaction: Transaction) {
+  let trace = emptyLiveMdLeafAnalysisTrace();
+  let languageTrace = syntaxTreeApplyTrace(transaction);
+  trace.languageApplyMs = languageTrace.applyMs;
+  trace.languageWorkIterations = languageTrace.workIterations;
+  return trace;
+}
+
+function pendingSelectionAnalysis(value: LiveMdAnalysis, transaction: Transaction): LiveMdAnalysis {
+  let activeLines = getActiveLines(transaction.state);
+  let pending = value.pending;
+  let activeSourceRanges = pending
+    ? activePendingSourceRanges(
+        transaction.state,
+        pending.baseDoc,
+        pending.baseAnalysis.sourceIslandLeaves,
+        pending.changes,
+      )
+    : activeMarkdownSourceRanges(transaction.state, value.sourceIslandLeaves);
+  let revealRanges = newlyActiveSourceRanges(value.activeSourceRanges, activeSourceRanges);
+  if (
+    sameSetItems(activeLines, value.activeLines) &&
+    sameRanges(activeSourceRanges, value.activeSourceRanges)
+  ) {
+    return value;
+  }
+  let destructiveDecorations = clearDecorationRanges(value.destructiveDecorations, revealRanges);
+  let atomicRanges = clearRangeSetRanges(value.atomicRanges, revealRanges);
+  return {
+    ...value,
+    activeLines,
+    activeSourceRanges,
+    atomicRanges,
+    decorations: joinedDecorations(
+      value.sourceSafeDecorations,
+      value.interactiveDecorations,
+      destructiveDecorations,
+    ),
+    destructiveDecorations,
+    interactiveDecorations: value.interactiveDecorations,
+    trace: emptyLiveMdLeafAnalysisTrace(),
+  };
+}
+
+function sourceSafetyRanges(
+  baseAnalysis: LiveMdAnalysis,
+  state: EditorState,
+  changes: ChangeDesc,
+): readonly DocRange[] {
+  let ranges: DocRange[] = changedPhysicalLineRanges(state, changes);
+  let oldChangedRanges = changedOldRanges(changes);
+
+  if (baseAnalysis.semantic) {
+    for (let record of findLeafAnalysisRecordsTouchingRanges(
+      baseAnalysis.semantic.cache,
+      oldChangedRanges,
+    )) {
+      ranges.push(mapRange(record.effectRange, changes));
+    }
+  }
+
+  for (let activeRange of baseAnalysis.activeSourceRanges) {
+    if (
+      oldChangedRanges.some((range) =>
+        rangesTouch(activeRange.from, activeRange.to, range.from, range.to),
+      )
+    ) {
+      ranges.push(mapRange(activeRange, changes));
+    }
+  }
+
+  return mergeDocRanges(ranges.map((range) => clampRangeToDoc(range, state)));
+}
+
+function sourceInteractiveSafetyRanges(
+  baseAnalysis: LiveMdAnalysis,
+  state: EditorState,
+  changes: ChangeDesc,
+  fallbackRanges: readonly DocRange[],
+): readonly DocRange[] {
+  if (!baseAnalysis.semantic) return fallbackRanges;
+
+  let oldChangedRanges = changedOldRanges(changes);
+  let ranges: DocRange[] = [];
+  for (let record of findLeafAnalysisRecordsTouchingRanges(
+    baseAnalysis.semantic.cache,
+    oldChangedRanges,
+  )) {
+    for (let descriptor of record.analysis.descriptors) {
+      if (!isDirtyLinkDescriptor(descriptor, oldChangedRanges, record.sourceRange.from)) continue;
+      ranges.push(mapRange(offsetDocRange(descriptor.range, record.sourceRange.from), changes));
+    }
+  }
+
+  return mergeDocRanges(ranges.map((range) => clampRangeToDoc(range, state)));
+}
+
+function isDirtyLinkDescriptor(
+  descriptor: LiveMdDescriptor,
+  oldChangedRanges: readonly DocRange[],
+  sourceOffset: number,
+) {
+  if (descriptor.kind != "linkMark") return false;
+  let sourceRange = offsetDocRange(descriptor.sourceRange, sourceOffset);
+  return oldChangedRanges.some((range) => docRangesTouch(sourceRange, range));
+}
+
+function changedOldRanges(changes: ChangeDesc): DocRange[] {
+  let ranges: DocRange[] = [];
+  changes.iterChangedRanges((fromA, toA) => {
+    ranges.push({ from: fromA, to: toA });
+  }, true);
+  return ranges;
+}
+
+function changedPhysicalLineRanges(state: EditorState, changes: ChangeDesc): DocRange[] {
+  let ranges: DocRange[] = [];
+  changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    ranges.push(lineRangeFor(state, fromB, toB));
+  }, true);
+  return ranges;
+}
+
+function clearDecorationRanges(decorations: DecorationSet, ranges: readonly DocRange[]) {
+  return clearRangeSetRanges(decorations, ranges);
+}
+
+function joinedDecorations(
+  sourceSafeDecorations: DecorationSet,
+  interactiveDecorations: DecorationSet,
+  destructiveDecorations: DecorationSet,
+) {
+  return RangeSet.join([sourceSafeDecorations, interactiveDecorations, destructiveDecorations]);
+}
+
+function newlyActiveSourceRanges(
+  previous: readonly DocRange[],
+  current: readonly DocRange[],
+): readonly DocRange[] {
+  return current.filter(
+    (range) => !previous.some((oldRange) => range.from == oldRange.from && range.to == oldRange.to),
+  );
+}
+
+function activePendingSourceRanges(
+  state: EditorState,
+  baseDoc: LiveMdPendingAnalysis["baseDoc"],
+  leaves: LiveMdAnalysis["sourceIslandLeaves"],
+  changes: ChangeDesc,
+): readonly DocRange[] {
+  if (!leaves.length) return [];
+  let active: DocRange[] = [];
+  let seen = new Set<string>();
+  let inverseChanges = changes.invertedDesc;
+  for (let range of state.selection.ranges) {
+    let oldHead = inverseChanges.mapPos(range.head, range.assoc);
+    let leaf = findSourceIslandLeaf(baseDoc, leaves, oldHead, range.assoc);
+    if (!leaf) continue;
+    let sourceRange = mapInclusiveRange(leaf.sourceRange, changes);
+    let key = `${sourceRange.from}:${sourceRange.to}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    active.push(sourceRange);
+  }
+  return active;
+}
+
+function clearRangeSetRanges<T extends RangeValue>(
+  rangeSet: RangeSet<T>,
+  ranges: readonly DocRange[],
+) {
+  return ranges.length ? patchRangeSet(rangeSet, ranges, []) : rangeSet;
+}
+
+function scheduledAnalysisFromEffects(transaction: Transaction): LiveMdScheduledAnalysis | null {
+  for (let effect of transaction.effects) {
+    if (effect.is(commitLiveMdScheduledAnalysis)) return effect.value;
+  }
+  return null;
+}
+
+function canCommitScheduledAnalysis(
+  value: LiveMdAnalysis,
+  state: EditorState,
+  result: LiveMdScheduledAnalysis,
+) {
+  return Boolean(
+    value.pending &&
+    value.pending.revision == result.revision &&
+    result.docLength == state.doc.length &&
+    !runtimeEpochsChanged(result.epochs, runtimeEpochs(state)) &&
+    result.analysis.revision == result.revision &&
+    !result.analysis.pending &&
+    analysisRangesInDoc(result.analysis, state.doc.length),
+  );
+}
+
+function withStaleResultDrop(value: LiveMdAnalysis): LiveMdAnalysis {
+  let trace = { ...value.trace, staleResultDrops: value.trace.staleResultDrops + 1 };
+  return {
+    ...value,
+    semanticTrace: value.semanticTrace
+      ? { ...value.semanticTrace, staleResultDrops: trace.staleResultDrops }
+      : null,
+    trace,
+  };
+}
+
+function analysisRangesInDoc(analysis: LiveMdAnalysis, docLength: number) {
+  return (
+    rangesInDoc(analysis.activeSourceRanges, docLength) &&
+    rangesInDoc(
+      analysis.sourceIslandLeaves.map((leaf) => leaf.sourceRange),
+      docLength,
+    ) &&
+    rangesInDoc(
+      analysis.semantic?.cache.records.flatMap((record) => [
+        record.range,
+        record.sourceRange,
+        record.effectRange,
+      ]) ?? [],
+      docLength,
+    )
+  );
+}
+
+function rangesInDoc(ranges: readonly DocRange[], docLength: number) {
+  return ranges.every(
+    (range) => range.from >= 0 && range.from <= range.to && range.to <= docLength,
+  );
+}
+
+function runtimeEpochs(state: EditorState): LiveMdRuntimeEpochs {
+  return {
+    codeFenceHighlighters: codeFenceHighlighters(state),
+    codeFenceLanguages: state.field(codeFenceLanguagesField, false) ?? null,
+    imageSourceResolver: state.facet(liveMdImageSourceResolver),
+    linkBaseUrl: state.facet(liveMdLinkBaseUrl),
+    markdownFeatures: state.facet(liveMdMarkdownFeatureFacet),
+    markdownParserService: state.facet(liveMdMarkdownParserServiceFacet),
+  };
+}
+
+function runtimeEpochsChanged(left: LiveMdRuntimeEpochs, right: LiveMdRuntimeEpochs) {
+  return (
+    left.codeFenceLanguages != right.codeFenceLanguages ||
+    !sameArrayItems(left.codeFenceHighlighters, right.codeFenceHighlighters) ||
+    left.imageSourceResolver != right.imageSourceResolver ||
+    left.linkBaseUrl != right.linkBaseUrl ||
+    !sameArrayItems(left.markdownFeatures, right.markdownFeatures) ||
+    left.markdownParserService != right.markdownParserService
+  );
+}
+
+function scheduleLiveMdWork(
+  revision: number,
+  run: (deadline?: IdleDeadline) => void,
+  allowDeadlineYield = true,
+): LiveMdScheduledWork {
+  let cancelled = false;
+  let frame: number | null = null;
+  let quietTimer: ReturnType<typeof setTimeout> | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let idle: number | null = null;
+
+  let scheduleQuietTask = () => {
+    frame = null;
+    if (cancelled) return;
+    quietTimer = setTimeout(scheduleIdleTask, liveMdSchedulerQuietDelay);
+  };
+
+  let scheduleIdleTask = () => {
+    quietTimer = null;
+    if (cancelled) return;
+    if (isInputPending()) {
+      scheduleQuietTask();
+      return;
+    }
+    let requestIdle = globalThis.requestIdleCallback;
+    if (typeof requestIdle == "function") {
+      idle = requestIdle((deadline) => {
+        idle = null;
+        if (cancelled) return;
+        if (isInputPending() || (allowDeadlineYield && idleDeadlineExhausted(deadline))) {
+          scheduleQuietTask();
+          return;
+        }
+        run(deadline);
+      });
+    } else {
+      timer = setTimeout(() => {
+        timer = null;
+        if (cancelled) return;
+        if (isInputPending()) {
+          scheduleQuietTask();
+          return;
+        }
+        run();
+      }, 0);
+    }
+  };
+
+  if (typeof globalThis.requestAnimationFrame == "function") {
+    frame = globalThis.requestAnimationFrame(scheduleQuietTask);
+  } else {
+    timer = setTimeout(scheduleQuietTask, 0);
+  }
+
+  return {
+    cancel() {
+      cancelled = true;
+      if (frame != null && typeof globalThis.cancelAnimationFrame == "function") {
+        globalThis.cancelAnimationFrame(frame);
+      }
+      if (idle != null && typeof globalThis.cancelIdleCallback == "function") {
+        globalThis.cancelIdleCallback(idle);
+      }
+      if (quietTimer != null) clearTimeout(quietTimer);
+      if (timer != null) clearTimeout(timer);
+    },
+    revision,
+  };
+}
+
+function isInputPending() {
+  return Boolean(
+    typeof navigator != "undefined" &&
+    (
+      navigator as Navigator & {
+        scheduling?: { isInputPending?: () => boolean };
+      }
+    ).scheduling?.isInputPending?.(),
+  );
+}
+
+function idleDeadlineExhausted(deadline: IdleDeadline | undefined) {
+  return Boolean(deadline && !deadline.didTimeout && deadline.timeRemaining() <= 0);
+}
+
+function scheduledYieldCheck(deadline: IdleDeadline | undefined, allowDeadlineYield: boolean) {
+  return () => {
+    if (isInputPending()) throw new LiveMdScheduledYield("input");
+    if (allowDeadlineYield && idleDeadlineExhausted(deadline)) {
+      throw new LiveMdScheduledYield("deadline");
+    }
+  };
+}
+
+function mapRange(range: DocRange, changes: ChangeDesc): DocRange {
+  let from = changes.mapPos(clamp(range.from, 0, changes.length), 1);
+  let to = changes.mapPos(clamp(range.to, 0, changes.length), -1);
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+function offsetDocRange(range: DocRange, offset: number): DocRange {
+  return { from: range.from + offset, to: range.to + offset };
+}
+
+function docRangesTouch(left: DocRange, right: DocRange) {
+  return rangesTouch(left.from, left.to, right.from, right.to);
+}
+
+function mapInclusiveRange(range: DocRange, changes: ChangeDesc): DocRange {
+  let from = changes.mapPos(clamp(range.from, 0, changes.length), -1);
+  let to = changes.mapPos(clamp(range.to, 0, changes.length), 1);
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+function clampRangeToDoc(range: DocRange, state: EditorState): DocRange {
+  return {
+    from: clamp(range.from, 0, state.doc.length),
+    to: clamp(range.to, 0, state.doc.length),
+  };
+}
+
+function lineRangeFor(state: EditorState, from: number, to: number): DocRange {
+  let rangeFrom = clamp(from, 0, state.doc.length);
+  let rangeTo = clamp(to, 0, state.doc.length);
+  let firstLine = state.doc.lineAt(rangeFrom);
+  let lastLine = state.doc.lineAt(Math.max(rangeFrom, rangeTo - 1));
+  return { from: firstLine.from, to: rangeTo >= state.doc.length ? rangeTo : lastLine.to };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
 function buildLiveMdAnalysis(
   state: EditorState,
@@ -126,7 +735,9 @@ function buildLiveMdAnalysis(
       service: markdownParserService,
       state,
       transaction: options.transaction,
+      transitionBase: options.transitionBase,
       tree,
+      yieldCheck: options.yieldCheck,
     });
     let build = createLiveMdBuild({
       activeLines,
@@ -139,6 +750,7 @@ function buildLiveMdAnalysis(
       sourceIslandMode: true,
       state,
       trace: semanticAnalysis.trace,
+      yieldCheck: options.yieldCheck,
     });
     projectLeafRecords(build, semanticAnalysis.semantic.cache.records);
     let legacyFeatureFullQueryCount = applyLegacyMarkdownFeatures(
@@ -147,13 +759,19 @@ function buildLiveMdAnalysis(
       tree,
     );
     let trace = liveMdSemanticTrace(build.trace, legacyFeatureFullQueryCount);
+    let decorationSets = finishDecorationSets(build);
     let analysis: LiveMdAnalysis = {
       activeLines,
       activeSourceRanges: semanticAnalysis.activeSourceRanges,
       atomicRanges: finishAtomicRanges(build),
-      decorations: finishDecorations(build),
+      decorations: decorationSets.decorations,
+      destructiveDecorations: decorationSets.destructiveDecorations,
+      interactiveDecorations: decorationSets.interactiveDecorations,
+      pending: null,
+      revision: options.revision ?? options.previous?.revision ?? 0,
       semantic: semanticAnalysis.semantic,
       semanticTrace: trace,
+      sourceSafeDecorations: decorationSets.sourceSafeDecorations,
       sourceIslandLeaves: semanticAnalysis.sourceIslandLeaves,
       trace,
       tree,
@@ -161,14 +779,27 @@ function buildLiveMdAnalysis(
     return analysis;
   }
 
-  let build = buildLegacyLiveMdBuild(state, activeLines, codeFenceLanguages, null, tree);
+  let build = buildLegacyLiveMdBuild(
+    state,
+    activeLines,
+    codeFenceLanguages,
+    null,
+    tree,
+    options.yieldCheck,
+  );
+  let decorationSets = finishDecorationSets(build);
   return {
     activeLines,
     activeSourceRanges: [],
     atomicRanges: finishAtomicRanges(build),
-    decorations: finishDecorations(build),
+    decorations: decorationSets.decorations,
+    destructiveDecorations: decorationSets.destructiveDecorations,
+    interactiveDecorations: decorationSets.interactiveDecorations,
+    pending: null,
+    revision: options.revision ?? options.previous?.revision ?? 0,
     semantic: null,
     semanticTrace: null,
+    sourceSafeDecorations: decorationSets.sourceSafeDecorations,
     sourceIslandLeaves: [],
     trace: build.trace,
     tree,
@@ -181,7 +812,9 @@ function buildLiveMdSemanticAnalysis(input: {
   service: LiveMdMarkdownParserService;
   state: EditorState;
   transaction?: Transaction;
+  transitionBase?: LiveMdPendingAnalysis;
   tree: Tree;
+  yieldCheck?: () => void;
 }) {
   let previous = input.previous;
   let previousSemantic = input.previous?.semantic ?? null;
@@ -196,36 +829,57 @@ function buildLiveMdSemanticAnalysis(input: {
     };
   }
 
+  input.yieldCheck?.();
   let walked = walkMarkdownBlocks(input.tree, input.state.doc);
+  input.yieldCheck?.();
   let sourceIslandLeaves = sourceIslandLeavesFromMarkdownSnapshot(input.state.doc, walked.snapshot);
   let activeSourceRanges = activeMarkdownSourceRanges(input.state, sourceIslandLeaves);
   let transaction = input.transaction;
+  let transitionBase = input.transitionBase;
   let transition =
     previousSemantic &&
-    transaction &&
-    !markdownParserServiceChanged(transaction.startState, transaction.state)
+    transitionBase &&
+    transitionBase.epochs.markdownParserService == input.service
       ? transitionLeafAnalysisCache({
           analysisInput: {
             service: input.service,
             state: input.state,
             tree: input.tree,
           },
-          changes: transaction.changes,
+          changes: transitionBase.changes,
           oldCache: previousSemantic.cache,
-          oldDoc: transaction.startState.doc,
+          oldDoc: transitionBase.baseDoc,
           snapshot: walked.snapshot,
+          yieldCheck: input.yieldCheck,
         })
-      : buildFreshLeafAnalysisCache({
-          analysisInput: {
-            service: input.service,
-            state: input.state,
-            tree: input.tree,
-          },
-          snapshot: walked.snapshot,
-          startCacheId: previousSemantic?.cache.nextCacheId,
-        });
+      : previousSemantic &&
+          transaction &&
+          !markdownParserServiceChanged(transaction.startState, transaction.state)
+        ? transitionLeafAnalysisCache({
+            analysisInput: {
+              service: input.service,
+              state: input.state,
+              tree: input.tree,
+            },
+            changes: transaction.changes,
+            oldCache: previousSemantic.cache,
+            oldDoc: transaction.startState.doc,
+            snapshot: walked.snapshot,
+            yieldCheck: input.yieldCheck,
+          })
+        : buildFreshLeafAnalysisCache({
+            analysisInput: {
+              service: input.service,
+              state: input.state,
+              tree: input.tree,
+            },
+            snapshot: walked.snapshot,
+            startCacheId: previousSemantic?.cache.nextCacheId,
+            yieldCheck: input.yieldCheck,
+          });
 
   transition.trace.blockNodesVisited = walked.trace.visitedBlockNodes;
+  transition.trace.checkedRanges = walked.trace.checkedRanges;
 
   return {
     activeSourceRanges,
@@ -273,6 +927,24 @@ export function __testLiveMdAnalysis(view: EditorView): LiveMdAnalysis {
   return view.state.field(liveMdAnalysisField);
 }
 
+export async function __testFlushLiveMdAnalysis(view: EditorView) {
+  for (let index = 0; index < 20; index++) {
+    if (!view.state.field(liveMdAnalysisField).pending) return;
+    await waitForScheduledTurn();
+  }
+}
+
+function waitForScheduledTurn() {
+  return new Promise<void>((resolve) => {
+    let settle = () => setTimeout(resolve, liveMdSchedulerQuietDelay + 5);
+    if (typeof globalThis.requestAnimationFrame == "function") {
+      globalThis.requestAnimationFrame(settle);
+    } else {
+      settle();
+    }
+  });
+}
+
 function buildCanonicalLiveMdAnalysis(state: EditorState): LiveMdAnalysis {
   let activeLines = getActiveLines(state);
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
@@ -286,13 +958,19 @@ function buildCanonicalLiveMdAnalysis(state: EditorState): LiveMdAnalysis {
     markdownAnalysis,
     tree,
   );
+  let decorationSets = finishDecorationSets(build);
   return {
     activeLines,
     activeSourceRanges: markdownAnalysis?.activeSourceRanges ?? [],
     atomicRanges: finishAtomicRanges(build),
-    decorations: finishDecorations(build),
+    decorations: decorationSets.decorations,
+    destructiveDecorations: decorationSets.destructiveDecorations,
+    interactiveDecorations: decorationSets.interactiveDecorations,
+    pending: null,
+    revision: 0,
     semantic: null,
     semanticTrace: null,
+    sourceSafeDecorations: decorationSets.sourceSafeDecorations,
     sourceIslandLeaves: markdownAnalysis?.leaves ?? [],
     trace: build.trace,
     tree,
@@ -305,6 +983,7 @@ function buildLegacyLiveMdBuild(
   codeFenceLanguages: CodeFenceLanguageMap,
   markdownAnalysis: LiveMdSourceIslandAnalysis | null,
   tree: ReturnType<typeof syntaxTree>,
+  yieldCheck?: () => void,
 ) {
   let build = createLiveMdBuild({
     activeLines,
@@ -317,6 +996,7 @@ function buildLegacyLiveMdBuild(
     sourceIslandMode: Boolean(markdownAnalysis),
     state,
     trace: emptyLiveMdLeafAnalysisTrace(),
+    yieldCheck,
   });
 
   let markdownParserService = state.facet(liveMdMarkdownParserServiceFacet);

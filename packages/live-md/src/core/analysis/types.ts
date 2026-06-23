@@ -7,6 +7,7 @@ export type DocRange = {
 
 export type LiveMdLeafAnalysisTrace = {
   blockNodesVisited: number;
+  checkedRanges: readonly DocRange[];
   codeFenceParserSessionsCreated: number;
   codeFenceParserSessionsDeleted: number;
   codeFenceParses: number;
@@ -19,18 +20,22 @@ export type LiveMdLeafAnalysisTrace = {
   inlineParsedChars: number;
   inlineParseCalls: number;
   inlineParserSessions: number;
+  languageApplyMs: number;
+  languageWorkIterations: number;
   legacyFeatureFullQueryCount: number;
   projectionRecords: number;
   recordsAnalyzed: number;
   recordsReused: number;
   recordsVisited: number;
   sourceHashCollisions: number;
+  staleResultDrops: number;
   tableCellsParsed: number;
 };
 
 export function emptyLiveMdLeafAnalysisTrace(): LiveMdLeafAnalysisTrace {
   return {
     blockNodesVisited: 0,
+    checkedRanges: [],
     codeFenceParserSessionsCreated: 0,
     codeFenceParserSessionsDeleted: 0,
     codeFenceParses: 0,
@@ -43,12 +48,15 @@ export function emptyLiveMdLeafAnalysisTrace(): LiveMdLeafAnalysisTrace {
     inlineParsedChars: 0,
     inlineParseCalls: 0,
     inlineParserSessions: 0,
+    languageApplyMs: 0,
+    languageWorkIterations: 0,
     legacyFeatureFullQueryCount: 0,
     projectionRecords: 0,
     recordsAnalyzed: 0,
     recordsReused: 0,
     recordsVisited: 0,
     sourceHashCollisions: 0,
+    staleResultDrops: 0,
     tableCellsParsed: 0,
   };
 }

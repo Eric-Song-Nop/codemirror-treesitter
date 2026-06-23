@@ -20,6 +20,7 @@ export type LiveMdBuild = {
   sourceIslandMode: boolean;
   state: EditorState;
   trace: LiveMdLeafAnalysisTrace;
+  yieldCheck?: () => void;
 };
 
 export type LiveMdBuildConfig = {
@@ -33,6 +34,7 @@ export type LiveMdBuildConfig = {
   sourceIslandMode?: boolean;
   state: EditorState;
   trace?: LiveMdLeafAnalysisTrace;
+  yieldCheck?: () => void;
 };
 
 export type CodeFenceParser =
