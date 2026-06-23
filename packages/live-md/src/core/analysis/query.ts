@@ -9,7 +9,7 @@ import {
 } from "@codemirror-treesitter/language";
 import liveMdMarkdownInlineQuerySource from "../queries/decorations-markdown-inline.scm?raw";
 import liveMdMarkdownQuerySource from "../queries/decorations-markdown.scm?raw";
-import { type DocRange, type LiveMdMatchKind, type ParagraphContainerKind } from "./types.js";
+import { type DocRange, type LiveMdMatchKind } from "./types.js";
 
 export function queryLiveMdMatches(tree: Tree) {
   return queryLiveMdMatchesFromSource(tree, liveMdQuerySource);
@@ -54,18 +54,6 @@ function isLiveMdMatchKind(kind: string): kind is LiveMdMatchKind {
     case "link":
     case "rule":
     case "table":
-      return true;
-    default:
-      return false;
-  }
-}
-
-export function isParagraphContainerKind(kind: string): kind is ParagraphContainerKind {
-  switch (kind) {
-    case "block":
-    case "document":
-    case "list":
-    case "listItem":
       return true;
     default:
       return false;

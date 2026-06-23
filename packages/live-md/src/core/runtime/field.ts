@@ -1,15 +1,9 @@
 import { EditorState, RangeSet, StateField, type Extension } from "@codemirror/state";
 import { syntaxHighlighters, syntaxTree, type Highlighter } from "@codemirror-treesitter/language";
 import { EditorView } from "@codemirror/view";
-import { collectParagraphContainer, markParagraphBreaks } from "../analysis/paragraphs.js";
 import { isInsideSkippedRange, matchRoot, queryLiveMdMatches } from "../analysis/query.js";
 import { collectTable } from "../analysis/tables.js";
-import {
-  type CapturedTable,
-  type DocRange,
-  type LiveMdAnalysis,
-  type ParagraphContainer,
-} from "../analysis/types.js";
+import { type CapturedTable, type DocRange, type LiveMdAnalysis } from "../analysis/types.js";
 import { liveMdMarkdownFeatureFacet } from "../features.js";
 import { liveMdImageSourceResolver } from "../images.js";
 import {
@@ -101,10 +95,8 @@ function buildLiveMdBuild(
   let tree = syntaxTree(state);
   let skipped: DocRange[] = [];
   let matches = queryLiveMdMatches(tree);
-  let paragraphContainers = new Map<string, ParagraphContainer>();
   let tables = new Map<string, CapturedTable>();
   for (let match of matches) {
-    collectParagraphContainer(match, paragraphContainers);
     collectTable(match, tables);
   }
   let processed = new Set<string>();
@@ -115,7 +107,6 @@ function buildLiveMdBuild(
       skipped.push({ from: root.from, to: root.to });
     }
   }
-  markParagraphBreaks(build, paragraphContainers);
   applyLiveMdMarkdownFeatures(build);
 
   return build;

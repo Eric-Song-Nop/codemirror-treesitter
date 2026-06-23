@@ -85,14 +85,6 @@ export type LiveMdAnalysis = {
   tree: Tree;
 };
 
-export type ParagraphContainerKind = "block" | "document" | "list" | "listItem";
-
-export type ParagraphContainer = {
-  children: SyntaxNode[];
-  kind: ParagraphContainerKind;
-  node: SyntaxNode;
-};
-
 export type CapturedTable = {
   delimiterCells: Map<string, CapturedTableDelimiterCell>;
   delimiterRow: SyntaxNode | null;
