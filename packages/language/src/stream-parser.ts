@@ -207,6 +207,7 @@ type SimpleCursor = {
   gotoNextSibling: () => boolean;
   gotoPreviousSibling: () => boolean;
   gotoDescendant: (index: number) => void;
+  gotoFirstChildForIndex: (index: number) => boolean;
   gotoFirstChildForPosition: (position: Point) => boolean;
 };
 
@@ -555,6 +556,13 @@ class SimpleTreeCursor implements SimpleCursor {
     };
     visit(root);
     if (found) this.node = found;
+  }
+
+  gotoFirstChildForIndex(index: number) {
+    let child = this.node.firstChildForIndex(index);
+    if (!child) return false;
+    this.node = child;
+    return true;
   }
 
   gotoFirstChildForPosition(position: Point) {

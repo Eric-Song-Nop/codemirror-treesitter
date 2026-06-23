@@ -16,7 +16,7 @@ import {
   syntaxTreeAvailable,
 } from "../src/index.js";
 import { __testResolveWasmPath } from "../src/language.js";
-import { SyntaxNode } from "../src/tree.js";
+import { SyntaxNode, TreeCursor } from "../src/tree.js";
 import declarationMatchQuerySource from "./queries/declaration-match.scm?raw";
 import type { Tree } from "../src/index.js";
 import type { NodeIterator } from "../src/tree.js";
@@ -445,6 +445,35 @@ describe("tree-sitter tree wrapper", () => {
     copy.delete();
   });
 
+  it("keeps reset node roots separate from resetTo cursor paths", async () => {
+    let doc = "let alpha = beta + gamma;\n";
+    let state = await javascriptState(doc);
+    let tree = syntaxTree(state);
+    let cursor = tree.cursor()!;
+    let original: TreeCursor | null = null;
+    let beta = doc.indexOf("beta");
+
+    try {
+      expect(cursor.firstChild()).toBe(true);
+      expect(cursor.firstChildForIndex(beta)).toBe(true);
+      expect(cursor.name).toBe("variable_declarator");
+      original = cursor.copy();
+
+      cursor.reset(cursor.node);
+      expect(cursor.name).toBe("variable_declarator");
+      expect(cursor.parent()).toBe(false);
+      expect(cursor.name).toBe("variable_declarator");
+
+      cursor.resetTo(original);
+      expect(cursor.name).toBe("variable_declarator");
+      expect(cursor.parent()).toBe(true);
+      expect(cursor.name).toBe("lexical_declaration");
+    } finally {
+      original?.delete();
+      cursor.delete();
+    }
+  });
+
   it("uses native cursor range jumps for all child index results", async () => {
     let doc = "let first = 1;\nlet second = 2;\nlet third = 3;\nlet last = 4;\n";
     let state = await javascriptState(doc);
@@ -470,6 +499,46 @@ describe("tree-sitter tree wrapper", () => {
       expectNativeCursorFirstChildForIndex(root, index);
       expectNativeCursorFirstChildForPosition(root, doc, index);
     }
+  });
+
+  it("delegates wrapper child index jumps to native tree cursors", async () => {
+    let doc = "let alpha = beta + gamma;\n";
+    let state = await javascriptState(doc);
+    let parsed = ensureSyntaxTree(state, doc.length, 5_000)!;
+    let nativeCursor = parsed.tree!.rootNode.walk();
+    let nativeCursorPrototype = Object.getPrototypeOf(nativeCursor) as {
+      gotoFirstChildForIndex(index: number): boolean;
+    };
+    let descriptor = Object.getOwnPropertyDescriptor(
+      nativeCursorPrototype,
+      "gotoFirstChildForIndex",
+    )!;
+    let calls: number[] = [];
+    nativeCursor.delete();
+
+    Object.defineProperty(nativeCursorPrototype, "gotoFirstChildForIndex", {
+      configurable: true,
+      value(this: unknown, index: number) {
+        calls.push(index);
+        return (descriptor.value as (this: unknown, index: number) => boolean).call(this, index);
+      },
+    });
+    try {
+      let cursor = syntaxTree(state).cursor()!;
+      try {
+        let beta = doc.indexOf("beta");
+        expect(cursor.firstChildForIndex(beta)).toBe(true);
+        expect(cursor.name).toBe("lexical_declaration");
+        expect(cursor.firstChildForIndex(beta)).toBe(true);
+        expect(cursor.name).toBe("variable_declarator");
+      } finally {
+        cursor.delete();
+      }
+    } finally {
+      Object.defineProperty(nativeCursorPrototype, "gotoFirstChildForIndex", descriptor);
+    }
+
+    expect(calls).toEqual([doc.indexOf("beta"), doc.indexOf("beta")]);
   });
 
   it("jumps to a middle markdown list item without changing cursor roots", async () => {
@@ -516,6 +585,164 @@ describe("tree-sitter tree wrapper", () => {
     }
     expect(materializedChildren).toBe(0);
     expect(siblingReads).toBe(0);
+  });
+
+  it("uses wrapper cursor range jumps for large sibling lists", async () => {
+    let itemCount = 10_000;
+    let doc = Array.from({ length: itemCount }, (_, index) => `- item ${index}`).join("\n") + "\n";
+    let state = await markdownState(doc);
+    let tree = syntaxTree(state);
+    let parsed = ensureSyntaxTree(state, doc.length, 10_000)!;
+    let nativeList = parsed.tree!.rootNode.child(0)!.child(0)!;
+    let list = new SyntaxNode(tree, nativeList);
+    let target = doc.indexOf("- item 5000");
+    let expected = nativeList.firstChildForIndex(target)!;
+
+    expect(expected.type).toBe("list_item");
+    expect(expected.startIndex).toBe(target);
+
+    let materializedChildren = 0;
+    let siblingReads = 0;
+    let nodePrototype = Object.getPrototypeOf(nativeList);
+    let nativeChildrenDescriptor = Object.getOwnPropertyDescriptor(nodePrototype, "children")!;
+    let nextSiblingDescriptor = Object.getOwnPropertyDescriptor(nodePrototype, "nextSibling")!;
+    let syntaxChildrenDescriptor = Object.getOwnPropertyDescriptor(
+      SyntaxNode.prototype,
+      "children",
+    )!;
+    Object.defineProperty(nodePrototype, "children", {
+      configurable: true,
+      get(this: TSNode) {
+        let children = nativeChildrenDescriptor.get!.call(this) as TSNode[];
+        materializedChildren += children.length;
+        return children;
+      },
+    });
+    Object.defineProperty(nodePrototype, "nextSibling", {
+      configurable: true,
+      get(this: TSNode) {
+        siblingReads++;
+        return nextSiblingDescriptor.get!.call(this) as TSNode | null;
+      },
+    });
+    Object.defineProperty(SyntaxNode.prototype, "children", {
+      configurable: true,
+      get() {
+        throw new Error("TreeCursor hot paths must not materialize SyntaxNode.children");
+      },
+    });
+    try {
+      let cursor = list.cursor()!;
+      try {
+        expect(cursor.firstChildForIndex(target)).toBe(true);
+        expect(cursor.name).toBe("list_item");
+        expect(cursor.from).toBe(target);
+        expect(cursor.parent()).toBe(true);
+        expect(cursor.nodeId).toBe(nativeList.id);
+      } finally {
+        cursor.delete();
+      }
+    } finally {
+      Object.defineProperty(nodePrototype, "children", nativeChildrenDescriptor);
+      Object.defineProperty(nodePrototype, "nextSibling", nextSiblingDescriptor);
+      Object.defineProperty(SyntaxNode.prototype, "children", syntaxChildrenDescriptor);
+    }
+    expect(materializedChildren).toBe(0);
+    expect(siblingReads).toBe(0);
+  });
+
+  it("walks cursor subtrees with balanced callbacks and subtree skips", async () => {
+    let doc = "let value = [1, 2];\n";
+    let state = await javascriptState(doc);
+    let tree = syntaxTree(state);
+    let cursor = tree.cursor()!;
+    let events: string[] = [];
+
+    try {
+      cursor.iterate(
+        (node) => {
+          if (node.name == "array" || node.name == "number") events.push(`>${node.name}`);
+          if (node.name == "number" && node.text == "1") return false;
+        },
+        (node) => {
+          if (node.name == "array" || node.name == "number") events.push(`<${node.name}`);
+        },
+      );
+    } finally {
+      cursor.delete();
+    }
+
+    expect(events).toEqual([">array", ">number", ">number", "<number", "<array"]);
+  });
+
+  it("skips setext heading subtrees during cursor iteration", async () => {
+    let doc = "Title\n=====\n\nParagraph\n";
+    let state = await markdownState(doc);
+    let tree = syntaxTree(state);
+    let headingEnd = doc.indexOf("\n\n");
+    let skippedHeading = false;
+    let visitedInsideHeading = false;
+    let visitedLaterParagraph = false;
+    let cursor = tree.cursor()!;
+
+    try {
+      cursor.iterate((node) => {
+        if (/heading/i.test(node.name) && node.from == 0 && node.to <= headingEnd + 1) {
+          skippedHeading = true;
+          return false;
+        }
+        if (skippedHeading && node.from > 0 && node.to <= headingEnd) visitedInsideHeading = true;
+        if (node.name == "paragraph" && node.from > headingEnd) visitedLaterParagraph = true;
+      });
+    } finally {
+      cursor.delete();
+    }
+
+    expect(skippedHeading).toBe(true);
+    expect(visitedInsideHeading).toBe(false);
+    expect(visitedLaterParagraph).toBe(true);
+  });
+
+  it("deletes copied cursors after deeply nested traversal", async () => {
+    let doc = Array.from({ length: 120 }, (_, index) => `${"  ".repeat(index)}- item ${index}`)
+      .join("\n")
+      .concat("\n");
+    let state = await markdownState(doc);
+    let copyDescriptor = Object.getOwnPropertyDescriptor(TreeCursor.prototype, "copy")!;
+    let originalCopy = copyDescriptor.value as (this: TreeCursor) => TreeCursor;
+    let createdCopies = 0;
+    let deletedCopies = 0;
+
+    TreeCursor.prototype.copy = function (this: TreeCursor) {
+      let copied = originalCopy.call(this);
+      let originalDelete = copied.delete.bind(copied);
+      let deleted = false;
+      createdCopies++;
+      copied.delete = () => {
+        if (!deleted) {
+          deleted = true;
+          deletedCopies++;
+        }
+        originalDelete();
+      };
+      return copied;
+    };
+    try {
+      let cursor = syntaxTree(state).cursor()!;
+      try {
+        let visited = 0;
+        cursor.iterate((node) => {
+          if (node.name == "list_item") visited++;
+        });
+        expect(visited).toBeGreaterThan(100);
+      } finally {
+        cursor.delete();
+      }
+    } finally {
+      Object.defineProperty(TreeCursor.prototype, "copy", copyDescriptor);
+    }
+
+    expect(deletedCopies).toBe(createdCopies);
   });
 
   it("surfaces tree-sitter error state", async () => {
@@ -778,7 +1005,7 @@ describe("tree-sitter tree wrapper", () => {
       Object.defineProperty(SyntaxNode.prototype, "children", descriptor);
     }
 
-    expect(materializedChildren).toBeLessThan(40);
+    expect(materializedChildren).toBe(0);
   });
 
   it("parses and reuses multiple disjoint nested ranges", async () => {
