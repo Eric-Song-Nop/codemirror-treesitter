@@ -323,7 +323,7 @@ starts `prepareLiveMd()` in the background, and dispatches a global
 - `vite-plugin.ts`: raw CSS helper used by apps that need to import LiveMD CSS
   in Vite builds.
 - `tests/*`: web component behavior, readonly commands, Markdown features,
-  code fences, LaTeX, Mermaid, style installation, and paragraph behavior.
+  code fences, LaTeX, Mermaid, style installation, and newline behavior.
 
 ## Relationship to Other Packages
 
@@ -373,5 +373,5 @@ vp run @codemirror-treesitter/live-md#build
 
 The LiveMD test suite covers web component behavior, readonly commands,
 leaf-local analysis equivalence against the canonical full-query oracle,
-feature registration, code fences, LaTeX, Mermaid, paragraph breaks, Markdown
+feature registration, code fences, LaTeX, Mermaid, newline editing, Markdown
 HTML rendering, and style installation.
