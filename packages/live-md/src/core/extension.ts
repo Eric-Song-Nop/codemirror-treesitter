@@ -2,7 +2,7 @@ import { EditorState, type Extension } from "@codemirror/state";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror-treesitter/autocomplete";
 import { EditorView, keymap, placeholder as placeholderExtension } from "@codemirror/view";
 import { liveMdKeymap } from "./commands.js";
-import { liveMdAnalysis } from "./decorations.js";
+import { liveMdAnalysis } from "./runtime/field.js";
 import { liveMdMarkdownFeatures, type LiveMdMarkdownConfig } from "./features.js";
 import { liveMdImageSource, type LiveMdImageSourceResolver } from "./images.js";
 import { codeFenceLanguagesField, liveMdDefaultCodeFenceHighlighting } from "./languages.js";
