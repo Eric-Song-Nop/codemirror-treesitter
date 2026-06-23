@@ -13,6 +13,7 @@ export default defineConfig({
       "!packages/language-data/src/assets.d.ts",
       "src/**/*.d.ts",
       "!src/assets.d.ts",
+      "vendor/**",
     ],
   },
   lint: {
@@ -23,6 +24,7 @@ export default defineConfig({
       "!packages/language-data/src/assets.d.ts",
       "src/**/*.d.ts",
       "!src/assets.d.ts",
+      "vendor/**",
     ],
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },

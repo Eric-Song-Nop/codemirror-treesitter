@@ -1,0 +1,77 @@
+{
+  "name": "web-tree-sitter",
+  "version": "0.26.9-codemirror-treesitter.0",
+  "private": true,
+  "description": "Vendored web-tree-sitter runtime with a cursor range navigation patch",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tree-sitter/tree-sitter.git",
+    "directory": "lib/binding_web"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Max Brunsfeld",
+    "email": "maxbrunsfeld@gmail.com"
+  },
+  "maintainers": [
+    {
+      "name": "Amaan Qureshi",
+      "email": "amaanq12@gmail.com"
+    }
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./web-tree-sitter.d.ts",
+        "default": "./web-tree-sitter.js"
+      },
+      "require": {
+        "types": "./web-tree-sitter.d.cts",
+        "default": "./web-tree-sitter.cjs"
+      }
+    },
+    "./web-tree-sitter.wasm": "./web-tree-sitter.wasm",
+    "./debug": {
+      "import": {
+        "types": "./web-tree-sitter.d.ts",
+        "default": "./debug/web-tree-sitter.js"
+      },
+      "require": {
+        "types": "./web-tree-sitter.d.cts",
+        "default": "./debug/web-tree-sitter.cjs"
+      }
+    },
+    "./debug/web-tree-sitter.wasm": "./debug/web-tree-sitter.wasm"
+  },
+  "types": "web-tree-sitter.d.ts",
+  "keywords": [
+    "incremental",
+    "parsing",
+    "tree-sitter",
+    "wasm"
+  ],
+  "codemirrorTreesitterPatch": {
+    "script": "../../tools/patch-web-tree-sitter-cursor-range.mjs",
+    "reason": "Fix TreeCursor gotoFirstChildForIndex/gotoFirstChildForPosition transfer-buffer offsets and child-index success semantics."
+  },
+  "files": [
+    "PATCH_NOTES.md",
+    "web-tree-sitter.cjs",
+    "web-tree-sitter.cjs.map",
+    "web-tree-sitter.js",
+    "web-tree-sitter.js.map",
+    "web-tree-sitter.wasm",
+    "web-tree-sitter.wasm.map",
+    "debug/web-tree-sitter.cjs",
+    "debug/web-tree-sitter.cjs.map",
+    "debug/web-tree-sitter.js",
+    "debug/web-tree-sitter.js.map",
+    "debug/web-tree-sitter.wasm",
+    "debug/web-tree-sitter.wasm.map",
+    "web-tree-sitter.d.ts",
+    "web-tree-sitter.d.ts.map",
+    "web-tree-sitter.d.cts",
+    "web-tree-sitter.d.cts.map"
+  ]
+}

@@ -10,7 +10,8 @@
   "type": "module",
   "scripts": {
     "audit": "node tools/audit.mjs",
-    "ready": "vp check && vp run local-md-workspace#i18n:check && vp run -r test && vp run -r build && vp run audit"
+    "ready": "vp check && vp run verify:web-tree-sitter && vp run local-md-workspace#i18n:check && vp run -r test && vp run -r build && vp run audit",
+    "verify:web-tree-sitter": "node tools/verify-web-tree-sitter-cursor-range.mjs"
   },
   "dependencies": {},
   "devDependencies": {
@@ -18,7 +19,8 @@
   },
   "overrides": {
     "vite": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "web-tree-sitter": "file:vendor/web-tree-sitter"
   },
   "engines": {
     "node": ">=26.0.0"
