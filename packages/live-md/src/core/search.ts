@@ -1,12 +1,30 @@
-import { EditorState, type Extension, type StateEffect, type Transaction } from "@codemirror/state";
+import {
+  EditorState,
+  RangeSet,
+  RangeSetBuilder,
+  RangeValue,
+  type Extension,
+  type StateEffect,
+  type Transaction,
+} from "@codemirror/state";
 import { SearchQuery, search, searchKeymap, setSearchQuery } from "@codemirror/search";
-import { syntaxTree, type SyntaxNode } from "@codemirror-treesitter/language";
+import { syntaxTree, type SyntaxNode, type Tree } from "@codemirror-treesitter/language";
 import { keymap } from "@codemirror/view";
+import { liveMdMarkdownParserServiceFacet, withLiveMdMarkdownInlineTrees } from "./languages.js";
 
 type SearchTest = NonNullable<SearchQuery["test"]>;
 
 const liveMdSearchTests = new WeakSet<SearchTest>();
 const combinedSearchTests = new WeakMap<SearchTest, SearchTest>();
+const visibilityIndexCache = new WeakMap<EditorState, RangeSet<HiddenSourceRange>>();
+
+class HiddenSourceRange extends RangeValue {
+  eq(other: RangeValue) {
+    return other instanceof HiddenSourceRange;
+  }
+}
+
+const hiddenSourceRange = new HiddenSourceRange();
 
 export const liveMdSearch: Extension = [
   search(),
@@ -62,43 +80,58 @@ export function __testIsLiveMdSearchVisible(state: EditorState, from: number, to
 
 function isLiveMdSearchVisible(state: EditorState, from: number, to: number) {
   if (from >= to) return true;
-  if (isHiddenMarkdownSourceRange(state, from, to)) return false;
+  let hidden = false;
+  liveMdSearchVisibilityIndex(state).between(from, to, (hiddenFrom, hiddenTo) => {
+    if (hiddenFrom < to && from < hiddenTo) hidden = true;
+  });
+  return !hidden;
+}
 
-  let visible = true;
-  syntaxTree(state).iterate({
-    from,
-    to,
+function liveMdSearchVisibilityIndex(state: EditorState) {
+  let cached = visibilityIndexCache.get(state);
+  if (!cached) {
+    cached = buildLiveMdSearchVisibilityIndex(state);
+    visibilityIndexCache.set(state, cached);
+  }
+  return cached;
+}
+
+function buildLiveMdSearchVisibilityIndex(state: EditorState) {
+  let tree = syntaxTree(state);
+  let service = state.facet(liveMdMarkdownParserServiceFacet);
+  let ranges: Array<{ from: number; to: number }> = [];
+  collectHiddenMarkdownSourceRanges(tree, ranges);
+  if (service) {
+    withLiveMdMarkdownInlineTrees(service, state.doc, tree, (inlineTrees) => {
+      for (let inlineTree of inlineTrees) collectHiddenMarkdownSourceRanges(inlineTree, ranges);
+    });
+  }
+  return rangeSetFromRanges(ranges);
+}
+
+function collectHiddenMarkdownSourceRanges(
+  tree: Tree,
+  ranges: Array<{ from: number; to: number }>,
+) {
+  tree.iterate({
     enter(node) {
-      if (!visible || !rangesOverlap(from, to, node.from, node.to)) return false;
-
       if (isHiddenMarkdownNode(node)) {
-        visible = false;
+        addHiddenRange(ranges, node.from, node.to);
         return false;
       }
 
-      if (node.name == "inline_link" && rangeOverlapsOutsideChild(node, "link_text", from, to)) {
-        visible = false;
-        return false;
-      }
-
-      if (node.name == "image" && rangeOverlapsOutsideChild(node, "image_description", from, to)) {
-        visible = false;
-        return false;
-      }
-
-      if (
-        node.name == "uri_autolink" &&
-        (rangesOverlap(from, to, node.from, node.from + 1) ||
-          rangesOverlap(from, to, node.to - 1, node.to))
-      ) {
-        visible = false;
-        return false;
+      if (node.name == "inline_link") {
+        addRangesOutsideChild(ranges, node, "link_text");
+      } else if (node.name == "image") {
+        addRangesOutsideChild(ranges, node, "image_description");
+      } else if (node.name == "uri_autolink") {
+        addHiddenRange(ranges, node.from, node.from + 1);
+        addHiddenRange(ranges, node.to - 1, node.to);
       }
 
       return undefined;
     },
   });
-  return visible;
 }
 
 function isHiddenMarkdownNode(node: SyntaxNode) {
@@ -129,93 +162,41 @@ function isHiddenMarkdownNode(node: SyntaxNode) {
   }
 }
 
-function rangeOverlapsOutsideChild(node: SyntaxNode, childName: string, from: number, to: number) {
-  let child = node.getChild(childName);
-  if (!child) return rangesOverlap(from, to, node.from, node.to);
-  return (
-    rangesOverlap(from, to, node.from, child.from) || rangesOverlap(from, to, child.to, node.to)
-  );
-}
-
-function isHiddenMarkdownSourceRange(state: EditorState, from: number, to: number) {
-  let source = state.sliceDoc(from, to);
-  if (!source) return false;
-
-  let line = state.doc.lineAt(from);
-  let lineFrom = from - line.from;
-  let lineTo = to - line.from;
-  if (to > line.to || lineTo > line.text.length) return false;
-
-  if (isAtxHeadingMarker(line.text, lineFrom, lineTo)) return true;
-  if (isSetextHeadingUnderline(line.text, lineFrom, lineTo)) return true;
-  if (isAutolinkBracket(line.text, lineFrom, lineTo)) return true;
-  if (isInlineLinkDestination(line.text, lineFrom, lineTo)) return true;
-  if (isInlineDelimiter(line.text, lineFrom, lineTo)) return true;
-  if (isListMarker(line.text, lineFrom, lineTo)) return true;
-  if (isTableSyntax(state, line.number, line.text, lineFrom, lineTo)) return true;
-
-  return false;
-}
-
-function isAtxHeadingMarker(line: string, from: number, to: number) {
-  let match = /^(#{1,6})(?=\s)/.exec(line);
-  return Boolean(match && from >= 0 && to <= match[1]!.length);
-}
-
-function isSetextHeadingUnderline(line: string, from: number, to: number) {
-  return from >= 0 && to <= line.length && /^\s*(?:=+|-+)\s*$/.test(line);
-}
-
-function isAutolinkBracket(line: string, from: number, to: number) {
-  if (to != from + 1 || (line[from] != "<" && line[from] != ">")) return false;
-  let open = line.lastIndexOf("<", from);
-  let close = line.indexOf(">", from);
-  return open > -1 && close > open + 1 && /\S/.test(line.slice(open + 1, close));
-}
-
-function isInlineLinkDestination(line: string, from: number, to: number) {
-  let open = line.lastIndexOf("](", from);
-  if (open < 0 || from < open + 2) return false;
-  let close = line.indexOf(")", open + 2);
-  return close > -1 && to <= close;
-}
-
-function isInlineDelimiter(line: string, from: number, to: number) {
-  let source = line.slice(from, to);
-  if (!/^(?:[*]+|~~)$/.test(source)) return false;
-
-  let before = line.slice(0, from);
-  let after = line.slice(to);
-  let opens = /\S/.test(after[0] ?? "") && after.includes(source);
-  let closes = /\S/.test(before.at(-1) ?? "") && before.includes(source);
-  return opens || closes;
-}
-
-function isListMarker(line: string, from: number, to: number) {
-  let marker = /^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/.exec(line)?.[0];
-  return Boolean(marker && from >= 0 && to <= marker.length);
-}
-
-function isTableSyntax(
-  state: EditorState,
-  lineNumber: number,
-  line: string,
-  from: number,
-  to: number,
+function addRangesOutsideChild(
+  ranges: Array<{ from: number; to: number }>,
+  node: SyntaxNode,
+  childName: string,
 ) {
-  let source = line.slice(from, to);
-  if (isPipeTableDelimiterLine(line)) return true;
-  if (source != "|") return false;
-
-  let previous = lineNumber > 1 ? state.doc.line(lineNumber - 1).text : "";
-  let next = lineNumber < state.doc.lines ? state.doc.line(lineNumber + 1).text : "";
-  return isPipeTableDelimiterLine(previous) || isPipeTableDelimiterLine(next);
+  let child = node.getChild(childName);
+  if (!child) {
+    addHiddenRange(ranges, node.from, node.to);
+    return;
+  }
+  addHiddenRange(ranges, node.from, child.from);
+  addHiddenRange(ranges, child.to, node.to);
 }
 
-function isPipeTableDelimiterLine(line: string) {
-  return /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+function addHiddenRange(ranges: Array<{ from: number; to: number }>, from: number, to: number) {
+  if (from < to) ranges.push({ from, to });
 }
 
-function rangesOverlap(fromA: number, toA: number, fromB: number, toB: number) {
-  return fromA < toB && fromB < toA;
+function rangeSetFromRanges(ranges: Array<{ from: number; to: number }>) {
+  let builder = new RangeSetBuilder<HiddenSourceRange>();
+  for (let range of normalizeRanges(ranges)) {
+    builder.add(range.from, range.to, hiddenSourceRange);
+  }
+  return builder.finish();
+}
+
+function normalizeRanges(ranges: Array<{ from: number; to: number }>) {
+  let normalized: Array<{ from: number; to: number }> = [];
+  for (let range of ranges.sort((left, right) => left.from - right.from || left.to - right.to)) {
+    let previous = normalized.at(-1);
+    if (previous && range.from <= previous.to) {
+      previous.to = Math.max(previous.to, range.to);
+    } else {
+      normalized.push({ ...range });
+    }
+  }
+  return normalized;
 }

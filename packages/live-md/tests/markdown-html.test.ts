@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { languages } from "@codemirror-treesitter/language-data";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   liveMdMarkdownFeature,
@@ -102,6 +103,20 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     expect(html).toContain("line two &lt;span&gt;raw&lt;/span&gt;");
   });
 
+  it("renders through explicit Markdown parsers without loading generic nested Markdown", async () => {
+    let markdown = languages.find((language) => language.name == "Markdown")!;
+    let load = vi.spyOn(markdown, "load").mockRejectedValue(new Error("generic Markdown loaded"));
+
+    try {
+      await expect(renderMarkdownToHtml("**bold** and [link](https://example.com)")).resolves.toBe(
+        '<p><strong>bold</strong> and <a href="https://example.com">link</a></p>',
+      );
+      expect(load).not.toHaveBeenCalled();
+    } finally {
+      load.mockRestore();
+    }
+  });
+
   it("normalizes CRLF input before slicing syntax nodes", async () => {
     let html = await renderMarkdownToHtml("# Windows\r\n\r\n![Chart](assets/chart.png)\r\n");
 
@@ -172,6 +187,23 @@ describe("Tree-sitter Markdown HTML rendering", () => {
 
     expect(html).toBe("<p>Only HTML</p>");
     expect(decorate).not.toHaveBeenCalled();
+  });
+
+  it("keeps HTML feature rendering block-only even when includeNested is set", async () => {
+    let renderHtml = vi.fn(() => "<strong>Replaced</strong>");
+    let feature: LiveMdMarkdownFeature = {
+      includeNested: true,
+      name: "inline-html",
+      query: "(inline) @html",
+      renderHtml,
+    };
+
+    let html = await renderMarkdownToHtml("Use *emphasis* here", {
+      markdown: { features: [feature] },
+    });
+
+    expect(html).toBe("<p>Use <em>emphasis</em> here</p>");
+    expect(renderHtml).not.toHaveBeenCalled();
   });
 
   it("exports scoped document CSS driven by LiveMD variables", () => {

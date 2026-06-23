@@ -1,20 +1,24 @@
 import { Facet, StateEffect, StateField, Text, type Extension } from "@codemirror/state";
 import {
   HighlightStyle,
+  Tree,
   TreeSitterLanguage,
   queryTreeMatches,
   tags as t,
   type Highlighter,
-  type LanguageSupport,
-  type Tree,
   type TreeSitterParser,
 } from "@codemirror-treesitter/language";
-import { languages } from "@codemirror-treesitter/language-data";
+import {
+  languages,
+  loadMarkdownParserService,
+  type MarkdownParserService,
+} from "@codemirror-treesitter/language-data";
 import { EditorView } from "@codemirror/view";
 import liveMdMarkdownInlineQuerySource from "./queries/decorations-markdown-inline.scm?raw";
 import liveMdMarkdownQuerySource from "./queries/decorations-markdown.scm?raw";
 
 export type CodeFenceLanguageMap = ReadonlyMap<string, TreeSitterParser>;
+export type LiveMdMarkdownParserService = MarkdownParserService;
 
 export const emptyCodeFenceLanguages: CodeFenceLanguageMap = new Map();
 export const setCodeFenceLanguages = StateEffect.define<CodeFenceLanguageMap>();
@@ -45,6 +49,15 @@ export const codeFenceHighlighterFacet = Facet.define<
     let value = values.at(-1);
     if (!value) return null;
     return Array.isArray(value) ? value : [value];
+  },
+});
+
+export const liveMdMarkdownParserServiceFacet = Facet.define<
+  LiveMdMarkdownParserService,
+  LiveMdMarkdownParserService | null
+>({
+  combine(values) {
+    return values.at(-1) ?? null;
   },
 });
 
@@ -99,11 +112,9 @@ export function loadCodeFenceLanguages() {
 }
 
 async function loadMarkdownExtensionOnce() {
-  let markdownDescription = languages.find((language) => language.name == "Markdown");
-  if (!markdownDescription) throw new Error("Markdown language support is unavailable");
-  let support = await markdownDescription.load();
-  warmLiveMdMarkdownQueries(support);
-  return support.extension;
+  let service = await loadMarkdownParserService();
+  warmLiveMdMarkdownQueries(service);
+  return [service.blockLanguage.extension, liveMdMarkdownParserServiceFacet.of(service)];
 }
 
 const liveMdMarkdownQueryWarmupDoc = Text.of([
@@ -112,16 +123,90 @@ const liveMdMarkdownQueryWarmupDoc = Text.of([
   "Paragraph with **strong**, _emphasis_, ~~strike~~, `code`, [link](https://example.com), and ![image](image.png).",
 ]);
 
-function warmLiveMdMarkdownQueries(support: LanguageSupport) {
-  if (!(support.language instanceof TreeSitterLanguage)) return;
-  let tree = support.language.parser.parse(liveMdMarkdownQueryWarmupDoc);
-  queryTreeMatches(tree, liveMdQuerySource);
+export function withLiveMdParserTree<T>(
+  parser: TreeSitterParser,
+  doc: Text,
+  useTree: (tree: Tree) => T,
+): T {
+  let nativeParser = parser.createParser();
+  let tree: Tree | null = null;
+  let cleanup = () => {
+    if (tree) {
+      deleteLiveMdTree(tree);
+      tree = null;
+    }
+    nativeParser.delete();
+  };
+  try {
+    let parsed = parser.parseWith(nativeParser, doc);
+    tree = parsed ? (parser.wrapTree(parsed, doc) ?? Tree.empty) : Tree.empty;
+    let result = useTree(tree);
+    if (isPromiseLike(result)) {
+      return result.finally(cleanup) as T;
+    }
+    cleanup();
+    return result;
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 
-function liveMdQuerySource(_parser: TreeSitterParser, tree: Tree) {
-  if (tree.topNode.name == "document") return liveMdMarkdownQuerySource;
-  if (tree.topNode.name == "inline") return liveMdMarkdownInlineQuerySource;
-  return null;
+function parseLiveMdMarkdownInlineTrees(
+  service: LiveMdMarkdownParserService,
+  doc: Text,
+  blockTree: Tree,
+): Tree[] {
+  let parser = service.inlineParser.createParser();
+  let trees: Tree[] = [];
+  try {
+    for (let ranges of service.inlineRanges(blockTree)) {
+      let parsed = service.inlineParser.parseWith(parser, doc, null, undefined, ranges);
+      if (!parsed) continue;
+      let tree = service.inlineParser.wrapTree(parsed, doc);
+      if (tree) trees.push(tree);
+    }
+    return trees;
+  } catch (error) {
+    for (let tree of trees) deleteLiveMdTree(tree);
+    throw error;
+  } finally {
+    parser.delete();
+  }
+}
+
+export function withLiveMdMarkdownInlineTrees<T>(
+  service: LiveMdMarkdownParserService,
+  doc: Text,
+  blockTree: Tree,
+  useTrees: (trees: readonly Tree[]) => T,
+): T {
+  let trees = parseLiveMdMarkdownInlineTrees(service, doc, blockTree);
+  try {
+    return useTrees(trees);
+  } finally {
+    for (let tree of trees) deleteLiveMdTree(tree);
+  }
+}
+
+export function deleteLiveMdTree(tree: Tree) {
+  for (let nested of tree.nested) deleteLiveMdTree(nested.tree);
+  tree.tree?.delete();
+}
+
+function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
+  return !!value && typeof (value as Promise<T>).then == "function";
+}
+
+function warmLiveMdMarkdownQueries(service: LiveMdMarkdownParserService) {
+  withLiveMdParserTree(service.blockParser, liveMdMarkdownQueryWarmupDoc, (tree) => {
+    queryTreeMatches(tree, liveMdMarkdownQuerySource, { includeNested: false });
+    withLiveMdMarkdownInlineTrees(service, liveMdMarkdownQueryWarmupDoc, tree, (inlineTrees) => {
+      for (let inlineTree of inlineTrees) {
+        queryTreeMatches(inlineTree, liveMdMarkdownInlineQuerySource, { includeNested: false });
+      }
+    });
+  });
 }
 
 async function loadCodeFenceLanguagesOnce() {

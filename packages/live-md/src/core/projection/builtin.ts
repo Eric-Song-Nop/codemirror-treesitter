@@ -2,6 +2,7 @@ import { type EditorState } from "@codemirror/state";
 import {
   syntaxTree,
   type SyntaxNode,
+  type Tree,
   type TreeSitterQueryMatch,
 } from "@codemirror-treesitter/language";
 import { Decoration } from "@codemirror/view";
@@ -102,13 +103,18 @@ export function processLiveMdMatch(
   }
 }
 
-export function applyLiveMdMarkdownFeatures(build: LiveMdBuild) {
+export function applyLiveMdMarkdownFeatures(build: LiveMdBuild, inlineTrees: readonly Tree[]) {
   if (!build.markdownFeatures.length) return;
 
   let tree = syntaxTree(build.state);
   for (let feature of build.markdownFeatures) {
     if (!feature.query || !feature.decorate) continue;
-    let matches = queryLiveMdMatchesFromSource(tree, feature.query, feature.includeNested ?? false);
+    let matches = queryLiveMdMatchesFromSource(
+      tree,
+      feature.query,
+      feature.includeNested ?? false,
+      inlineTrees,
+    );
     for (let match of matches) {
       feature.decorate(createLiveMdFeatureDecorateContext(build, match));
     }
