@@ -1,4 +1,9 @@
-import { type EditorState, type SelectionRange, type Text } from "@codemirror/state";
+import {
+  type ChangeDesc,
+  type EditorState,
+  type SelectionRange,
+  type Text,
+} from "@codemirror/state";
 import { type DocRange, type Tree } from "@codemirror-treesitter/language";
 import { walkMarkdownBlocks } from "./markdown-block-cursor.js";
 import {
@@ -7,6 +12,7 @@ import {
   type MarkdownBlockSnapshot,
   type MarkdownMarkerRecord,
 } from "./markdown-block-types.js";
+import { type LeafAnalysisRecord } from "./descriptors.js";
 import { isWhitespaceOnly } from "../util.js";
 
 export type LiveMdSourceIslandLeaf = {
@@ -18,6 +24,38 @@ export type LiveMdSourceIslandLeaf = {
 export type LiveMdSourceIslandAnalysis = {
   activeSourceRanges: readonly DocRange[];
   leaves: readonly LiveMdSourceIslandLeaf[];
+};
+
+const sourceIslandLeafSegments = Symbol("sourceIslandLeafSegments");
+
+type SourceIslandLeafSegment =
+  | {
+      leaves: readonly LiveMdSourceIslandLeaf[];
+      type: "leaves";
+    }
+  | {
+      changes: ChangeDesc;
+      fromIndex: number;
+      leaves: readonly LiveMdSourceIslandLeaf[];
+      toIndex: number;
+      type: "mapped";
+    };
+
+type SourceIslandLeafCallback<T> = (
+  value: LiveMdSourceIslandLeaf,
+  index: number,
+  array: readonly LiveMdSourceIslandLeaf[],
+) => T;
+
+type SegmentedSourceIslandLeaves = {
+  readonly [index: number]: LiveMdSourceIslandLeaf;
+  readonly length: number;
+  [Symbol.iterator](): IterableIterator<LiveMdSourceIslandLeaf>;
+  every(callback: SourceIslandLeafCallback<unknown>, thisArg?: unknown): boolean;
+  filter(callback: SourceIslandLeafCallback<unknown>, thisArg?: unknown): LiveMdSourceIslandLeaf[];
+  map<T>(callback: SourceIslandLeafCallback<T>, thisArg?: unknown): T[];
+  some(callback: SourceIslandLeafCallback<unknown>, thisArg?: unknown): boolean;
+  [sourceIslandLeafSegments]?: readonly SourceIslandLeafSegment[];
 };
 
 export function analyzeLiveMdSourceIslands(input: {
@@ -38,6 +76,71 @@ export function sourceIslandLeavesFromMarkdownSnapshot(
   snapshot: MarkdownBlockSnapshot,
 ): LiveMdSourceIslandLeaf[] {
   return withMarkerOnlySourceIslands(doc, snapshot.leaves.map(sourceIslandLeaf), snapshot.markers);
+}
+
+export function sourceIslandLeavesFromLeafAnalysisRecords(
+  doc: Text,
+  records: readonly LeafAnalysisRecord[],
+): LiveMdSourceIslandLeaf[] {
+  let leaves = records
+    .filter((record) => record.kind != "marker")
+    .map((record) => ({
+      contextKey: record.contextKey,
+      kind: record.kind as MarkdownLeafKind,
+      sourceRange: record.sourceRange,
+    }));
+  let markers = records
+    .filter((record) => record.kind == "marker")
+    .map(
+      (record): MarkdownMarkerRecord => ({
+        context: record.context,
+        contextKey: record.contextKey,
+        kind: "listMarker",
+        lineRange: record.sourceRange,
+        range: record.range,
+        text: doc.sliceString(record.range.from, record.range.to),
+      }),
+    );
+  return withMarkerOnlySourceIslands(doc, leaves, markers);
+}
+
+export function transitionSourceIslandLeavesFromLeafAnalysisRecords(input: {
+  changes: ChangeDesc;
+  doc: Text;
+  localRecords: readonly LeafAnalysisRecord[];
+  localWindows: readonly DocRange[];
+  oldChangedRanges: readonly DocRange[];
+  oldDoc: Text;
+  oldLeaves: readonly LiveMdSourceIslandLeaf[];
+}): readonly LiveMdSourceIslandLeaf[] {
+  let oldLocalWindows = input.localWindows.map((range) =>
+    mapRange(range, input.changes.invertedDesc),
+  );
+  let oldRemovalRanges = normalizeRanges(
+    [...input.oldChangedRanges, ...oldLocalWindows],
+    input.oldDoc.length,
+  );
+  let excludedIndexes = sourceIslandLeafIndexesTouchingRanges(input.oldLeaves, oldRemovalRanges);
+  let localLeaves = sourceIslandLeavesFromLeafAnalysisRecords(input.doc, input.localRecords);
+  let segments: SourceIslandLeafSegment[] = [
+    ...mappedSourceIslandLeafSegments(input.oldLeaves, input.changes, excludedIndexes),
+  ];
+  if (localLeaves.length) segments.push({ leaves: localLeaves, type: "leaves" });
+  return createSegmentedSourceIslandLeaves(segments);
+}
+
+export function sourceIslandLeavesInDoc(
+  leaves: readonly LiveMdSourceIslandLeaf[],
+  docLength: number,
+) {
+  let segments = (leaves as SegmentedSourceIslandLeaves)[sourceIslandLeafSegments];
+  if (segments) return true;
+  return leaves.every(
+    (leaf) =>
+      leaf.sourceRange.from >= 0 &&
+      leaf.sourceRange.from <= leaf.sourceRange.to &&
+      leaf.sourceRange.to <= docLength,
+  );
 }
 
 export function activeMarkdownSourceRanges(
@@ -82,6 +185,115 @@ function leafAtSelectionHead(
   range: SelectionRange,
 ) {
   return findSourceIslandLeaf(doc, leaves, range.head, range.assoc);
+}
+
+function createSegmentedSourceIslandLeaves(segments: readonly SourceIslandLeafSegment[]) {
+  let sortedSegments = segments
+    .filter((segment) => segmentLength(segment) > 0)
+    .slice()
+    .sort(compareSourceIslandLeafSegments);
+  let starts: number[] = [];
+  let count = 0;
+  for (let segment of sortedSegments) {
+    starts.push(count);
+    count += segmentLength(segment);
+  }
+  let materialized: readonly LiveMdSourceIslandLeaf[] | null = null;
+  let target = {
+    get length() {
+      return count;
+    },
+    every(callback: Parameters<SegmentedSourceIslandLeaves["every"]>[0], thisArg?: unknown) {
+      return materializedLeaves().every(callback, thisArg);
+    },
+    filter(callback: Parameters<SegmentedSourceIslandLeaves["filter"]>[0], thisArg?: unknown) {
+      return materializedLeaves().filter(callback, thisArg);
+    },
+    map<T>(callback: SourceIslandLeafCallback<T>, thisArg?: unknown) {
+      return materializedLeaves().map(callback, thisArg);
+    },
+    some(callback: Parameters<SegmentedSourceIslandLeaves["some"]>[0], thisArg?: unknown) {
+      return materializedLeaves().some(callback, thisArg);
+    },
+    [Symbol.iterator]() {
+      return materializedLeaves()[Symbol.iterator]();
+    },
+    [sourceIslandLeafSegments]: sortedSegments,
+  };
+  return new Proxy(target, {
+    get(object, property, receiver) {
+      if (typeof property == "string" && isArrayIndexProperty(property)) {
+        return sourceIslandLeafAt(Number(property));
+      }
+      return Reflect.get(object, property, receiver);
+    },
+  }) as unknown as readonly LiveMdSourceIslandLeaf[];
+
+  function sourceIslandLeafAt(index: number) {
+    if (index < 0 || index >= count) return undefined;
+    let segmentIndex = segmentIndexAt(starts, index);
+    let segment = sortedSegments[segmentIndex]!;
+    return sourceIslandLeafInSegment(segment, index - starts[segmentIndex]!);
+  }
+
+  function materializedLeaves() {
+    if (!materialized) {
+      let leaves: LiveMdSourceIslandLeaf[] = [];
+      for (let segment of sortedSegments) {
+        for (let index = 0; index < segmentLength(segment); index++) {
+          leaves.push(sourceIslandLeafInSegment(segment, index));
+        }
+      }
+      materialized = Object.freeze(leaves);
+    }
+    return materialized;
+  }
+}
+
+function compareSourceIslandLeafSegments(
+  left: SourceIslandLeafSegment,
+  right: SourceIslandLeafSegment,
+) {
+  return compareSourceIslandLeaf(
+    sourceIslandLeafInSegment(left, 0),
+    sourceIslandLeafInSegment(right, 0),
+  );
+}
+
+function segmentIndexAt(starts: readonly number[], index: number) {
+  let low = 0;
+  let high = starts.length;
+  while (low < high) {
+    let mid = (low + high) >> 1;
+    if (starts[mid]! <= index) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low - 1;
+}
+
+function segmentLength(segment: SourceIslandLeafSegment) {
+  return segment.type == "leaves" ? segment.leaves.length : segment.toIndex - segment.fromIndex;
+}
+
+function sourceIslandLeafInSegment(segment: SourceIslandLeafSegment, index: number) {
+  let leaf =
+    segment.type == "leaves"
+      ? segment.leaves[index]!
+      : mapSourceIslandLeaf(segment.leaves[segment.fromIndex + index]!, segment.changes);
+  return leaf;
+}
+
+function mapSourceIslandLeaf(
+  leaf: LiveMdSourceIslandLeaf,
+  changes: ChangeDesc,
+): LiveMdSourceIslandLeaf {
+  return {
+    ...leaf,
+    sourceRange: mapRange(leaf.sourceRange, changes),
+  };
 }
 
 function lastLeafStartingAtOrBefore(leaves: readonly LiveMdSourceIslandLeaf[], position: number) {
@@ -205,4 +417,154 @@ function compareSourceIslandLeaf(left: LiveMdSourceIslandLeaf, right: LiveMdSour
     left.sourceRange.to - right.sourceRange.to ||
     left.kind.localeCompare(right.kind)
   );
+}
+
+function sourceIslandLeafIndexesTouchingRanges(
+  leaves: readonly LiveMdSourceIslandLeaf[],
+  ranges: readonly DocRange[],
+) {
+  let indexes: number[] = [];
+  let seen = new Set<number>();
+  for (let range of ranges) {
+    let index = firstSourceIslandLeafPossiblyTouchingRange(leaves, range);
+    for (; index < leaves.length; index++) {
+      let leafRange = leaves[index]!.sourceRange;
+      if (range.from == range.to ? leafRange.from > range.from : leafRange.from >= range.to) {
+        break;
+      }
+      if (rangesTouch(leafRange, range) && !seen.has(index)) {
+        seen.add(index);
+        indexes.push(index);
+      }
+    }
+  }
+  return indexes.sort((left, right) => left - right);
+}
+
+function firstSourceIslandLeafPossiblyTouchingRange(
+  leaves: readonly LiveMdSourceIslandLeaf[],
+  range: DocRange,
+) {
+  let low = 0;
+  let high = leaves.length;
+  while (low < high) {
+    let mid = (low + high) >> 1;
+    if (leaves[mid]!.sourceRange.to < range.from) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
+}
+
+function mappedSourceIslandLeafSegments(
+  leaves: readonly LiveMdSourceIslandLeaf[],
+  changes: ChangeDesc,
+  excludedIndexes: readonly number[],
+) {
+  let segments: SourceIslandLeafSegment[] = [];
+  let start = 0;
+  for (let index of excludedIndexes) {
+    if (start < index) appendMappedSourceIslandLeafRun(segments, leaves, changes, start, index);
+    start = index + 1;
+  }
+  if (start < leaves.length) {
+    appendMappedSourceIslandLeafRun(segments, leaves, changes, start, leaves.length);
+  }
+  return segments;
+}
+
+function appendMappedSourceIslandLeafRun(
+  target: SourceIslandLeafSegment[],
+  leaves: readonly LiveMdSourceIslandLeaf[],
+  changes: ChangeDesc,
+  fromIndex: number,
+  toIndex: number,
+) {
+  if (fromIndex >= toIndex) return;
+  let sourceSegments = (leaves as SegmentedSourceIslandLeaves)[sourceIslandLeafSegments];
+  if (!sourceSegments) {
+    target.push({ changes, fromIndex, leaves, toIndex, type: "mapped" });
+    return;
+  }
+
+  let segmentStart = 0;
+  for (let segment of sourceSegments) {
+    let segmentEnd = segmentStart + segmentLength(segment);
+    let from = Math.max(fromIndex, segmentStart);
+    let to = Math.min(toIndex, segmentEnd);
+    if (from < to) {
+      appendMappedSourceIslandLeafSegmentRun(
+        target,
+        segment,
+        changes,
+        from - segmentStart,
+        to - segmentStart,
+      );
+    }
+    if (segmentEnd >= toIndex) break;
+    segmentStart = segmentEnd;
+  }
+}
+
+function appendMappedSourceIslandLeafSegmentRun(
+  target: SourceIslandLeafSegment[],
+  segment: SourceIslandLeafSegment,
+  changes: ChangeDesc,
+  fromIndex: number,
+  toIndex: number,
+) {
+  if (fromIndex >= toIndex) return;
+  if (segment.type == "leaves") {
+    target.push({ changes, fromIndex, leaves: segment.leaves, toIndex, type: "mapped" });
+    return;
+  }
+  appendMappedSourceIslandLeafRun(
+    target,
+    segment.leaves,
+    segment.changes.composeDesc(changes),
+    segment.fromIndex + fromIndex,
+    segment.fromIndex + toIndex,
+  );
+}
+
+function isArrayIndexProperty(property: string) {
+  return /^(0|[1-9]\d*)$/.test(property);
+}
+
+function normalizeRanges(ranges: readonly DocRange[], docLength: number) {
+  let sorted = ranges
+    .map((range) => ({
+      from: clamp(Math.min(range.from, range.to), 0, docLength),
+      to: clamp(Math.max(range.from, range.to), 0, docLength),
+    }))
+    .sort((left, right) => left.from - right.from || left.to - right.to);
+  let merged: DocRange[] = [];
+  for (let range of sorted) {
+    let last = merged[merged.length - 1];
+    if (!last || range.from > last.to) {
+      merged.push({ ...range });
+    } else if (range.to > last.to) {
+      last.to = range.to;
+    }
+  }
+  return merged;
+}
+
+function mapRange(range: DocRange, changes: ChangeDesc): DocRange {
+  let from = changes.mapPos(clamp(range.from, 0, changes.length), 1);
+  let to = changes.mapPos(clamp(range.to, 0, changes.length), -1);
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+function rangesTouch(left: DocRange, right: DocRange) {
+  if (left.from == left.to && right.from == right.to) return left.from == right.from;
+  if (left.from == left.to) return left.from >= right.from && left.from < right.to;
+  if (right.from == right.to) return left.from <= right.from && left.to >= right.from;
+  return left.from < right.to && right.from < left.to;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }

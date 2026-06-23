@@ -16,6 +16,7 @@ import {
   syntaxTree,
   syntaxTreeApplyTrace,
   syntaxTreeAvailable,
+  syntaxTreeChangedRanges,
   type Highlighter,
   type Tree,
 } from "@codemirror-treesitter/language";
@@ -26,13 +27,17 @@ import {
   buildFreshLeafAnalysisCache,
   emptyLeafAnalysisCacheTrace,
   findLeafAnalysisRecordsTouchingRanges,
+  leafAnalysisCacheRangesInDoc,
+  materializeLeafAnalysisCacheRecords,
+  transitionLeafAnalysisCacheLocal,
   transitionLeafAnalysisCache,
 } from "../analysis/markdown-leaf-cache.js";
 import {
   activeMarkdownSourceRanges,
   analyzeLiveMdSourceIslands,
   findSourceIslandLeaf,
-  sourceIslandLeavesFromMarkdownSnapshot,
+  sourceIslandLeavesInDoc,
+  sourceIslandLeavesFromLeafAnalysisRecords,
   type LiveMdSourceIslandAnalysis,
 } from "../analysis/markdown-source-islands.js";
 import { isInsideSkippedRange, matchRoot, queryLiveMdMatches } from "../analysis/query.js";
@@ -57,7 +62,7 @@ import {
 import { liveMdLinkBaseUrl } from "../links.js";
 import { createLiveMdBuild, finishAtomicRanges, finishDecorationSets } from "../projection/emit.js";
 import { applyLiveMdMarkdownFeatures, processLiveMdMatch } from "../projection/builtin.js";
-import { projectLeafRecords } from "../projection/project-leaf.js";
+import { projectLeafCacheRecords } from "../projection/project-leaf.js";
 import {
   type LiveMdAnalysis,
   type LiveMdPendingAnalysis,
@@ -277,12 +282,14 @@ function pendingSourceAnalysis(value: LiveMdAnalysis, transaction: Transaction):
     ? previousPending.changes.composeDesc(transaction.changes)
     : transaction.changes;
   let revision = (previousPending?.revision ?? value.revision) + 1;
+  let syntaxChangedRanges = pendingSyntaxChangedRanges(previousPending, transaction);
   let pending: LiveMdPendingAnalysis = {
     baseAnalysis,
     baseDoc,
     changes,
     epochs: previousPending?.epochs ?? runtimeEpochs(transaction.startState),
     revision,
+    syntaxChangedRanges,
   };
   let safetyRanges = sourceSafetyRanges(baseAnalysis, transaction.state, changes);
   let interactiveSafetyRanges = sourceInteractiveSafetyRanges(
@@ -338,6 +345,15 @@ function pendingInputTrace(transaction: Transaction) {
   trace.languageApplyMs = languageTrace.applyMs;
   trace.languageWorkIterations = languageTrace.workIterations;
   return trace;
+}
+
+function pendingSyntaxChangedRanges(
+  previousPending: LiveMdPendingAnalysis | null,
+  transaction: Transaction,
+) {
+  let previousRanges =
+    previousPending?.syntaxChangedRanges.map((range) => mapRange(range, transaction.changes)) ?? [];
+  return mergeDocRanges([...previousRanges, ...syntaxTreeChangedRanges(transaction)]);
 }
 
 function pendingSelectionAnalysis(value: LiveMdAnalysis, transaction: Transaction): LiveMdAnalysis {
@@ -543,18 +559,8 @@ function withStaleResultDrop(value: LiveMdAnalysis): LiveMdAnalysis {
 function analysisRangesInDoc(analysis: LiveMdAnalysis, docLength: number) {
   return (
     rangesInDoc(analysis.activeSourceRanges, docLength) &&
-    rangesInDoc(
-      analysis.sourceIslandLeaves.map((leaf) => leaf.sourceRange),
-      docLength,
-    ) &&
-    rangesInDoc(
-      analysis.semantic?.cache.records.flatMap((record) => [
-        record.range,
-        record.sourceRange,
-        record.effectRange,
-      ]) ?? [],
-      docLength,
-    )
+    sourceIslandLeavesInDoc(analysis.sourceIslandLeaves, docLength) &&
+    (!analysis.semantic || leafAnalysisCacheRangesInDoc(analysis.semantic.cache, docLength))
   );
 }
 
@@ -752,7 +758,7 @@ function buildLiveMdAnalysis(
       trace: semanticAnalysis.trace,
       yieldCheck: options.yieldCheck,
     });
-    projectLeafRecords(build, semanticAnalysis.semantic.cache.records);
+    projectLeafCacheRecords(build, semanticAnalysis.semantic.cache);
     let legacyFeatureFullQueryCount = applyLegacyMarkdownFeatures(
       build,
       markdownParserService,
@@ -829,57 +835,116 @@ function buildLiveMdSemanticAnalysis(input: {
     };
   }
 
-  input.yieldCheck?.();
-  let walked = walkMarkdownBlocks(input.tree, input.state.doc);
-  input.yieldCheck?.();
-  let sourceIslandLeaves = sourceIslandLeavesFromMarkdownSnapshot(input.state.doc, walked.snapshot);
-  let activeSourceRanges = activeMarkdownSourceRanges(input.state, sourceIslandLeaves);
   let transaction = input.transaction;
   let transitionBase = input.transitionBase;
-  let transition =
+  if (
     previousSemantic &&
     transitionBase &&
     transitionBase.epochs.markdownParserService == input.service
+  ) {
+    let transition = transitionLeafAnalysisCacheLocal({
+      analysisInput: {
+        service: input.service,
+        state: input.state,
+        tree: input.tree,
+      },
+      changes: transitionBase.changes,
+      oldCache: previousSemantic.cache,
+      oldDoc: transitionBase.baseDoc,
+      oldSourceIslandLeaves: transitionBase.baseAnalysis.sourceIslandLeaves,
+      syntaxChangedRanges: transitionBase.syntaxChangedRanges,
+      yieldCheck: input.yieldCheck,
+    });
+    if (!transition.fallback) {
+      let sourceIslandLeaves =
+        transition.sourceIslandLeaves ??
+        sourceIslandLeavesFromLeafAnalysisRecords(
+          input.state.doc,
+          materializeLeafAnalysisCacheRecords(transition.cache),
+        );
+      return {
+        activeSourceRanges: activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
+        semantic: {
+          cache: transition.cache,
+          revision: (previousSemantic.revision ?? 0) + 1,
+        },
+        sourceIslandLeaves,
+        trace: transition.trace,
+      };
+    }
+
+    input.yieldCheck?.();
+    let walked = walkMarkdownBlocks(input.tree, input.state.doc);
+    input.yieldCheck?.();
+    let fallback = transitionLeafAnalysisCache({
+      analysisInput: {
+        service: input.service,
+        state: input.state,
+        tree: input.tree,
+      },
+      changes: transitionBase.changes,
+      oldCache: previousSemantic.cache,
+      oldDoc: transitionBase.baseDoc,
+      snapshot: walked.snapshot,
+      yieldCheck: input.yieldCheck,
+    });
+    fallback.trace.blockNodesVisited = walked.trace.visitedBlockNodes;
+    fallback.trace.checkedRanges = [{ from: 0, to: input.state.doc.length }];
+    fallback.trace.fallbackCount = 1;
+    fallback.trace.fixedPointRounds = transition.trace.fixedPointRounds;
+    fallback.trace.leavesCollected = walked.snapshot.leaves.length + walked.snapshot.markers.length;
+    let sourceIslandLeaves = sourceIslandLeavesFromLeafAnalysisRecords(
+      input.state.doc,
+      materializeLeafAnalysisCacheRecords(fallback.cache),
+    );
+    return {
+      activeSourceRanges: activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
+      semantic: {
+        cache: fallback.cache,
+        revision: (previousSemantic.revision ?? 0) + 1,
+      },
+      sourceIslandLeaves,
+      trace: fallback.trace,
+    };
+  }
+
+  input.yieldCheck?.();
+  let walked = walkMarkdownBlocks(input.tree, input.state.doc);
+  input.yieldCheck?.();
+  let transition =
+    previousSemantic &&
+    transaction &&
+    !markdownParserServiceChanged(transaction.startState, transaction.state)
       ? transitionLeafAnalysisCache({
           analysisInput: {
             service: input.service,
             state: input.state,
             tree: input.tree,
           },
-          changes: transitionBase.changes,
+          changes: transaction.changes,
           oldCache: previousSemantic.cache,
-          oldDoc: transitionBase.baseDoc,
+          oldDoc: transaction.startState.doc,
           snapshot: walked.snapshot,
           yieldCheck: input.yieldCheck,
         })
-      : previousSemantic &&
-          transaction &&
-          !markdownParserServiceChanged(transaction.startState, transaction.state)
-        ? transitionLeafAnalysisCache({
-            analysisInput: {
-              service: input.service,
-              state: input.state,
-              tree: input.tree,
-            },
-            changes: transaction.changes,
-            oldCache: previousSemantic.cache,
-            oldDoc: transaction.startState.doc,
-            snapshot: walked.snapshot,
-            yieldCheck: input.yieldCheck,
-          })
-        : buildFreshLeafAnalysisCache({
-            analysisInput: {
-              service: input.service,
-              state: input.state,
-              tree: input.tree,
-            },
-            snapshot: walked.snapshot,
-            startCacheId: previousSemantic?.cache.nextCacheId,
-            yieldCheck: input.yieldCheck,
-          });
+      : buildFreshLeafAnalysisCache({
+          analysisInput: {
+            service: input.service,
+            state: input.state,
+            tree: input.tree,
+          },
+          snapshot: walked.snapshot,
+          startCacheId: previousSemantic?.cache.nextCacheId,
+          yieldCheck: input.yieldCheck,
+        });
 
   transition.trace.blockNodesVisited = walked.trace.visitedBlockNodes;
   transition.trace.checkedRanges = walked.trace.checkedRanges;
+  let sourceIslandLeaves = sourceIslandLeavesFromLeafAnalysisRecords(
+    input.state.doc,
+    materializeLeafAnalysisCacheRecords(transition.cache),
+  );
+  let activeSourceRanges = activeMarkdownSourceRanges(input.state, sourceIslandLeaves);
 
   return {
     activeSourceRanges,

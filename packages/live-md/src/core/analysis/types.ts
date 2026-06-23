@@ -17,16 +17,24 @@ export type LiveMdLeafAnalysisTrace = {
   inlineRangeGroupsExamined: number;
   exactSourceComparisons: number;
   exactSourceComparedChars: number;
+  fallbackCount: number;
+  fixedPointRounds: number;
   inlineParsedChars: number;
   inlineParseCalls: number;
   inlineParserSessions: number;
   languageApplyMs: number;
   languageWorkIterations: number;
+  leavesCollected: number;
   legacyFeatureFullQueryCount: number;
   projectionRecords: number;
   recordsAnalyzed: number;
+  cacheFullMaterializations: number;
+  recordsCollected: number;
+  recordsMappedIndividually: number;
   recordsReused: number;
   recordsVisited: number;
+  cacheIndexCallbacks: number;
+  cacheIndexQueries: number;
   sourceHashCollisions: number;
   staleResultDrops: number;
   tableCellsParsed: number;
@@ -45,16 +53,24 @@ export function emptyLiveMdLeafAnalysisTrace(): LiveMdLeafAnalysisTrace {
     inlineRangeGroupsExamined: 0,
     exactSourceComparisons: 0,
     exactSourceComparedChars: 0,
+    fallbackCount: 0,
+    fixedPointRounds: 0,
     inlineParsedChars: 0,
     inlineParseCalls: 0,
     inlineParserSessions: 0,
     languageApplyMs: 0,
     languageWorkIterations: 0,
+    leavesCollected: 0,
     legacyFeatureFullQueryCount: 0,
     projectionRecords: 0,
     recordsAnalyzed: 0,
+    cacheFullMaterializations: 0,
+    recordsCollected: 0,
+    recordsMappedIndividually: 0,
     recordsReused: 0,
     recordsVisited: 0,
+    cacheIndexCallbacks: 0,
+    cacheIndexQueries: 0,
     sourceHashCollisions: 0,
     staleResultDrops: 0,
     tableCellsParsed: 0,

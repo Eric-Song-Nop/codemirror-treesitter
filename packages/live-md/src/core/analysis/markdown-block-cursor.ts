@@ -278,14 +278,20 @@ function collectQuoteMarkersInRange(
 }
 
 function firstRangeChild(cursor: MarkdownTreeCursor, from: number) {
-  let index = searchIndex(cursor, from, -1);
-  if (!cursor.firstChildForIndex(index) && (index == from || !cursor.firstChildForIndex(from))) {
-    return false;
+  if (!cursor.firstChildForIndex(cursorSearchIndex(cursor, from))) {
+    if (!cursor.firstChild()) return false;
   }
   while (cursor.to < from) {
     if (!cursor.nextSibling()) return false;
   }
   return true;
+}
+
+function cursorSearchIndex(range: DocRange, pos: number) {
+  let index = pos;
+  if (index >= range.to && range.to > range.from) index = range.to - 1;
+  if (index < range.from) index = range.from;
+  return index;
 }
 
 function contextAfterEntering(
@@ -316,13 +322,13 @@ function listItemContext(node: SyntaxNode, doc: Text): MarkdownListItemContext |
   if (!marker) return null;
   let task = node.children.find(isTaskMarker);
   return {
-    itemRange: nodeRange(node),
-    markerRange: nodeRange(marker),
+    itemRange: nodeRangeInDoc(node, doc),
+    markerRange: nodeRangeInDoc(marker, doc),
     markerText: doc.sliceString(marker.from, marker.to).trim(),
     task: task
       ? {
           checked: task.name == "task_list_marker_checked",
-          range: nodeRange(task),
+          range: nodeRangeInDoc(task, doc),
         }
       : null,
   };
@@ -530,6 +536,11 @@ function nodeRange(node: SyntaxNode): DocRange {
   return { from: node.from, to: node.to };
 }
 
+function nodeRangeInDoc(node: SyntaxNode, doc: Text): DocRange {
+  let from = clamp(node.from, 0, doc.length);
+  return { from, to: clamp(node.to, from, doc.length) };
+}
+
 function lineRangesTouchingRange(doc: Text, range: DocRange) {
   if (doc.length == 0) return [{ from: 0, to: 0 }];
   let from = clamp(Math.min(range.from, range.to), 0, doc.length);
@@ -569,13 +580,6 @@ function rangesTouch(a: DocRange, b: DocRange) {
 
 function rangesSame(a: DocRange, b: DocRange) {
   return a.from == b.from && a.to == b.to;
-}
-
-function searchIndex(range: DocRange, pos: number, side: -1 | 0 | 1) {
-  let index = side < 0 && pos > range.from ? pos - 1 : pos;
-  if (index >= range.to && range.to > range.from) index = range.to - 1;
-  if (index < range.from) index = range.from;
-  return index;
 }
 
 function emptyTrace(): MarkdownBlockTrace {

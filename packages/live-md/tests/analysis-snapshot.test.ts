@@ -1,12 +1,17 @@
 // @vitest-environment happy-dom
 
 import {
+  type ChangeDesc,
   Compartment,
   EditorState,
   StateEffect,
   StateField,
   type Extension,
+  type StateCommand,
+  type Transaction,
+  type TransactionSpec,
 } from "@codemirror/state";
+import { history, redo, undo } from "@codemirror-treesitter/commands";
 import { EditorView } from "@codemirror/view";
 import {
   ensureSyntaxTree,
@@ -30,12 +35,24 @@ import { walkMarkdownBlocks } from "../src/core/analysis/markdown-block-cursor.j
 import {
   buildFreshLeafAnalysisCache,
   createLeafAnalysisCache,
+  findLeafAnalysisRecordsTouchingRanges,
+  leafAnalysisCacheRecordCount,
+  materializeLeafAnalysisCacheRecords,
   transitionLeafAnalysisCache,
+  transitionLeafAnalysisCacheLocal,
 } from "../src/core/analysis/markdown-leaf-cache.js";
 import {
   analyzeMarkdownLeafSemantics,
   hashDocRange,
 } from "../src/core/analysis/markdown-leaf-analysis.js";
+import {
+  activeMarkdownSourceRanges,
+  sourceIslandLeavesFromLeafAnalysisRecords,
+  transitionSourceIslandLeavesFromLeafAnalysisRecords,
+  type LiveMdSourceIslandLeaf,
+} from "../src/core/analysis/markdown-source-islands.js";
+import { type LeafAnalysisRecord } from "../src/core/analysis/descriptors.js";
+import { type LiveMdLeafAnalysisTrace } from "../src/core/analysis/types.js";
 import {
   codeFenceLanguagesField,
   deleteLiveMdTree,
@@ -165,21 +182,13 @@ describe("LiveMD analysis snapshot", () => {
   it("does not scan all semantic records on the docChanged pending fast path", async () => {
     let doc = Array.from({ length: 200 }, (_value, index) => `paragraph ${index}`).join("\n\n");
     let view = await markdownAnalysisView(doc, "paragraph 199");
-    let before = __testLiveMdAnalysis(view);
-    if (!before.semantic) throw new Error("Expected semantic cache");
-
-    Object.defineProperty(before.semantic.cache, "records", {
-      configurable: true,
-      get() {
-        throw new Error("pending fast path must use the range index, not cache.records");
-      },
-    });
 
     view.dispatch({ changes: { from: doc.length, insert: "!" } });
 
     let pending = __testLiveMdAnalysis(view);
     expect(pending.pending).toBeTruthy();
     expect(pending.trace.recordsVisited).toBe(0);
+    expect(pending.trace.cacheFullMaterializations).toBe(0);
     view.destroy();
   });
 
@@ -441,18 +450,658 @@ describe("LiveMD analysis snapshot", () => {
     await __testFlushLiveMdAnalysis(view);
 
     let after = __testLiveMdAnalysis(view);
+    if (!after.semantic) throw new Error("Expected semantic cache after front insert");
     let afterRecord = recordBySource(view.state, after, "second **two**");
+    let recordCount = leafAnalysisCacheRecordCount(after.semantic.cache);
 
     expect(afterRecord.cacheId).toBe(beforeRecord.cacheId);
     expect(afterRecord.analysis).toBe(beforeRecord.analysis);
     expect(after.semanticTrace?.recordsReused).toBeGreaterThan(0);
-    expect(after.semanticTrace?.recordsVisited).toBe(after.semantic?.cache.records.length);
+    expect(after.semanticTrace?.recordsVisited).toBeGreaterThan(0);
+    expect(after.semanticTrace?.recordsVisited).toBeLessThan(recordCount!);
     expect(after.semanticTrace?.exactSourceComparisons).toBeGreaterThan(0);
     expect(after.semanticTrace?.exactSourceComparedChars).toBeGreaterThan(0);
     expect(after.semanticTrace?.inlineParserSessions).toBeLessThanOrEqual(1);
-    expect(after.semanticTrace?.projectionRecords).toBe(after.semantic?.cache.records.length);
+    expect(after.semanticTrace?.projectionRecords).toBe(recordCount);
     expect(legacyFeatureFullQueryCount(after)).toBe(0);
     view.destroy();
+  });
+
+  it("keeps scheduled semantic transition local for ordinary paragraph edits", async () => {
+    let doc = Array.from({ length: 1_000 }, (_value, index) => `paragraph ${index}`).join("\n\n");
+    let target = doc.indexOf("paragraph 500") + "paragraph 500".length;
+    let view = await markdownAnalysisView(doc, "paragraph 0");
+
+    let { after } = await dispatchScheduledLocalEdit(
+      view,
+      { changes: { from: target, insert: "!" } },
+      "ordinary paragraph edit",
+    );
+
+    expect(after.semanticTrace?.recordsAnalyzed).toBe(1);
+    expect(after.semanticTrace?.fallbackCount).toBe(0);
+    expect(after.semanticTrace?.recordsVisited).toBeLessThan(5);
+    expect(after.semanticTrace?.recordsCollected).toBeLessThan(10);
+    expect(after.semanticTrace?.recordsMappedIndividually).toBeLessThan(10);
+    expect(after.semanticTrace?.cacheFullMaterializations).toBe(0);
+    expect(after.semanticTrace?.blockNodesVisited).toBeLessThan(160);
+    expect(after.semanticTrace?.checkedRanges.length).toBeGreaterThan(0);
+    view.destroy();
+  });
+
+  it("keeps a 10,000 paragraph middle edit range-local on the scheduled path", async () => {
+    let doc = numberedParagraphDoc(10_000);
+    let target = doc.indexOf("paragraph 5000") + "paragraph 5000".length;
+    let view = await markdownAnalysisView(doc, "paragraph 0");
+
+    let { after, pending } = await dispatchScheduledLocalEdit(
+      view,
+      { changes: { from: target, insert: "!" } },
+      "10k paragraph middle edit",
+      { oracle: "semantic" },
+    );
+
+    expect(pending.pending).toBeTruthy();
+    expect(pending.trace.blockNodesVisited).toBe(0);
+    expect(pending.trace.recordsVisited).toBe(0);
+    expect(pending.trace.inlineParseCalls).toBe(0);
+    expect(after.semanticTrace?.recordsAnalyzed).toBe(1);
+    expect(after.semanticTrace?.fallbackCount).toBe(0);
+    expect(after.semanticTrace?.recordsVisited).toBeLessThan(5);
+    expect(after.semanticTrace?.recordsCollected).toBeLessThan(10);
+    expect(after.semanticTrace?.recordsMappedIndividually).toBeLessThan(10);
+    expect(after.semanticTrace?.cacheFullMaterializations).toBe(0);
+    expect(after.semanticTrace?.cacheIndexQueries).toBeLessThan(10);
+    expect(after.semanticTrace?.cacheIndexCallbacks).toBeLessThan(12);
+    expect(after.semanticTrace?.blockNodesVisited).toBeLessThan(180);
+    view.destroy();
+  }, 60_000);
+
+  it("keeps a 10,000 list item body edit from traversing the whole list", async () => {
+    let doc = numberedListDoc(10_000);
+    let target = doc.indexOf("item 5000 body") + "item 5000 body".length;
+    let view = await markdownAnalysisView(doc, "item 0");
+
+    let { after } = await dispatchScheduledLocalEdit(
+      view,
+      { changes: { from: target, insert: "!" } },
+      "10k list item body edit",
+      { oracle: "semantic" },
+    );
+
+    expect(after.semanticTrace?.recordsAnalyzed).toBe(1);
+    expect(after.semanticTrace?.fallbackCount).toBe(0);
+    expect(after.semanticTrace?.recordsVisited).toBeLessThanOrEqual(5);
+    expect(after.semanticTrace?.recordsCollected).toBeLessThan(10);
+    expect(after.semanticTrace?.recordsMappedIndividually).toBeLessThan(10);
+    expect(after.semanticTrace?.cacheFullMaterializations).toBe(0);
+    expect(after.semanticTrace?.cacheIndexQueries).toBeLessThan(10);
+    expect(after.semanticTrace?.cacheIndexCallbacks).toBeLessThan(12);
+    expect(after.semanticTrace?.leavesCollected).toBeLessThanOrEqual(5);
+    expect(after.semanticTrace?.blockNodesVisited).toBeLessThan(220);
+    view.destroy();
+  }, 60_000);
+
+  it("keeps a 10,000 quote paragraph middle edit range-local", async () => {
+    let doc = numberedQuoteParagraphDoc(10_000);
+    let target = doc.indexOf("quote 5000 body") + "quote 5000 body".length;
+    let view = await markdownAnalysisView(doc, "quote 0");
+
+    let { after } = await dispatchScheduledLocalEdit(
+      view,
+      { changes: { from: target, insert: "!" } },
+      "10k quote paragraph middle edit",
+      { oracle: "semantic" },
+    );
+
+    expect(after.semanticTrace?.recordsAnalyzed).toBe(1);
+    expect(after.semanticTrace?.fallbackCount).toBe(0);
+    expect(after.semanticTrace?.recordsVisited).toBeLessThanOrEqual(3);
+    expect(after.semanticTrace?.recordsCollected).toBeLessThan(10);
+    expect(after.semanticTrace?.recordsMappedIndividually).toBeLessThan(10);
+    expect(after.semanticTrace?.cacheFullMaterializations).toBe(0);
+    expect(after.semanticTrace?.cacheIndexQueries).toBeLessThan(10);
+    expect(after.semanticTrace?.cacheIndexCallbacks).toBeLessThan(10);
+    expect(after.semanticTrace?.leavesCollected).toBeLessThanOrEqual(3);
+    expect(after.semanticTrace?.blockNodesVisited).toBeLessThan(260);
+    view.destroy();
+  }, 60_000);
+
+  it("keeps disjoint 10,000 paragraph multi-change transactions range-local", async () => {
+    let doc = numberedPlainParagraphDoc(10_000);
+    let firstTarget = doc.indexOf("paragraph 100") + "paragraph 100".length;
+    let secondTarget = doc.indexOf("paragraph 9000") + "paragraph 9000".length;
+    let view = await markdownAnalysisView(doc, "paragraph 0");
+
+    let { after } = await dispatchScheduledLocalEdit(
+      view,
+      {
+        changes: [
+          { from: firstTarget, insert: "!" },
+          { from: secondTarget, insert: "?" },
+        ],
+      },
+      "10k disjoint paragraph multi-change",
+      { oracle: "semantic" },
+    );
+
+    expectPr75LocalTrace(after.semanticTrace, "10k disjoint paragraph multi-change", {
+      recordsAnalyzed: 2,
+      recordsCollectedLessThan: 20,
+      recordsMappedLessThan: 20,
+      recordsVisitedLessThan: 10,
+      cacheIndexCallbacksLessThan: 12,
+      cacheIndexQueriesLessThan: 12,
+    });
+    view.destroy();
+  }, 60_000);
+
+  it("keeps local, full-walk, and fresh semantic transitions equivalent across block boundaries", async () => {
+    let cases: Array<{
+      changes: (doc: string) => TransactionSpec["changes"];
+      doc: string;
+      name: string;
+      oracle?: ScheduledLocalOracleMode;
+      selection?: string;
+    }> = [
+      {
+        name: "paragraph split",
+        doc: "alpha beta\n\ngamma",
+        selection: "gamma",
+        changes: (doc) => ({ from: doc.indexOf(" beta"), insert: "\n\n" }),
+      },
+      {
+        name: "paragraph merge",
+        doc: "alpha\n\nbeta\n\ngamma",
+        selection: "gamma",
+        changes: (doc) => ({
+          from: doc.indexOf("\n\nbeta"),
+          insert: "\n",
+          to: doc.indexOf("\n\nbeta") + 2,
+        }),
+      },
+      {
+        name: "table create",
+        doc: "before\n\nName | Value\n--- | ---\nalpha | 1\n\nafter",
+        selection: "after",
+        changes: (doc) => [
+          { from: doc.indexOf("Name"), insert: "| " },
+          { from: doc.indexOf("Value") + "Value".length, insert: " |" },
+          { from: doc.indexOf("--- | ---"), insert: "| " },
+          { from: doc.indexOf("---\nalpha") + "---".length, insert: " |" },
+          { from: doc.indexOf("alpha"), insert: "| " },
+          { from: doc.indexOf("1\n\nafter") + "1".length, insert: " |" },
+        ],
+      },
+      {
+        name: "table destroy",
+        doc: "before\n\n| Name | Value |\n| --- | --- |\n| alpha | 1 |\n\nafter",
+        selection: "after",
+        changes: (doc) => ({
+          from: doc.indexOf("| --- | --- |"),
+          insert: "not a table separator",
+          to: doc.indexOf("| --- | --- |") + "| --- | --- |".length,
+        }),
+      },
+      {
+        name: "fence open",
+        doc: "before\n\nlet answer = 1;\n\nafter",
+        selection: "after",
+        changes: (doc) => [
+          { from: doc.indexOf("let answer"), insert: "```ts\n" },
+          {
+            from: doc.indexOf("\n\nafter"),
+            insert: "\n```",
+          },
+        ],
+      },
+      {
+        name: "fence close",
+        doc: "before\n\n```ts\nlet answer = 1;\n\nafter",
+        selection: "after",
+        changes: (doc) => ({ from: doc.indexOf("\n\nafter"), insert: "\n```" }),
+      },
+      {
+        name: "list context indent",
+        doc: "before\n\n- parent\n- child\n\nafter",
+        oracle: "semantic",
+        selection: "after",
+        changes: (doc) => ({ from: doc.indexOf("- child"), insert: "  " }),
+      },
+      {
+        name: "list context dedent",
+        doc: "before\n\n- parent\n  - child\n\nafter",
+        oracle: "semantic",
+        selection: "after",
+        changes: (doc) => ({
+          from: doc.indexOf("  - child"),
+          to: doc.indexOf("  - child") + 2,
+        }),
+      },
+      {
+        name: "quote context enter",
+        doc: "before\n\nplain **bold**\n\nafter",
+        oracle: "semantic",
+        selection: "after",
+        changes: (doc) => ({ from: doc.indexOf("plain"), insert: "> " }),
+      },
+      {
+        name: "quote context exit",
+        doc: "before\n\n> quoted **bold**\n\nafter",
+        oracle: "semantic",
+        selection: "after",
+        changes: (doc) => ({
+          from: doc.indexOf("> quoted"),
+          to: doc.indexOf("> quoted") + 2,
+        }),
+      },
+    ];
+
+    for (let testCase of cases) {
+      let view = await markdownAnalysisView(testCase.doc, testCase.selection ?? "");
+      try {
+        let { after } = await dispatchScheduledLocalEdit(
+          view,
+          { changes: testCase.changes(testCase.doc) },
+          testCase.name,
+          { oracle: testCase.oracle },
+        );
+        expect(after.semanticTrace?.fallbackCount, testCase.name).toBe(0);
+        expect(after.semanticTrace?.cacheFullMaterializations, testCase.name).toBe(0);
+        expect(after.semanticTrace?.recordsCollected, testCase.name).toBeLessThan(40);
+        expect(after.semanticTrace?.recordsMappedIndividually, testCase.name).toBeLessThan(40);
+        expect(after.semanticTrace?.cacheIndexCallbacks, testCase.name).toBeLessThan(40);
+        expect(after.semanticTrace?.cacheIndexQueries, testCase.name).toBeLessThan(20);
+      } finally {
+        view.destroy();
+      }
+    }
+  }, 60_000);
+
+  it("keeps a deterministic random edit sequence equivalent to full-walk and fresh rebuilds", async () => {
+    let view = await markdownAnalysisView(randomEditSeedDoc(), "tail");
+    let random = seededRandom(0x75f);
+
+    try {
+      for (let index = 0; index < 24; index++) {
+        let doc = view.state.doc.toString();
+        await dispatchScheduledLocalEdit(
+          view,
+          { changes: randomTextEdit(doc, random) },
+          `random edit ${index}`,
+        );
+      }
+    } finally {
+      view.destroy();
+    }
+  }, 60_000);
+
+  it("does not materialize old segmented records during consecutive local transitions", async () => {
+    let service = await loadMarkdownParserService();
+    let state0 = EditorState.create({ doc: numberedParagraphDoc(1_000) });
+    let tree0 = service.blockParser.parse(state0.doc);
+    let tree1: Tree | null = null;
+    let tree2: Tree | null = null;
+
+    try {
+      let snapshot0 = walkMarkdownBlocks(tree0, state0.doc).snapshot;
+      let fresh0 = buildFreshLeafAnalysisCache({
+        analysisInput: { service, state: state0, tree: tree0 },
+        snapshot: snapshot0,
+      });
+      let sourceIslandLeaves0 = sourceIslandLeavesFromLeafAnalysisRecords(
+        state0.doc,
+        materializeLeafAnalysisCacheRecords(fresh0.cache),
+      );
+
+      let firstTarget = state0.doc.toString().indexOf("paragraph 500") + "paragraph 500".length;
+      let transaction1 = state0.update({ changes: { from: firstTarget, insert: "!" } });
+      tree1 = service.blockParser.parse(transaction1.state.doc);
+      let local1 = transitionLeafAnalysisCacheLocal({
+        analysisInput: { service, state: transaction1.state, tree: tree1 },
+        changes: transaction1.changes,
+        oldCache: fresh0.cache,
+        oldDoc: state0.doc,
+        oldSourceIslandLeaves: sourceIslandLeaves0,
+      });
+      expect(local1.fallback).toBeUndefined();
+      expect(local1.sourceIslandLeaves).toBeDefined();
+
+      let doc1 = transaction1.state.doc.toString();
+      let secondTarget = doc1.indexOf("paragraph 700") + "paragraph 700".length;
+      let transaction2 = transaction1.state.update({
+        changes: { from: secondTarget, insert: "?" },
+      });
+      tree2 = service.blockParser.parse(transaction2.state.doc);
+      let local2 = transitionLeafAnalysisCacheLocal({
+        analysisInput: { service, state: transaction2.state, tree: tree2 },
+        changes: transaction2.changes,
+        oldCache: local1.cache,
+        oldDoc: transaction1.state.doc,
+        oldSourceIslandLeaves: local1.sourceIslandLeaves,
+      });
+
+      expect(local2.fallback).toBeUndefined();
+      expect(local2.trace.recordsAnalyzed).toBe(1);
+      expect(local2.trace.recordsVisited).toBeLessThan(5);
+      expect(local2.trace.cacheFullMaterializations).toBe(0);
+    } finally {
+      deleteLiveMdTree(tree0);
+      if (tree1) deleteLiveMdTree(tree1);
+      if (tree2) deleteLiveMdTree(tree2);
+    }
+  });
+
+  it("does not materialize segmented records during selection-only reprojection", async () => {
+    let doc = numberedParagraphDoc(1_000);
+    let target = doc.indexOf("paragraph 500") + "paragraph 500".length;
+    let view = await markdownAnalysisView(doc, "paragraph 0");
+
+    try {
+      let { after } = await dispatchScheduledLocalEdit(
+        view,
+        { changes: { from: target, insert: "!" } },
+        "selection-only reprojection",
+        { oracle: "semantic" },
+      );
+      if (!after.semantic) throw new Error("Expected semantic cache after local edit");
+
+      view.dispatch({ selection: { anchor: view.state.doc.toString().indexOf("paragraph 900") } });
+
+      let reprojected = __testLiveMdAnalysis(view);
+      expect(reprojected.semantic?.cache).toBe(after.semantic.cache);
+      expect(reprojected.semanticTrace?.projectionRecords).toBe(
+        leafAnalysisCacheRecordCount(after.semantic.cache),
+      );
+      expect(reprojected.semanticTrace?.cacheFullMaterializations).toBe(0);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps 100,000 paragraph local cache transitions off full-record remapping", async () => {
+    let service = await loadMarkdownParserService();
+    let state0 = EditorState.create({ doc: numberedPlainParagraphDoc(100_000) });
+    let tree0 = service.blockParser.parse(state0.doc);
+    let snapshot0 = walkMarkdownBlocks(tree0, state0.doc).snapshot;
+    let fresh = buildFreshLeafAnalysisCache({
+      analysisInput: { service, state: state0, tree: tree0 },
+      snapshot: snapshot0,
+    });
+    let oldCache = fresh.cache;
+    let oldRecords = materializeLeafAnalysisCacheRecords(oldCache);
+    let untouchedOld = oldRecords[90_000]!;
+    let tree1: Tree | null = null;
+    let tree2: Tree | null = null;
+
+    expect(oldRecords).toHaveLength(100_000);
+
+    try {
+      let transaction1 = state0.update({ changes: { from: 0, insert: "intro\n\n" } });
+      tree1 = service.blockParser.parse(transaction1.state.doc);
+      let front = transitionLeafAnalysisCacheLocal({
+        analysisInput: { service, state: transaction1.state, tree: tree1 },
+        changes: transaction1.changes,
+        oldCache,
+        oldDoc: state0.doc,
+      });
+
+      expect(front.fallback).toBeUndefined();
+      expect(front.trace.recordsAnalyzed).toBe(1);
+      expect(front.trace.fallbackCount).toBe(0);
+      expect(front.trace.recordsVisited).toBeLessThan(8);
+      expect(front.trace.recordsCollected).toBeLessThan(10);
+      expect(front.trace.recordsMappedIndividually).toBeLessThan(10);
+      expect(front.trace.cacheFullMaterializations).toBe(0);
+      expect(front.trace.cacheIndexCallbacks).toBeGreaterThan(0);
+      expect(front.trace.cacheIndexCallbacks).toBeLessThan(10);
+      expect(front.trace.cacheIndexQueries).toBeGreaterThan(0);
+      expect(front.trace.cacheIndexQueries).toBeLessThan(10);
+      expect(front.trace.recordsReused).toBeGreaterThan(99_000);
+
+      let untouchedAfterFront = onlyRecordTouching(
+        front.cache,
+        mapRangeForTest(untouchedOld.sourceRange, transaction1.changes),
+        "untouched front insert record",
+      );
+      expect(untouchedAfterFront.cacheId).toBe(untouchedOld.cacheId);
+      expect(untouchedAfterFront.analysis).toBe(untouchedOld.analysis);
+
+      let doc1 = transaction1.state.doc.toString();
+      let editTarget = doc1.indexOf("paragraph 50000") + "paragraph 50000".length;
+      let transaction2 = transaction1.state.update({
+        changes: { from: editTarget, insert: "!" },
+      });
+      tree2 = service.blockParser.parse(transaction2.state.doc);
+      let middle = transitionLeafAnalysisCacheLocal({
+        analysisInput: { service, state: transaction2.state, tree: tree2 },
+        changes: transaction2.changes,
+        oldCache: front.cache,
+        oldDoc: transaction1.state.doc,
+      });
+
+      expect(middle.fallback).toBeUndefined();
+      expect(middle.trace.recordsAnalyzed).toBe(1);
+      expect(middle.trace.fallbackCount).toBe(0);
+      expect(middle.trace.recordsVisited).toBeLessThan(8);
+      expect(middle.trace.recordsCollected).toBeLessThan(10);
+      expect(middle.trace.recordsMappedIndividually).toBeLessThan(10);
+      expect(middle.trace.cacheFullMaterializations).toBe(0);
+      expect(middle.trace.cacheIndexCallbacks).toBeGreaterThan(0);
+      expect(middle.trace.cacheIndexCallbacks).toBeLessThan(10);
+      expect(middle.trace.cacheIndexQueries).toBeGreaterThan(0);
+      expect(middle.trace.cacheIndexQueries).toBeLessThan(10);
+      expect(middle.trace.recordsReused).toBeGreaterThan(99_000);
+
+      let untouchedAfterMiddle = onlyRecordTouching(
+        middle.cache,
+        mapRangeForTest(untouchedAfterFront.sourceRange, transaction2.changes),
+        "untouched middle edit record",
+      );
+      expect(untouchedAfterMiddle.cacheId).toBe(untouchedOld.cacheId);
+      expect(untouchedAfterMiddle.analysis).toBe(untouchedOld.analysis);
+    } finally {
+      deleteLiveMdTree(tree0);
+      if (tree1) deleteLiveMdTree(tree1);
+      if (tree2) deleteLiveMdTree(tree2);
+    }
+  }, 180_000);
+
+  it("keeps repeated 10,000 paragraph cache transitions local", async () => {
+    let harness = await createLocalCacheHarness(numberedPlainParagraphDoc(10_000));
+    let oldRecords = materializeLeafAnalysisCacheRecords(harness.current.cache);
+    let untouchedOld = oldRecords[9_000]!;
+    let untouchedRange = untouchedOld.sourceRange;
+    let finalFull = null as ReturnType<typeof transitionLeafAnalysisCache> | null;
+
+    expect(oldRecords).toHaveLength(10_000);
+
+    try {
+      for (let index = 0; index < 1_000; index++) {
+        let targetLine = harness.state.doc.line(5_000 * 2 + 1);
+        let transaction = harness.state.update({
+          changes: { from: targetLine.to, insert: "!" },
+        });
+        let previousCache = harness.current.cache;
+        let previousDoc = harness.state.doc;
+        let local = harness.apply(transaction);
+
+        expect(local.fallback, `repeat ${index}`).toBeUndefined();
+        expect(local.trace.recordsAnalyzed, `repeat ${index}`).toBe(1);
+        expect(local.trace.fallbackCount, `repeat ${index}`).toBe(0);
+        expect(local.trace.recordsVisited, `repeat ${index}`).toBeLessThan(8);
+        expect(local.trace.recordsCollected, `repeat ${index}`).toBeLessThan(10);
+        expect(local.trace.recordsMappedIndividually, `repeat ${index}`).toBeLessThan(10);
+        expect(local.trace.cacheFullMaterializations, `repeat ${index}`).toBe(0);
+        expect(local.trace.cacheIndexCallbacks, `repeat ${index}`).toBeLessThan(10);
+        expect(local.trace.cacheIndexQueries, `repeat ${index}`).toBeLessThan(10);
+        expect(local.trace.recordsReused, `repeat ${index}`).toBeGreaterThan(9_990);
+        expect(leafAnalysisCacheRecordCount(local.cache), `repeat ${index}`).toBe(10_000);
+
+        if (index == 999) {
+          let fullSnapshot = walkMarkdownBlocks(harness.tree, harness.state.doc).snapshot;
+          finalFull = transitionLeafAnalysisCache({
+            analysisInput: { service: harness.service, state: harness.state, tree: harness.tree },
+            changes: transaction.changes,
+            oldCache: previousCache,
+            oldDoc: previousDoc,
+            snapshot: fullSnapshot,
+          });
+        }
+
+        untouchedRange = mapRangeForTest(untouchedRange, transaction.changes);
+      }
+
+      let untouchedAfter = onlyRecordTouching(
+        harness.current.cache,
+        untouchedRange,
+        "untouched repeated edit record",
+      );
+      expect(untouchedAfter.cacheId).toBe(untouchedOld.cacheId);
+      expect(untouchedAfter.analysis).toBe(untouchedOld.analysis);
+      expect(finalFull).not.toBeNull();
+      expect(
+        firstCanonicalMismatch(
+          canonicalSemanticTransitionCache(harness.state, harness.current.cache),
+          canonicalSemanticTransitionCache(harness.state, finalFull!.cache),
+        ),
+        "final repeated local transition must match full-walk transition with cache ids",
+      ).toBeNull();
+
+      let freshSnapshot = walkMarkdownBlocks(harness.tree, harness.state.doc).snapshot;
+      let fresh = buildFreshLeafAnalysisCache({
+        analysisInput: { service: harness.service, state: harness.state, tree: harness.tree },
+        snapshot: freshSnapshot,
+        startCacheId: harness.current.cache.nextCacheId,
+      });
+      expect(canonicalSemanticRecordsFromCache(harness.state, harness.current.cache)).toEqual(
+        canonicalSemanticRecordsFromCache(harness.state, fresh.cache),
+      );
+    } finally {
+      harness.destroy();
+    }
+  }, 180_000);
+
+  it("keeps document-front and jumping 10,000 paragraph cache transitions local", async () => {
+    let harness = await createLocalCacheHarness(numberedPlainParagraphDoc(10_000));
+
+    try {
+      for (let index = 0; index < 250; index++) {
+        let local = harness.apply(harness.state.update({ changes: { from: 0, insert: "!" } }));
+        expectPr75LocalTrace(local.trace, `front insert ${index}`, {
+          recordsAnalyzed: 1,
+          recordsReusedGreaterThan: 9_990,
+        });
+        expect(leafAnalysisCacheRecordCount(local.cache), `front insert ${index}`).toBe(10_000);
+      }
+
+      for (let index = 0; index < 250; index++) {
+        let paragraphIndex = (index * 37) % 10_000;
+        let targetLine = harness.state.doc.line(paragraphIndex * 2 + 1);
+        let local = harness.apply(
+          harness.state.update({ changes: { from: targetLine.to, insert: "?" } }),
+        );
+        expectPr75LocalTrace(local.trace, `jumping edit ${index}`, {
+          recordsAnalyzed: 1,
+          recordsReusedGreaterThan: 9_990,
+        });
+        expect(leafAnalysisCacheRecordCount(local.cache), `jumping edit ${index}`).toBe(10_000);
+      }
+
+      let freshSnapshot = walkMarkdownBlocks(harness.tree, harness.state.doc).snapshot;
+      let fresh = buildFreshLeafAnalysisCache({
+        analysisInput: { service: harness.service, state: harness.state, tree: harness.tree },
+        snapshot: freshSnapshot,
+      });
+      expect(canonicalSemanticRecordsFromCache(harness.state, harness.current.cache)).toEqual(
+        canonicalSemanticRecordsFromCache(harness.state, fresh.cache),
+      );
+    } finally {
+      harness.destroy();
+    }
+  }, 180_000);
+
+  it("keeps 500 undo/redo command cache transitions local", async () => {
+    let harness = await createLocalCacheHarness(numberedPlainParagraphDoc(10_000), [history()]);
+
+    try {
+      let targetLine = harness.state.doc.line(5_000 * 2 + 1);
+      let initial = harness.apply(
+        harness.state.update({
+          changes: { from: targetLine.to, insert: "!" },
+          selection: { anchor: targetLine.to + 1 },
+          userEvent: "input",
+        }),
+      );
+      expectPr75LocalTrace(initial.trace, "undo/redo seed edit", {
+        recordsAnalyzed: 1,
+        recordsReusedGreaterThan: 9_990,
+      });
+
+      for (let index = 0; index < 500; index++) {
+        let undone = commandTransaction(harness.state, undo, `undo ${index}`);
+        let undoLocal = harness.apply(undone);
+        expectPr75LocalTrace(undoLocal.trace, `undo ${index}`, {
+          recordsAnalyzed: 1,
+          recordsReusedGreaterThan: 9_990,
+        });
+
+        let redone = commandTransaction(harness.state, redo, `redo ${index}`);
+        let redoLocal = harness.apply(redone);
+        expectPr75LocalTrace(redoLocal.trace, `redo ${index}`, {
+          recordsAnalyzed: 1,
+          recordsReusedGreaterThan: 9_990,
+        });
+      }
+
+      let freshSnapshot = walkMarkdownBlocks(harness.tree, harness.state.doc).snapshot;
+      let fresh = buildFreshLeafAnalysisCache({
+        analysisInput: { service: harness.service, state: harness.state, tree: harness.tree },
+        snapshot: freshSnapshot,
+      });
+      expect(canonicalSemanticRecordsFromCache(harness.state, harness.current.cache)).toEqual(
+        canonicalSemanticRecordsFromCache(harness.state, fresh.cache),
+      );
+    } finally {
+      harness.destroy();
+    }
+  }, 180_000);
+
+  it("does not scan source island tail leaves for zero-width removal ranges", () => {
+    let count = 10_000;
+    let point = 5_000;
+    let state0 = EditorState.create({ doc: "x".repeat(count * 10) });
+    let transaction = state0.update({ changes: { from: point, insert: "!" } });
+    let reads = 0;
+    let oldLeaves: LiveMdSourceIslandLeaf[] = Array.from({ length: count }, (_value, index) => {
+      let sourceRange = { from: index * 10, to: (index + 1) * 10 };
+      let leaf = {
+        contextKey: `leaf-${index}`,
+        kind: "paragraph" as const,
+      } as LiveMdSourceIslandLeaf;
+      Object.defineProperty(leaf, "sourceRange", {
+        configurable: true,
+        get() {
+          reads++;
+          return sourceRange;
+        },
+      });
+      return leaf;
+    });
+
+    let transitioned = transitionSourceIslandLeavesFromLeafAnalysisRecords({
+      changes: transaction.changes,
+      doc: transaction.state.doc,
+      localRecords: [],
+      localWindows: [],
+      oldChangedRanges: [{ from: point, to: point }],
+      oldDoc: state0.doc,
+      oldLeaves,
+    });
+
+    expect(transitioned.length).toBe(count - 2);
+    expect(transitioned[499]?.contextKey).toBe("leaf-501");
+    expect(reads).toBeLessThan(200);
   });
 
   it("keeps task list marker cache ids stable when editing only the task body", async () => {
@@ -606,7 +1255,9 @@ describe("LiveMD analysis snapshot", () => {
     expect(after.semanticTrace?.blockNodesVisited).toBe(0);
     expect(after.semanticTrace?.recordsVisited).toBe(0);
     expect(after.semanticTrace?.inlineParseCalls).toBe(0);
-    expect(after.semanticTrace?.projectionRecords).toBe(after.semantic?.cache.records.length);
+    expect(after.semanticTrace?.projectionRecords).toBe(
+      before.semantic ? leafAnalysisCacheRecordCount(before.semantic.cache) : null,
+    );
     view.destroy();
   });
 
@@ -696,10 +1347,12 @@ describe("LiveMD analysis snapshot", () => {
       let newSnapshot = walkMarkdownBlocks(newTree, newState.doc).snapshot;
       let newHash = hashDocRange(newState.doc, { from: 0, to: newState.doc.length });
       expect(typeof newHash).toBe("number");
-      let tamperedRecords = oldTransition.cache.records.map((record) => ({
-        ...record,
-        sourceHash: newHash,
-      }));
+      let tamperedRecords = materializeLeafAnalysisCacheRecords(oldTransition.cache).map(
+        (record) => ({
+          ...record,
+          sourceHash: newHash,
+        }),
+      );
       let tamperedCache = createLeafAnalysisCache(tamperedRecords, oldTransition.cache.nextCacheId);
       let changes = oldState.update({
         changes: { from: 0, insert: "bravo", to: oldState.doc.length },
@@ -712,7 +1365,8 @@ describe("LiveMD analysis snapshot", () => {
         snapshot: newSnapshot,
       });
 
-      expect(transitioned.cache.records[0]?.cacheId).not.toBe(tamperedRecords[0]?.cacheId);
+      let transitionedRecords = materializeLeafAnalysisCacheRecords(transitioned.cache);
+      expect(transitionedRecords[0]?.cacheId).not.toBe(tamperedRecords[0]?.cacheId);
       expect(transitioned.trace.sourceHashCollisions).toBe(1);
       expect(transitioned.trace.exactSourceComparisons).toBe(1);
       expect(transitioned.trace.exactSourceComparedChars).toBe(5);
@@ -1380,6 +2034,224 @@ async function markdownAnalysisView(doc: string, selectionText = "", extensions:
   return view;
 }
 
+type TestLiveMdAnalysis = ReturnType<typeof __testLiveMdAnalysis>;
+type TestLeafAnalysisCache = NonNullable<TestLiveMdAnalysis["semantic"]>["cache"];
+type ScheduledLocalOracleMode = "full" | "semantic" | false;
+
+async function dispatchScheduledLocalEdit(
+  view: EditorView,
+  spec: TransactionSpec,
+  label: string,
+  options: { oracle?: ScheduledLocalOracleMode } = {},
+) {
+  let before = __testLiveMdAnalysis(view);
+  if (!before.semantic) throw new Error(`${label}: expected semantic cache before edit`);
+  let transaction = view.state.update(spec);
+
+  view.dispatch(transaction);
+  let pending = __testLiveMdAnalysis(view);
+  expect(pending.pending, `${label}: source-first pending state`).toBeTruthy();
+
+  await __testFlushLiveMdAnalysis(view);
+
+  let after = __testLiveMdAnalysis(view);
+  expect(after.pending, `${label}: scheduled analysis committed`).toBeNull();
+  if (options.oracle !== false) {
+    expectLocalFullFreshSemanticEquivalence(
+      after,
+      before.semantic.cache,
+      transaction,
+      view.state,
+      label,
+      options.oracle ?? "full",
+    );
+  }
+  return { after, before, pending, transaction };
+}
+
+function expectLocalFullFreshSemanticEquivalence(
+  local: TestLiveMdAnalysis,
+  oldCache: TestLeafAnalysisCache,
+  transaction: Transaction,
+  state: EditorState,
+  label: string,
+  mode: Exclude<ScheduledLocalOracleMode, false>,
+) {
+  if (!local.semantic) throw new Error(`${label}: expected local semantic cache after edit`);
+  let { freshCache, fullCache } = semanticTransitionOracles(
+    transaction.startState,
+    state,
+    transaction.changes,
+    oldCache,
+  );
+
+  let localTransitionCache = canonicalSemanticTransitionCache(state, local.semantic.cache);
+  let fullTransitionCache = canonicalSemanticTransitionCache(state, fullCache);
+  expect(
+    firstCanonicalMismatch(localTransitionCache, fullTransitionCache),
+    `${label}: local transition must match full-walk transition with cache ids`,
+  ).toBeNull();
+  expect(
+    canonicalSemanticRecordsFromCache(state, local.semantic.cache),
+    `${label}: local transition must match fresh rebuild semantics`,
+  ).toEqual(canonicalSemanticRecordsFromCache(state, freshCache));
+  let fullSourceIslandLeaves = sourceIslandLeavesFromLeafAnalysisRecords(
+    state.doc,
+    materializeLeafAnalysisCacheRecords(fullCache),
+  );
+  expect(
+    canonicalSourceIslandLeaves(local.sourceIslandLeaves),
+    `${label}: local source islands vs full-walk transition`,
+  ).toEqual(canonicalSourceIslandLeaves(fullSourceIslandLeaves));
+  expect(local.activeSourceRanges, `${label}: local active lookup vs full-walk transition`).toEqual(
+    activeMarkdownSourceRanges(state, fullSourceIslandLeaves),
+  );
+  if (mode == "semantic") return;
+
+  let freshAnalysis = __testBuildLiveMdAnalysis(state);
+  expect(canonicalAnalysis(state, local), `${label}: local projection vs fresh`).toEqual(
+    canonicalAnalysis(state, freshAnalysis),
+  );
+  expect(
+    canonicalAnalysis(state, local),
+    `${label}: local projection vs canonical full-query projection`,
+  ).toEqual(canonicalAnalysis(state, __testBuildCanonicalLiveMdAnalysis(state)));
+}
+
+function semanticTransitionOracles(
+  startState: EditorState,
+  state: EditorState,
+  changes: ChangeDesc,
+  oldCache: TestLeafAnalysisCache,
+) {
+  let service = markdownParserService(state);
+  let tree = service.blockParser.parse(state.doc);
+  try {
+    let walked = walkMarkdownBlocks(tree, state.doc);
+    let analysisInput = { service, state, tree };
+    let fullTransition = transitionLeafAnalysisCache({
+      analysisInput,
+      changes,
+      oldCache,
+      oldDoc: startState.doc,
+      snapshot: walked.snapshot,
+    });
+    let freshTransition = buildFreshLeafAnalysisCache({
+      analysisInput,
+      snapshot: walked.snapshot,
+    });
+    return {
+      freshCache: freshTransition.cache,
+      fullCache: fullTransition.cache,
+    };
+  } finally {
+    deleteLiveMdTree(tree);
+  }
+}
+
+function markdownParserService(state: EditorState) {
+  let service = state.facet(liveMdMarkdownParserServiceFacet);
+  if (!service) throw new Error("Expected LiveMD Markdown parser service");
+  return service;
+}
+
+async function createLocalCacheHarness(doc: string, extensions: Extension = []) {
+  let service = await loadMarkdownParserService();
+  let state = EditorState.create({ doc, extensions });
+  let tree = service.blockParser.parse(state.doc);
+  let snapshot = walkMarkdownBlocks(tree, state.doc).snapshot;
+  let current = buildFreshLeafAnalysisCache({
+    analysisInput: { service, state, tree },
+    snapshot,
+  });
+  let sourceIslandLeaves: readonly LiveMdSourceIslandLeaf[] =
+    sourceIslandLeavesFromLeafAnalysisRecords(
+      state.doc,
+      materializeLeafAnalysisCacheRecords(current.cache),
+    );
+
+  let harness = {
+    current,
+    service,
+    sourceIslandLeaves,
+    state,
+    tree,
+    apply(transaction: Transaction) {
+      let previousTree = harness.tree;
+      let editedTree = service.blockParser.editWrappedTree(
+        previousTree,
+        transaction.changes,
+        harness.state.doc,
+        transaction.state.doc,
+      );
+      let nextTree = service.blockParser.parse(transaction.state.doc, editedTree);
+      let local = transitionLeafAnalysisCacheLocal({
+        analysisInput: { service, state: transaction.state, tree: nextTree },
+        changes: transaction.changes,
+        oldCache: harness.current.cache,
+        oldDoc: harness.state.doc,
+        oldSourceIslandLeaves: harness.sourceIslandLeaves,
+      });
+      if (local.fallback) throw new Error("Expected range-local cache transition");
+      if (!local.sourceIslandLeaves) {
+        throw new Error("Expected range-local source island transition");
+      }
+
+      harness.current = local;
+      harness.state = transaction.state;
+      harness.tree = nextTree;
+      harness.sourceIslandLeaves = local.sourceIslandLeaves;
+      deleteLiveMdTree(previousTree);
+      deleteLiveMdTree(editedTree);
+      return local;
+    },
+    destroy() {
+      deleteLiveMdTree(harness.tree);
+    },
+  };
+  return harness;
+}
+
+function commandTransaction(state: EditorState, command: StateCommand, label: string) {
+  let transaction: Transaction | null = null;
+  let dispatched = command({
+    state,
+    dispatch: (next) => {
+      transaction = next;
+    },
+  });
+  expect(dispatched, label).toBe(true);
+  if (!transaction) throw new Error(`${label}: command did not dispatch`);
+  return transaction;
+}
+
+function expectPr75LocalTrace(
+  trace: LiveMdLeafAnalysisTrace | null | undefined,
+  label: string,
+  options: {
+    cacheIndexCallbacksLessThan?: number;
+    cacheIndexQueriesLessThan?: number;
+    recordsAnalyzed?: number;
+    recordsCollectedLessThan?: number;
+    recordsMappedLessThan?: number;
+    recordsReusedGreaterThan?: number;
+    recordsVisitedLessThan?: number;
+  } = {},
+) {
+  if (!trace) throw new Error(`${label}: expected semantic trace`);
+  expect(trace.recordsAnalyzed, label).toBe(options.recordsAnalyzed ?? 1);
+  expect(trace.fallbackCount, label).toBe(0);
+  expect(trace.recordsVisited, label).toBeLessThan(options.recordsVisitedLessThan ?? 8);
+  expect(trace.recordsCollected, label).toBeLessThan(options.recordsCollectedLessThan ?? 10);
+  expect(trace.recordsMappedIndividually, label).toBeLessThan(options.recordsMappedLessThan ?? 10);
+  expect(trace.cacheFullMaterializations, label).toBe(0);
+  expect(trace.cacheIndexCallbacks, label).toBeLessThan(options.cacheIndexCallbacksLessThan ?? 10);
+  expect(trace.cacheIndexQueries, label).toBeLessThan(options.cacheIndexQueriesLessThan ?? 10);
+  if (options.recordsReusedGreaterThan != null) {
+    expect(trace.recordsReused, label).toBeGreaterThan(options.recordsReusedGreaterThan);
+  }
+}
+
 function imagePreviewSources(state: EditorState) {
   let sources: string[] = [];
   __testBuildLiveMdAnalysis(state).decorations.between(0, state.doc.length, (_from, _to, value) => {
@@ -1446,9 +2318,12 @@ function recordBySource(
   analysis: ReturnType<typeof __testLiveMdAnalysis>,
   source: string,
 ) {
-  let record = analysis.semantic?.cache.records.find(
-    (candidate) => state.sliceDoc(candidate.sourceRange.from, candidate.sourceRange.to) == source,
-  );
+  let record = analysis.semantic
+    ? materializeLeafAnalysisCacheRecords(analysis.semantic.cache).find(
+        (candidate) =>
+          state.sliceDoc(candidate.sourceRange.from, candidate.sourceRange.to) == source,
+      )
+    : undefined;
   if (!record) throw new Error(`Missing semantic record for source: ${source}`);
   return record;
 }
@@ -1459,12 +2334,14 @@ function markerRecordBySource(
   source: string,
   markerKind: "listMarker" | "taskMarker",
 ) {
-  let record = analysis.semantic?.cache.records.find(
-    (candidate) =>
-      candidate.kind == "marker" &&
-      state.sliceDoc(candidate.sourceRange.from, candidate.sourceRange.to) == source &&
-      candidate.analysis.structuralEffects.some((descriptor) => descriptor.kind == markerKind),
-  );
+  let record = analysis.semantic
+    ? materializeLeafAnalysisCacheRecords(analysis.semantic.cache).find(
+        (candidate) =>
+          candidate.kind == "marker" &&
+          state.sliceDoc(candidate.sourceRange.from, candidate.sourceRange.to) == source &&
+          candidate.analysis.structuralEffects.some((descriptor) => descriptor.kind == markerKind),
+      )
+    : undefined;
   if (!record) throw new Error(`Missing ${markerKind} semantic record for source: ${source}`);
   return record;
 }
@@ -1559,6 +2436,91 @@ function markHeadingFeature(className: string) {
   ]);
 }
 
+function numberedParagraphDoc(count: number) {
+  return Array.from({ length: count }, (_value, index) => `paragraph ${index} **bold**`).join(
+    "\n\n",
+  );
+}
+
+function numberedPlainParagraphDoc(count: number) {
+  return Array.from({ length: count }, (_value, index) => `paragraph ${index}`).join("\n\n");
+}
+
+function onlyRecordTouching(cache: TestLeafAnalysisCache, range: DocRange, label: string) {
+  let records = findLeafAnalysisRecordsTouchingRanges(cache, [range]);
+  let exact = records.filter(
+    (record) => record.sourceRange.from == range.from && record.sourceRange.to == range.to,
+  );
+  expect(exact, label).toHaveLength(1);
+  return exact[0]!;
+}
+
+function mapRangeForTest(range: DocRange, changes: ChangeDesc): DocRange {
+  let from = changes.mapPos(range.from, 1);
+  let to = changes.mapPos(range.to, -1);
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+function numberedListDoc(count: number) {
+  return Array.from({ length: count }, (_value, index) => `- item ${index} body **bold**`).join(
+    "\n",
+  );
+}
+
+function numberedQuoteParagraphDoc(count: number) {
+  return Array.from({ length: count }, (_value, index) => `> quote ${index} body **bold**`).join(
+    "\n>\n",
+  );
+}
+
+function randomEditSeedDoc() {
+  return (
+    "# Random Seed\n\n" +
+    "alpha **one** and [link](https://example.com)\n\n" +
+    "- [ ] todo item\n" +
+    "- item two\n\n" +
+    "> quote **bold**\n>\n> next quote\n\n" +
+    "| Name | Value |\n" +
+    "| --- | --- |\n" +
+    "| alpha | 1 |\n\n" +
+    "```ts\n" +
+    "let answer = 1;\n" +
+    "```\n\n" +
+    "tail\n"
+  );
+}
+
+function seededRandom(seed: number) {
+  let value = seed >>> 0;
+  return () => {
+    value = (Math.imul(value, 1_664_525) + 1_013_904_223) >>> 0;
+    return value / 0x1_0000_0000;
+  };
+}
+
+function randomTextEdit(doc: string, random: () => number): TransactionSpec["changes"] {
+  let operation = Math.floor(random() * 3);
+  let insertions = ["!", " more", "\nnew line", " 中", " `code`", " **x**"];
+  if (operation == 0 || doc.length == 0) {
+    let from = randomPosition(doc, random);
+    return { from, insert: insertions[Math.floor(random() * insertions.length)]! };
+  }
+
+  let from = Math.floor(random() * doc.length);
+  let maxDelete = Math.min(8, doc.length - from);
+  let to = from + 1 + Math.floor(random() * maxDelete);
+  if (operation == 1) return { from, to };
+  return {
+    from,
+    insert: insertions[Math.floor(random() * insertions.length)]!,
+    to,
+  };
+}
+
+function randomPosition(doc: string, random: () => number) {
+  return Math.floor(random() * (doc.length + 1));
+}
+
 function liveMdKitchenSinkDoc() {
   return (
     "# Heading One\n\n" +
@@ -1605,24 +2567,84 @@ function canonicalSemanticCache(
   state: EditorState,
   analysis: ReturnType<typeof __testLiveMdAnalysis>,
 ): CanonicalSemanticRecord[] {
-  let records =
-    analysis.semantic?.cache.records.map((record) => ({
-      analysis: {
-        analysisKey: record.analysis.analysisKey,
-        descriptors: record.analysis.descriptors,
-        renderKey: record.analysis.renderKey,
-        structuralEffects: record.analysis.structuralEffects,
-      },
-      context: record.context,
-      contextKey: record.contextKey,
-      effectRange: record.effectRange,
-      kind: record.kind,
-      range: record.range,
-      source: state.sliceDoc(record.sourceRange.from, record.sourceRange.to),
-      sourceHash: record.sourceHash.toString(16),
-      sourceRange: record.sourceRange,
-    })) ?? [];
+  return analysis.semantic ? canonicalSemanticRecordsFromCache(state, analysis.semantic.cache) : [];
+}
+
+function canonicalSemanticRecordsFromCache(
+  state: EditorState,
+  cache: TestLeafAnalysisCache,
+): CanonicalSemanticRecord[] {
+  let records = materializeLeafAnalysisCacheRecords(cache).map((record) =>
+    canonicalSemanticRecord(state, record),
+  );
   return records.sort(compareCanonicalSemanticRecord);
+}
+
+function canonicalSemanticTransitionCache(
+  state: EditorState,
+  cache: TestLeafAnalysisCache,
+): CanonicalSemanticTransitionRecord[] {
+  let records = materializeLeafAnalysisCacheRecords(cache).map((record) => ({
+    ...canonicalSemanticRecord(state, record),
+    cacheId: record.cacheId,
+  }));
+  return records.sort(compareCanonicalSemanticTransitionRecord);
+}
+
+function canonicalSourceIslandLeaves(leaves: readonly LiveMdSourceIslandLeaf[]) {
+  return leaves
+    .map((leaf) => ({
+      contextKey: leaf.contextKey,
+      kind: leaf.kind,
+      sourceRange: leaf.sourceRange,
+    }))
+    .sort(
+      (left, right) =>
+        left.sourceRange.from - right.sourceRange.from ||
+        left.sourceRange.to - right.sourceRange.to ||
+        left.kind.localeCompare(right.kind) ||
+        left.contextKey.localeCompare(right.contextKey),
+    );
+}
+
+function canonicalSemanticRecord(
+  state: EditorState,
+  record: LeafAnalysisRecord,
+): CanonicalSemanticRecord {
+  return {
+    analysis: {
+      analysisKey: record.analysis.analysisKey,
+      descriptors: record.analysis.descriptors,
+      renderKey: record.analysis.renderKey,
+      structuralEffects: record.analysis.structuralEffects,
+    },
+    context: canonicalMarkdownBlockContext(record.context),
+    contextKey: record.contextKey,
+    effectRange: record.effectRange,
+    kind: record.kind,
+    range: record.range,
+    source: state.sliceDoc(record.sourceRange.from, record.sourceRange.to),
+    sourceHash: record.sourceHash.toString(16),
+    sourceRange: record.sourceRange,
+  };
+}
+
+function canonicalMarkdownBlockContext(context: LeafAnalysisRecord["context"]) {
+  return {
+    listPath: context.listPath.map((item) => ({
+      itemRange: item.itemRange,
+      markerRange: item.markerRange,
+      markerText: item.markerText,
+      task: item.task
+        ? {
+            checked: item.task.checked,
+            range: item.task.range,
+          }
+        : null,
+    })),
+    quoteDepth: context.quoteDepth,
+    quoteMarkers: context.quoteMarkers.map((range) => ({ from: range.from, to: range.to })),
+  };
 }
 
 function compareCanonicalSemanticRecord(
@@ -1643,6 +2665,30 @@ function compareCanonicalSemanticRecord(
   );
 }
 
+function compareCanonicalSemanticTransitionRecord(
+  left: CanonicalSemanticTransitionRecord,
+  right: CanonicalSemanticTransitionRecord,
+) {
+  return compareCanonicalSemanticRecord(left, right) || left.cacheId - right.cacheId;
+}
+
+function firstCanonicalMismatch(
+  left: readonly CanonicalSemanticTransitionRecord[],
+  right: readonly CanonicalSemanticTransitionRecord[],
+) {
+  if (left.length != right.length) {
+    return { leftLength: left.length, rightLength: right.length };
+  }
+  for (let index = 0; index < left.length; index++) {
+    let leftRecord = left[index]!;
+    let rightRecord = right[index]!;
+    if (JSON.stringify(leftRecord) != JSON.stringify(rightRecord)) {
+      return { index, left: leftRecord, right: rightRecord };
+    }
+  }
+  return null;
+}
+
 type CanonicalSemanticRecord = {
   analysis: {
     analysisKey: string;
@@ -1650,7 +2696,7 @@ type CanonicalSemanticRecord = {
     renderKey: string;
     structuralEffects: unknown;
   };
-  context: unknown;
+  context: ReturnType<typeof canonicalMarkdownBlockContext>;
   contextKey: string;
   effectRange: DocRange;
   kind: string;
@@ -1658,6 +2704,10 @@ type CanonicalSemanticRecord = {
   source: string;
   sourceHash: string;
   sourceRange: DocRange;
+};
+
+type CanonicalSemanticTransitionRecord = CanonicalSemanticRecord & {
+  cacheId: number;
 };
 
 function compareCanonicalRange(
