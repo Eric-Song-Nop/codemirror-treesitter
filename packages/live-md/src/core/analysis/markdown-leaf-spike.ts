@@ -1,44 +1,37 @@
 import { type ChangeDesc, type Text } from "@codemirror/state";
-import { type DocRange, type SyntaxNode, type Tree } from "@codemirror-treesitter/language";
+import { type DocRange, type Tree } from "@codemirror-treesitter/language";
+import { collectMarkdownBlocksInRanges, walkMarkdownBlocks } from "./markdown-block-cursor.js";
+import {
+  type MarkdownBlockTrace,
+  type MarkdownLeaf,
+  type MarkdownLeafKind,
+} from "./markdown-block-types.js";
 
 /**
- * Gate B validation spike for Markdown leaf discovery after local edits.
+ * Gate B validation harness for Markdown leaf discovery after local edits.
  *
- * Gate B is complete when the bounded walk matches the full-walk oracle on the
- * covered cases and ordinary edits stay local. This module does not install the
- * production immutable cache transition, marker/context model, or final reducer
- * integration.
+ * Gate B is complete for range-local changed-leaf discovery when the bounded
+ * walk matches the full-walk oracle and ordinary edits stay local.
  *
- * This module is intentionally an oracle/trace harness, not the production
- * incremental LiveMD analysis cache. It keeps exact leaf source in records so
- * the spike can validate correctness without depending on a diagnostic hash.
+ * Production block traversal, leaf classification, context collection, and
+ * marker records live in markdown-block-cursor.ts. This module only owns the
+ * edit-range seed expansion, fixed-point retry, and full-walk oracle diff used
+ * to verify range-local discovery against the canonical full walk.
+ * It is not the production immutable analysis cache transition.
  */
 
-export type MarkdownLeafKind =
-  | "paragraph"
-  | "heading"
-  | "table"
-  | "fencedCode"
-  | "indentedCode"
-  | "html"
-  | "rule";
+export type { MarkdownLeafKind } from "./markdown-block-types.js";
 
 export type MarkdownLeafRecord = DocRange & {
-  kind: MarkdownLeafKind;
-  nodeName: string;
-  nodeId: number;
   contextKey: string;
+  kind: MarkdownLeafKind;
+  nodeId: number;
+  nodeName: string;
   sourceHash: number;
   sourceText: string;
 };
 
-export type MarkdownLeafTrace = {
-  checkedRanges: readonly DocRange[];
-  collectedLeaves: number;
-  fallbackCount: number;
-  rounds: number;
-  visitedBlockNodes: number;
-};
+export type MarkdownLeafTrace = MarkdownBlockTrace;
 
 export type MarkdownChangedLeafResult = {
   changedLeaves: readonly MarkdownLeafRecord[];
@@ -49,30 +42,6 @@ export type MarkdownChangedLeafResult = {
   trace: MarkdownLeafTrace;
 };
 
-type MarkdownTreeCursor = NonNullable<ReturnType<Tree["cursor"]>>;
-
-type WalkContext = {
-  quoteDepth: number;
-  listPath: readonly string[];
-};
-
-const emptyContext: WalkContext = { listPath: [], quoteDepth: 0 };
-
-const leafKinds: ReadonlyMap<string, MarkdownLeafKind> = new Map([
-  ["paragraph", "paragraph"],
-  ["atx_heading", "heading"],
-  ["setext_heading", "heading"],
-  ["pipe_table", "table"],
-  ["fenced_code_block", "fencedCode"],
-  ["indented_code_block", "indentedCode"],
-  ["html_block", "html"],
-  ["thematic_break", "rule"],
-]);
-
-export function classifyMarkdownLeaf(node: SyntaxNode): MarkdownLeafKind | null {
-  return leafKinds.get(node.name) ?? null;
-}
-
 export function walkMarkdownLeaves(
   tree: Tree,
   doc: Text,
@@ -80,18 +49,11 @@ export function walkMarkdownLeaves(
   leaves: readonly MarkdownLeafRecord[];
   trace: MarkdownLeafTrace;
 } {
-  let trace = emptyTrace();
-  let leaves: MarkdownLeafRecord[] = [];
-  let seen = new Set<string>();
-  let cursor = tree.cursor();
-  if (!cursor) return { leaves, trace };
-  try {
-    walkFullCursor(cursor, doc, emptyContext, leaves, seen, trace);
-  } finally {
-    cursor.delete();
-  }
-  trace.collectedLeaves = leaves.length;
-  return { leaves, trace };
+  let walked = walkMarkdownBlocks(tree, doc);
+  return {
+    leaves: walked.snapshot.leaves.map((leaf) => leafRecord(leaf, doc)),
+    trace: walked.trace,
+  };
 }
 
 export function collectMarkdownLeavesInRanges(
@@ -102,24 +64,11 @@ export function collectMarkdownLeavesInRanges(
   leaves: readonly MarkdownLeafRecord[];
   trace: MarkdownLeafTrace;
 } {
-  let trace = emptyTrace();
-  let checkedRanges = normalizeRanges(ranges, doc.length);
-  let leaves: MarkdownLeafRecord[] = [];
-  let seen = new Set<string>();
-
-  for (let range of checkedRanges) {
-    let cursor = tree.cursor();
-    if (!cursor) continue;
-    try {
-      walkRangeCursor(cursor, doc, range, emptyContext, leaves, seen, trace);
-    } finally {
-      cursor.delete();
-    }
-  }
-
-  trace.checkedRanges = checkedRanges;
-  trace.collectedLeaves = leaves.length;
-  return { leaves: leaves.sort(compareLeaf), trace };
+  let walked = collectMarkdownBlocksInRanges(tree, doc, ranges);
+  return {
+    leaves: walked.snapshot.leaves.map((leaf) => leafRecord(leaf, doc)),
+    trace: walked.trace,
+  };
 }
 
 export function findChangedMarkdownLeaves(input: {
@@ -200,119 +149,15 @@ function collectWithFixedPoint(tree: Tree, doc: Text, initialRanges: readonly Do
   };
 }
 
-function walkFullCursor(
-  cursor: MarkdownTreeCursor,
-  doc: Text,
-  context: WalkContext,
-  leaves: MarkdownLeafRecord[],
-  seen: Set<string>,
-  trace: MarkdownLeafTrace,
-) {
-  trace.visitedBlockNodes++;
-  let node = cursor.node;
-  let kind = classifyMarkdownLeaf(node);
-  if (kind) {
-    addLeaf(leaves, seen, leafRecord(node, kind, context, doc));
-    return;
-  }
-
-  let childContext = contextAfterEntering(cursor, doc, context);
-  let child = cursor.copy();
-  try {
-    if (child.firstChild()) {
-      do {
-        walkFullCursor(child, doc, childContext, leaves, seen, trace);
-      } while (child.nextSibling());
-    }
-  } finally {
-    child.delete();
-  }
-}
-
-function walkRangeCursor(
-  cursor: MarkdownTreeCursor,
-  doc: Text,
-  range: DocRange,
-  context: WalkContext,
-  leaves: MarkdownLeafRecord[],
-  seen: Set<string>,
-  trace: MarkdownLeafTrace,
-) {
-  trace.visitedBlockNodes++;
-  if (!rangesTouch(cursor, range)) return;
-
-  let node = cursor.node;
-  let kind = classifyMarkdownLeaf(node);
-  if (kind) {
-    addLeaf(leaves, seen, leafRecord(node, kind, context, doc));
-    return;
-  }
-
-  let childContext = contextAfterEntering(cursor, doc, context);
-  let child = cursor.copy();
-  try {
-    if (!firstRangeChild(child, range.from)) return;
-    do {
-      if (child.from > range.to) break;
-      if (child.to >= range.from) {
-        walkRangeCursor(child, doc, range, childContext, leaves, seen, trace);
-      }
-    } while (child.nextSibling());
-  } finally {
-    child.delete();
-  }
-}
-
-function firstRangeChild(cursor: MarkdownTreeCursor, from: number) {
-  let index = searchIndex(cursor, from, -1);
-  if (!cursor.firstChildForIndex(index) && (index == from || !cursor.firstChildForIndex(from))) {
-    return false;
-  }
-  while (cursor.to < from) {
-    if (!cursor.nextSibling()) return false;
-  }
-  return true;
-}
-
-function contextAfterEntering(
-  cursor: MarkdownTreeCursor,
-  doc: Text,
-  context: WalkContext,
-): WalkContext {
-  let node = cursor.node;
-  if (node.name == "block_quote") {
-    return { ...context, quoteDepth: context.quoteDepth + 1 };
-  }
-  if (node.name == "list_item") {
-    return {
-      ...context,
-      listPath: [...context.listPath, listItemMarkerText(cursor, doc)],
-    };
-  }
-  return context;
-}
-
-function listItemMarkerText(cursor: MarkdownTreeCursor, doc: Text) {
-  let node = cursor.node;
-  let prefix = doc.sliceString(node.from, Math.min(node.to, node.from + 48));
-  return prefix.match(/^\s*(?:[-+*]|\d+[.)])\s*(?:\[[ xX]\]\s*)?/u)?.[0] ?? prefix;
-}
-
-function leafRecord(
-  node: SyntaxNode,
-  kind: MarkdownLeafKind,
-  context: WalkContext,
-  doc: Text,
-): MarkdownLeafRecord {
-  let from = clamp(node.from, 0, doc.length);
-  let to = clamp(node.to, from, doc.length);
+function leafRecord(leaf: MarkdownLeaf, doc: Text): MarkdownLeafRecord {
+  let { from, to } = leaf.range;
   let source = doc.sliceString(from, to);
   return {
-    contextKey: contextKey(context),
+    contextKey: leaf.contextKey,
     from,
-    kind,
-    nodeId: node.id,
-    nodeName: node.name,
+    kind: leaf.kind,
+    nodeId: leaf.nodeId,
+    nodeName: leaf.nodeName,
     sourceHash: hashString(source),
     sourceText: source,
     to,
@@ -340,17 +185,6 @@ function mapLeafRange(range: DocRange, changes: ChangeDesc): DocRange {
   let from = changes.mapPos(clamp(range.from, 0, length), 1);
   let to = changes.mapPos(clamp(range.to, 0, length), -1);
   return from <= to ? { from, to } : { from: to, to: from };
-}
-
-function addLeaf(leaves: MarkdownLeafRecord[], seen: Set<string>, leaf: MarkdownLeafRecord) {
-  let key = `${leaf.kind}:${leaf.from}:${leaf.to}:${leaf.contextKey}`;
-  if (seen.has(key)) return;
-  seen.add(key);
-  leaves.push(leaf);
-}
-
-function contextKey(context: WalkContext) {
-  return `q${context.quoteDepth}|${context.listPath.join(">")}`;
 }
 
 function leafKey(leaf: MarkdownLeafRecord) {
@@ -446,10 +280,6 @@ function rangesSame(a: DocRange, b: DocRange) {
   return a.from == b.from && a.to == b.to;
 }
 
-function rangesTouch(a: DocRange, b: DocRange) {
-  return a.from <= b.to && b.from <= a.to;
-}
-
 function isBroadContainerSyntaxRange(
   range: DocRange,
   textContextRanges: readonly DocRange[],
@@ -462,13 +292,6 @@ function isBroadContainerSyntaxRange(
   );
 }
 
-function searchIndex(range: DocRange, pos: number, side: -1 | 0 | 1) {
-  let index = side < 0 && pos > range.from ? pos - 1 : pos;
-  if (index >= range.to && range.to > range.from) index = range.to - 1;
-  if (index < range.from) index = range.from;
-  return index;
-}
-
 function hashString(value: string) {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i++) {
@@ -476,16 +299,6 @@ function hashString(value: string) {
     hash = Math.imul(hash, 16777619);
   }
   return hash >>> 0;
-}
-
-function emptyTrace(): MarkdownLeafTrace {
-  return {
-    checkedRanges: [],
-    collectedLeaves: 0,
-    fallbackCount: 0,
-    rounds: 0,
-    visitedBlockNodes: 0,
-  };
 }
 
 function clamp(value: number, min: number, max: number) {

@@ -116,12 +116,22 @@ describe("LiveMD active source islands", () => {
   });
 
   it("keeps marker-only edit states as source islands", async () => {
-    let cases = ["-", "- ", "- [ ]", "- [ ] ", ">", "> ", "> - ", "> - [ ] "];
+    let cases = [
+      { doc: "-", forbiddenWidget: ".cm-md-list-marker" },
+      { doc: "- ", forbiddenWidget: ".cm-md-list-marker" },
+      { doc: "- [ ]", forbiddenWidget: ".cm-md-task-toggle" },
+      { doc: "- [ ] ", forbiddenWidget: ".cm-md-task-toggle" },
+      { doc: ">", forbiddenWidget: ".cm-md-syntax-hidden" },
+      { doc: "> ", forbiddenWidget: ".cm-md-syntax-hidden" },
+      { doc: "> - ", forbiddenWidget: ".cm-md-list-marker" },
+      { doc: "> - [ ] ", forbiddenWidget: ".cm-md-task-toggle" },
+    ];
 
-    for (let doc of cases) {
-      let editor = await mountEditor(doc, { selection: doc.length });
+    for (let testCase of cases) {
+      let editor = await mountEditor(testCase.doc, { selection: testCase.doc.length });
 
-      expectMarkerOnlySource(editor, doc);
+      expectMarkerOnlySource(editor, testCase.doc);
+      expect(editor.view.dom.querySelector(testCase.forbiddenWidget)).toBeNull();
       editor.destroy();
     }
 
