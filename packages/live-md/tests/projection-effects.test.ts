@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { EditorState, Text } from "@codemirror/state";
-import { Decoration, WidgetType } from "@codemirror/view";
+import { EditorState, RangeSet, Text, type RangeValue } from "@codemirror/state";
+import { Decoration, WidgetType, type DecorationSet } from "@codemirror/view";
 import { describe, expect, it } from "vite-plus/test";
 import {
   type LeafAnalysisRecord,
@@ -17,6 +17,7 @@ import {
   createLiveMdBuild,
   finishAtomicRanges,
   finishDecorations,
+  finishProjectionLayers,
 } from "../src/core/projection/emit.js";
 import { projectLeaf, projectLeafRecords } from "../src/core/projection/project-leaf.js";
 import { type LiveMdBuild, type LiveMdRenderStatus } from "../src/core/projection/types.js";
@@ -80,6 +81,44 @@ describe("LiveMD projection effects", () => {
       { from: 1, to: 3 },
       { from: 2, to: 4 },
     ]);
+  });
+
+  it("splits direct layout effects from visible surface effects", () => {
+    let build = testBuild("aaa\nbbb\nccc\nddd\neee\nfff");
+    addMark(build, 0, 3, Decoration.mark({ class: "surface-mark" }));
+    addReplace(build, 4, 7, new TestWidget("surface-inline"), false, true);
+    addReplace(build, 8, 15, new TestWidget("direct-cross-line"), false, true);
+    addReplace(build, 16, 19, new TestWidget("direct-block"), true, true);
+    addLineClass(build, 2, "direct-line");
+    addSyntax(build, 20, 23);
+
+    let projection = finishProjectionLayers(build);
+    let mergedDecorations = RangeSet.join([
+      projection.direct.decorations,
+      projection.surface.decorations,
+    ]);
+    let mergedAtomicRanges = RangeSet.join([
+      projection.direct.atomicRanges,
+      projection.surface.atomicRanges,
+    ]);
+
+    expect(decorationRanges(build, projection.direct.decorations)).toEqual([
+      { className: "direct-line", from: 4, to: 4, widget: undefined },
+      { className: undefined, from: 8, to: 15, widget: "TestWidget" },
+      { className: undefined, from: 16, to: 19, widget: "TestWidget" },
+    ]);
+    expect(decorationRanges(build, projection.surface.decorations)).toEqual([
+      { className: "surface-mark", from: 0, to: 3, widget: undefined },
+      { className: undefined, from: 4, to: 7, widget: "TestWidget" },
+      { className: "cm-md-syntax cm-md-syntax-hidden", from: 20, to: 23, widget: undefined },
+    ]);
+    expect(decorationRanges(build, mergedDecorations)).toEqual(decorationRanges(build));
+    expect(atomicRanges(build, projection.direct.atomicRanges)).toEqual([
+      { from: 8, to: 15 },
+      { from: 16, to: 19 },
+    ]);
+    expect(atomicRanges(build, projection.surface.atomicRanges)).toEqual([{ from: 4, to: 7 }]);
+    expect(atomicRanges(build, mergedAtomicRanges)).toEqual(atomicRanges(build));
   });
 
   it("keeps window materialization equivalent to the same full-build window", () => {
@@ -204,14 +243,17 @@ function testBuild(
   });
 }
 
-function decorationRanges(build: LiveMdBuild) {
+function decorationRanges(
+  build: LiveMdBuild,
+  decorations: DecorationSet = finishDecorations(build),
+) {
   let ranges: Array<{
     className: string | undefined;
     from: number;
     to: number;
     widget: string | undefined;
   }> = [];
-  finishDecorations(build).between(0, build.state.doc.length, (from, to, value) => {
+  decorations.between(0, build.state.doc.length, (from, to, value) => {
     let spec = value.spec as { class?: string; widget?: unknown };
     let widget = spec.widget;
     ranges.push({
@@ -312,10 +354,13 @@ function pipeRanges(doc: string): DocRange[] {
   return ranges;
 }
 
-function atomicRanges(build: LiveMdBuild) {
+function atomicRanges(
+  build: LiveMdBuild,
+  rangeSet: RangeSet<RangeValue> = finishAtomicRanges(build),
+) {
   let ranges: Array<{ from: number; to: number }> = [];
-  finishAtomicRanges(build).between(0, build.state.doc.length, (from, to) => {
+  rangeSet.between(0, build.state.doc.length, (from, to) => {
     ranges.push({ from, to });
   });
-  return ranges;
+  return ranges.sort((left, right) => left.from - right.from || left.to - right.to);
 }

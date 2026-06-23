@@ -34,6 +34,10 @@ export type LiveMdAnalysis = {
   activeSourceRanges: readonly DocRange[];
   atomicRanges: RangeSet<RangeValue>;
   decorations: DecorationSet;
+  directAtomicRanges: RangeSet<RangeValue>;
+  directDecorations: DecorationSet;
+  directDestructiveDecorations: DecorationSet;
+  directSourceSafeDecorations: DecorationSet;
   destructiveDecorations: DecorationSet;
   interactiveDecorations: DecorationSet;
   pending: LiveMdPendingAnalysis | null;
@@ -42,6 +46,11 @@ export type LiveMdAnalysis = {
   semanticTrace: LiveMdSemanticTrace | null;
   sourceSafeDecorations: DecorationSet;
   sourceIslandLeaves: readonly LiveMdSourceIslandLeaf[];
+  surfaceAtomicRanges: RangeSet<RangeValue>;
+  surfaceDecorations: DecorationSet;
+  surfaceDestructiveDecorations: DecorationSet;
+  surfaceInteractiveDecorations: DecorationSet;
+  surfaceSourceSafeDecorations: DecorationSet;
   trace: LiveMdLeafAnalysisTrace;
   tree: Tree;
 };

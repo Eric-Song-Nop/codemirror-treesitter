@@ -2,6 +2,7 @@ import {
   type ChangeDesc,
   EditorState,
   RangeSet,
+  RangeSetBuilder,
   StateEffect,
   StateField,
   type Extension,
@@ -20,7 +21,13 @@ import {
   type Highlighter,
   type Tree,
 } from "@codemirror-treesitter/language";
-import { EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import {
+  Decoration,
+  EditorView,
+  ViewPlugin,
+  type DecorationSet,
+  type ViewUpdate,
+} from "@codemirror/view";
 import { walkMarkdownBlocks } from "../analysis/markdown-block-cursor.js";
 import { type LiveMdDescriptor } from "../analysis/descriptors.js";
 import {
@@ -60,7 +67,7 @@ import {
   type LiveMdMarkdownParserService,
 } from "../languages.js";
 import { liveMdLinkBaseUrl } from "../links.js";
-import { createLiveMdBuild, finishAtomicRanges, finishDecorationSets } from "../projection/emit.js";
+import { createLiveMdBuild, finishProjectionLayers } from "../projection/emit.js";
 import { applyLiveMdMarkdownFeatures, processLiveMdMatch } from "../projection/builtin.js";
 import { projectLeafCacheRecords } from "../projection/project-leaf.js";
 import {
@@ -152,9 +159,9 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
   },
   provide(field) {
     return [
-      EditorView.decorations.from(field, (analysis) => analysis.decorations),
+      EditorView.decorations.from(field, (analysis) => analysis.directDecorations),
       EditorView.atomicRanges.of(
-        (view) => view.state.field(field, false)?.atomicRanges ?? RangeSet.empty,
+        (view) => view.state.field(field, false)?.directAtomicRanges ?? RangeSet.empty,
       ),
     ];
   },
@@ -261,7 +268,54 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
   },
 );
 
-export const liveMdAnalysis: Extension = [liveMdAnalysisField, liveMdSchedulerPlugin];
+const liveMdSurfacePlugin = ViewPlugin.fromClass(
+  class LiveMdSurfacePlugin {
+    atomicRanges = RangeSet.empty;
+    decorations: DecorationSet = Decoration.none;
+
+    constructor(readonly view: EditorView) {
+      this.refresh();
+    }
+
+    update(update: ViewUpdate) {
+      if (
+        update.viewportChanged ||
+        update.startState.field(liveMdAnalysisField) != update.state.field(liveMdAnalysisField)
+      ) {
+        this.refresh();
+      }
+    }
+
+    private refresh() {
+      let analysis = this.view.state.field(liveMdAnalysisField, false);
+      if (!analysis) {
+        this.atomicRanges = RangeSet.empty;
+        this.decorations = Decoration.none;
+        return;
+      }
+      this.atomicRanges = filterRangeSetToRanges(
+        analysis.surfaceAtomicRanges,
+        this.view.visibleRanges,
+      );
+      this.decorations = filterRangeSetToRanges(
+        analysis.surfaceDecorations,
+        this.view.visibleRanges,
+      );
+    }
+  },
+  {
+    decorations: (plugin) => plugin.decorations,
+  },
+);
+
+export const liveMdAnalysis: Extension = [
+  liveMdAnalysisField,
+  liveMdSchedulerPlugin,
+  liveMdSurfacePlugin,
+  EditorView.atomicRanges.of(
+    (view) => view.plugin(liveMdSurfacePlugin)?.atomicRanges ?? RangeSet.empty,
+  ),
+];
 
 type LiveMdScheduledWork = {
   cancel: () => void;
@@ -306,34 +360,60 @@ function pendingSourceAnalysis(value: LiveMdAnalysis, transaction: Transaction):
     sourceIslandLeaves,
     changes,
   );
-  let sourceSafeDecorations = value.sourceSafeDecorations.map(transaction.changes);
-  let interactiveDecorations = clearDecorationRanges(
-    value.interactiveDecorations.map(transaction.changes),
-    interactiveSafetyRanges,
-  );
-  let destructiveDecorations = clearDecorationRanges(
-    value.destructiveDecorations.map(transaction.changes),
+  let directSourceSafeDecorations = value.directSourceSafeDecorations.map(transaction.changes);
+  let directDestructiveDecorations = clearDecorationRanges(
+    value.directDestructiveDecorations.map(transaction.changes),
     safetyRanges,
   );
+  let surfaceSourceSafeDecorations = value.surfaceSourceSafeDecorations.map(transaction.changes);
+  let surfaceInteractiveDecorations = clearDecorationRanges(
+    value.surfaceInteractiveDecorations.map(transaction.changes),
+    interactiveSafetyRanges,
+  );
+  let surfaceDestructiveDecorations = clearDecorationRanges(
+    value.surfaceDestructiveDecorations.map(transaction.changes),
+    safetyRanges,
+  );
+  let directAtomicRanges = clearRangeSetRanges(
+    value.directAtomicRanges.map(transaction.changes),
+    safetyRanges,
+  );
+  let surfaceAtomicRanges = clearRangeSetRanges(
+    value.surfaceAtomicRanges.map(transaction.changes),
+    safetyRanges,
+  );
+  let projection = joinProjectionSets({
+    directAtomicRanges,
+    directDestructiveDecorations,
+    directSourceSafeDecorations,
+    surfaceAtomicRanges,
+    surfaceDestructiveDecorations,
+    surfaceInteractiveDecorations,
+    surfaceSourceSafeDecorations,
+  });
   let trace = pendingInputTrace(transaction);
-
   return {
     activeLines,
     activeSourceRanges,
-    atomicRanges: clearRangeSetRanges(value.atomicRanges.map(transaction.changes), safetyRanges),
-    decorations: joinedDecorations(
-      sourceSafeDecorations,
-      interactiveDecorations,
-      destructiveDecorations,
-    ),
-    destructiveDecorations,
-    interactiveDecorations,
+    atomicRanges: projection.atomicRanges,
+    decorations: projection.decorations,
+    destructiveDecorations: projection.destructiveDecorations,
+    directAtomicRanges,
+    directDecorations: projection.directDecorations,
+    directDestructiveDecorations,
+    directSourceSafeDecorations,
+    interactiveDecorations: projection.interactiveDecorations,
     pending,
     revision,
     semantic: baseAnalysis.semantic,
     semanticTrace: baseAnalysis.semantic ? emptyLeafAnalysisCacheTrace() : null,
-    sourceSafeDecorations,
+    sourceSafeDecorations: projection.sourceSafeDecorations,
     sourceIslandLeaves,
+    surfaceAtomicRanges,
+    surfaceDecorations: projection.surfaceDecorations,
+    surfaceDestructiveDecorations,
+    surfaceInteractiveDecorations,
+    surfaceSourceSafeDecorations,
     trace,
     tree: value.tree,
   };
@@ -374,20 +454,40 @@ function pendingSelectionAnalysis(value: LiveMdAnalysis, transaction: Transactio
   ) {
     return value;
   }
-  let destructiveDecorations = clearDecorationRanges(value.destructiveDecorations, revealRanges);
-  let atomicRanges = clearRangeSetRanges(value.atomicRanges, revealRanges);
+  let directDestructiveDecorations = clearDecorationRanges(
+    value.directDestructiveDecorations,
+    revealRanges,
+  );
+  let surfaceDestructiveDecorations = clearDecorationRanges(
+    value.surfaceDestructiveDecorations,
+    revealRanges,
+  );
+  let directAtomicRanges = clearRangeSetRanges(value.directAtomicRanges, revealRanges);
+  let surfaceAtomicRanges = clearRangeSetRanges(value.surfaceAtomicRanges, revealRanges);
+  let projection = joinProjectionSets({
+    directAtomicRanges,
+    directDestructiveDecorations,
+    directSourceSafeDecorations: value.directSourceSafeDecorations,
+    surfaceAtomicRanges,
+    surfaceDestructiveDecorations,
+    surfaceInteractiveDecorations: value.surfaceInteractiveDecorations,
+    surfaceSourceSafeDecorations: value.surfaceSourceSafeDecorations,
+  });
   return {
     ...value,
     activeLines,
     activeSourceRanges,
-    atomicRanges,
-    decorations: joinedDecorations(
-      value.sourceSafeDecorations,
-      value.interactiveDecorations,
-      destructiveDecorations,
-    ),
-    destructiveDecorations,
-    interactiveDecorations: value.interactiveDecorations,
+    atomicRanges: projection.atomicRanges,
+    decorations: projection.decorations,
+    destructiveDecorations: projection.destructiveDecorations,
+    directAtomicRanges,
+    directDecorations: projection.directDecorations,
+    directDestructiveDecorations,
+    interactiveDecorations: projection.interactiveDecorations,
+    sourceSafeDecorations: projection.sourceSafeDecorations,
+    surfaceAtomicRanges,
+    surfaceDecorations: projection.surfaceDecorations,
+    surfaceDestructiveDecorations,
     trace: emptyLiveMdLeafAnalysisTrace(),
   };
 }
@@ -475,12 +575,68 @@ function clearDecorationRanges(decorations: DecorationSet, ranges: readonly DocR
   return clearRangeSetRanges(decorations, ranges);
 }
 
-function joinedDecorations(
-  sourceSafeDecorations: DecorationSet,
-  interactiveDecorations: DecorationSet,
-  destructiveDecorations: DecorationSet,
-) {
-  return RangeSet.join([sourceSafeDecorations, interactiveDecorations, destructiveDecorations]);
+type ProjectionSetInputs = {
+  directAtomicRanges: RangeSet<RangeValue>;
+  directDestructiveDecorations: DecorationSet;
+  directSourceSafeDecorations: DecorationSet;
+  surfaceAtomicRanges: RangeSet<RangeValue>;
+  surfaceDestructiveDecorations: DecorationSet;
+  surfaceInteractiveDecorations: DecorationSet;
+  surfaceSourceSafeDecorations: DecorationSet;
+};
+
+function joinProjectionSets(input: ProjectionSetInputs) {
+  let directDecorations = RangeSet.join([
+    input.directSourceSafeDecorations,
+    input.directDestructiveDecorations,
+  ]);
+  let surfaceDecorations = RangeSet.join([
+    input.surfaceSourceSafeDecorations,
+    input.surfaceInteractiveDecorations,
+    input.surfaceDestructiveDecorations,
+  ]);
+  let sourceSafeDecorations = RangeSet.join([
+    input.directSourceSafeDecorations,
+    input.surfaceSourceSafeDecorations,
+  ]);
+  let destructiveDecorations = RangeSet.join([
+    input.directDestructiveDecorations,
+    input.surfaceDestructiveDecorations,
+  ]);
+  return {
+    atomicRanges: RangeSet.join([input.directAtomicRanges, input.surfaceAtomicRanges]),
+    decorations: RangeSet.join([directDecorations, surfaceDecorations]),
+    destructiveDecorations,
+    directDecorations,
+    interactiveDecorations: input.surfaceInteractiveDecorations,
+    sourceSafeDecorations,
+    surfaceDecorations,
+  };
+}
+
+function filterRangeSetToRanges<T extends RangeValue>(
+  rangeSet: RangeSet<T>,
+  ranges: readonly DocRange[],
+): RangeSet<T> {
+  if (!ranges.length) return RangeSet.empty;
+  let collected: Array<{ from: number; to: number; value: T }> = [];
+  let builder = new RangeSetBuilder<T>();
+  for (let range of ranges) {
+    rangeSet.between(range.from, range.to, (from, to, value) => {
+      collected.push({ from, to, value });
+    });
+  }
+  collected.sort(
+    (left, right) =>
+      left.from - right.from ||
+      left.value.startSide - right.value.startSide ||
+      left.to - right.to ||
+      left.value.endSide - right.value.endSide,
+  );
+  for (let range of collected) {
+    builder.add(range.from, range.to, range.value);
+  }
+  return builder.finish();
 }
 
 function newlyActiveSourceRanges(
@@ -765,20 +921,29 @@ function buildLiveMdAnalysis(
       tree,
     );
     let trace = liveMdSemanticTrace(build.trace, legacyFeatureFullQueryCount);
-    let decorationSets = finishDecorationSets(build);
+    let projection = finishProjectionLayers(build);
     let analysis: LiveMdAnalysis = {
       activeLines,
       activeSourceRanges: semanticAnalysis.activeSourceRanges,
-      atomicRanges: finishAtomicRanges(build),
-      decorations: decorationSets.decorations,
-      destructiveDecorations: decorationSets.destructiveDecorations,
-      interactiveDecorations: decorationSets.interactiveDecorations,
+      atomicRanges: projection.atomicRanges,
+      decorations: projection.decorations,
+      destructiveDecorations: projection.destructiveDecorations,
+      directAtomicRanges: projection.direct.atomicRanges,
+      directDecorations: projection.direct.decorations,
+      directDestructiveDecorations: projection.direct.destructiveDecorations,
+      directSourceSafeDecorations: projection.direct.sourceSafeDecorations,
+      interactiveDecorations: projection.interactiveDecorations,
       pending: null,
       revision: options.revision ?? options.previous?.revision ?? 0,
       semantic: semanticAnalysis.semantic,
       semanticTrace: trace,
-      sourceSafeDecorations: decorationSets.sourceSafeDecorations,
+      sourceSafeDecorations: projection.sourceSafeDecorations,
       sourceIslandLeaves: semanticAnalysis.sourceIslandLeaves,
+      surfaceAtomicRanges: projection.surface.atomicRanges,
+      surfaceDecorations: projection.surface.decorations,
+      surfaceDestructiveDecorations: projection.surface.destructiveDecorations,
+      surfaceInteractiveDecorations: projection.surface.interactiveDecorations,
+      surfaceSourceSafeDecorations: projection.surface.sourceSafeDecorations,
       trace,
       tree,
     };
@@ -793,20 +958,29 @@ function buildLiveMdAnalysis(
     tree,
     options.yieldCheck,
   );
-  let decorationSets = finishDecorationSets(build);
+  let projection = finishProjectionLayers(build);
   return {
     activeLines,
     activeSourceRanges: [],
-    atomicRanges: finishAtomicRanges(build),
-    decorations: decorationSets.decorations,
-    destructiveDecorations: decorationSets.destructiveDecorations,
-    interactiveDecorations: decorationSets.interactiveDecorations,
+    atomicRanges: projection.atomicRanges,
+    decorations: projection.decorations,
+    destructiveDecorations: projection.destructiveDecorations,
+    directAtomicRanges: projection.direct.atomicRanges,
+    directDecorations: projection.direct.decorations,
+    directDestructiveDecorations: projection.direct.destructiveDecorations,
+    directSourceSafeDecorations: projection.direct.sourceSafeDecorations,
+    interactiveDecorations: projection.interactiveDecorations,
     pending: null,
     revision: options.revision ?? options.previous?.revision ?? 0,
     semantic: null,
     semanticTrace: null,
-    sourceSafeDecorations: decorationSets.sourceSafeDecorations,
+    sourceSafeDecorations: projection.sourceSafeDecorations,
     sourceIslandLeaves: [],
+    surfaceAtomicRanges: projection.surface.atomicRanges,
+    surfaceDecorations: projection.surface.decorations,
+    surfaceDestructiveDecorations: projection.surface.destructiveDecorations,
+    surfaceInteractiveDecorations: projection.surface.interactiveDecorations,
+    surfaceSourceSafeDecorations: projection.surface.sourceSafeDecorations,
     trace: build.trace,
     tree,
   };
@@ -1023,20 +1197,29 @@ function buildCanonicalLiveMdAnalysis(state: EditorState): LiveMdAnalysis {
     markdownAnalysis,
     tree,
   );
-  let decorationSets = finishDecorationSets(build);
+  let projection = finishProjectionLayers(build);
   return {
     activeLines,
     activeSourceRanges: markdownAnalysis?.activeSourceRanges ?? [],
-    atomicRanges: finishAtomicRanges(build),
-    decorations: decorationSets.decorations,
-    destructiveDecorations: decorationSets.destructiveDecorations,
-    interactiveDecorations: decorationSets.interactiveDecorations,
+    atomicRanges: projection.atomicRanges,
+    decorations: projection.decorations,
+    destructiveDecorations: projection.destructiveDecorations,
+    directAtomicRanges: projection.direct.atomicRanges,
+    directDecorations: projection.direct.decorations,
+    directDestructiveDecorations: projection.direct.destructiveDecorations,
+    directSourceSafeDecorations: projection.direct.sourceSafeDecorations,
+    interactiveDecorations: projection.interactiveDecorations,
     pending: null,
     revision: 0,
     semantic: null,
     semanticTrace: null,
-    sourceSafeDecorations: decorationSets.sourceSafeDecorations,
+    sourceSafeDecorations: projection.sourceSafeDecorations,
     sourceIslandLeaves: markdownAnalysis?.leaves ?? [],
+    surfaceAtomicRanges: projection.surface.atomicRanges,
+    surfaceDecorations: projection.surface.decorations,
+    surfaceDestructiveDecorations: projection.surface.destructiveDecorations,
+    surfaceInteractiveDecorations: projection.surface.interactiveDecorations,
+    surfaceSourceSafeDecorations: projection.surface.sourceSafeDecorations,
     trace: build.trace,
     tree,
   };

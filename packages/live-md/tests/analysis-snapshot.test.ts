@@ -4,6 +4,7 @@ import {
   type ChangeDesc,
   Compartment,
   EditorState,
+  RangeSet,
   StateEffect,
   StateField,
   type Extension,
@@ -12,7 +13,7 @@ import {
   type TransactionSpec,
 } from "@codemirror/state";
 import { history, redo, undo } from "@codemirror-treesitter/commands";
-import { EditorView } from "@codemirror/view";
+import { EditorView, type DecorationSet } from "@codemirror/view";
 import {
   ensureSyntaxTree,
   HighlightStyle,
@@ -1411,6 +1412,40 @@ describe("LiveMD analysis snapshot", () => {
     expect(decorationClasses(state, leafLocal).has("cm-md-inline-code")).toBe(true);
   });
 
+  it("keeps direct layout and visible surface projections merge-equivalent", async () => {
+    let doc =
+      "Paragraph with **bold** and [link](https://example.com)\n\n" +
+      "| Name | Value |\n" +
+      "| --- | ---: |\n" +
+      "| alpha | 1 |\n\n" +
+      "after";
+    let state = await markdownAnalysisState(doc, "after");
+    let analysis = __testBuildLiveMdAnalysis(state);
+    let mergedProjection = canonicalProjectionFromSets(
+      state,
+      RangeSet.join([analysis.directDecorations, analysis.surfaceDecorations]),
+      RangeSet.join([analysis.directAtomicRanges, analysis.surfaceAtomicRanges]),
+    );
+
+    expect(mergedProjection).toEqual(canonicalAnalysis(state, analysis));
+    expect(canonicalAnalysis(state, analysis)).toEqual(
+      canonicalAnalysis(state, __testBuildCanonicalLiveMdAnalysis(state)),
+    );
+    expect(decorationClassesFromSet(state, analysis.surfaceDecorations).has("cm-md-strong")).toBe(
+      true,
+    );
+    expect(decorationClassesFromSet(state, analysis.surfaceDecorations).has("cm-md-link")).toBe(
+      true,
+    );
+    expect(decorationClassesFromSet(state, analysis.directDecorations).has("cm-md-strong")).toBe(
+      false,
+    );
+    expect(widgetNamesFromSet(state, analysis.directDecorations)).toContain("TablePreviewWidget");
+    expect(widgetNamesFromSet(state, analysis.surfaceDecorations)).not.toContain(
+      "TablePreviewWidget",
+    );
+  });
+
   it("balances leaf-local inline parser and tree lifetimes including table cells", async () => {
     let service = await loadMarkdownParserService();
     let created = 0;
@@ -2378,14 +2413,27 @@ function decorationClasses(
   state: EditorState,
   analysis = __testLiveMdAnalysis({ state } as EditorView),
 ) {
+  return decorationClassesFromSet(state, analysis.decorations);
+}
+
+function decorationClassesFromSet(state: EditorState, decorations: DecorationSet) {
   let classes = new Set<string>();
-  analysis.decorations.between(0, state.doc.length, (_from, _to, value) => {
+  decorations.between(0, state.doc.length, (_from, _to, value) => {
     let className = (value.spec as { class?: string }).class;
     for (let name of className?.split(/\s+/) ?? []) {
       if (name) classes.add(name);
     }
   });
   return classes;
+}
+
+function widgetNamesFromSet(state: EditorState, decorations: DecorationSet) {
+  let names: string[] = [];
+  decorations.between(0, state.doc.length, (_from, _to, value) => {
+    let widget = (value.spec as { widget?: unknown }).widget;
+    if (widget && typeof widget == "object") names.push(widget.constructor.name);
+  });
+  return names;
 }
 
 function lineBySource(state: EditorState, lineText: string) {
@@ -2548,14 +2596,22 @@ function liveMdKitchenSinkDoc() {
 }
 
 function canonicalAnalysis(state: EditorState, analysis = __testBuildLiveMdAnalysis(state)) {
+  return canonicalProjectionFromSets(state, analysis.decorations, analysis.atomicRanges);
+}
+
+function canonicalProjectionFromSets(
+  state: EditorState,
+  decorationsSet: DecorationSet,
+  atomicRangesSet: ReturnType<typeof __testBuildLiveMdAnalysis>["atomicRanges"],
+) {
   let decorations: Array<{ from: number; spec: unknown; to: number }> = [];
-  analysis.decorations.between(0, state.doc.length, (from, to, value) => {
+  decorationsSet.between(0, state.doc.length, (from, to, value) => {
     decorations.push({ from, spec: canonicalDecorationSpec(value.spec), to });
   });
   decorations.sort(compareCanonicalRange);
 
   let atomicRanges: Array<{ from: number; to: number; value: string }> = [];
-  analysis.atomicRanges.between(0, state.doc.length, (from, to, value) => {
+  atomicRangesSet.between(0, state.doc.length, (from, to, value) => {
     atomicRanges.push({ from, to, value: value.constructor.name });
   });
   atomicRanges.sort(compareCanonicalRange);
