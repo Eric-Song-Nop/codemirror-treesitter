@@ -1,25 +1,18 @@
 import {
-  type ChangeDesc,
   EditorState,
   RangeSet,
   RangeSetBuilder,
   RangeValue,
-  StateEffect,
   StateField,
   Text,
   type Extension,
   type Range,
-  type Transaction,
 } from "@codemirror/state";
 import {
   highlightTree,
-  lineRangesForChanges,
-  patchRangeSet,
   queryTreeMatches,
-  rangesTouch,
   syntaxHighlighters,
   syntaxTree,
-  syntaxTreeChangedRanges,
   type Highlighter,
   type SyntaxNode,
   type Tree,
@@ -28,14 +21,7 @@ import {
   type TreeSitterQueryMatch,
   type TreeSitterQuerySource,
 } from "@codemirror-treesitter/language";
-import {
-  Decoration,
-  EditorView,
-  ViewPlugin,
-  WidgetType,
-  type DecorationSet,
-  type ViewUpdate,
-} from "@codemirror/view";
+import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import {
   codeFenceHighlighterFacet,
   codeFenceLanguagesField,
@@ -81,13 +67,7 @@ type LiveMdBuild = {
   lineClasses: Map<number, Set<string>>;
   linkBaseUrl: string | null;
   markdownFeatures: readonly LiveMdMarkdownFeature[];
-  ranges: readonly DocRange[];
   state: EditorState;
-};
-
-type DocRange = {
-  from: number;
-  to: number;
 };
 
 type CodeFenceParser =
@@ -115,40 +95,18 @@ type LiveMdAnalysis = {
   activeLines: ReadonlySet<number>;
   atomicRanges: RangeSet<RangeValue>;
   codeFenceHighlightTrees: readonly CodeFenceHighlightTree[];
-  codeFenceLanguages: CodeFenceLanguageMap;
   decorations: DecorationSet;
-  ranges: readonly DocRange[];
   tree: Tree;
 };
 
-const setLiveMdAnalysisRanges = StateEffect.define<readonly DocRange[]>();
-
 const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
   create(state) {
-    return buildLiveMdAnalysis(state, getActiveLines(state), fullDocRange(state));
+    return buildLiveMdAnalysis(state, getActiveLines(state));
   },
   update(value, transaction) {
-    let ranges = transaction.docChanged
-      ? mapDocRanges(value.ranges, transaction.changes, transaction.state)
-      : value.ranges;
-    let rangesChanged = false;
-    for (let effect of transaction.effects) {
-      if (effect.is(setLiveMdAnalysisRanges)) {
-        ranges = effect.value;
-        rangesChanged = !sameDocRanges(ranges, value.ranges);
-      }
-    }
-
     let tree = syntaxTree(transaction.state);
     let activeLines = getActiveLines(transaction.state);
-    let decorations = transaction.docChanged
-      ? value.decorations.map(transaction.changes)
-      : value.decorations;
-    let atomicRanges = transaction.docChanged
-      ? value.atomicRanges.map(transaction.changes)
-      : value.atomicRanges;
     if (
-      !rangesChanged &&
       tree == value.tree &&
       !transaction.docChanged &&
       sameNumbers(activeLines, value.activeLines) &&
@@ -162,58 +120,7 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
       return value;
     }
 
-    if (
-      rangesChanged ||
-      codeFenceHighlightersChanged(transaction.startState, transaction.state) ||
-      codeFenceLanguagesChanged(transaction.startState, transaction.state) ||
-      markdownFeaturesChanged(transaction.startState, transaction.state) ||
-      transaction.startState.facet(liveMdImageSourceResolver) !=
-        transaction.state.facet(liveMdImageSourceResolver) ||
-      transaction.startState.facet(liveMdLinkBaseUrl) != transaction.state.facet(liveMdLinkBaseUrl)
-    ) {
-      return buildLiveMdAnalysis(transaction.state, activeLines, ranges);
-    }
-
-    let dirtyRanges = liveMdDirtyRanges(value, transaction, ranges, activeLines);
-    if (!dirtyRanges.length) {
-      return {
-        ...value,
-        activeLines,
-        atomicRanges,
-        codeFenceHighlightTrees: transaction.docChanged
-          ? mapCodeFenceHighlightTrees(value.codeFenceHighlightTrees, transaction.changes)
-          : value.codeFenceHighlightTrees,
-        decorations,
-        ranges,
-        tree,
-      };
-    }
-
-    let dirtyAnalysis = buildLiveMdAnalysis(transaction.state, activeLines, dirtyRanges, {
-      expandLeadingBlankRanges: false,
-    });
-    return {
-      activeLines,
-      atomicRanges: patchRangeSet(
-        atomicRanges,
-        dirtyRanges,
-        rangeSetRanges(dirtyAnalysis.atomicRanges, transaction.state.doc.length),
-      ),
-      codeFenceHighlightTrees: patchCodeFenceHighlightTrees(
-        value,
-        transaction,
-        dirtyAnalysis,
-        dirtyRanges,
-      ),
-      codeFenceLanguages: value.codeFenceLanguages,
-      decorations: patchRangeSet(
-        decorations,
-        dirtyRanges,
-        rangeSetRanges(dirtyAnalysis.decorations, transaction.state.doc.length),
-      ),
-      ranges,
-      tree,
-    };
+    return buildLiveMdAnalysis(transaction.state, activeLines);
   },
   provide(field) {
     return [
@@ -225,44 +132,7 @@ const liveMdAnalysisField = StateField.define<LiveMdAnalysis>({
   },
 });
 
-class LiveMdViewportPlugin {
-  private destroyed = false;
-  private pending = false;
-
-  constructor(readonly view: EditorView) {
-    this.scheduleSync();
-  }
-
-  update(update: ViewUpdate) {
-    if (update.viewportChanged || update.docChanged) this.scheduleSync();
-  }
-
-  private scheduleSync() {
-    if (this.pending) return;
-    this.pending = true;
-    this.view.requestMeasure({
-      read: () => null,
-      write: () => {
-        this.pending = false;
-        setTimeout(() => {
-          if (this.destroyed) return;
-          let ranges = visibleLineRanges(this.view);
-          let current = this.view.state.field(liveMdAnalysisField, false);
-          if (!current || sameDocRanges(ranges, current.ranges)) return;
-          this.view.dispatch({ effects: setLiveMdAnalysisRanges.of(ranges) });
-        }, 0);
-      },
-    });
-  }
-
-  destroy() {
-    this.destroyed = true;
-  }
-}
-
-const liveMdViewportPlugin = ViewPlugin.fromClass(LiveMdViewportPlugin);
-
-export const liveMdAnalysis: Extension = [liveMdAnalysisField, liveMdViewportPlugin];
+export const liveMdAnalysis: Extension = liveMdAnalysisField;
 
 class AtomicRange extends RangeValue {
   eq(other: RangeValue) {
@@ -276,7 +146,6 @@ function createLiveMdBuild(
   state: EditorState,
   activeLines: Set<number>,
   codeFenceLanguages: CodeFenceLanguageMap,
-  ranges: readonly DocRange[],
 ): LiveMdBuild {
   return {
     activeLines,
@@ -289,7 +158,6 @@ function createLiveMdBuild(
     lineClasses: new Map(),
     linkBaseUrl: state.facet(liveMdLinkBaseUrl),
     markdownFeatures: state.facet(liveMdMarkdownFeatureFacet),
-    ranges,
     state,
   };
 }
@@ -301,11 +169,9 @@ function addLineClass(build: LiveMdBuild, lineNumber: number, className: string)
 }
 
 function addLineRangeClass(build: LiveMdBuild, from: number, to: number, className: string) {
-  forEachBuildRange(build, from, to, (rangeFrom, rangeTo) => {
-    forEachLineInRange(build.state, rangeFrom, rangeTo, (docLine) =>
-      addLineClass(build, docLine.number, className),
-    );
-  });
+  forEachLineInRange(build.state, from, to, (docLine) =>
+    addLineClass(build, docLine.number, className),
+  );
 }
 
 function addAtom(build: LiveMdBuild, from: number, to: number) {
@@ -344,20 +210,6 @@ function addSyntax(build: LiveMdBuild, from: number, to: number, decoration?: De
   });
 }
 
-function forEachBuildRange(
-  build: LiveMdBuild,
-  from: number,
-  to: number,
-  visit: (from: number, to: number) => void,
-) {
-  if (from >= to) return;
-  for (let range of build.ranges) {
-    let rangeFrom = Math.max(from, range.from);
-    let rangeTo = Math.min(to, range.to);
-    if (rangeFrom < rangeTo) visit(rangeFrom, rangeTo);
-  }
-}
-
 function finishDecorations(build: LiveMdBuild) {
   let lineDecorations = new RangeSetBuilder<Decoration>();
   let lineClasses = Array.from(build.lineClasses).sort(
@@ -386,23 +238,14 @@ function finishAtomicRanges(build: LiveMdBuild) {
 function buildLiveMdAnalysis(
   state: EditorState,
   activeLines = getActiveLines(state),
-  ranges: readonly DocRange[] = fullDocRange(state),
-  options: { expandLeadingBlankRanges?: boolean } = {},
 ): LiveMdAnalysis {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
-  let build = buildLiveMdBuild(
-    state,
-    activeLines,
-    codeFenceLanguages,
-    options.expandLeadingBlankRanges === false ? ranges : expandLeadingBlankRanges(state, ranges),
-  );
+  let build = buildLiveMdBuild(state, activeLines, codeFenceLanguages);
   return {
     activeLines,
     atomicRanges: finishAtomicRanges(build),
     codeFenceHighlightTrees: build.codeFenceHighlightTrees,
-    codeFenceLanguages,
     decorations: finishDecorations(build),
-    ranges,
     tree: syntaxTree(state),
   };
 }
@@ -411,29 +254,20 @@ export function __testBuildLiveMdAnalysis(state: EditorState) {
   return buildLiveMdAnalysis(state);
 }
 
-export function __testBuildVisibleLiveMdAnalysis(state: EditorState, ranges: readonly DocRange[]) {
-  return buildLiveMdAnalysis(state, getActiveLines(state), ranges);
-}
-
 export function __testLiveMdAnalysis(view: EditorView): LiveMdAnalysis {
   return view.state.field(liveMdAnalysisField);
-}
-
-export function __testVisibleLineRanges(view: EditorView): readonly DocRange[] {
-  return visibleLineRanges(view);
 }
 
 function buildLiveMdBuild(
   state: EditorState,
   activeLines: Set<number>,
   codeFenceLanguages: CodeFenceLanguageMap,
-  ranges: readonly DocRange[],
 ) {
-  let build = createLiveMdBuild(state, activeLines, codeFenceLanguages, ranges);
+  let build = createLiveMdBuild(state, activeLines, codeFenceLanguages);
 
   let tree = syntaxTree(state);
   let skipped: Array<{ from: number; to: number }> = [];
-  let matches = queryLiveMdMatches(tree, liveMdQueryRanges(state, ranges));
+  let matches = queryLiveMdMatches(tree);
   let paragraphContainers = new Map<string, ParagraphContainer>();
   let tables = new Map<string, CapturedTable>();
   for (let match of matches) {
@@ -454,370 +288,18 @@ function buildLiveMdBuild(
   return build;
 }
 
-function queryLiveMdMatches(tree: Tree, ranges: readonly DocRange[]) {
-  return queryLiveMdMatchesFromSource(tree, liveMdQuerySource, ranges);
+function queryLiveMdMatches(tree: Tree) {
+  return queryLiveMdMatchesFromSource(tree, liveMdQuerySource);
 }
 
 function queryLiveMdMatchesFromSource(
   tree: Tree,
   source: TreeSitterQuerySource,
-  ranges: readonly DocRange[],
   includeNested?: boolean,
 ) {
-  if (!ranges.length) return [];
-  let queryFrom = Math.min(...ranges.map((range) => range.from));
-  let options = {
-    ...(queryFrom > 0 ? { from: queryFrom } : null),
-    ...(includeNested == null ? null : { includeNested }),
-  };
-  let matches = queryTreeMatches(tree, source, options);
-  if (ranges.some((range) => range.from <= 0 && range.to >= tree.length)) return matches;
-  return matches.filter((match) => matchTouchesRanges(match, ranges));
-}
-
-function matchTouchesRanges(match: TreeSitterQueryMatch, ranges: readonly DocRange[]) {
-  let feature = capture(match, "feature")?.node ?? matchFeatureRoot(match);
-  if (feature) return nodeRangesTouch(feature, ranges);
-  let paragraphChild = capture(match, "paragraph.child")?.node;
-  if (paragraphChild) return nodeTouchesRangesInclusive(paragraphChild, ranges);
-  return match.captures.some((item) => nodeRangesTouch(item.node, ranges));
-}
-
-function matchFeatureRoot(match: TreeSitterQueryMatch) {
-  switch (matchKind(match)) {
-    case "codeFence":
-      return capture(match, "codeFence")?.node ?? null;
-    case "heading":
-      return capture(match, "heading")?.node ?? null;
-    case "image":
-      return capture(match, "image")?.node ?? null;
-    case "latex":
-      return capture(match, "latex")?.node ?? null;
-    case "link":
-      return capture(match, "link")?.node ?? null;
-    case "rule":
-      return capture(match, "rule")?.node ?? null;
-    case "table":
-      return capture(match, "table")?.node ?? null;
-    default:
-      return null;
-  }
-}
-
-function nodeRangesTouch(node: SyntaxNode, ranges: readonly DocRange[]) {
-  return ranges.some((range) => rangesTouch(node.from, node.to, range.from, range.to));
-}
-
-function nodeTouchesRangesInclusive(node: SyntaxNode, ranges: readonly DocRange[]) {
-  return ranges.some((range) => node.from <= range.to && node.to >= range.from);
-}
-
-function liveMdQueryRanges(state: EditorState, ranges: readonly DocRange[]) {
-  return expandPipeTableRanges(state, expandLeadingBlankRanges(state, ranges));
-}
-
-function liveMdDirtyRanges(
-  value: LiveMdAnalysis,
-  transaction: Transaction,
-  ranges: readonly DocRange[],
-  activeLines: ReadonlySet<number>,
-) {
-  let dirtyRanges: DocRange[] = [];
-  if (transaction.docChanged) {
-    dirtyRanges.push(
-      ...lineRangesForChanges(
-        transaction.state,
-        transaction.changes,
-        syntaxTreeChangedRanges(transaction),
-      ),
-    );
-  } else {
-    dirtyRanges.push(...syntaxTreeChangedRanges(transaction));
-  }
-
-  if (!sameNumbers(activeLines, value.activeLines)) {
-    dirtyRanges.push(
-      ...previousActiveLineRanges(value, transaction),
-      ...activeLineRanges(transaction.state, activeLines),
-    );
-  }
-
-  if (!dirtyRanges.length) return [];
-  return expandLiveMdDirtyRanges(transaction.state, dirtyRanges).filter((range) =>
-    ranges.some((visibleRange) =>
-      rangesTouch(range.from, range.to, visibleRange.from, visibleRange.to),
-    ),
-  );
-}
-
-function expandLiveMdDirtyRanges(state: EditorState, ranges: readonly DocRange[]) {
-  let expanded: DocRange[] = [...ranges];
-  let tree = syntaxTree(state);
-  for (let range of ranges) {
-    tree.iterate({
-      from: range.from,
-      to: range.to,
-      enter(node) {
-        if (isLiveMdDirtyBoundary(node)) expanded.push(liveMdDirtyBoundaryRange(node));
-      },
-    });
-  }
-  return mergeDocRanges([
-    ...expandPipeTableRanges(state, mergeDocRanges(expanded)),
-    ...expandLeadingBlankRanges(state, ranges),
-  ]);
-}
-
-function isLiveMdDirtyBoundary(node: SyntaxNode) {
-  switch (node.name) {
-    case "atx_heading":
-    case "block_quote":
-    case "fenced_code_block":
-    case "latex_block":
-    case "list":
-    case "list_item":
-    case "paragraph":
-    case "pipe_table":
-    case "setext_heading":
-    case "thematic_break":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function liveMdDirtyBoundaryRange(node: SyntaxNode): DocRange {
-  return {
-    from: previousLiveMdDirtySibling(node)?.to ?? node.from,
-    to: nextLiveMdDirtySibling(node)?.from ?? node.to,
-  };
-}
-
-function previousLiveMdDirtySibling(node: SyntaxNode) {
-  for (let sibling = node.previousSibling; sibling; sibling = sibling.previousSibling) {
-    if (isLiveMdDirtyBoundary(sibling)) return sibling;
-  }
-  return null;
-}
-
-function nextLiveMdDirtySibling(node: SyntaxNode) {
-  for (let sibling = node.nextSibling; sibling; sibling = sibling.nextSibling) {
-    if (isLiveMdDirtyBoundary(sibling)) return sibling;
-  }
-  return null;
-}
-
-function previousActiveLineRanges(value: LiveMdAnalysis, transaction: Transaction) {
-  let ranges: DocRange[] = [];
-  for (let lineNumber of value.activeLines) {
-    if (lineNumber < 1 || lineNumber > transaction.startState.doc.lines) continue;
-    let line = transaction.startState.doc.line(lineNumber);
-    let from = transaction.docChanged ? transaction.changes.mapPos(line.from, 1) : line.from;
-    let to = transaction.docChanged ? transaction.changes.mapPos(line.to, -1) : line.to;
-    ranges.push(lineRangeFor(transaction.state, from, to));
-  }
-  return ranges;
-}
-
-function activeLineRanges(state: EditorState, lines: ReadonlySet<number>) {
-  let ranges: DocRange[] = [];
-  for (let lineNumber of lines) {
-    if (lineNumber < 1 || lineNumber > state.doc.lines) continue;
-    let line = state.doc.line(lineNumber);
-    ranges.push({ from: line.from, to: line.to });
-  }
-  return ranges;
-}
-
-function rangeSetRanges<T extends RangeValue>(rangeSet: RangeSet<T>, length: number) {
-  let ranges: Range<T>[] = [];
-  rangeSet.between(0, length, (from, to, value) => {
-    ranges.push(value.range(from, to));
-  });
-  return ranges;
-}
-
-function patchCodeFenceHighlightTrees(
-  value: LiveMdAnalysis,
-  transaction: Transaction,
-  dirtyAnalysis: LiveMdAnalysis,
-  dirtyRanges: readonly DocRange[],
-) {
-  let previous = transaction.docChanged
-    ? mapCodeFenceHighlightTrees(value.codeFenceHighlightTrees, transaction.changes)
-    : value.codeFenceHighlightTrees;
-  return previous
-    .filter(
-      (highlight) =>
-        !dirtyRanges.some((range) =>
-          rangesTouch(highlight.contentFrom, highlight.contentTo, range.from, range.to),
-        ),
-    )
-    .concat(dirtyAnalysis.codeFenceHighlightTrees)
-    .sort(
-      (left, right) => left.contentFrom - right.contentFrom || left.contentTo - right.contentTo,
-    );
-}
-
-function mapCodeFenceHighlightTrees(
-  highlights: readonly CodeFenceHighlightTree[],
-  changes: ChangeDesc,
-) {
-  return highlights
-    .map((highlight) => ({
-      ...highlight,
-      contentFrom: changes.mapPos(highlight.contentFrom, 1),
-      contentTo: changes.mapPos(highlight.contentTo, -1),
-    }))
-    .filter((highlight) => highlight.contentFrom < highlight.contentTo);
-}
-
-function fullDocRange(state: EditorState): readonly DocRange[] {
-  return [{ from: 0, to: state.doc.length }];
-}
-
-function visibleLineRanges(view: EditorView): readonly DocRange[] {
-  if (view.scrollDOM.clientHeight == 0) return fullDocRange(view.state);
-  if (!rangesCoverSelection(view.visibleRanges, view.state)) return fullDocRange(view.state);
-
-  let ranges: DocRange[] = [];
-  for (let range of view.visibleRanges) {
-    let from = clamp(range.from, 0, view.state.doc.length);
-    let to = clamp(range.to, 0, view.state.doc.length);
-    if (from > to) continue;
-    let firstLine = view.state.doc.lineAt(from);
-    let lastLine = view.state.doc.lineAt(Math.max(from, to - 1));
-    let lineRange = { from: firstLine.from, to: to >= view.state.doc.length ? to : lastLine.to };
-    let last = ranges[ranges.length - 1];
-    if (last && lineRange.from <= last.to) {
-      last.to = Math.max(last.to, lineRange.to);
-    } else {
-      ranges.push(lineRange);
-    }
-  }
-  return ranges;
-}
-
-function rangesCoverSelection(ranges: readonly DocRange[], state: EditorState) {
-  for (let selectionRange of state.selection.ranges) {
-    let head = selectionRange.head;
-    if (!ranges.some((range) => head >= range.from && head <= range.to)) return false;
-  }
-  return true;
-}
-
-function mapDocRanges(ranges: readonly DocRange[], changes: ChangeDesc, state: EditorState) {
-  return mergeDocRanges(
-    ranges.map((range) =>
-      lineRangeFor(state, changes.mapPos(range.from, -1), changes.mapPos(range.to, 1)),
-    ),
-  );
-}
-
-function expandLeadingBlankRanges(state: EditorState, ranges: readonly DocRange[]) {
-  return mergeDocRanges(ranges.map((range) => expandLeadingBlankRange(state, range)));
-}
-
-function expandPipeTableRanges(state: EditorState, ranges: readonly DocRange[]) {
-  let tableRanges: DocRange[] = [];
-  for (let range of ranges) {
-    if (range.from > range.to) continue;
-    let firstLine = state.doc.lineAt(clamp(range.from, 0, state.doc.length));
-    let lastLine = state.doc.lineAt(clamp(Math.max(range.from, range.to - 1), 0, state.doc.length));
-    for (let lineNumber = firstLine.number; lineNumber <= lastLine.number; lineNumber++) {
-      let line = state.doc.line(lineNumber);
-      if (!lineMayBePipeTableLine(state.sliceDoc(line.from, line.to))) continue;
-      let tableRange = pipeTableLineBlock(state, lineNumber);
-      tableRanges.push(tableRange);
-      lineNumber = state.doc.lineAt(Math.max(tableRange.from, tableRange.to - 1)).number;
-    }
-  }
-  return mergeDocRanges([...ranges, ...tableRanges]);
-}
-
-function pipeTableLineBlock(state: EditorState, lineNumber: number): DocRange {
-  let fromLine = lineNumber;
-  for (; fromLine > 1; fromLine--) {
-    let previous = state.doc.line(fromLine - 1);
-    if (!lineMayBePipeTableLine(state.sliceDoc(previous.from, previous.to))) break;
-  }
-
-  let toLine = lineNumber;
-  for (; toLine < state.doc.lines; toLine++) {
-    let next = state.doc.line(toLine + 1);
-    if (!lineMayBePipeTableLine(state.sliceDoc(next.from, next.to))) break;
-  }
-
-  let lastLine = state.doc.line(toLine);
-  let to = lastLine.to < state.doc.length ? lastLine.to + 1 : lastLine.to;
-  return { from: state.doc.line(fromLine).from, to };
-}
-
-function lineMayBePipeTableLine(text: string) {
-  return text.trim().length > 0 && hasUnescapedPipe(text);
-}
-
-function hasUnescapedPipe(text: string) {
-  let backslashes = 0;
-  for (let index = 0; index < text.length; index++) {
-    let code = text.charCodeAt(index);
-    if (code == 92) {
-      backslashes++;
-      continue;
-    }
-    if (code == 124 && backslashes % 2 == 0) return true;
-    backslashes = 0;
-  }
-  return false;
-}
-
-function expandLeadingBlankRange(state: EditorState, range: DocRange): DocRange {
-  if (range.from <= 0 || state.doc.length == 0) return range;
-  let from = clamp(range.from, 0, state.doc.length);
-  let to = clamp(range.to, 0, state.doc.length);
-  let firstLine = state.doc.lineAt(Math.min(from, state.doc.length));
-  if (!isWhitespaceOnly(state.sliceDoc(firstLine.from, firstLine.to))) return { from, to };
-
-  let lineNumber = firstLine.number - 1;
-  for (; lineNumber >= 1; lineNumber--) {
-    let line = state.doc.line(lineNumber);
-    from = line.from;
-    if (!isWhitespaceOnly(state.sliceDoc(line.from, line.to))) break;
-  }
-  for (lineNumber--; lineNumber >= 1; lineNumber--) {
-    let line = state.doc.line(lineNumber);
-    if (isWhitespaceOnly(state.sliceDoc(line.from, line.to))) break;
-    from = line.from;
-  }
-  return { from, to: expandToNextNonBlankLineStart(state, to) };
-}
-
-function expandToNextNonBlankLineStart(state: EditorState, to: number) {
-  let lineNumber = state.doc.lineAt(clamp(to, 0, state.doc.length)).number;
-  for (; lineNumber <= state.doc.lines; lineNumber++) {
-    let line = state.doc.line(lineNumber);
-    if (line.to < to) continue;
-    if (!isWhitespaceOnly(state.sliceDoc(line.from, line.to))) return Math.max(to, line.from);
-  }
-  return to;
-}
-
-function lineRangeFor(state: EditorState, from: number, to: number): DocRange {
-  let rangeFrom = clamp(from, 0, state.doc.length);
-  let rangeTo = clamp(to, 0, state.doc.length);
-  let firstLine = state.doc.lineAt(rangeFrom);
-  let lastLine = state.doc.lineAt(Math.max(rangeFrom, rangeTo - 1));
-  return { from: firstLine.from, to: rangeTo >= state.doc.length ? rangeTo : lastLine.to };
-}
-
-function sameDocRanges(left: readonly DocRange[], right: readonly DocRange[]) {
-  if (left.length != right.length) return false;
-  for (let index = 0; index < left.length; index++) {
-    let leftRange = left[index]!;
-    let rightRange = right[index]!;
-    if (leftRange.from != rightRange.from || leftRange.to != rightRange.to) return false;
-  }
-  return true;
+  return includeNested == null
+    ? queryTreeMatches(tree, source)
+    : queryTreeMatches(tree, source, { includeNested });
 }
 
 function sameNumbers(left: ReadonlySet<number>, right: ReadonlySet<number>) {
@@ -832,24 +314,6 @@ function sameArrayItems<T>(left: readonly T[], right: readonly T[]) {
     if (left[index] != right[index]) return false;
   }
   return true;
-}
-
-function mergeDocRanges(ranges: readonly DocRange[]) {
-  let sorted = ranges.slice().sort((left, right) => left.from - right.from || left.to - right.to);
-  let merged: DocRange[] = [];
-  for (let range of sorted) {
-    let last = merged[merged.length - 1];
-    if (last && range.from <= last.to) {
-      last.to = Math.max(last.to, range.to);
-    } else {
-      merged.push({ from: range.from, to: range.to });
-    }
-  }
-  return merged;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }
 
 function liveMdQuerySource(_parser: TreeSitterParser, tree: Tree) {
@@ -1186,12 +650,7 @@ function applyLiveMdMarkdownFeatures(build: LiveMdBuild) {
   let tree = syntaxTree(build.state);
   for (let feature of build.markdownFeatures) {
     if (!feature.query || !feature.decorate) continue;
-    let matches = queryLiveMdMatchesFromSource(
-      tree,
-      feature.query,
-      build.ranges,
-      feature.includeNested ?? false,
-    );
+    let matches = queryLiveMdMatchesFromSource(tree, feature.query, feature.includeNested ?? false);
     for (let match of matches) {
       feature.decorate(createLiveMdFeatureDecorateContext(build, match));
     }
@@ -1225,7 +684,6 @@ function createLiveMdFeatureDecorateContext(
     match,
     node: (name) => capture(match, name)?.node ?? null,
     nodes: (name) => captures(match, name).map((item) => item.node),
-    ranges: build.ranges,
     rangeTouchesActiveLine: (from, to) => rangeTouchesActiveLine(build, from, to),
     slice: (node) => build.state.sliceDoc(node.from, node.to),
     state: build.state,
@@ -1549,7 +1007,6 @@ function addCodeFenceHighlights(
   contentTo: number,
   language: string,
 ) {
-  if (!rangeTouchesBuildRanges(build, contentFrom, contentTo)) return;
   let highlight = getCodeFenceHighlight(build, contentFrom, contentTo, language);
   if (!highlight) return;
 
@@ -1567,10 +1024,6 @@ function addCodeFenceHighlights(
     0,
     sourceText.length,
   );
-}
-
-function rangeTouchesBuildRanges(build: LiveMdBuild, from: number, to: number) {
-  return build.ranges.some((range) => rangesTouch(from, to, range.from, range.to));
 }
 
 function getCodeFenceHighlight(

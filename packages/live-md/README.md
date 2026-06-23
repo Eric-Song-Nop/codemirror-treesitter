@@ -14,6 +14,10 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Built as an ES module package with Vite+ `vp pack`.
 - Keeps collaboration optional. Loro-specific code belongs in
   `@codemirror-treesitter/live-md-loro`, not this package.
+- LiveMD currently uses full-document query-based decoration analysis as a clean
+  baseline. Incremental analysis is expected to be rebuilt in follow-up work on
+  top of TreeCursor leaf discovery and leaf-local analysis caches, not
+  viewport-driven analysis ranges.
 
 ## Responsibilities
 
@@ -31,8 +35,6 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Render live Markdown decorations for headings, lists, task checkboxes,
   blockquotes, inline emphasis/strong/strike/code/link syntax, tables, images,
   thematic breaks, LaTeX, Mermaid diagrams, and code fences.
-- Patch decorations incrementally with dirty-range analysis so edits avoid full
-  document recomputation where possible.
 - Support Shadow DOM styling, CSS custom properties, persistence, readonly
   mode, placeholder text, focus/blur, selection APIs, dirty tracking, ready and
   error events, and fixtures for demos/benchmarks.
@@ -179,6 +181,14 @@ need to override fenced-code highlighting explicitly. The controller exposes `vi
 `ready`, `setValue()`, `setConfig()`, `setExtensions()`, `setPersistKey()`,
 `setPlaceholder()`, `setReadOnly()`, and `destroy()`.
 
+This v3 migration baseline intentionally uses full-document LiveMD decoration
+analysis. It is a correctness reset, not a performance improvement. The old
+viewport/dirty-range feature API was removed with that reset:
+`LiveMdFeatureDecorateContext` no longer exposes `ranges`, and the
+`LiveMdFeatureDocRange` type is no longer exported. Query-driven features should
+emit decorations for their matched syntax and use `activeLines` plus
+`rangeTouchesActiveLine(...)` when they need active-line-specific behavior.
+
 `prepareLiveMd(options?)` preloads Markdown language support and warms the
 LiveMD Markdown decoration queries before the first editor render. Pass
 `{ codeFences: true }` when a host also wants to preload the bundled
@@ -271,12 +281,11 @@ starts `prepareLiveMd()` in the background, and dispatches a global
 - `src/core/editor.ts`: editor controller, persistence, read-only state,
   placeholders, and async language loading.
 - `src/core/extension.ts`, `src/core/decorations.ts`,
-  `src/core/dirty-ranges.ts`, `src/core/features.ts`, `src/core/widgets.ts`,
-  `src/core/images.ts`, `src/core/links.ts`, `src/core/search.ts`, and
-  `src/core/languages.ts`: live Markdown extension, query-based decoration
-  pipeline, dirty-range patching, feature registration, image source
-  resolution, link interactions, search, widget rendering, and language
-  loading.
+  `src/core/features.ts`, `src/core/widgets.ts`, `src/core/images.ts`,
+  `src/core/links.ts`, `src/core/search.ts`, and `src/core/languages.ts`: live
+  Markdown extension, full-document query-based decoration analysis, feature
+  registration, image source resolution, link interactions, search, widget
+  rendering, and language loading.
 - `src/core/markdown-html.ts`: Tree-sitter Markdown-to-HTML renderer and scoped
   document CSS helpers for hosts that need sanitized document export.
 - `src/element/*`: custom element implementation and style installation.
@@ -317,5 +326,5 @@ vp run @codemirror-treesitter/live-md#build
 ```
 
 The LiveMD test suite covers web component behavior, readonly commands,
-dirty-range expansion, feature registration, code fences, LaTeX, Mermaid,
-paragraph breaks, Markdown HTML rendering, and style installation.
+full-document decoration analysis, feature registration, code fences, LaTeX,
+Mermaid, paragraph breaks, Markdown HTML rendering, and style installation.

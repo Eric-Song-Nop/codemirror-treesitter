@@ -377,6 +377,12 @@ image asset, link behavior, or collaboration integration. Markdown syntax
 extensions are called features, not plugins. The controller exposes `view`,
 `value`, `ready`, `setValue()`, `setConfig()`, `setExtensions()`,
 `setPersistKey()`, `setPlaceholder()`, `setReadOnly()`, and `destroy()`.
+The v3 LiveMD baseline is a full-document correctness reset, not a performance
+improvement. The old viewport/dirty-range feature API was removed:
+`LiveMdFeatureDecorateContext` no longer exposes `ranges`, and
+`LiveMdFeatureDocRange` is no longer exported. Query-driven features should use
+their matched syntax plus `activeLines` and `rangeTouchesActiveLine(...)` for
+active-line-specific behavior.
 `extensions` remains the direct CodeMirror escape hatch and is applied after
 plugin extensions. `imageSource` and `linkBaseUrl` remain available for simple
 hosts, but package-style integrations should prefer `config.plugins`. Link
