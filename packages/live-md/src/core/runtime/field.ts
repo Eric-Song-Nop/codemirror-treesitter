@@ -1545,7 +1545,9 @@ function compileRuntimeVisibleSurfaceProjection(
     sourceIslandMode: true,
     trace,
   });
-  return compileVisibleSurfaceProjection(input, semantic.cache, ranges);
+  return compileVisibleSurfaceProjection(input, semantic.cache, ranges, {
+    codeFenceHighlights: true,
+  });
 }
 
 function visibleLegacySurface(

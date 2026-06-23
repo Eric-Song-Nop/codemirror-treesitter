@@ -28,6 +28,7 @@ import {
 } from "../widgets.js";
 import {
   addAtom,
+  addLineClass,
   addLineRangeClass,
   addMark,
   addReplace,
@@ -880,9 +881,14 @@ function materializeEffectSpec(
     case "codeFenceHighlight":
       addCodeFenceHighlights(build, spec.contentFrom, spec.contentTo, spec.language);
       break;
-    case "lineClass":
-      addLineRangeClass(build, spec.from, spec.to, spec.className, ownerKeys);
+    case "lineClass": {
+      if (spec.from == spec.to) {
+        addLineClass(build, build.state.doc.lineAt(spec.from).number, spec.className, ownerKeys);
+      } else {
+        addLineRangeClass(build, spec.from, spec.to, spec.className, ownerKeys);
+      }
       break;
+    }
     case "mark":
       addMark(build, spec.from, spec.to, markDecoration(build, spec.mark), ownerKeys);
       break;

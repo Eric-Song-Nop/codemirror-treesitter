@@ -104,6 +104,42 @@ describe("code fence at end of document", () => {
     expect(closingLine.classList.contains("cm-md-code-block-end")).toBe(true);
     expect(closingLine.classList.contains("cm-md-code-line")).toBe(false);
   });
+
+  it("adds code line classes to empty physical lines inside fenced code", async () => {
+    let parent = document.createElement("div");
+    document.body.append(parent);
+
+    let editor = createLiveMdEditor({
+      parent,
+      doc: "```ts\ntype Note = {\n  title: string;\n  done: boolean;\n\n\n};\n```",
+      focus: false,
+    });
+
+    await editor.ready;
+
+    let lines = Array.from(editor.view.contentDOM.querySelectorAll(".cm-line"));
+    let contentLines = lines.slice(1, 7);
+    let closingLine = lines[7]!;
+
+    expect(lines).toHaveLength(8);
+    expect(contentLines.map((line) => line.classList.contains("cm-md-code-line"))).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(contentLines.map((line) => line.textContent)).toEqual([
+      "type Note = {",
+      "  title: string;",
+      "  done: boolean;",
+      "",
+      "",
+      "};",
+    ]);
+    expect(closingLine.classList.contains("cm-md-code-line")).toBe(false);
+  });
 });
 
 function codeFenceSnapshots(tree: ReturnType<typeof syntaxTree>) {
