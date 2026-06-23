@@ -37,7 +37,13 @@ export type LiveMdLeafAnalysisTrace = {
   cacheIndexQueries: number;
   sourceHashCollisions: number;
   staleResultDrops: number;
+  surfaceCompileCalls: number;
+  surfaceCompileRanges: readonly DocRange[];
+  surfaceDescriptorsMapped: number;
+  surfaceMapOnlyUpdates: number;
+  surfaceRecordsVisited: number;
   tableCellsParsed: number;
+  widgetConstructions: number;
 };
 
 export function emptyLiveMdLeafAnalysisTrace(): LiveMdLeafAnalysisTrace {
@@ -73,7 +79,13 @@ export function emptyLiveMdLeafAnalysisTrace(): LiveMdLeafAnalysisTrace {
     cacheIndexQueries: 0,
     sourceHashCollisions: 0,
     staleResultDrops: 0,
+    surfaceCompileCalls: 0,
+    surfaceCompileRanges: [],
+    surfaceDescriptorsMapped: 0,
+    surfaceMapOnlyUpdates: 0,
+    surfaceRecordsVisited: 0,
     tableCellsParsed: 0,
+    widgetConstructions: 0,
   };
 }
 

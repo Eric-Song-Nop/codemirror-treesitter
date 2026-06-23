@@ -1,10 +1,16 @@
 // @vitest-environment happy-dom
 
-import type { Extension } from "@codemirror/state";
+import { EditorState, type Extension } from "@codemirror/state";
+import { ensureSyntaxTree } from "@codemirror-treesitter/language";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { __testFlushLiveMdAnalysis, __testLiveMdAnalysis } from "../src/core/decorations.js";
+import {
+  __testFlushLiveMdAnalysis,
+  __testLiveMdAnalysis,
+  liveMdAnalysis,
+} from "../src/core/decorations.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
+import { codeFenceLanguagesField, loadMarkdownExtension } from "../src/core/languages.js";
 import { liveMdLinkOpen, type LiveMdLinkBaseUrl } from "../src/core/links.js";
 
 let openLink: ReturnType<typeof vi.fn>;
@@ -243,6 +249,33 @@ describe("LiveMD links", () => {
     await __testFlushLiveMdAnalysis(editor.view);
 
     expect(firstStyledLink(editor.view).hasAttribute("data-live-md-href")).toBe(false);
+  });
+
+  it("tracks only dirty link labels in pending interactive safety ranges", async () => {
+    let doc = "[one](https://one.example) and [two](https://two.example) tail";
+    let state = EditorState.create({
+      doc,
+      extensions: [await loadMarkdownExtension(), codeFenceLanguagesField, liveMdAnalysis],
+    });
+    ensureSyntaxTree(state, doc.length, 5_000);
+    state = state.update({}).state;
+
+    let destinationFrom = doc.indexOf("https://one.example");
+    let pendingState = state.update({
+      changes: {
+        from: destinationFrom,
+        to: destinationFrom + "https://one.example".length,
+        insert: "javascript:alert",
+      },
+    }).state;
+    let analysis = __testLiveMdAnalysis({ state: pendingState } as EditorView);
+
+    expect(analysis.pending).toBeTruthy();
+    expect(
+      analysis.pending?.interactiveSafetyRanges.map((range) =>
+        pendingState.sliceDoc(range.from, range.to),
+      ),
+    ).toEqual(["one"]);
   });
 });
 

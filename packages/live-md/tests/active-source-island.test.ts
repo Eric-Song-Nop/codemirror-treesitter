@@ -9,7 +9,7 @@ import {
 } from "@codemirror/state";
 import { undo, redo } from "@codemirror-treesitter/commands";
 import { ensureSyntaxTree, syntaxTree, type Tree } from "@codemirror-treesitter/language";
-import { EditorView } from "@codemirror/view";
+import { EditorView, type DecorationSet } from "@codemirror/view";
 import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
@@ -31,6 +31,7 @@ import {
   analyzeLiveMdSourceIslands,
   type LiveMdSourceIslandLeaf,
 } from "../src/core/analysis/markdown-source-islands.js";
+import { compileFullSurfaceProjection } from "../src/core/projection/compilers.js";
 import { type LiveMdAnalysis } from "../src/core/runtime/types.js";
 
 type SelectionSpec = number | { anchor: number; head: number };
@@ -131,6 +132,35 @@ describe("LiveMD active source islands", () => {
     ).toBe(true);
     expect(atomicRangeTexts(view.state, analysis)).toEqual([]);
     view.destroy();
+  });
+
+  it("keeps active table inline source marks in the visible surface layer", async () => {
+    let doc =
+      "| Name | Value |\n" +
+      "| --- | ---: |\n" +
+      "| **alpha** | [docs](https://docs.example) |\n\n" +
+      "next";
+    let state = await markdownState(doc, {
+      selection: EditorSelection.create([EditorSelection.cursor(doc.indexOf("alpha"))]),
+    });
+    let analysis = __testBuildLiveMdAnalysis(state);
+    if (!analysis.semantic) throw new Error("Expected semantic cache for active table");
+    let surface = compileFullSurfaceProjection(
+      projectionCompileInputForTest(state, analysis),
+      analysis.semantic.cache,
+    );
+    let directClasses = decorationClassesFromSet(state, analysis.directDecorations);
+    let surfaceClasses = decorationClassesFromSet(state, surface.decorations);
+
+    expect(directClasses.has("cm-md-table-line")).toBe(true);
+    expect(directClasses.has("cm-md-strong")).toBe(false);
+    expect(directClasses.has("cm-md-link")).toBe(false);
+    expect(surfaceClasses.has("cm-md-strong")).toBe(true);
+    expect(surfaceClasses.has("cm-md-link")).toBe(true);
+    expect(widgetNamesFromSet(state, analysis.directDecorations)).not.toContain(
+      "TablePreviewWidget",
+    );
+    expect(widgetNamesFromSet(state, surface.decorations)).not.toContain("TablePreviewWidget");
   });
 
   it("does not layer canonical cell inline marks over inactive table previews", async () => {
@@ -481,6 +511,24 @@ async function markdownState(
   return state.update({}).state;
 }
 
+function projectionCompileInputForTest(
+  state: EditorState,
+  analysis: ReturnType<typeof __testBuildLiveMdAnalysis>,
+) {
+  return {
+    activeLines: new Set(analysis.activeLines),
+    activeSourceRanges: analysis.activeSourceRanges,
+    codeFenceHighlighters: [],
+    codeFenceLanguages: new Map(),
+    imageSourceResolver: null,
+    linkBaseUrl: null,
+    markdownFeatures: [],
+    sourceIslandMode: true,
+    state,
+    trace: analysis.trace,
+  };
+}
+
 function selectionFromSpec(selection: SelectionSpec) {
   return typeof selection == "number"
     ? EditorSelection.cursor(selection)
@@ -528,14 +576,27 @@ function pressKey(view: EditorView, key: string, init: KeyboardEventInit = {}) {
 }
 
 function decorationClasses(state: EditorState, analysis = __testBuildLiveMdAnalysis(state)) {
+  return decorationClassesFromSet(state, analysis.decorations);
+}
+
+function decorationClassesFromSet(state: EditorState, decorations: DecorationSet) {
   let classes = new Set<string>();
-  analysis.decorations.between(0, state.doc.length, (_from, _to, value) => {
+  decorations.between(0, state.doc.length, (_from, _to, value) => {
     let className = (value.spec as { class?: string }).class;
     for (let name of className?.split(/\s+/) ?? []) {
       if (name) classes.add(name);
     }
   });
   return classes;
+}
+
+function widgetNamesFromSet(state: EditorState, decorations: DecorationSet) {
+  let names: string[] = [];
+  decorations.between(0, state.doc.length, (_from, _to, value) => {
+    let widget = (value.spec as { widget?: unknown }).widget;
+    if (widget && typeof widget == "object") names.push(widget.constructor.name);
+  });
+  return names;
 }
 
 function atomicRangeTexts(state: EditorState, analysis = __testBuildLiveMdAnalysis(state)) {

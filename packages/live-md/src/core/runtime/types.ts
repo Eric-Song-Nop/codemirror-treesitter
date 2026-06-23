@@ -21,27 +21,59 @@ export type LiveMdRuntimeEpochs = {
 };
 
 export type LiveMdPendingAnalysis = {
-  baseAnalysis: LiveMdAnalysis;
+  baseAnalysis: LiveMdRuntimeState;
   baseDoc: Text;
   changes: ChangeDesc;
   epochs: LiveMdRuntimeEpochs;
+  interactiveSafetyRanges: readonly DocRange[];
   revision: number;
+  safetyRanges: readonly DocRange[];
   syntaxChangedRanges: readonly DocRange[];
 };
 
-export type LiveMdAnalysis = {
+export type LiveMdRuntimeState = {
   activeLines: ReadonlySet<number>;
   activeSourceRanges: readonly DocRange[];
-  atomicRanges: RangeSet<RangeValue>;
-  decorations: DecorationSet;
-  destructiveDecorations: DecorationSet;
-  interactiveDecorations: DecorationSet;
+  directAtomicRanges: RangeSet<RangeValue>;
+  directDecorations: DecorationSet;
+  directDestructiveDecorations: DecorationSet;
+  directSourceSafeDecorations: DecorationSet;
+  legacySurface: LiveMdSurfaceProjection | null;
   pending: LiveMdPendingAnalysis | null;
   revision: number;
   semantic: LiveMdSemanticState | null;
   semanticTrace: LiveMdSemanticTrace | null;
-  sourceSafeDecorations: DecorationSet;
   sourceIslandLeaves: readonly LiveMdSourceIslandLeaf[];
   trace: LiveMdLeafAnalysisTrace;
   tree: Tree;
+};
+
+export type LiveMdSurfaceProjection = {
+  atomicRanges: RangeSet<RangeValue>;
+  decorations: DecorationSet;
+  destructiveDecorations: DecorationSet;
+  interactiveDecorations: DecorationSet;
+  sourceSafeDecorations: DecorationSet;
+};
+
+export type LiveMdSurfaceProjectionState = {
+  atoms: RangeSet<RangeValue>;
+  compiledRanges: readonly DocRange[];
+  destructive: DecorationSet;
+  interactive: DecorationSet;
+  semanticRevision: number;
+  sourceSafe: DecorationSet;
+};
+
+export type LiveMdAnalysis = LiveMdRuntimeState & {
+  atomicRanges: RangeSet<RangeValue>;
+  decorations: DecorationSet;
+  destructiveDecorations: DecorationSet;
+  interactiveDecorations: DecorationSet;
+  sourceSafeDecorations: DecorationSet;
+  surfaceAtomicRanges: RangeSet<RangeValue>;
+  surfaceDecorations: DecorationSet;
+  surfaceDestructiveDecorations: DecorationSet;
+  surfaceInteractiveDecorations: DecorationSet;
+  surfaceSourceSafeDecorations: DecorationSet;
 };

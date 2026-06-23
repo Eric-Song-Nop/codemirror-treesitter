@@ -1,10 +1,28 @@
 import { RangeSet, RangeSetBuilder, RangeValue, type Range } from "@codemirror/state";
-import { Decoration, type WidgetType } from "@codemirror/view";
+import { Decoration, type DecorationSet, type WidgetType } from "@codemirror/view";
 import { isWhitespaceOnly, forEachLineInRange, splitRangeByLine } from "../util.js";
 import { type MarkdownTable } from "../widgets.js";
 import { emptyLiveMdLeafAnalysisTrace, type DocRange } from "../analysis/types.js";
 import { isLiveMdInteractiveLinkDecoration } from "../links.js";
 import { type LiveMdBuild, type LiveMdBuildConfig, type LiveMdEffect } from "./types.js";
+
+export type LiveMdProjectionLayer = {
+  atomicRanges: RangeSet<RangeValue>;
+  decorations: DecorationSet;
+  destructiveDecorations: DecorationSet;
+  interactiveDecorations: DecorationSet;
+  sourceSafeDecorations: DecorationSet;
+};
+
+export type LiveMdProjectionLayers = {
+  atomicRanges: RangeSet<RangeValue>;
+  decorations: DecorationSet;
+  destructiveDecorations: DecorationSet;
+  direct: LiveMdProjectionLayer;
+  interactiveDecorations: DecorationSet;
+  sourceSafeDecorations: DecorationSet;
+  surface: LiveMdProjectionLayer;
+};
 
 const visibleSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-active" });
 const hiddenSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-hidden" });
@@ -85,16 +103,28 @@ export function finishDecorations(build: LiveMdBuild) {
 }
 
 export function finishDecorationSets(build: LiveMdBuild) {
+  let projection = finishProjectionLayers(build);
+  return {
+    decorations: projection.decorations,
+    destructiveDecorations: projection.destructiveDecorations,
+    interactiveDecorations: projection.interactiveDecorations,
+    sourceSafeDecorations: projection.sourceSafeDecorations,
+  };
+}
+
+export function finishProjectionLayers(build: LiveMdBuild): LiveMdProjectionLayers {
   let lineDecorations = new RangeSetBuilder<Decoration>();
   let lineClasses = collectLineClasses(build);
   for (let [lineFrom, classes] of lineClasses) {
     lineDecorations.add(lineFrom, lineFrom, Decoration.line({ class: [...classes].join(" ") }));
   }
 
-  let allDecorations: Array<Range<Decoration>> = [];
-  let interactiveDecorations: Array<Range<Decoration>> = [];
-  let sourceSafeDecorations: Array<Range<Decoration>> = [];
-  let destructiveDecorations: Array<Range<Decoration>> = [];
+  let directDecorations: Array<Range<Decoration>> = [];
+  let directDestructiveDecorations: Array<Range<Decoration>> = [];
+  let surfaceDecorations: Array<Range<Decoration>> = [];
+  let surfaceInteractiveDecorations: Array<Range<Decoration>> = [];
+  let surfaceSourceSafeDecorations: Array<Range<Decoration>> = [];
+  let surfaceDestructiveDecorations: Array<Range<Decoration>> = [];
   for (let effect of build.effects) {
     switch (effect.kind) {
       case "lineClass":
@@ -102,49 +132,75 @@ export function finishDecorationSets(build: LiveMdBuild) {
         break;
       case "mark":
         addProjectedDecoration(
-          allDecorations,
+          surfaceDecorations,
           isLiveMdInteractiveLinkDecoration(effect.decoration)
-            ? interactiveDecorations
-            : sourceSafeDecorations,
+            ? surfaceInteractiveDecorations
+            : surfaceSourceSafeDecorations,
           effect.decoration.range(effect.from, effect.to),
         );
         break;
-      case "replace":
+      case "replace": {
+        let layer = isDirectLayoutEffect(build, effect)
+          ? { all: directDecorations, destructive: directDestructiveDecorations }
+          : { all: surfaceDecorations, destructive: surfaceDestructiveDecorations };
         addProjectedDecoration(
-          allDecorations,
-          destructiveDecorations,
+          layer.all,
+          layer.destructive,
           Decoration.replace({ block: effect.block ?? false, widget: effect.widget }).range(
             effect.from,
             effect.to,
           ),
         );
         break;
+      }
       case "syntax":
         addSyntaxDecorations(
           build,
-          allDecorations,
-          sourceSafeDecorations,
-          destructiveDecorations,
+          surfaceDecorations,
+          surfaceSourceSafeDecorations,
+          surfaceDestructiveDecorations,
           effect,
         );
         break;
     }
   }
   let lineDecorationSet = lineDecorations.finish();
-  let interactive = RangeSet.of(interactiveDecorations, true);
-  let sourceSafe = RangeSet.join([lineDecorationSet, RangeSet.of(sourceSafeDecorations, true)]);
-  let destructive = RangeSet.of(destructiveDecorations, true);
+  let directSourceSafe = lineDecorationSet;
+  let directDestructive = RangeSet.of(directDestructiveDecorations, true);
+  let direct = {
+    atomicRanges: finishAtomicRanges(build, "direct"),
+    decorations: RangeSet.join([lineDecorationSet, RangeSet.of(directDecorations, true)]),
+    destructiveDecorations: directDestructive,
+    interactiveDecorations: Decoration.none,
+    sourceSafeDecorations: directSourceSafe,
+  };
+  let surfaceInteractive = RangeSet.of(surfaceInteractiveDecorations, true);
+  let surface = {
+    atomicRanges: finishAtomicRanges(build, "surface"),
+    decorations: RangeSet.of(surfaceDecorations, true),
+    destructiveDecorations: RangeSet.of(surfaceDestructiveDecorations, true),
+    interactiveDecorations: surfaceInteractive,
+    sourceSafeDecorations: RangeSet.of(surfaceSourceSafeDecorations, true),
+  };
+  let sourceSafe = RangeSet.join([direct.sourceSafeDecorations, surface.sourceSafeDecorations]);
+  let destructive = RangeSet.join([direct.destructiveDecorations, surface.destructiveDecorations]);
   return {
-    decorations: RangeSet.join([lineDecorationSet, RangeSet.of(allDecorations, true)]),
+    atomicRanges: RangeSet.join([direct.atomicRanges, surface.atomicRanges]),
+    decorations: RangeSet.join([direct.decorations, surface.decorations]),
     destructiveDecorations: destructive,
-    interactiveDecorations: interactive,
+    direct,
+    interactiveDecorations: surface.interactiveDecorations,
     sourceSafeDecorations: sourceSafe,
+    surface,
   };
 }
 
-export function finishAtomicRanges(build: LiveMdBuild) {
+export function finishAtomicRanges(
+  build: LiveMdBuild,
+  layer: "direct" | "surface" | "all" = "all",
+) {
   let builder = new RangeSetBuilder<RangeValue>();
-  let atomicRanges = collectAtomicRanges(build.effects);
+  let atomicRanges = collectAtomicRanges(build, layer);
   for (let { from, to } of atomicRanges) {
     builder.add(from, to, atomicRangeValue);
   }
@@ -163,13 +219,20 @@ function collectLineClasses(build: LiveMdBuild) {
   return Array.from(lineClasses).sort(([leftFrom], [rightFrom]) => leftFrom - rightFrom);
 }
 
-function collectAtomicRanges(effects: readonly LiveMdEffect[]) {
+function collectAtomicRanges(build: LiveMdBuild, layer: "direct" | "surface" | "all") {
   let atomicRanges: DocRange[] = [];
   let seen = new Set<string>();
-  for (let effect of effects) {
-    if (effect.kind == "atomic") collectAtomicRange(atomicRanges, seen, effect.from, effect.to);
-    if (effect.kind == "replace" && effect.atomic)
+  for (let effect of build.effects) {
+    if (effect.kind == "atomic" && layer != "surface") {
       collectAtomicRange(atomicRanges, seen, effect.from, effect.to);
+    }
+    if (
+      effect.kind == "replace" &&
+      effect.atomic &&
+      (layer == "all" || (isDirectLayoutEffect(build, effect) ? "direct" : "surface") == layer)
+    ) {
+      collectAtomicRange(atomicRanges, seen, effect.from, effect.to);
+    }
   }
   return atomicRanges.sort((left, right) => left.from - right.from || left.to - right.to);
 }
@@ -212,6 +275,25 @@ function addProjectedDecoration(
 ) {
   allDecorations.push(decoration);
   targetDecorations.push(decoration);
+}
+
+function isDirectLayoutEffect(build: LiveMdBuild, effect: LiveMdEffect) {
+  switch (effect.kind) {
+    case "lineClass":
+    case "atomic":
+      return true;
+    case "replace":
+      return Boolean(effect.block) || crossesLineBreak(build, effect.from, effect.to);
+    default:
+      return false;
+  }
+}
+
+function crossesLineBreak(build: LiveMdBuild, from: number, to: number) {
+  if (from >= to) return false;
+  let firstLine = build.state.doc.lineAt(from).number;
+  let lastLine = build.state.doc.lineAt(Math.max(from, to - 1)).number;
+  return firstLine != lastLine;
 }
 
 export function rangeTouchesActiveLine(build: LiveMdBuild, from: number, to: number) {

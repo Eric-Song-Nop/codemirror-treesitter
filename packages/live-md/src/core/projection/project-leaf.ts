@@ -10,7 +10,7 @@ import {
 } from "../analysis/descriptors.js";
 import {
   forEachLeafAnalysisCacheRecord,
-  leafAnalysisCacheRecordCount,
+  forEachLeafAnalysisCacheRecordTouchingRanges,
 } from "../analysis/markdown-leaf-cache.js";
 import { type DocRange } from "../analysis/types.js";
 import { resolveLiveMdImageSource } from "../images.js";
@@ -49,6 +49,27 @@ const strikeMark = Decoration.mark({ class: "cm-md-strike" });
 const inlineCodeMark = Decoration.mark({ class: "cm-md-inline-code" });
 const tablePipeMark = Decoration.mark({ class: "cm-md-table-pipe" });
 
+export type LiveMdEffectSpecMapper = (
+  spec: LiveMdEffectSpec,
+  record: LeafAnalysisRecord,
+  build: LiveMdBuild,
+) => readonly LiveMdEffectSpec[];
+
+export type LiveMdProjectionLayerFilter = "all" | "direct" | "surface";
+
+export function liveMdEffectSpecLayerMapper(
+  layer: LiveMdProjectionLayerFilter,
+): LiveMdEffectSpecMapper {
+  if (layer == "all") return identityEffectSpec;
+  return (spec, _record, build) => (liveMdEffectSpecLayer(build, spec) == layer ? [spec] : []);
+}
+
+export function liveMdRecordMayProduceDirectLayout(record: LeafAnalysisRecord) {
+  return [...record.analysis.structuralEffects, ...record.analysis.descriptors].some(
+    descriptorMayProduceDirectLayout,
+  );
+}
+
 export function projectLeaf(
   record: LeafAnalysisRecord,
   active: boolean,
@@ -77,31 +98,107 @@ export function projectLeafRecord(
   build: LiveMdBuild,
   record: LeafAnalysisRecord,
   seen = new Set<string>(),
+  mapSpec: LiveMdEffectSpecMapper = identityEffectSpec,
 ) {
   let renderStatus = renderStatusForRecord(build, record);
   let active = buildRangeTouchesActiveLine(build, record.sourceRange.from, record.sourceRange.to);
   for (let spec of projectLeaf(record, active, renderStatus)) {
-    materializeEffectSpecOnce(build, spec, seen);
+    for (let mapped of mapSpec(spec, record, build)) materializeEffectSpecOnce(build, mapped, seen);
   }
 }
 
-export function projectLeafRecords(build: LiveMdBuild, records: readonly LeafAnalysisRecord[]) {
+export function projectLeafRecords(
+  build: LiveMdBuild,
+  records: readonly LeafAnalysisRecord[],
+  mapSpec?: LiveMdEffectSpecMapper,
+  shouldProjectRecord?: (record: LeafAnalysisRecord) => boolean,
+) {
   let seen = new Set<string>();
-  build.trace.projectionRecords += records.length;
+  let projected = 0;
   for (let index = 0; index < records.length; index++) {
     if (index % 32 == 0) build.yieldCheck?.();
-    projectLeafRecord(build, records[index]!, seen);
+    let record = records[index]!;
+    if (shouldProjectRecord && !shouldProjectRecord(record)) continue;
+    projected++;
+    projectLeafRecord(build, record, seen, mapSpec);
+  }
+  build.trace.projectionRecords += projected;
+}
+
+export function projectLeafCacheRecords(
+  build: LiveMdBuild,
+  cache: LeafAnalysisCache,
+  mapSpec?: LiveMdEffectSpecMapper,
+  shouldProjectRecord?: (record: LeafAnalysisRecord) => boolean,
+) {
+  let seen = new Set<string>();
+  let projected = 0;
+  forEachLeafAnalysisCacheRecord(cache, (record, index) => {
+    if (index % 32 == 0) build.yieldCheck?.();
+    if (shouldProjectRecord && !shouldProjectRecord(record)) return;
+    projected++;
+    projectLeafRecord(build, record, seen, mapSpec);
+  });
+  build.trace.projectionRecords += projected;
+}
+
+export function projectLeafCacheRecordsTouchingRanges(
+  build: LiveMdBuild,
+  cache: LeafAnalysisCache,
+  ranges: readonly DocRange[],
+  mapSpec?: LiveMdEffectSpecMapper,
+) {
+  let seen = new Set<string>();
+  let count = forEachLeafAnalysisCacheRecordTouchingRanges(cache, ranges, (record, index) => {
+    if (index % 32 == 0) build.yieldCheck?.();
+    projectLeafRecord(build, record, seen, mapSpec);
+  });
+  build.trace.projectionRecords += count;
+}
+
+function identityEffectSpec(spec: LiveMdEffectSpec) {
+  return [spec];
+}
+
+export function liveMdEffectSpecLayer(
+  build: LiveMdBuild,
+  spec: LiveMdEffectSpec,
+): Exclude<LiveMdProjectionLayerFilter, "all"> {
+  switch (spec.kind) {
+    case "atomic":
+    case "lineClass":
+      return "direct";
+    case "replace":
+      return spec.block || crossesLineBreak(build, spec.from, spec.to) ? "direct" : "surface";
+    case "codeFenceHighlight":
+    case "mark":
+    case "syntax":
+      return "surface";
   }
 }
 
-export function projectLeafCacheRecords(build: LiveMdBuild, cache: LeafAnalysisCache) {
-  let seen = new Set<string>();
-  let count = leafAnalysisCacheRecordCount(cache);
-  build.trace.projectionRecords += count;
-  forEachLeafAnalysisCacheRecord(cache, (record, index) => {
-    if (index % 32 == 0) build.yieldCheck?.();
-    projectLeafRecord(build, record, seen);
-  });
+function descriptorMayProduceDirectLayout(descriptor: LiveMdDescriptor) {
+  switch (descriptor.kind) {
+    case "codeFence":
+    case "image":
+    case "latex":
+    case "lineClass":
+    case "table":
+      return true;
+    case "linkMark":
+    case "listMarker":
+    case "syntax":
+    case "taskMarker":
+    case "textMark":
+      return false;
+  }
+}
+
+function crossesLineBreak(build: LiveMdBuild, from: number, to: number) {
+  if (from >= to) return false;
+  let firstLine = build.state.doc.lineAt(from).number;
+  let lastLine = build.state.doc.lineAt(Math.max(from, to - 1)).number;
+  return firstLine != lastLine;
 }
 
 function projectDescriptorOnce(
@@ -114,7 +211,7 @@ function projectDescriptorOnce(
 ) {
   if (isInactiveTableInlineDescriptor(descriptor, inactiveTableRanges)) return;
 
-  let key = JSON.stringify(descriptor);
+  let key = liveMdDescriptorKey(descriptor);
   if (seen.has(key)) return;
   seen.add(key);
   specs.push(...projectDescriptor(descriptor, active, renderStatus));
@@ -560,10 +657,154 @@ function renderStatusForRecord(build: LiveMdBuild, record: LeafAnalysisRecord): 
 }
 
 function materializeEffectSpecOnce(build: LiveMdBuild, spec: LiveMdEffectSpec, seen: Set<string>) {
-  let key = JSON.stringify(spec);
+  let key = liveMdEffectSpecKey(spec);
   if (seen.has(key)) return;
   seen.add(key);
   materializeEffectSpec(build, spec);
+}
+
+function liveMdDescriptorKey(descriptor: LiveMdDescriptor) {
+  switch (descriptor.kind) {
+    case "lineClass":
+      return keyParts("lineClass", rangeKey(descriptor.range), descriptor.className);
+    case "syntax":
+      return keyParts("syntax", rangeKey(descriptor.range), descriptor.className);
+    case "textMark":
+      return keyParts("textMark", rangeKey(descriptor.range), descriptor.mark);
+    case "linkMark":
+      return keyParts(
+        "linkMark",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.sourceRange),
+        descriptor.destination,
+      );
+    case "listMarker":
+      return keyParts("listMarker", rangeKey(descriptor.range), descriptor.marker);
+    case "taskMarker":
+      return keyParts("taskMarker", rangeKey(descriptor.range), descriptor.checked ? 1 : 0);
+    case "image":
+      return keyParts(
+        "image",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.lineRange),
+        optionalRangeKey(descriptor.descriptionRange),
+        optionalRangeKey(descriptor.destinationRange),
+        descriptor.source,
+        descriptor.alt,
+      );
+    case "latex":
+      return keyParts(
+        "latex",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.formula.replacementRange),
+        descriptor.formula.replacementRange.block ? 1 : 0,
+        descriptor.formula.displayMode ? 1 : 0,
+        descriptor.formula.source,
+        descriptor.formula.tex,
+      );
+    case "table":
+      return keyParts(
+        "table",
+        rangeKey(descriptor.range),
+        optionalRangeKey(descriptor.delimiterRowRange),
+        descriptor.pipeRanges.map(rangeKey).join(","),
+        tableShapeKey(descriptor.table),
+      );
+    case "codeFence":
+      return keyParts(
+        "codeFence",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.openingDelimiterRange),
+        optionalRangeKey(descriptor.closingDelimiterRange),
+        optionalRangeKey(descriptor.contentRange),
+        descriptor.language,
+        descriptor.mermaidSource,
+      );
+  }
+}
+
+function liveMdEffectSpecKey(spec: LiveMdEffectSpec) {
+  switch (spec.kind) {
+    case "atomic":
+      return keyParts("atomic", rangeKey(spec));
+    case "codeFenceHighlight":
+      return keyParts("codeFenceHighlight", spec.contentFrom, spec.contentTo, spec.language);
+    case "lineClass":
+      return keyParts("lineClass", rangeKey(spec), spec.className);
+    case "mark":
+      return keyParts("mark", rangeKey(spec), markSpecKey(spec.mark));
+    case "replace":
+      return keyParts(
+        "replace",
+        rangeKey(spec),
+        spec.block ? 1 : 0,
+        spec.atomic ? 1 : 0,
+        widgetSpecKey(spec.widget),
+      );
+    case "syntax":
+      return keyParts("syntax", rangeKey(spec), spec.className);
+  }
+}
+
+function markSpecKey(mark: LiveMdMarkSpec) {
+  switch (mark.kind) {
+    case "class":
+      return keyParts("class", mark.className);
+    case "link":
+      return keyParts("link", mark.destination);
+    case "text":
+      return keyParts("text", mark.mark);
+  }
+}
+
+function widgetSpecKey(widget: LiveMdWidgetSpec) {
+  switch (widget.kind) {
+    case "imagePreview":
+      return keyParts("imagePreview", widget.source, widget.alt);
+    case "latex":
+      return keyParts(
+        "latex",
+        widget.block ? 1 : 0,
+        widget.displayMode ? 1 : 0,
+        widget.source,
+        widget.tex,
+      );
+    case "listMarker":
+      return keyParts("listMarker", widget.marker);
+    case "mermaid":
+      return keyParts("mermaid", widget.source);
+    case "tablePreview":
+      return keyParts("tablePreview", tableShapeKey(widget.table));
+    case "taskMarker":
+      return keyParts("taskMarker", widget.checked ? 1 : 0);
+  }
+}
+
+function tableShapeKey(table: LiveMdTableModel | null) {
+  if (!table) return "";
+  return keyParts(
+    table.header.length,
+    table.alignments.join(","),
+    table.rows.length,
+    table.rows.map((row) => row.length).join(","),
+  );
+}
+
+function rangeKey(range: DocRange) {
+  return `${range.from}-${range.to}`;
+}
+
+function optionalRangeKey(range: DocRange | null) {
+  return range ? rangeKey(range) : "";
+}
+
+function keyParts(...parts: readonly (boolean | number | string | null | undefined)[]) {
+  return parts
+    .map((part) => {
+      let text = part == null ? "" : String(part);
+      return `${text.length}:${text}`;
+    })
+    .join("|");
 }
 
 function materializeEffectSpec(build: LiveMdBuild, spec: LiveMdEffectSpec) {
@@ -628,6 +869,7 @@ function textMark(mark: Extract<LiveMdDescriptor, { kind: "textMark" }>["mark"])
 }
 
 function widgetFromSpec(build: LiveMdBuild, spec: LiveMdWidgetSpec) {
+  build.trace.widgetConstructions++;
   switch (spec.kind) {
     case "imagePreview":
       return new ImagePreviewWidget(

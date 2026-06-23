@@ -4,6 +4,7 @@ import {
   type ChangeDesc,
   Compartment,
   EditorState,
+  RangeSet,
   StateEffect,
   StateField,
   type Extension,
@@ -12,7 +13,7 @@ import {
   type TransactionSpec,
 } from "@codemirror/state";
 import { history, redo, undo } from "@codemirror-treesitter/commands";
-import { EditorView } from "@codemirror/view";
+import { EditorView, type DecorationSet } from "@codemirror/view";
 import {
   ensureSyntaxTree,
   HighlightStyle,
@@ -20,6 +21,7 @@ import {
   tags as t,
   Tree,
   type DocRange,
+  type Highlighter,
 } from "@codemirror-treesitter/language";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
@@ -27,8 +29,10 @@ import {
   __testBuildLiveMdAnalysis,
   __testFlushLiveMdAnalysis,
   __testLiveMdAnalysis,
+  __testRefreshLiveMdSurface,
   liveMdAnalysis,
 } from "../src/core/decorations.js";
+import { emptyLiveMdLeafAnalysisTrace } from "../src/core/analysis/types.js";
 import { liveMdMarkdownFeatures } from "../src/core/features.js";
 import { liveMdImageSource, normalizeMarkdownImageSource } from "../src/core/images.js";
 import { walkMarkdownBlocks } from "../src/core/analysis/markdown-block-cursor.js";
@@ -46,6 +50,10 @@ import {
   hashDocRange,
 } from "../src/core/analysis/markdown-leaf-analysis.js";
 import {
+  compileFullSurfaceProjection,
+  compileVisibleSurfaceProjection,
+} from "../src/core/projection/compilers.js";
+import {
   activeMarkdownSourceRanges,
   sourceIslandLeavesFromLeafAnalysisRecords,
   transitionSourceIslandLeavesFromLeafAnalysisRecords,
@@ -62,6 +70,7 @@ import {
   liveMdMarkdownParserServiceFacet,
   setCodeFenceLanguages,
 } from "../src/core/languages.js";
+import { liveMdLinkInteractions, liveMdLinkOpen } from "../src/core/links.js";
 import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
 
 let locationDescriptor: PropertyDescriptor | undefined;
@@ -462,7 +471,7 @@ describe("LiveMD analysis snapshot", () => {
     expect(after.semanticTrace?.exactSourceComparisons).toBeGreaterThan(0);
     expect(after.semanticTrace?.exactSourceComparedChars).toBeGreaterThan(0);
     expect(after.semanticTrace?.inlineParserSessions).toBeLessThanOrEqual(1);
-    expect(after.semanticTrace?.projectionRecords).toBe(recordCount);
+    expect(after.semanticTrace?.projectionRecords).toBe(0);
     expect(legacyFeatureFullQueryCount(after)).toBe(0);
     view.destroy();
   });
@@ -810,9 +819,7 @@ describe("LiveMD analysis snapshot", () => {
 
       let reprojected = __testLiveMdAnalysis(view);
       expect(reprojected.semantic?.cache).toBe(after.semantic.cache);
-      expect(reprojected.semanticTrace?.projectionRecords).toBe(
-        leafAnalysisCacheRecordCount(after.semantic.cache),
-      );
+      expect(reprojected.semanticTrace?.projectionRecords).toBe(0);
       expect(reprojected.semanticTrace?.cacheFullMaterializations).toBe(0);
     } finally {
       view.destroy();
@@ -1255,9 +1262,7 @@ describe("LiveMD analysis snapshot", () => {
     expect(after.semanticTrace?.blockNodesVisited).toBe(0);
     expect(after.semanticTrace?.recordsVisited).toBe(0);
     expect(after.semanticTrace?.inlineParseCalls).toBe(0);
-    expect(after.semanticTrace?.projectionRecords).toBe(
-      before.semantic ? leafAnalysisCacheRecordCount(before.semantic.cache) : null,
-    );
+    expect(after.semanticTrace?.projectionRecords).toBe(0);
     view.destroy();
   });
 
@@ -1409,6 +1414,292 @@ describe("LiveMD analysis snapshot", () => {
     expect(decorationClasses(state, leafLocal).has("cm-md-emphasis")).toBe(true);
     expect(decorationClasses(state, leafLocal).has("cm-md-strong")).toBe(true);
     expect(decorationClasses(state, leafLocal).has("cm-md-inline-code")).toBe(true);
+  });
+
+  it("keeps direct layout and visible surface projections merge-equivalent", async () => {
+    let doc =
+      "Paragraph with **bold** and [link](https://example.com)\n\n" +
+      "| Name | Value |\n" +
+      "| --- | ---: |\n" +
+      "| alpha | 1 |\n\n" +
+      "![Alt](https://example.com/image.png)\n\n" +
+      "after";
+    let state = await markdownAnalysisState(doc, "after");
+    let analysis = __testBuildLiveMdAnalysis(state);
+    if (!analysis.semantic) throw new Error("Expected semantic cache for projection oracle");
+    let canonical = __testBuildCanonicalLiveMdAnalysis(state);
+    let surface = compileFullSurfaceProjection(
+      projectionCompileInputForTest(state, analysis),
+      analysis.semantic.cache,
+    );
+    let directProjection = canonicalProjectionFromSets(
+      state,
+      analysis.directDecorations,
+      analysis.directAtomicRanges,
+    );
+    let canonicalDirectProjection = canonicalProjectionFromSets(
+      state,
+      canonical.directDecorations,
+      canonical.directAtomicRanges,
+    );
+    let surfaceProjection = canonicalProjectionFromSets(
+      state,
+      surface.decorations,
+      surface.atomicRanges,
+    );
+    let canonicalSurfaceProjection = canonicalProjectionFromSets(
+      state,
+      canonical.surfaceDecorations,
+      canonical.surfaceAtomicRanges,
+    );
+    let mergedProjection = canonicalProjectionFromSets(
+      state,
+      RangeSet.join([analysis.directDecorations, surface.decorations]),
+      RangeSet.join([analysis.directAtomicRanges, surface.atomicRanges]),
+    );
+
+    expect(directProjection).toEqual(canonicalDirectProjection);
+    expect(surfaceProjection).toEqual(canonicalSurfaceProjection);
+    expect(mergedProjection).toEqual(canonicalAnalysis(state, analysis));
+    expect(canonicalAnalysis(state, analysis)).toEqual(canonicalAnalysis(state, canonical));
+    expect(decorationClassesFromSet(state, surface.decorations).has("cm-md-strong")).toBe(true);
+    expect(decorationClassesFromSet(state, surface.decorations).has("cm-md-link")).toBe(true);
+    expect(decorationClassesFromSet(state, analysis.directDecorations).has("cm-md-strong")).toBe(
+      false,
+    );
+    expect(widgetNamesFromSet(state, analysis.directDecorations)).toContain("TablePreviewWidget");
+    expect(widgetNamesFromSet(state, analysis.directDecorations)).toContain("ImagePreviewWidget");
+    expect(widgetNamesFromSet(state, surface.decorations)).not.toContain("TablePreviewWidget");
+    expect(widgetNamesFromSet(state, surface.decorations)).not.toContain("ImagePreviewWidget");
+  });
+
+  it("clips visible surface projections to viewport ranges without semantic work", async () => {
+    let doc = Array.from(
+      { length: 240 },
+      (_value, index) =>
+        `paragraph ${index} [link ${index}](https://example.com/${index}) **bold**`,
+    ).join("\n\n");
+    let state = await markdownAnalysisState(doc, "paragraph 0");
+    let analysis = __testBuildLiveMdAnalysis(state);
+    if (!analysis.semantic) throw new Error("Expected semantic cache before surface clipping");
+    let visibleLine = state.doc.lineAt(doc.indexOf("paragraph 220"));
+    let visibleRanges = [{ from: visibleLine.from, to: visibleLine.to }];
+    Object.defineProperty(analysis.semantic.cache, "records", {
+      configurable: true,
+      get() {
+        throw new Error("viewport-only surface clipping must not materialize semantic records");
+      },
+    });
+
+    let clipped = compileVisibleSurfaceProjection(
+      projectionCompileInputForTest(state, analysis),
+      analysis.semantic.cache,
+      visibleRanges,
+    );
+    let clippedProjection = canonicalProjectionFromSets(
+      state,
+      clipped.decorations,
+      clipped.atomicRanges,
+    );
+
+    expect(clippedProjection.decorations.length).toBeGreaterThan(0);
+    expect(
+      clippedProjection.decorations.every((range) => rangesOverlap(range, visibleRanges[0]!)),
+    ).toBe(true);
+    expect(
+      clippedProjection.atomicRanges.every((range) => rangesOverlap(range, visibleRanges[0]!)),
+    ).toBe(true);
+  });
+
+  it("keeps visible surface projection equivalent to a full clipped oracle", async () => {
+    let doc =
+      "outside before **one** [one](https://one.example)\n\n" +
+      "visible **two** [two](https://two.example) `code`\n\n" +
+      "outside after **three** [three](https://three.example)\n";
+    let state = await markdownAnalysisState(doc, "visible");
+    let analysis = __testBuildLiveMdAnalysis(state);
+    if (!analysis.semantic) throw new Error("Expected semantic cache for visible surface oracle");
+    let visibleLine = state.doc.lineAt(doc.indexOf("visible"));
+    let visibleRanges = [{ from: visibleLine.from, to: visibleLine.to }];
+    let input = projectionCompileInputForTest(state, analysis);
+
+    let full = canonicalProjectionFromSets(
+      state,
+      compileFullSurfaceProjection(input, analysis.semantic.cache).decorations,
+      RangeSet.empty,
+    );
+    let visible = compileVisibleSurfaceProjection(input, analysis.semantic.cache, visibleRanges);
+    let visibleProjection = canonicalProjectionFromSets(
+      state,
+      visible.decorations,
+      visible.atomicRanges,
+    );
+
+    expect(visibleProjection).toEqual(clipCanonicalProjectionToRanges(full, visibleRanges));
+  });
+
+  it("keeps pending input surface work on the map-only trace path", async () => {
+    let doc =
+      "intro [docs](https://docs.example) **bold**\n\n" +
+      "- [ ] stable task\n\n" +
+      "```ts\nconst answer = 42;\n```\n\n" +
+      "tail";
+    let view = await markdownAnalysisView(doc, "tail", [
+      syntaxHighlighting(testLightCodeFenceHighlightStyle),
+    ]);
+    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+
+    view.dispatch({ changes: { from: doc.indexOf("tail"), insert: "new " } });
+
+    let pending = __testLiveMdAnalysis(view);
+    expect(pending.pending).toBeTruthy();
+    expect(pending.trace.blockNodesVisited).toBe(0);
+    expect(pending.trace.recordsVisited).toBe(0);
+    expect(pending.trace.inlineParseCalls).toBe(0);
+    expect(pending.trace.codeFenceParses).toBe(0);
+    expect(pending.trace.cacheFullMaterializations).toBe(0);
+    expect(pending.trace.surfaceCompileCalls).toBe(0);
+    expect(pending.trace.surfaceRecordsVisited).toBe(0);
+    expect(pending.trace.surfaceDescriptorsMapped).toBe(0);
+    expect(pending.trace.widgetConstructions).toBe(0);
+    expect(pending.trace.surfaceMapOnlyUpdates).toBe(1);
+    expect(pending.trace.surfaceCompileRanges).toEqual([]);
+    view.destroy();
+  });
+
+  it("keeps unrelated visible code, link, and widget surface stable during pending input", async () => {
+    let doc =
+      "intro [docs](https://docs.example) **bold**\n\n" +
+      "- [ ] stable task\n\n" +
+      "```ts\nconst answer = 42;\n```\n\n" +
+      "tail";
+    let view = await markdownAnalysisView(doc, "tail", [
+      syntaxHighlighting(testLightCodeFenceHighlightStyle),
+    ]);
+    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+    let keywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
+    if (!keywordClass) throw new Error("Expected keyword highlight class");
+
+    let before = __testLiveMdAnalysis(view);
+    let taskBefore = view.contentDOM.querySelector(".cm-md-task-toggle");
+    let beforeHasKeywordClass = decorationClassesFromSet(view.state, before.surfaceDecorations).has(
+      keywordClass,
+    );
+    expect(before.trace.codeFenceParses).toBe(0);
+    expect(linkHrefsFromSet(view.state, before.surfaceInteractiveDecorations)).toEqual([
+      "https://docs.example",
+    ]);
+    expect(taskBefore).toBeTruthy();
+
+    view.dispatch({ changes: { from: doc.indexOf("tail"), insert: "new " } });
+
+    let pending = __testLiveMdAnalysis(view);
+    let taskPending = view.contentDOM.querySelector(".cm-md-task-toggle");
+    expect(pending.pending).toBeTruthy();
+    expect(decorationClassesFromSet(view.state, pending.surfaceDecorations).has(keywordClass)).toBe(
+      beforeHasKeywordClass,
+    );
+    expect(pending.trace.codeFenceParses).toBe(0);
+    expect(linkHrefsFromSet(view.state, pending.surfaceInteractiveDecorations)).toEqual([
+      "https://docs.example",
+    ]);
+    expect(taskPending).toBe(taskBefore);
+    view.destroy();
+  });
+
+  it("clears dirty link interaction without opening the old destination on pending input", async () => {
+    let opened: string[] = [];
+    let doc = "[docs](https://old.example) tail";
+    let view = await markdownAnalysisView(doc, "tail", [
+      liveMdLinkInteractions(),
+      liveMdLinkOpen((href) => opened.push(href)),
+    ]);
+
+    expect(
+      linkHrefsFromSet(view.state, __testLiveMdAnalysis(view).surfaceInteractiveDecorations),
+    ).toEqual(["https://old.example"]);
+
+    let editFrom = doc.indexOf("old");
+    view.dispatch({ changes: { from: editFrom, to: editFrom + "old".length, insert: "new" } });
+
+    let pending = __testLiveMdAnalysis(view);
+    expect(pending.pending).toBeTruthy();
+    expect(linkHrefsFromSet(view.state, pending.surfaceInteractiveDecorations)).toEqual([]);
+    expect(view.contentDOM.querySelector("[data-live-md-href='https://old.example']")).toBeNull();
+
+    let dirtyLink = view.contentDOM.querySelector(".cm-md-link");
+    dirtyLink?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: true }),
+    );
+    expect(opened).toEqual([]);
+    view.destroy();
+  });
+
+  it("keeps ViewPlugin surface refreshes viewport-only and off full materialization", async () => {
+    let doc = Array.from(
+      { length: 600 },
+      (_value, index) => `paragraph ${index} [link ${index}](https://example.com/${index})`,
+    ).join("\n\n");
+    let view = await markdownAnalysisView(doc, "paragraph 0");
+    let initial = __testLiveMdAnalysis(view);
+    if (!initial.semantic) throw new Error("Expected semantic cache before ViewPlugin gate");
+    Object.defineProperty(initial.semantic.cache, "records", {
+      configurable: true,
+      get() {
+        throw new Error("ViewPlugin surface refresh must not materialize all semantic records");
+      },
+    });
+    let materializationsBefore = initial.trace.cacheFullMaterializations;
+
+    __testRefreshLiveMdSurface(view);
+
+    let refreshed = __testLiveMdAnalysis(view);
+    expect(refreshed.pending).toBeNull();
+    expect(refreshed.trace.cacheFullMaterializations).toBe(materializationsBefore);
+    expect(refreshed.trace.surfaceCompileCalls).toBeGreaterThan(0);
+    expect(refreshed.trace.surfaceCompileRanges.length).toBeGreaterThan(0);
+    expect(
+      refreshed.trace.surfaceCompileRanges.every((range) =>
+        view.visibleRanges.some((visibleRange) => rangesOverlap(range, visibleRange)),
+      ),
+    ).toBe(true);
+    view.destroy();
+  });
+
+  it("keeps legacy document-query features off the pending input surface path", async () => {
+    let decoratedHeadings: string[] = [];
+    let doc = "# First\n\nbody\n\n# Second\n";
+    let view = await markdownAnalysisView(doc, "body", [
+      liveMdMarkdownFeatures([
+        {
+          name: "test-pending-legacy-feature",
+          query: "(atx_heading) @heading",
+          decorate({ addMark, node, slice }) {
+            let heading = node("heading");
+            if (!heading) return;
+            decoratedHeadings.push(slice(heading).trimEnd());
+            addMark(heading.from, heading.to, "cm-md-feature-heading");
+          },
+        },
+      ]),
+    ]);
+
+    decoratedHeadings = [];
+    view.dispatch({ changes: { from: doc.indexOf("body"), insert: "edited " } });
+
+    let pending = __testLiveMdAnalysis(view);
+    expect(pending.pending).toBeTruthy();
+    expect(pending.trace.legacyFeatureFullQueryCount).toBe(0);
+    expect(pending.trace.surfaceCompileCalls).toBe(0);
+    expect(decoratedHeadings).toEqual([]);
+
+    await __testFlushLiveMdAnalysis(view);
+
+    let committed = __testLiveMdAnalysis(view);
+    expect(committed.pending).toBeNull();
+    expect(committed.semanticTrace?.legacyFeatureFullQueryCount).toBe(1);
+    expect(decoratedHeadings).toEqual(["# First", "# Second"]);
+    view.destroy();
   });
 
   it("balances leaf-local inline parser and tree lifetimes including table cells", async () => {
@@ -1674,7 +1965,7 @@ describe("LiveMD analysis snapshot", () => {
     ]);
   });
 
-  it("parses code fence highlights after edits", async () => {
+  it("parses code fence highlights only for explicit compiler oracles", async () => {
     let doc = "```html\n<script>let a = 1;</script>\n```\n";
     let parseCalls = 0;
     let parserCreate = 0;
@@ -1722,7 +2013,18 @@ describe("LiveMD analysis snapshot", () => {
 
     let view = await markdownAnalysisView(doc);
     view.dispatch({ effects: setCodeFenceLanguages.of(languages) });
+    let keywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
+    if (!keywordClass) throw new Error("Expected keyword highlight class");
     let initialAnalysis = __testLiveMdAnalysis(view);
+    expect(parseCalls).toBe(0);
+    expect(initialAnalysis.trace.codeFenceParses).toBe(0);
+
+    let initialTrace = emptyLiveMdLeafAnalysisTrace();
+    let initialSurface = explicitCodeFenceSurface(
+      view.state,
+      [testLightCodeFenceHighlightStyle],
+      initialTrace,
+    );
     expect(parseCalls).toBe(1);
     expect(parserCreate).toBe(1);
     expect(nestedOwnerMaps).toBe(1);
@@ -1731,15 +2033,18 @@ describe("LiveMD analysis snapshot", () => {
     expect(nestedParserDelete).toBe(nestedParserCreate);
     expect(treeCreate).toBeGreaterThan(1);
     expect(treeDelete).toBe(treeCreate);
-    expect(initialAnalysis.trace.codeFenceParserSessionsCreated).toBe(
-      parserCreate + nestedParserCreate,
+    expect(decorationClassesFromSet(view.state, initialSurface.decorations).has(keywordClass)).toBe(
+      true,
     );
-    expect(initialAnalysis.trace.codeFenceParserSessionsDeleted).toBe(
-      parserDelete + nestedParserDelete,
-    );
-    expect(initialAnalysis.trace.codeFenceParses).toBe(1);
-    expect(initialAnalysis.trace.codeFenceTreesCreated).toBe(treeCreate);
-    expect(initialAnalysis.trace.codeFenceTreesDeleted).toBe(treeDelete);
+    expect(initialTrace.codeFenceParserSessionsCreated).toBe(parserCreate + nestedParserCreate);
+    expect(initialTrace.codeFenceParserSessionsDeleted).toBe(parserDelete + nestedParserDelete);
+    expect(initialTrace.codeFenceParses).toBe(1);
+    expect(initialTrace.codeFenceTreesCreated).toBe(treeCreate);
+    expect(initialTrace.codeFenceTreesDeleted).toBe(treeDelete);
+    expect(initialAnalysis.trace.codeFenceParserSessionsCreated).toBe(0);
+    expect(initialAnalysis.trace.codeFenceParserSessionsDeleted).toBe(0);
+    expect(initialAnalysis.trace.codeFenceTreesCreated).toBe(0);
+    expect(initialAnalysis.trace.codeFenceTreesDeleted).toBe(0);
 
     parseCalls = 0;
     parserCreate = 0;
@@ -1756,6 +2061,15 @@ describe("LiveMD analysis snapshot", () => {
     await __testFlushLiveMdAnalysis(view);
 
     let editedAnalysis = __testLiveMdAnalysis(view);
+    expect(parseCalls).toBe(0);
+    expect(editedAnalysis.trace.codeFenceParses).toBe(0);
+
+    let editedTrace = emptyLiveMdLeafAnalysisTrace();
+    let editedSurface = explicitCodeFenceSurface(
+      view.state,
+      [testLightCodeFenceHighlightStyle],
+      editedTrace,
+    );
     expect(parseCalls).toBe(1);
     expect(parserCreate).toBe(1);
     expect(nestedOwnerMaps).toBe(1);
@@ -1764,19 +2078,18 @@ describe("LiveMD analysis snapshot", () => {
     expect(nestedParserDelete).toBe(nestedParserCreate);
     expect(treeCreate).toBeGreaterThan(1);
     expect(treeDelete).toBe(treeCreate);
-    expect(editedAnalysis.trace.codeFenceParserSessionsCreated).toBe(
-      parserCreate + nestedParserCreate,
+    expect(decorationClassesFromSet(view.state, editedSurface.decorations).has(keywordClass)).toBe(
+      true,
     );
-    expect(editedAnalysis.trace.codeFenceParserSessionsDeleted).toBe(
-      parserDelete + nestedParserDelete,
-    );
-    expect(editedAnalysis.trace.codeFenceParses).toBe(1);
-    expect(editedAnalysis.trace.codeFenceTreesCreated).toBe(treeCreate);
-    expect(editedAnalysis.trace.codeFenceTreesDeleted).toBe(treeDelete);
+    expect(editedTrace.codeFenceParserSessionsCreated).toBe(parserCreate + nestedParserCreate);
+    expect(editedTrace.codeFenceParserSessionsDeleted).toBe(parserDelete + nestedParserDelete);
+    expect(editedTrace.codeFenceParses).toBe(1);
+    expect(editedTrace.codeFenceTreesCreated).toBe(treeCreate);
+    expect(editedTrace.codeFenceTreesDeleted).toBe(treeDelete);
     view.destroy();
   });
 
-  it("reuses active syntax highlighters for code fence highlights", async () => {
+  it("keeps highlighter reconfiguration off the runtime code fence parser path", async () => {
     let highlighterCompartment = new Compartment();
     let view = await markdownAnalysisView("```ts\nlet answer = 1;\n```\n", "", [
       highlighterCompartment.of(syntaxHighlighting(testLightCodeFenceHighlightStyle)),
@@ -1787,7 +2100,13 @@ describe("LiveMD analysis snapshot", () => {
 
     expect(lightKeywordClass).toBeTruthy();
     expect(darkKeywordClass).toBeTruthy();
-    expect(codeFenceClasses(view.state).has(lightKeywordClass!)).toBe(true);
+    expect(codeFenceClasses(view.state).has(lightKeywordClass!)).toBe(false);
+    expect(__testLiveMdAnalysis(view).trace.codeFenceParses).toBe(0);
+    expect(
+      explicitCodeFenceClasses(view.state, [testLightCodeFenceHighlightStyle]).has(
+        lightKeywordClass!,
+      ),
+    ).toBe(true);
 
     view.dispatch({
       effects: highlighterCompartment.reconfigure(
@@ -1795,12 +2114,18 @@ describe("LiveMD analysis snapshot", () => {
       ),
     });
 
-    expect(codeFenceClasses(view.state).has(darkKeywordClass!)).toBe(true);
+    expect(__testLiveMdAnalysis(view).trace.codeFenceParses).toBe(0);
+    expect(codeFenceClasses(view.state).has(darkKeywordClass!)).toBe(false);
     expect(codeFenceClasses(view.state).has(lightKeywordClass!)).toBe(false);
+    expect(
+      explicitCodeFenceClasses(view.state, [testDarkCodeFenceHighlightStyle]).has(
+        darkKeywordClass!,
+      ),
+    ).toBe(true);
     view.destroy();
   });
 
-  it("allows explicit code fence highlighter overrides", async () => {
+  it("keeps explicit code fence highlighter overrides off the runtime parser path", async () => {
     let view = await markdownAnalysisView("```ts\nlet answer = 1;\n```\n", "", [
       syntaxHighlighting(testLightCodeFenceHighlightStyle),
       liveMdCodeFenceHighlighting(testDarkCodeFenceHighlightStyle),
@@ -1810,8 +2135,14 @@ describe("LiveMD analysis snapshot", () => {
     let darkKeywordClass = testDarkCodeFenceHighlightStyle.style([t.keyword]);
 
     expect(darkKeywordClass).toBeTruthy();
-    expect(codeFenceClasses(view.state).has(darkKeywordClass!)).toBe(true);
+    expect(codeFenceClasses(view.state).has(darkKeywordClass!)).toBe(false);
     expect(codeFenceClasses(view.state).has(lightKeywordClass!)).toBe(false);
+    expect(__testLiveMdAnalysis(view).trace.codeFenceParses).toBe(0);
+    expect(
+      explicitCodeFenceClasses(view.state, [testDarkCodeFenceHighlightStyle]).has(
+        darkKeywordClass!,
+      ),
+    ).toBe(true);
     view.destroy();
   });
 
@@ -2252,6 +2583,50 @@ function expectPr75LocalTrace(
   }
 }
 
+function projectionCompileInputForTest(
+  state: EditorState,
+  analysis: ReturnType<typeof __testBuildLiveMdAnalysis>,
+  options: {
+    codeFenceHighlighters?: readonly Highlighter[];
+    trace?: ReturnType<typeof emptyLiveMdLeafAnalysisTrace>;
+  } = {},
+) {
+  return {
+    activeLines: new Set(analysis.activeLines),
+    activeSourceRanges: analysis.activeSourceRanges,
+    codeFenceHighlighters: options.codeFenceHighlighters ?? [],
+    codeFenceLanguages: state.field(codeFenceLanguagesField, false) ?? new Map(),
+    imageSourceResolver: null,
+    linkBaseUrl: null,
+    markdownFeatures: [],
+    sourceIslandMode: true,
+    state,
+    trace: options.trace ?? emptyLiveMdLeafAnalysisTrace(),
+  };
+}
+
+function explicitCodeFenceSurface(
+  state: EditorState,
+  highlighters: readonly Highlighter[],
+  trace = emptyLiveMdLeafAnalysisTrace(),
+) {
+  let analysis = __testBuildLiveMdAnalysis(state);
+  if (!analysis.semantic) throw new Error("Expected semantic cache for code fence oracle");
+  return compileVisibleSurfaceProjection(
+    projectionCompileInputForTest(state, analysis, {
+      codeFenceHighlighters: highlighters,
+      trace,
+    }),
+    analysis.semantic.cache,
+    state.doc.length ? [{ from: 0, to: state.doc.length }] : [],
+    { codeFenceHighlights: true },
+  );
+}
+
+function explicitCodeFenceClasses(state: EditorState, highlighters: readonly Highlighter[]) {
+  return decorationClassesFromSet(state, explicitCodeFenceSurface(state, highlighters).decorations);
+}
+
 function imagePreviewSources(state: EditorState) {
   let sources: string[] = [];
   __testBuildLiveMdAnalysis(state).decorations.between(0, state.doc.length, (_from, _to, value) => {
@@ -2378,14 +2753,38 @@ function decorationClasses(
   state: EditorState,
   analysis = __testLiveMdAnalysis({ state } as EditorView),
 ) {
+  return decorationClassesFromSet(state, analysis.decorations);
+}
+
+function decorationClassesFromSet(state: EditorState, decorations: DecorationSet) {
   let classes = new Set<string>();
-  analysis.decorations.between(0, state.doc.length, (_from, _to, value) => {
+  decorations.between(0, state.doc.length, (_from, _to, value) => {
     let className = (value.spec as { class?: string }).class;
     for (let name of className?.split(/\s+/) ?? []) {
       if (name) classes.add(name);
     }
   });
   return classes;
+}
+
+function linkHrefsFromSet(state: EditorState, decorations: DecorationSet) {
+  let hrefs: string[] = [];
+  decorations.between(0, state.doc.length, (_from, _to, value) => {
+    let href = (value.spec as { attributes?: { "data-live-md-href"?: string } }).attributes?.[
+      "data-live-md-href"
+    ];
+    if (href) hrefs.push(href);
+  });
+  return hrefs.sort();
+}
+
+function widgetNamesFromSet(state: EditorState, decorations: DecorationSet) {
+  let names: string[] = [];
+  decorations.between(0, state.doc.length, (_from, _to, value) => {
+    let widget = (value.spec as { widget?: unknown }).widget;
+    if (widget && typeof widget == "object") names.push(widget.constructor.name);
+  });
+  return names;
 }
 
 function lineBySource(state: EditorState, lineText: string) {
@@ -2548,14 +2947,22 @@ function liveMdKitchenSinkDoc() {
 }
 
 function canonicalAnalysis(state: EditorState, analysis = __testBuildLiveMdAnalysis(state)) {
+  return canonicalProjectionFromSets(state, analysis.decorations, analysis.atomicRanges);
+}
+
+function canonicalProjectionFromSets(
+  state: EditorState,
+  decorationsSet: DecorationSet,
+  atomicRangesSet: ReturnType<typeof __testBuildLiveMdAnalysis>["atomicRanges"],
+) {
   let decorations: Array<{ from: number; spec: unknown; to: number }> = [];
-  analysis.decorations.between(0, state.doc.length, (from, to, value) => {
+  decorationsSet.between(0, state.doc.length, (from, to, value) => {
     decorations.push({ from, spec: canonicalDecorationSpec(value.spec), to });
   });
   decorations.sort(compareCanonicalRange);
 
   let atomicRanges: Array<{ from: number; to: number; value: string }> = [];
-  analysis.atomicRanges.between(0, state.doc.length, (from, to, value) => {
+  atomicRangesSet.between(0, state.doc.length, (from, to, value) => {
     atomicRanges.push({ from, to, value: value.constructor.name });
   });
   atomicRanges.sort(compareCanonicalRange);
@@ -2723,6 +3130,47 @@ function compareCanonicalRange(
 
 function rangesOverlap(left: DocRange, right: DocRange) {
   return left.from < right.to && right.from < left.to;
+}
+
+function clipCanonicalProjectionToRanges(
+  projection: ReturnType<typeof canonicalProjectionFromSets>,
+  ranges: readonly DocRange[],
+): ReturnType<typeof canonicalProjectionFromSets> {
+  let decorations = projection.decorations.flatMap((decoration) => {
+    if (canonicalSpecHasWidget(decoration.spec)) {
+      return ranges.some((range) => rangesOverlap(decoration, range)) ? [decoration] : [];
+    }
+    return intersectCanonicalRange(decoration, ranges).map((range) => ({
+      ...decoration,
+      ...range,
+    }));
+  });
+  let atomicRanges = projection.atomicRanges.flatMap((atomicRange) =>
+    intersectCanonicalRange(atomicRange, ranges).map((range) => ({
+      ...atomicRange,
+      ...range,
+    })),
+  );
+  decorations.sort(compareCanonicalRange);
+  atomicRanges.sort(compareCanonicalRange);
+  return { atomicRanges, decorations };
+}
+
+function canonicalSpecHasWidget(spec: unknown) {
+  return Boolean(spec && typeof spec == "object" && "widget" in spec);
+}
+
+function intersectCanonicalRange<T extends { from: number; to: number }>(
+  target: T,
+  ranges: readonly DocRange[],
+) {
+  let clipped: DocRange[] = [];
+  for (let range of ranges) {
+    let from = Math.max(target.from, range.from);
+    let to = Math.min(target.to, range.to);
+    if (from < to) clipped.push({ from, to });
+  }
+  return clipped;
 }
 
 function canonicalDecorationSpec(spec: Record<string, unknown>) {
