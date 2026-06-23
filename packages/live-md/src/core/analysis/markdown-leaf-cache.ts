@@ -31,6 +31,11 @@ export type LeafAnalysisCacheTrace = LiveMdLeafAnalysisTrace;
 
 export type LeafAnalysisCacheTransition = {
   cache: LeafAnalysisCache;
+  changedRecordIds?: readonly number[];
+  changedRecords?: readonly LeafAnalysisRecord[];
+  mappedOldEffectRanges?: readonly DocRange[];
+  newEffectRanges?: readonly DocRange[];
+  removedRecordIds?: readonly number[];
   fallback?: "fullWalk";
   sourceIslandLeaves?: readonly LiveMdSourceIslandLeaf[];
   trace: LeafAnalysisCacheTrace;
@@ -67,7 +72,7 @@ type LeafAnalysisRecordEntry = {
 
 type LeafAnalysisCacheTraceCounters = Pick<
   LeafAnalysisCacheTrace,
-  "cacheIndexCallbacks" | "cacheIndexQueries" | "recordsMappedIndividually"
+  "cacheIndexCallbacks" | "cacheIndexQueries" | "recordsMappedIndividually" | "safetyIndexQueries"
 >;
 
 type RelativeRange = {
@@ -207,7 +212,10 @@ function findLeafAnalysisRecordEntriesTouchingRanges(
   trace?: LeafAnalysisCacheTraceCounters,
 ): readonly LeafAnalysisRecordEntry[] {
   if (!ranges.length) return [];
-  if (trace) trace.cacheIndexQueries += ranges.length;
+  if (trace) {
+    trace.cacheIndexQueries += ranges.length;
+    trace.safetyIndexQueries += ranges.length;
+  }
 
   let records: LeafAnalysisRecordEntry[] = [];
   let seen = new Set<number>();
@@ -383,6 +391,7 @@ export function transitionLeafAnalysisCacheLocal(
     ...localCandidateEntries(input.oldCache, input.changes, oldChangedRanges, localWindows, trace),
   ]);
   let oldCandidateRecords = oldCandidateEntries.map((entry) => entry.record);
+  let changedOldIds = new Set<number>();
   trace.recordsCollected = oldCandidateEntries.length;
   let oldCandidates = mappedOldRecordCandidates(
     oldCandidateRecords,
@@ -393,6 +402,7 @@ export function transitionLeafAnalysisCacheLocal(
   let nextCacheId = input.oldCache.nextCacheId;
   trace.recordsVisited = units.length;
   let localRecords: LeafAnalysisRecord[] = [];
+  let changedRecords: LeafAnalysisRecord[] = [];
   let usedOldIds = new Set<number>();
   let inlineSession: MarkdownInlineAnalysisSession | null = null;
 
@@ -411,14 +421,15 @@ export function transitionLeafAnalysisCacheLocal(
         usedOldIds.add(reused.record.cacheId);
         if (!reused.reuseAnalysis) {
           trace.recordsAnalyzed++;
-          localRecords.push(
-            analyzeMarkdownLeafAnalysisUnit(
-              analysisInputWithInlineSession(input.analysisInput, inlineSessionHolder),
-              unit,
-              reused.record.cacheId,
-              trace,
-            ),
+          let record = analyzeMarkdownLeafAnalysisUnit(
+            analysisInputWithInlineSession(input.analysisInput, inlineSessionHolder),
+            unit,
+            reused.record.cacheId,
+            trace,
           );
+          changedOldIds.add(reused.record.cacheId);
+          localRecords.push(record);
+          changedRecords.push(record);
           continue;
         }
         trace.recordsReused++;
@@ -429,20 +440,21 @@ export function transitionLeafAnalysisCacheLocal(
       }
 
       trace.recordsAnalyzed++;
-      localRecords.push(
-        analyzeMarkdownLeafAnalysisUnit(
-          analysisInputWithInlineSession(input.analysisInput, inlineSessionHolder),
-          unit,
-          nextCacheId++,
-          trace,
-        ),
+      let record = analyzeMarkdownLeafAnalysisUnit(
+        analysisInputWithInlineSession(input.analysisInput, inlineSessionHolder),
+        unit,
+        nextCacheId++,
+        trace,
       );
+      localRecords.push(record);
+      changedRecords.push(record);
     }
   } finally {
     disposeInlineSession(inlineSession);
   }
 
   localRecords.sort(compareAnalysisRecords);
+  changedRecords.sort(compareAnalysisRecords);
   trace.recordsReused += cacheRecordCount(input.oldCache) - oldCandidateEntries.length;
   let sourceIslandLeaves =
     input.oldSourceIslandLeaves &&
@@ -460,6 +472,21 @@ export function transitionLeafAnalysisCacheLocal(
     oldCandidateRecords.flatMap((record) => mappedOldRecordSafetyRanges(record, input.changes)),
     input.analysisInput.state.doc.length,
   );
+  let localRecordIds = new Set(localRecords.map((record) => record.cacheId));
+  let removedRecordIds = oldCandidateRecords
+    .filter((record) => !localRecordIds.has(record.cacheId))
+    .map((record) => record.cacheId);
+  let oldPatchIds = new Set([...changedOldIds, ...removedRecordIds]);
+  let mappedOldEffectRanges = normalizeRanges(
+    oldCandidateRecords
+      .filter((record) => oldPatchIds.has(record.cacheId))
+      .map((record) => mapRange(record.effectRange, input.changes)),
+    input.analysisInput.state.doc.length,
+  );
+  let newEffectRanges = normalizeRanges(
+    changedRecords.map((record) => record.effectRange),
+    input.analysisInput.state.doc.length,
+  );
   let excludedIds = new Set(oldCandidateRecords.map((record) => record.cacheId));
   return {
     cache: patchLeafAnalysisCache(
@@ -470,6 +497,11 @@ export function transitionLeafAnalysisCacheLocal(
       localRecords,
       nextCacheId,
     ),
+    changedRecordIds: [...changedOldIds].sort((left, right) => left - right),
+    changedRecords,
+    mappedOldEffectRanges,
+    newEffectRanges,
+    removedRecordIds,
     sourceIslandLeaves,
     trace,
   };
@@ -797,6 +829,7 @@ function localInitialCheckRanges(input: LeafAnalysisCacheLocalTransitionInput) {
     cacheIndexCallbacks: 0,
     cacheIndexQueries: 0,
     recordsMappedIndividually: 0,
+    safetyIndexQueries: 0,
   };
   let oldAffectedEntries =
     input.oldAffectedRecords != null
@@ -848,6 +881,7 @@ function traceWithCacheCounters(
   trace.cacheIndexQueries += seed.traceCounters.cacheIndexQueries;
   trace.cacheIndexCallbacks += seed.traceCounters.cacheIndexCallbacks;
   trace.recordsMappedIndividually += seed.traceCounters.recordsMappedIndividually;
+  trace.safetyIndexQueries += seed.traceCounters.safetyIndexQueries;
   return trace;
 }
 

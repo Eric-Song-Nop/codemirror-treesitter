@@ -4,7 +4,12 @@ import { isWhitespaceOnly, forEachLineInRange, splitRangeByLine } from "../util.
 import { type MarkdownTable } from "../widgets.js";
 import { emptyLiveMdLeafAnalysisTrace, type DocRange } from "../analysis/types.js";
 import { isLiveMdInteractiveLinkDecoration } from "../links.js";
-import { type LiveMdBuild, type LiveMdBuildConfig, type LiveMdEffect } from "./types.js";
+import {
+  type LiveMdBuild,
+  type LiveMdBuildConfig,
+  type LiveMdEffect,
+  type LiveMdEffectOwnerKey,
+} from "./types.js";
 
 export type LiveMdProjectionLayer = {
   atomicRanges: RangeSet<RangeValue>;
@@ -26,10 +31,15 @@ export type LiveMdProjectionLayers = {
 
 const visibleSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-active" });
 const hiddenSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-hidden" });
+const projectionOwnerKeys = Symbol("liveMdProjectionOwnerKeys");
 
 class AtomicRange extends RangeValue {
+  constructor(readonly ownerKeys: readonly LiveMdEffectOwnerKey[] = []) {
+    super();
+  }
+
   eq(other: RangeValue) {
-    return other instanceof AtomicRange;
+    return other instanceof AtomicRange && sameArrayItems(this.ownerKeys, other.ownerKeys);
   }
 }
 
@@ -52,23 +62,45 @@ export function createLiveMdBuild(config: LiveMdBuildConfig): LiveMdBuild {
   };
 }
 
-export function addLineClass(build: LiveMdBuild, lineNumber: number, className: string) {
+export function addLineClass(
+  build: LiveMdBuild,
+  lineNumber: number,
+  className: string,
+  ownerKeys?: readonly LiveMdEffectOwnerKey[],
+) {
   let line = build.state.doc.line(lineNumber);
-  build.effects.push({ className, from: line.from, kind: "lineClass", to: line.to });
+  build.effects.push({ className, from: line.from, kind: "lineClass", ownerKeys, to: line.to });
 }
 
-export function addLineRangeClass(build: LiveMdBuild, from: number, to: number, className: string) {
+export function addLineRangeClass(
+  build: LiveMdBuild,
+  from: number,
+  to: number,
+  className: string,
+  ownerKeys?: readonly LiveMdEffectOwnerKey[],
+) {
   forEachLineInRange(build.state, from, to, (docLine) =>
-    addLineClass(build, docLine.number, className),
+    addLineClass(build, docLine.number, className, ownerKeys),
   );
 }
 
-export function addAtom(build: LiveMdBuild, from: number, to: number) {
-  if (from < to) build.effects.push({ from, kind: "atomic", to });
+export function addAtom(
+  build: LiveMdBuild,
+  from: number,
+  to: number,
+  ownerKeys?: readonly LiveMdEffectOwnerKey[],
+) {
+  if (from < to) build.effects.push({ from, kind: "atomic", ownerKeys, to });
 }
 
-export function addMark(build: LiveMdBuild, from: number, to: number, decoration: Decoration) {
-  if (from < to) build.effects.push({ decoration, from, kind: "mark", to });
+export function addMark(
+  build: LiveMdBuild,
+  from: number,
+  to: number,
+  decoration: Decoration,
+  ownerKeys?: readonly LiveMdEffectOwnerKey[],
+) {
+  if (from < to) build.effects.push({ decoration, from, kind: "mark", ownerKeys, to });
 }
 
 function forEachLineDecoration(
@@ -90,12 +122,21 @@ export function addReplace(
   widget: WidgetType,
   block = false,
   atomic = false,
+  ownerKeys?: readonly LiveMdEffectOwnerKey[],
 ) {
-  if (from < to) build.effects.push({ atomic, block, from, kind: "replace", to, widget });
+  if (from < to) {
+    build.effects.push({ atomic, block, from, kind: "replace", ownerKeys, to, widget });
+  }
 }
 
-export function addSyntax(build: LiveMdBuild, from: number, to: number, decoration?: Decoration) {
-  if (from < to) build.effects.push({ decoration, from, kind: "syntax", to });
+export function addSyntax(
+  build: LiveMdBuild,
+  from: number,
+  to: number,
+  decoration?: Decoration,
+  ownerKeys?: readonly LiveMdEffectOwnerKey[],
+) {
+  if (from < to) build.effects.push({ decoration, from, kind: "syntax", ownerKeys, to });
 }
 
 export function finishDecorations(build: LiveMdBuild) {
@@ -115,8 +156,14 @@ export function finishDecorationSets(build: LiveMdBuild) {
 export function finishProjectionLayers(build: LiveMdBuild): LiveMdProjectionLayers {
   let lineDecorations = new RangeSetBuilder<Decoration>();
   let lineClasses = collectLineClasses(build);
-  for (let [lineFrom, classes] of lineClasses) {
-    lineDecorations.add(lineFrom, lineFrom, Decoration.line({ class: [...classes].join(" ") }));
+  for (let line of lineClasses) {
+    lineDecorations.add(
+      line.from,
+      line.from,
+      Decoration.line(
+        withProjectionOwnerKeys({ class: [...line.classes].join(" ") }, line.ownerKeys),
+      ),
+    );
   }
 
   let directDecorations: Array<Range<Decoration>> = [];
@@ -146,10 +193,12 @@ export function finishProjectionLayers(build: LiveMdBuild): LiveMdProjectionLaye
         addProjectedDecoration(
           layer.all,
           layer.destructive,
-          Decoration.replace({ block: effect.block ?? false, widget: effect.widget }).range(
-            effect.from,
-            effect.to,
-          ),
+          Decoration.replace(
+            withProjectionOwnerKeys(
+              { block: effect.block ?? false, widget: effect.widget },
+              effect.ownerKeys,
+            ),
+          ).range(effect.from, effect.to),
         );
         break;
       }
@@ -201,47 +250,67 @@ export function finishAtomicRanges(
 ) {
   let builder = new RangeSetBuilder<RangeValue>();
   let atomicRanges = collectAtomicRanges(build, layer);
-  for (let { from, to } of atomicRanges) {
-    builder.add(from, to, atomicRangeValue);
+  for (let { from, ownerKeys, to } of atomicRanges) {
+    builder.add(from, to, ownerKeys.length ? new AtomicRange(ownerKeys) : atomicRangeValue);
   }
   return builder.finish();
 }
 
 function collectLineClasses(build: LiveMdBuild) {
-  let lineClasses = new Map<number, Set<string>>();
+  let lineClasses = new Map<
+    string,
+    { classes: Set<string>; from: number; ownerKeys: readonly LiveMdEffectOwnerKey[] }
+  >();
   for (let effect of build.effects) {
     if (effect.kind != "lineClass") continue;
     let line = build.state.doc.lineAt(Math.min(effect.from, build.state.doc.length));
-    let classes = lineClasses.get(line.from);
-    if (!classes) lineClasses.set(line.from, (classes = new Set()));
-    classes.add(effect.className);
+    let ownerKeys = sortedOwnerKeys(effect.ownerKeys);
+    let key = `${line.from}:${ownerKeys.join("\0")}`;
+    let collected = lineClasses.get(key);
+    if (!collected) {
+      lineClasses.set(key, (collected = { classes: new Set(), from: line.from, ownerKeys }));
+    }
+    collected.classes.add(effect.className);
   }
-  return Array.from(lineClasses).sort(([leftFrom], [rightFrom]) => leftFrom - rightFrom);
+  return Array.from(lineClasses.values()).sort(
+    (left, right) =>
+      left.from - right.from || left.ownerKeys.join("\0").localeCompare(right.ownerKeys.join("\0")),
+  );
 }
 
 function collectAtomicRanges(build: LiveMdBuild, layer: "direct" | "surface" | "all") {
-  let atomicRanges: DocRange[] = [];
-  let seen = new Set<string>();
+  let atomicRanges = new Map<string, DocRange & { ownerKeys: Set<LiveMdEffectOwnerKey> }>();
   for (let effect of build.effects) {
     if (effect.kind == "atomic" && layer != "surface") {
-      collectAtomicRange(atomicRanges, seen, effect.from, effect.to);
+      collectAtomicRange(atomicRanges, effect.from, effect.to, effect.ownerKeys);
     }
     if (
       effect.kind == "replace" &&
       effect.atomic &&
       (layer == "all" || (isDirectLayoutEffect(build, effect) ? "direct" : "surface") == layer)
     ) {
-      collectAtomicRange(atomicRanges, seen, effect.from, effect.to);
+      collectAtomicRange(atomicRanges, effect.from, effect.to, effect.ownerKeys);
     }
   }
-  return atomicRanges.sort((left, right) => left.from - right.from || left.to - right.to);
+  return Array.from(atomicRanges.values())
+    .map((range) => ({
+      from: range.from,
+      ownerKeys: [...range.ownerKeys].sort(),
+      to: range.to,
+    }))
+    .sort((left, right) => left.from - right.from || left.to - right.to);
 }
 
-function collectAtomicRange(ranges: DocRange[], seen: Set<string>, from: number, to: number) {
+function collectAtomicRange(
+  ranges: Map<string, DocRange & { ownerKeys: Set<LiveMdEffectOwnerKey> }>,
+  from: number,
+  to: number,
+  ownerKeys: readonly LiveMdEffectOwnerKey[] | undefined,
+) {
   let key = `${from}:${to}`;
-  if (seen.has(key)) return;
-  seen.add(key);
-  ranges.push({ from, to });
+  let range = ranges.get(key);
+  if (!range) ranges.set(key, (range = { from, ownerKeys: new Set(), to }));
+  for (let ownerKey of ownerKeys ?? []) range.ownerKeys.add(ownerKey);
 }
 
 function addSyntaxDecorations(
@@ -287,6 +356,42 @@ function isDirectLayoutEffect(build: LiveMdBuild, effect: LiveMdEffect) {
     default:
       return false;
   }
+}
+
+export function liveMdProjectionValueOwnerKeys(value: RangeValue): readonly LiveMdEffectOwnerKey[] {
+  if (value instanceof AtomicRange) return value.ownerKeys;
+  if (value instanceof Decoration) {
+    return ((value.spec as ProjectionOwnerSpec)[projectionOwnerKeys] ?? []) as readonly string[];
+  }
+  return [];
+}
+
+function withProjectionOwnerKeys<T extends object>(
+  spec: T,
+  ownerKeys: readonly LiveMdEffectOwnerKey[] | undefined,
+): T {
+  if (!ownerKeys?.length) return spec;
+  Object.defineProperty(spec, projectionOwnerKeys, {
+    enumerable: false,
+    value: [...ownerKeys].sort(),
+  });
+  return spec;
+}
+
+function sortedOwnerKeys(ownerKeys: readonly LiveMdEffectOwnerKey[] | undefined) {
+  return ownerKeys?.length ? [...ownerKeys].sort() : [];
+}
+
+type ProjectionOwnerSpec = {
+  [projectionOwnerKeys]?: readonly LiveMdEffectOwnerKey[];
+};
+
+function sameArrayItems<T>(left: readonly T[], right: readonly T[]) {
+  if (left.length != right.length) return false;
+  for (let index = 0; index < left.length; index++) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 function crossesLineBreak(build: LiveMdBuild, from: number, to: number) {

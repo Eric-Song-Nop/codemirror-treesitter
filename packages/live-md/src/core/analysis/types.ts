@@ -26,6 +26,8 @@ export type LiveMdLeafAnalysisTrace = {
   languageWorkIterations: number;
   leavesCollected: number;
   legacyFeatureFullQueryCount: number;
+  directProjectionRecords: number;
+  directProjectionWindows: readonly DocRange[];
   projectionRecords: number;
   recordsAnalyzed: number;
   cacheFullMaterializations: number;
@@ -35,6 +37,9 @@ export type LiveMdLeafAnalysisTrace = {
   recordsVisited: number;
   cacheIndexCallbacks: number;
   cacheIndexQueries: number;
+  heavyRenderStarts: number;
+  recordIndexQueries: number;
+  safetyIndexQueries: number;
   sourceHashCollisions: number;
   staleResultDrops: number;
   surfaceCompileCalls: number;
@@ -68,6 +73,8 @@ export function emptyLiveMdLeafAnalysisTrace(): LiveMdLeafAnalysisTrace {
     languageWorkIterations: 0,
     leavesCollected: 0,
     legacyFeatureFullQueryCount: 0,
+    directProjectionRecords: 0,
+    directProjectionWindows: [],
     projectionRecords: 0,
     recordsAnalyzed: 0,
     cacheFullMaterializations: 0,
@@ -77,6 +84,9 @@ export function emptyLiveMdLeafAnalysisTrace(): LiveMdLeafAnalysisTrace {
     recordsVisited: 0,
     cacheIndexCallbacks: 0,
     cacheIndexQueries: 0,
+    heavyRenderStarts: 0,
+    recordIndexQueries: 0,
+    safetyIndexQueries: 0,
     sourceHashCollisions: 0,
     staleResultDrops: 0,
     surfaceCompileCalls: 0,
