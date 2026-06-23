@@ -211,7 +211,7 @@ function projectDescriptorOnce(
 ) {
   if (isInactiveTableInlineDescriptor(descriptor, inactiveTableRanges)) return;
 
-  let key = JSON.stringify(descriptor);
+  let key = liveMdDescriptorKey(descriptor);
   if (seen.has(key)) return;
   seen.add(key);
   specs.push(...projectDescriptor(descriptor, active, renderStatus));
@@ -657,10 +657,154 @@ function renderStatusForRecord(build: LiveMdBuild, record: LeafAnalysisRecord): 
 }
 
 function materializeEffectSpecOnce(build: LiveMdBuild, spec: LiveMdEffectSpec, seen: Set<string>) {
-  let key = JSON.stringify(spec);
+  let key = liveMdEffectSpecKey(spec);
   if (seen.has(key)) return;
   seen.add(key);
   materializeEffectSpec(build, spec);
+}
+
+function liveMdDescriptorKey(descriptor: LiveMdDescriptor) {
+  switch (descriptor.kind) {
+    case "lineClass":
+      return keyParts("lineClass", rangeKey(descriptor.range), descriptor.className);
+    case "syntax":
+      return keyParts("syntax", rangeKey(descriptor.range), descriptor.className);
+    case "textMark":
+      return keyParts("textMark", rangeKey(descriptor.range), descriptor.mark);
+    case "linkMark":
+      return keyParts(
+        "linkMark",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.sourceRange),
+        descriptor.destination,
+      );
+    case "listMarker":
+      return keyParts("listMarker", rangeKey(descriptor.range), descriptor.marker);
+    case "taskMarker":
+      return keyParts("taskMarker", rangeKey(descriptor.range), descriptor.checked ? 1 : 0);
+    case "image":
+      return keyParts(
+        "image",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.lineRange),
+        optionalRangeKey(descriptor.descriptionRange),
+        optionalRangeKey(descriptor.destinationRange),
+        descriptor.source,
+        descriptor.alt,
+      );
+    case "latex":
+      return keyParts(
+        "latex",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.formula.replacementRange),
+        descriptor.formula.replacementRange.block ? 1 : 0,
+        descriptor.formula.displayMode ? 1 : 0,
+        descriptor.formula.source,
+        descriptor.formula.tex,
+      );
+    case "table":
+      return keyParts(
+        "table",
+        rangeKey(descriptor.range),
+        optionalRangeKey(descriptor.delimiterRowRange),
+        descriptor.pipeRanges.map(rangeKey).join(","),
+        tableShapeKey(descriptor.table),
+      );
+    case "codeFence":
+      return keyParts(
+        "codeFence",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.openingDelimiterRange),
+        optionalRangeKey(descriptor.closingDelimiterRange),
+        optionalRangeKey(descriptor.contentRange),
+        descriptor.language,
+        descriptor.mermaidSource,
+      );
+  }
+}
+
+function liveMdEffectSpecKey(spec: LiveMdEffectSpec) {
+  switch (spec.kind) {
+    case "atomic":
+      return keyParts("atomic", rangeKey(spec));
+    case "codeFenceHighlight":
+      return keyParts("codeFenceHighlight", spec.contentFrom, spec.contentTo, spec.language);
+    case "lineClass":
+      return keyParts("lineClass", rangeKey(spec), spec.className);
+    case "mark":
+      return keyParts("mark", rangeKey(spec), markSpecKey(spec.mark));
+    case "replace":
+      return keyParts(
+        "replace",
+        rangeKey(spec),
+        spec.block ? 1 : 0,
+        spec.atomic ? 1 : 0,
+        widgetSpecKey(spec.widget),
+      );
+    case "syntax":
+      return keyParts("syntax", rangeKey(spec), spec.className);
+  }
+}
+
+function markSpecKey(mark: LiveMdMarkSpec) {
+  switch (mark.kind) {
+    case "class":
+      return keyParts("class", mark.className);
+    case "link":
+      return keyParts("link", mark.destination);
+    case "text":
+      return keyParts("text", mark.mark);
+  }
+}
+
+function widgetSpecKey(widget: LiveMdWidgetSpec) {
+  switch (widget.kind) {
+    case "imagePreview":
+      return keyParts("imagePreview", widget.source, widget.alt);
+    case "latex":
+      return keyParts(
+        "latex",
+        widget.block ? 1 : 0,
+        widget.displayMode ? 1 : 0,
+        widget.source,
+        widget.tex,
+      );
+    case "listMarker":
+      return keyParts("listMarker", widget.marker);
+    case "mermaid":
+      return keyParts("mermaid", widget.source);
+    case "tablePreview":
+      return keyParts("tablePreview", tableShapeKey(widget.table));
+    case "taskMarker":
+      return keyParts("taskMarker", widget.checked ? 1 : 0);
+  }
+}
+
+function tableShapeKey(table: LiveMdTableModel | null) {
+  if (!table) return "";
+  return keyParts(
+    table.header.length,
+    table.alignments.join(","),
+    table.rows.length,
+    table.rows.map((row) => row.length).join(","),
+  );
+}
+
+function rangeKey(range: DocRange) {
+  return `${range.from}-${range.to}`;
+}
+
+function optionalRangeKey(range: DocRange | null) {
+  return range ? rangeKey(range) : "";
+}
+
+function keyParts(...parts: readonly (boolean | number | string | null | undefined)[]) {
+  return parts
+    .map((part) => {
+      let text = part == null ? "" : String(part);
+      return `${text.length}:${text}`;
+    })
+    .join("|");
 }
 
 function materializeEffectSpec(build: LiveMdBuild, spec: LiveMdEffectSpec) {
@@ -725,6 +869,7 @@ function textMark(mark: Extract<LiveMdDescriptor, { kind: "textMark" }>["mark"])
 }
 
 function widgetFromSpec(build: LiveMdBuild, spec: LiveMdWidgetSpec) {
+  build.trace.widgetConstructions++;
   switch (spec.kind) {
     case "imagePreview":
       return new ImagePreviewWidget(

@@ -38,6 +38,7 @@ export type LiveMdRuntimeState = {
   directDecorations: DecorationSet;
   directDestructiveDecorations: DecorationSet;
   directSourceSafeDecorations: DecorationSet;
+  legacySurface: LiveMdSurfaceProjection | null;
   pending: LiveMdPendingAnalysis | null;
   revision: number;
   semantic: LiveMdSemanticState | null;
@@ -45,6 +46,23 @@ export type LiveMdRuntimeState = {
   sourceIslandLeaves: readonly LiveMdSourceIslandLeaf[];
   trace: LiveMdLeafAnalysisTrace;
   tree: Tree;
+};
+
+export type LiveMdSurfaceProjection = {
+  atomicRanges: RangeSet<RangeValue>;
+  decorations: DecorationSet;
+  destructiveDecorations: DecorationSet;
+  interactiveDecorations: DecorationSet;
+  sourceSafeDecorations: DecorationSet;
+};
+
+export type LiveMdSurfaceProjectionState = {
+  atoms: RangeSet<RangeValue>;
+  compiledRanges: readonly DocRange[];
+  destructive: DecorationSet;
+  interactive: DecorationSet;
+  semanticRevision: number;
+  sourceSafe: DecorationSet;
 };
 
 export type LiveMdAnalysis = LiveMdRuntimeState & {

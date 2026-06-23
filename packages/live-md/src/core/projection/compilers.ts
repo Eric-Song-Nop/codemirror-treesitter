@@ -46,9 +46,13 @@ export function compileFullDirectLayoutProjection(
 export function compileFullSurfaceProjection(
   input: LiveMdProjectionCompileInput,
   cache: LeafAnalysisCache,
+  options: LiveMdVisibleSurfaceProjectionOptions = {},
 ): LiveMdProjectionLayer {
+  recordSurfaceCompile(input, [{ from: 0, to: input.state.doc.length }]);
   let build = createCompileBuild(input);
-  projectLeafCacheRecords(build, cache, liveMdEffectSpecLayerMapper("surface"));
+  let before = build.trace.projectionRecords;
+  projectLeafCacheRecords(build, cache, fullSurfaceSpec(build, options));
+  build.trace.surfaceRecordsVisited += build.trace.projectionRecords - before;
   return finishProjectionLayers(build).surface;
 }
 
@@ -59,13 +63,16 @@ export function compileVisibleSurfaceProjection(
   options: LiveMdVisibleSurfaceProjectionOptions = {},
 ): LiveMdProjectionLayer {
   if (!ranges.length) return emptyProjectionLayer();
+  recordSurfaceCompile(input, ranges);
   let build = createCompileBuild(input);
+  let before = build.trace.projectionRecords;
   projectLeafCacheRecordsTouchingRanges(
     build,
     cache,
     ranges,
     visibleSurfaceSpec(build, ranges, options),
   );
+  build.trace.surfaceRecordsVisited += build.trace.projectionRecords - before;
   return finishProjectionLayers(build).surface;
 }
 
@@ -76,8 +83,11 @@ export function compileVisibleSurfaceProjectionFromRecords(
   options: LiveMdVisibleSurfaceProjectionOptions = {},
 ): LiveMdProjectionLayer {
   if (!ranges.length || !records.length) return emptyProjectionLayer();
+  recordSurfaceCompile(input, ranges);
   let build = createCompileBuild(input);
+  let before = build.trace.projectionRecords;
   projectLeafRecords(build, records, visibleSurfaceSpec(build, ranges, options));
+  build.trace.surfaceRecordsVisited += build.trace.projectionRecords - before;
   return finishProjectionLayers(build).surface;
 }
 
@@ -108,6 +118,43 @@ function createCompileBuild(input: LiveMdProjectionCompileInput): LiveMdBuild {
   return createLiveMdBuild(input);
 }
 
+function recordSurfaceCompile(input: LiveMdProjectionCompileInput, ranges: readonly DocRange[]) {
+  input.trace.surfaceCompileCalls++;
+  input.trace.surfaceCompileRanges = mergeCompileRanges([
+    ...input.trace.surfaceCompileRanges,
+    ...ranges,
+  ]);
+}
+
+function mergeCompileRanges(ranges: readonly DocRange[]) {
+  let sorted = ranges
+    .filter((range) => range.from < range.to)
+    .slice()
+    .sort((left, right) => left.from - right.from || left.to - right.to);
+  let merged: DocRange[] = [];
+  for (let range of sorted) {
+    let previous = merged[merged.length - 1];
+    if (previous && range.from <= previous.to) {
+      previous.to = Math.max(previous.to, range.to);
+    } else {
+      merged.push({ from: range.from, to: range.to });
+    }
+  }
+  return merged;
+}
+
+function fullSurfaceSpec(
+  build: LiveMdBuild,
+  options: LiveMdVisibleSurfaceProjectionOptions,
+): LiveMdEffectSpecMapper {
+  return (spec) => {
+    if (liveMdEffectSpecLayer(build, spec) != "surface") return [];
+    build.trace.surfaceDescriptorsMapped++;
+    if (spec.kind == "codeFenceHighlight" && options.codeFenceHighlights !== true) return [];
+    return [spec];
+  };
+}
+
 function visibleSurfaceSpec(
   build: LiveMdBuild,
   ranges: readonly DocRange[],
@@ -115,7 +162,8 @@ function visibleSurfaceSpec(
 ): LiveMdEffectSpecMapper {
   return (spec) => {
     if (liveMdEffectSpecLayer(build, spec) == "direct") return [];
-    if (spec.kind == "codeFenceHighlight" && options.codeFenceHighlights === false) return [];
+    build.trace.surfaceDescriptorsMapped++;
+    if (spec.kind == "codeFenceHighlight" && options.codeFenceHighlights !== true) return [];
     return clipSurfaceSpec(build, spec, ranges);
   };
 }
