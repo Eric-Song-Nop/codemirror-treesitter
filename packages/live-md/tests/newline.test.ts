@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 
+import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { indentService } from "@codemirror-treesitter/language";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
 
@@ -106,13 +108,35 @@ describe("newline editing", () => {
     expect(editor.value).toBe("line 1\n\n- list item");
   });
 
-  it("falls through to the default newline behavior inside code fences", async () => {
+  it("inserts a raw newline inside code fences without consulting indentation services", async () => {
+    let indentationCalls = 0;
     let codeLineEnd = "```ts\nconst value = 1;".length;
-    let editor = await mountEditor("```ts\nconst value = 1;\n```", codeLineEnd);
+    let editor = await mountEditor("```ts\nconst value = 1;\n```", codeLineEnd, [
+      indentService.of(() => {
+        indentationCalls++;
+        return 2;
+      }),
+    ]);
 
     pressKey(editor.view, "Enter");
 
     expect(editor.value).toBe("```ts\nconst value = 1;\n\n```");
+    expect(indentationCalls).toBe(0);
+  });
+
+  it("uses a raw newline fallback without consulting indentation services", async () => {
+    let indentationCalls = 0;
+    let editor = await mountEditor("beforeafter", "before".length, [
+      indentService.of(() => {
+        indentationCalls++;
+        return 2;
+      }),
+    ]);
+
+    pressKey(editor.view, "Enter");
+
+    expect(editor.value).toBe("before\nafter");
+    expect(indentationCalls).toBe(0);
   });
 
   it("keeps blank-line and soft-line breaks as ordinary editable lines", async () => {
@@ -156,10 +180,14 @@ describe("newline editing", () => {
   });
 });
 
-async function mountEditor(doc: string, selection = doc.length): Promise<LiveMdEditorController> {
+async function mountEditor(
+  doc: string,
+  selection = doc.length,
+  extensions: Extension = [],
+): Promise<LiveMdEditorController> {
   let parent = document.createElement("div");
   document.body.append(parent);
-  let editor = createLiveMdEditor({ parent, doc, focus: false });
+  let editor = createLiveMdEditor({ parent, doc, extensions, focus: false });
   await editor.ready;
   editor.view.dispatch({ selection: { anchor: selection } });
   return editor;
