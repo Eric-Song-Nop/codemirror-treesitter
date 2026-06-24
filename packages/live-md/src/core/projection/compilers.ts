@@ -280,7 +280,7 @@ function fullSurfaceSpec(
   return (spec) => {
     if (liveMdEffectSpecLayer(build, spec) != "surface") return [];
     build.trace.surfaceDescriptorsMapped++;
-    if (spec.kind == "codeFenceHighlight" && options.codeFenceHighlights !== true) return [];
+    if (spec.kind == "codeFenceHighlight" && options.codeFenceHighlights === false) return [];
     return [spec];
   };
 }
@@ -293,7 +293,7 @@ function visibleSurfaceSpec(
   return (spec) => {
     if (liveMdEffectSpecLayer(build, spec) == "direct") return [];
     build.trace.surfaceDescriptorsMapped++;
-    if (spec.kind == "codeFenceHighlight" && options.codeFenceHighlights !== true) return [];
+    if (spec.kind == "codeFenceHighlight" && options.codeFenceHighlights === false) return [];
     return clipSurfaceSpec(build, spec, ranges);
   };
 }
@@ -308,8 +308,8 @@ function clipSurfaceSpec(
       return intersectRanges({ from: spec.contentFrom, to: spec.contentTo }, ranges).map(
         (range) => ({
           ...spec,
-          contentFrom: lineBoundaryFrom(build, range.from),
-          contentTo: lineBoundaryTo(build, range.to),
+          emitFrom: lineBoundaryFrom(build, range.from),
+          emitTo: lineBoundaryTo(build, range.to),
         }),
       );
     case "mark":

@@ -2,12 +2,14 @@ import { type ChangeDesc, type RangeSet, type RangeValue, type Text } from "@cod
 import { type Highlighter, type Tree } from "@codemirror-treesitter/language";
 import { type DecorationSet } from "@codemirror/view";
 import { type LiveMdSemanticState } from "../analysis/descriptors.js";
+import { type LiveMdRenderKeyContext } from "../analysis/markdown-leaf-analysis.js";
 import { type LiveMdSourceIslandLeaf } from "../analysis/markdown-source-islands.js";
 import { type DocRange, type LiveMdLeafAnalysisTrace } from "../analysis/types.js";
 import { type LiveMdMarkdownFeature } from "../features.js";
 import { type LiveMdImageSourceResolver } from "../images.js";
 import { type CodeFenceLanguageMap, type LiveMdMarkdownParserService } from "../languages.js";
 import { type LiveMdLinkBaseUrl } from "../links.js";
+import { type LiveMdRenderCache } from "./render-cache.js";
 
 export type LiveMdSemanticTrace = LiveMdLeafAnalysisTrace;
 
@@ -40,6 +42,8 @@ export type LiveMdRuntimeState = {
   directSourceSafeDecorations: DecorationSet;
   legacySurface: LiveMdSurfaceProjection | null;
   pending: LiveMdPendingAnalysis | null;
+  renderCache: LiveMdRenderCache;
+  renderKeyContext: LiveMdRenderKeyContext;
   revision: number;
   semantic: LiveMdSemanticState | null;
   semanticTrace: LiveMdSemanticTrace | null;

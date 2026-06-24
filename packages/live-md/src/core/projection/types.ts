@@ -2,11 +2,13 @@ import { type EditorState, type Text } from "@codemirror/state";
 import { type Highlighter } from "@codemirror-treesitter/language";
 import { type Decoration, type WidgetType } from "@codemirror/view";
 import { type LiveMdTableModel, type LiveMdTextMarkKind } from "../analysis/descriptors.js";
+import { type LiveMdRenderKeyContext } from "../analysis/markdown-leaf-analysis.js";
 import { type LiveMdLeafAnalysisTrace } from "../analysis/types.js";
 import { type LiveMdMarkdownFeature } from "../features.js";
 import { type LiveMdImageSourceResolver } from "../images.js";
 import { type CodeFenceLanguageMap } from "../languages.js";
 import { type DocRange } from "../analysis/types.js";
+import { type LiveMdRenderCache } from "../runtime/render-cache.js";
 
 export type LiveMdBuild = {
   activeLines: Set<number>;
@@ -17,6 +19,8 @@ export type LiveMdBuild = {
   imageSourceResolver: LiveMdImageSourceResolver | null;
   linkBaseUrl: string | null;
   markdownFeatures: readonly LiveMdMarkdownFeature[];
+  renderKeyContext: LiveMdRenderKeyContext;
+  renderCache: LiveMdRenderCache;
   sourceIslandMode: boolean;
   state: EditorState;
   trace: LiveMdLeafAnalysisTrace;
@@ -37,6 +41,8 @@ export type LiveMdBuildConfig = {
   imageSourceResolver: LiveMdImageSourceResolver | null;
   linkBaseUrl: string | null;
   markdownFeatures: readonly LiveMdMarkdownFeature[];
+  renderKeyContext?: LiveMdRenderKeyContext;
+  renderCache?: LiveMdRenderCache;
   sourceIslandMode?: boolean;
   state: EditorState;
   trace?: LiveMdLeafAnalysisTrace;
@@ -140,6 +146,8 @@ export type LiveMdEffectSpec =
   | {
       contentFrom: number;
       contentTo: number;
+      emitFrom?: number;
+      emitTo?: number;
       kind: "codeFenceHighlight";
       language: string;
     }

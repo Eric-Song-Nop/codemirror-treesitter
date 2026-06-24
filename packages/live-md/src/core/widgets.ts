@@ -2,6 +2,10 @@ import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import type { RenderOptions as BeautifulMermaidRenderOptions } from "beautiful-mermaid";
 import katex, { type KatexOptions } from "katex";
 import type { Mermaid } from "mermaid";
+import {
+  type LiveMdMermaidRenderHandle,
+  type LiveMdMermaidRenderResult,
+} from "./runtime/render-cache.js";
 import { isAsciiDigit } from "./util.js";
 
 export type MarkdownTable = {
@@ -26,9 +30,23 @@ export type LatexFormula = {
   tex: string;
 };
 
+export type LatexRenderResult =
+  | {
+      html: string;
+      ok: true;
+      resultKey: string;
+    }
+  | {
+      message: string | null;
+      ok: false;
+      resultKey: string;
+    };
+
 export type MermaidDiagram = {
   source: string;
 };
+
+const latexWidgetResults = new WeakMap<LatexWidget, LatexRenderResult>();
 
 export class TaskCheckboxWidget extends WidgetType {
   private checked: boolean;
@@ -81,18 +99,20 @@ export class LatexWidget extends WidgetType {
   private source: string;
   private tex: string;
 
-  constructor(formula: LatexFormula) {
+  constructor(formula: LatexFormula, rendered: LatexRenderResult | null = null) {
     super();
     this.block = formula.block;
     this.displayMode = formula.displayMode;
     this.source = formula.source;
     this.tex = formula.tex;
+    if (rendered) latexWidgetResults.set(this, rendered);
   }
 
   eq(other: LatexWidget) {
     return (
       other.block == this.block &&
       other.displayMode == this.displayMode &&
+      latexWidgetResults.get(other)?.resultKey == latexWidgetResults.get(this)?.resultKey &&
       other.source == this.source &&
       other.tex == this.tex
     );
@@ -105,15 +125,20 @@ export class LatexWidget extends WidgetType {
       : "cm-md-latex cm-md-latex-inline";
     element.dataset.source = this.source;
 
-    try {
-      element.innerHTML = katex.renderToString(this.tex, {
-        ...latexOptions,
+    let rendered =
+      latexWidgetResults.get(this) ??
+      renderLatexFormula({
+        block: this.block,
         displayMode: this.displayMode,
+        source: this.source,
+        tex: this.tex,
       });
-    } catch (error) {
+    if (rendered.ok) {
+      element.innerHTML = rendered.html;
+    } else {
       element.classList.add("is-error");
       element.textContent = this.source;
-      if (error instanceof Error) element.title = error.message;
+      if (rendered.message) element.title = rendered.message;
     }
 
     return element;
@@ -121,6 +146,27 @@ export class LatexWidget extends WidgetType {
 
   ignoreEvent() {
     return false;
+  }
+}
+
+export function renderLatexFormula(formula: LatexFormula): LatexRenderResult {
+  try {
+    let html = katex.renderToString(formula.tex, {
+      ...latexOptions,
+      displayMode: formula.displayMode,
+    });
+    return {
+      html,
+      ok: true,
+      resultKey: hashString(html),
+    };
+  } catch (error) {
+    let message = error instanceof Error ? error.message : null;
+    return {
+      message,
+      ok: false,
+      resultKey: hashString(`${formula.source}\0${message ?? ""}`),
+    };
   }
 }
 
@@ -147,10 +193,12 @@ let mermaidPromise: Promise<Mermaid> | null = null;
 let mermaidRenderSequence = 0;
 
 export class MermaidWidget extends WidgetType {
+  private renderHandle: LiveMdMermaidRenderHandle | null;
   private source: string;
 
-  constructor(diagram: MermaidDiagram) {
+  constructor(diagram: MermaidDiagram | LiveMdMermaidRenderHandle) {
     super();
+    this.renderHandle = isLiveMdMermaidRenderHandle(diagram) ? diagram : null;
     this.source = diagram.source;
   }
 
@@ -176,7 +224,7 @@ export class MermaidWidget extends WidgetType {
       });
       view.focus();
     });
-    renderMermaidInto(element, this.source);
+    renderMermaidInto(element, this.renderHandle ?? ephemeralMermaidRenderHandle(this.source));
     return element;
   }
 
@@ -340,29 +388,65 @@ function loadBeautifulMermaid() {
   return beautifulMermaidPromise;
 }
 
-function renderMermaidInto(element: HTMLElement, source: string) {
+function renderMermaidInto(element: HTMLElement, handle: LiveMdMermaidRenderHandle) {
   let renderToken = String(++mermaidRenderSequence);
   element.dataset.mermaidRenderToken = renderToken;
   element.classList.remove("is-error");
   element.removeAttribute("title");
+
+  if (handle.result) {
+    applyMermaidResult(element, handle.result);
+    return;
+  }
+
   element.replaceChildren(mermaidMessage("Rendering Mermaid diagram"));
 
-  void renderMermaidSvg(source)
-    .then(({ svg, bindFunctions }) => {
-      if (!isCurrentMermaidRender(element, renderToken)) return;
+  void cachedMermaidRenderResult(handle).then((result) => {
+    if (!isCurrentMermaidRender(element, renderToken)) return;
+    applyMermaidResult(element, result);
+  });
+}
 
-      let render = document.createElement("div");
-      render.className = "cm-md-mermaid-render";
-      appendSvg(render, svg);
-      element.replaceChildren(render);
-      bindFunctions?.(render);
-    })
-    .catch((error: unknown) => {
-      if (!isCurrentMermaidRender(element, renderToken)) return;
-      element.classList.add("is-error");
-      element.replaceChildren(mermaidMessage("Unable to render Mermaid diagram"));
-      if (error instanceof Error) element.title = error.message;
-    });
+function cachedMermaidRenderResult(handle: LiveMdMermaidRenderHandle) {
+  if (handle.result) return Promise.resolve(handle.result);
+  handle.promise ??= renderLiveMdMermaidResult(handle.source).then((result) => {
+    handle.result = result;
+    return result;
+  });
+  return handle.promise;
+}
+
+async function renderLiveMdMermaidResult(source: string): Promise<LiveMdMermaidRenderResult> {
+  try {
+    let { svg, bindFunctions } = await renderMermaidSvg(source);
+    return {
+      bindFunctions,
+      ok: true,
+      resultKey: hashString(svg),
+      svg,
+    };
+  } catch (error) {
+    let message = error instanceof Error ? error.message : null;
+    return {
+      message,
+      ok: false,
+      resultKey: hashString(`${source}\0${message ?? ""}`),
+    };
+  }
+}
+
+function applyMermaidResult(element: HTMLElement, result: LiveMdMermaidRenderResult) {
+  if (result.ok) {
+    let render = document.createElement("div");
+    render.className = "cm-md-mermaid-render";
+    appendSvg(render, result.svg);
+    element.replaceChildren(render);
+    result.bindFunctions?.(render);
+  } else {
+    element.classList.add("is-error");
+    element.replaceChildren(mermaidMessage("Unable to render Mermaid diagram"));
+    if (result.message) element.title = result.message;
+  }
 }
 
 async function renderMermaidSvg(source: string): Promise<MermaidRenderResult> {
@@ -426,6 +510,21 @@ function mermaidMessage(text: string) {
   return message;
 }
 
+function isLiveMdMermaidRenderHandle(
+  diagram: MermaidDiagram | LiveMdMermaidRenderHandle,
+): diagram is LiveMdMermaidRenderHandle {
+  return "promise" in diagram && "result" in diagram;
+}
+
+function ephemeralMermaidRenderHandle(source: string): LiveMdMermaidRenderHandle {
+  return {
+    promise: null,
+    result: null,
+    resultKey: hashString(source),
+    source,
+  };
+}
+
 export function replaceWithWidget(from: number, to: number, widget: WidgetType, block = false) {
   return {
     decoration: Decoration.replace({ block, widget }),
@@ -439,4 +538,12 @@ function applyTableAlignment(
   alignment: "center" | "default" | "left" | "right" = "default",
 ) {
   if (alignment != "default") element.style.textAlign = alignment;
+}
+
+function hashString(value: string) {
+  let hash = 5381;
+  for (let index = 0; index < value.length; index++) {
+    hash = ((hash << 5) + hash + value.charCodeAt(index)) | 0;
+  }
+  return (hash >>> 0).toString(36);
 }

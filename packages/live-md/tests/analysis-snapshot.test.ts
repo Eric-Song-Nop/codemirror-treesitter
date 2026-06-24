@@ -18,6 +18,7 @@ import {
   ensureSyntaxTree,
   HighlightStyle,
   syntaxHighlighting,
+  syntaxHighlighters,
   tags as t,
   Tree,
   type DocRange,
@@ -51,7 +52,10 @@ import {
 } from "../src/core/analysis/markdown-leaf-cache.js";
 import {
   analyzeMarkdownLeafSemantics,
+  defaultLiveMdRenderKeyContext,
   hashDocRange,
+  liveMdRendererVersion,
+  type LiveMdRenderKeyContext,
 } from "../src/core/analysis/markdown-leaf-analysis.js";
 import {
   compileFullDirectLayoutProjection,
@@ -70,12 +74,15 @@ import {
   codeFenceLanguagesField,
   codeFenceHighlighterFacet,
   deleteLiveMdTree,
+  emptyCodeFenceLanguages,
   liveMdCodeFenceHighlighting,
+  liveMdDefaultCodeFenceHighlighter,
   loadCodeFenceLanguages,
   loadMarkdownExtension,
   liveMdMarkdownParserServiceFacet,
   setCodeFenceLanguages,
 } from "../src/core/languages.js";
+import { liveMdCompositeEpoch, liveMdValueEpoch } from "../src/core/runtime/epochs.js";
 import { liveMdLinkBaseUrl, liveMdLinkInteractions, liveMdLinkOpen } from "../src/core/links.js";
 import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
 
@@ -182,6 +189,7 @@ describe("LiveMD analysis snapshot", () => {
     expect(pending.trace.codeFenceParses).toBe(0);
     expect(pending.trace.directProjectionRecords).toBe(0);
     expect(pending.trace.directProjectionWindows).toEqual([]);
+    expect(pending.trace.heavyRenderStarts).toBe(0);
     expect(pending.trace.languageApplyMs).toBeGreaterThanOrEqual(0);
     expect(pending.trace.languageWorkIterations).toBe(1);
     expect(parseCalls).toBe(0);
@@ -193,6 +201,119 @@ describe("LiveMD analysis snapshot", () => {
     expect(committed.pending).toBeNull();
     expect(committed.trace.recordsVisited).toBeGreaterThan(0);
     expect(tablePreviewTables(view.state, committed)[0]?.rows[0]?.[0]).toBe("bravo");
+    view.destroy();
+  });
+
+  it("keeps render keys stable across position and active state changes", async () => {
+    let doc = "![Alt](assets/one.png)\n\nTail";
+    let prefixedDoc = "Intro\n\n" + doc;
+    let state = await markdownAnalysisState(doc, "Tail");
+    let prefixedState = await markdownAnalysisState(prefixedDoc, "Tail");
+    let record = recordBySource(state, __testLiveMdAnalysis({ state }), "![Alt](assets/one.png)");
+    let prefixedRecord = recordBySource(
+      prefixedState,
+      __testLiveMdAnalysis({ state: prefixedState }),
+      "![Alt](assets/one.png)",
+    );
+
+    expect(record.range.from).not.toBe(prefixedRecord.range.from);
+    expect(record.analysis.analysisKey).toBe(prefixedRecord.analysis.analysisKey);
+    expect(record.analysis.renderKey).toBe(prefixedRecord.analysis.renderKey);
+    expect(record.analysis.analysisKey).not.toBe(record.analysis.renderKey);
+
+    let view = await markdownAnalysisView(doc, "Tail");
+    let inactiveRecord = recordBySource(
+      view.state,
+      __testLiveMdAnalysis(view),
+      doc.split("\n\n")[0]!,
+    );
+    view.dispatch({ selection: { anchor: doc.indexOf("one.png") } });
+    let activeRecord = recordBySource(
+      view.state,
+      __testLiveMdAnalysis(view),
+      doc.split("\n\n")[0]!,
+    );
+    expect(activeRecord.analysis.renderKey).toBe(inactiveRecord.analysis.renderKey);
+    view.destroy();
+  });
+
+  it("rekeys reused semantic records without semantic reanalysis", async () => {
+    let service = await loadMarkdownParserService();
+    let state = EditorState.create({ doc: "![Alt](assets/one.png)" });
+    let tree = service.blockParser.parse(state.doc);
+    let initialContext: LiveMdRenderKeyContext = {
+      referenceEpoch: 0,
+      rendererVersion: "test-renderer",
+      resolverEpoch: 1,
+      themeEpoch: 1,
+    };
+    let nextContext: LiveMdRenderKeyContext = {
+      ...initialContext,
+      resolverEpoch: 2,
+    };
+
+    try {
+      let snapshot = walkMarkdownBlocks(tree, state.doc).snapshot;
+      let initial = buildFreshLeafAnalysisCache({
+        analysisInput: { renderKeyContext: initialContext, service, state, tree },
+        snapshot,
+      });
+      let transaction = state.update({});
+      let transitioned = transitionLeafAnalysisCache({
+        analysisInput: { renderKeyContext: nextContext, service, state, tree },
+        changes: transaction.changes,
+        oldCache: initial.cache,
+        oldDoc: state.doc,
+        snapshot,
+      });
+      let initialRecord = materializeLeafAnalysisCacheRecords(initial.cache)[0]!;
+      let transitionedRecord = materializeLeafAnalysisCacheRecords(transitioned.cache)[0]!;
+
+      expect(transitioned.trace.recordsAnalyzed).toBe(0);
+      expect(transitioned.trace.recordsReused).toBe(1);
+      expect(transitionedRecord.analysis.analysisKey).toBe(initialRecord.analysis.analysisKey);
+      expect(transitionedRecord.analysis.renderKey).not.toBe(initialRecord.analysis.renderKey);
+      expect(transitionedRecord.analysis.descriptors).toBe(initialRecord.analysis.descriptors);
+    } finally {
+      deleteLiveMdTree(tree);
+    }
+  });
+
+  it("changes render keys when resolver and theme epochs change", async () => {
+    let imageSourceCompartment = new Compartment();
+    let highlighterCompartment = new Compartment();
+    let doc = "![Alt](assets/one.png)\n\n```ts\nlet answer = 1;\n```\n\nTail";
+    let view = await markdownAnalysisView(doc, "Tail", [
+      imageSourceCompartment.of(liveMdImageSource((source) => `blob:first/${source}`)),
+      highlighterCompartment.of(syntaxHighlighting(testLightCodeFenceHighlightStyle)),
+    ]);
+    let before = __testLiveMdAnalysis(view);
+    let beforeImage = recordBySource(view.state, before, "![Alt](assets/one.png)");
+    let beforeFence = recordByKind(before, "fencedCode");
+
+    view.dispatch({
+      effects: imageSourceCompartment.reconfigure(
+        liveMdImageSource((source) => `blob:second/${source}`),
+      ),
+    });
+    let resolverChanged = __testLiveMdAnalysis(view);
+    let resolverImage = recordBySource(view.state, resolverChanged, "![Alt](assets/one.png)");
+    let resolverFence = recordByKind(resolverChanged, "fencedCode");
+    expect(resolverChanged.semanticTrace?.recordsAnalyzed).toBe(0);
+    expect(resolverImage.analysis.analysisKey).toBe(beforeImage.analysis.analysisKey);
+    expect(resolverImage.analysis.renderKey).not.toBe(beforeImage.analysis.renderKey);
+
+    view.dispatch({
+      effects: highlighterCompartment.reconfigure(
+        syntaxHighlighting(testDarkCodeFenceHighlightStyle),
+      ),
+    });
+    let themeChanged = __testLiveMdAnalysis(view);
+    let themeFence = recordByKind(themeChanged, "fencedCode");
+    expect(themeChanged.semanticTrace?.recordsAnalyzed).toBe(0);
+    expect(themeFence.analysis.analysisKey).toBe(beforeFence.analysis.analysisKey);
+    expect(resolverFence.analysis.analysisKey).toBe(beforeFence.analysis.analysisKey);
+    expect(themeFence.analysis.renderKey).not.toBe(resolverFence.analysis.renderKey);
     view.destroy();
   });
 
@@ -956,7 +1077,12 @@ describe("LiveMD analysis snapshot", () => {
         if (index == 999) {
           let fullSnapshot = walkMarkdownBlocks(harness.tree, harness.state.doc).snapshot;
           finalFull = transitionLeafAnalysisCache({
-            analysisInput: { service: harness.service, state: harness.state, tree: harness.tree },
+            analysisInput: {
+              renderKeyContext: harness.renderKeyContext,
+              service: harness.service,
+              state: harness.state,
+              tree: harness.tree,
+            },
             changes: transaction.changes,
             oldCache: previousCache,
             oldDoc: previousDoc,
@@ -985,7 +1111,12 @@ describe("LiveMD analysis snapshot", () => {
 
       let freshSnapshot = walkMarkdownBlocks(harness.tree, harness.state.doc).snapshot;
       let fresh = buildFreshLeafAnalysisCache({
-        analysisInput: { service: harness.service, state: harness.state, tree: harness.tree },
+        analysisInput: {
+          renderKeyContext: harness.renderKeyContext,
+          service: harness.service,
+          state: harness.state,
+          tree: harness.tree,
+        },
         snapshot: freshSnapshot,
         startCacheId: harness.current.cache.nextCacheId,
       });
@@ -1025,7 +1156,12 @@ describe("LiveMD analysis snapshot", () => {
 
       let freshSnapshot = walkMarkdownBlocks(harness.tree, harness.state.doc).snapshot;
       let fresh = buildFreshLeafAnalysisCache({
-        analysisInput: { service: harness.service, state: harness.state, tree: harness.tree },
+        analysisInput: {
+          renderKeyContext: harness.renderKeyContext,
+          service: harness.service,
+          state: harness.state,
+          tree: harness.tree,
+        },
         snapshot: freshSnapshot,
       });
       expect(canonicalSemanticRecordsFromCache(harness.state, harness.current.cache)).toEqual(
@@ -1071,7 +1207,12 @@ describe("LiveMD analysis snapshot", () => {
 
       let freshSnapshot = walkMarkdownBlocks(harness.tree, harness.state.doc).snapshot;
       let fresh = buildFreshLeafAnalysisCache({
-        analysisInput: { service: harness.service, state: harness.state, tree: harness.tree },
+        analysisInput: {
+          renderKeyContext: harness.renderKeyContext,
+          service: harness.service,
+          state: harness.state,
+          tree: harness.tree,
+        },
         snapshot: freshSnapshot,
       });
       expect(canonicalSemanticRecordsFromCache(harness.state, harness.current.cache)).toEqual(
@@ -1607,6 +1748,139 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("reuses synchronous render cache when direct widgets are reprojected", async () => {
+    let resolverCalls = 0;
+    let doc =
+      "| Name | Value |\n" +
+      "| --- | ---: |\n" +
+      "| alpha | 1 |\n\n" +
+      "![Alt](assets/one.png)\n\n" +
+      "$$\n" +
+      "x\n" +
+      "$$\n\n" +
+      "```mermaid\n" +
+      "graph TD\n" +
+      "A --> B\n" +
+      "```\n\n" +
+      "Tail";
+    let view = await markdownAnalysisView(doc, "Tail", [
+      liveMdImageSource((source) => {
+        resolverCalls++;
+        return `blob:cached/${source}`;
+      }),
+    ]);
+    let initial = __testLiveMdAnalysis(view);
+    expect(initial.trace.heavyRenderStarts).toBeGreaterThanOrEqual(4);
+    expect(resolverCalls).toBe(1);
+
+    let cases = [
+      { name: "table", sourceText: "alpha" },
+      { name: "image", sourceText: "one.png" },
+      { name: "latex", sourceText: "x" },
+      { name: "mermaid", sourceText: "A --> B" },
+    ];
+
+    for (let entry of cases) {
+      view.dispatch({ selection: { anchor: view.state.sliceDoc().indexOf(entry.sourceText) } });
+      let active = __testLiveMdAnalysis(view);
+      expect(active.trace.heavyRenderStarts, `${entry.name} active source`).toBe(0);
+
+      view.dispatch({ selection: { anchor: view.state.sliceDoc().indexOf("Tail") } });
+      let inactive = __testLiveMdAnalysis(view);
+      expect(inactive.trace.heavyRenderStarts, `${entry.name} inactive projection`).toBe(0);
+    }
+
+    expect(resolverCalls).toBe(1);
+    view.destroy();
+  });
+
+  it("reuses render cache on the legacy fallback full-query projection path", async () => {
+    let doc = renderCacheFullQueryDoc();
+    let tracked = await trackedHtmlCodeFenceLanguages();
+    let view = await markdownLegacyAnalysisView(doc, "Tail");
+    let initial = __testLiveMdAnalysis(view);
+    expect(initial.semantic).toBeNull();
+    expect(initial.trace.heavyRenderStarts).toBeGreaterThanOrEqual(2);
+
+    view.dispatch({ effects: setCodeFenceLanguages.of(tracked.languages) });
+    let withCodeFence = __testLiveMdAnalysis(view);
+    expect(withCodeFence.semantic).toBeNull();
+    expect(tracked.parseCalls()).toBe(1);
+    expect(withCodeFence.trace.codeFenceParses).toBe(1);
+    expect(withCodeFence.trace.heavyRenderStarts).toBe(1);
+
+    tracked.reset();
+    view.dispatch({ selection: { anchor: view.state.sliceDoc().indexOf("alpha") } });
+    let active = __testLiveMdAnalysis(view);
+    expect(active.semantic).toBeNull();
+    expect(active.trace.heavyRenderStarts).toBe(0);
+    expect(active.trace.codeFenceParses).toBe(0);
+    expect(tracked.parseCalls()).toBe(0);
+
+    view.dispatch({ selection: { anchor: view.state.sliceDoc().indexOf("Tail") } });
+    let inactive = __testLiveMdAnalysis(view);
+    expect(inactive.trace.heavyRenderStarts).toBe(0);
+    expect(inactive.trace.codeFenceParses).toBe(0);
+    expect(tracked.parseCalls()).toBe(0);
+    view.destroy();
+  });
+
+  it("reuses render cache in canonical full-query oracle builds", async () => {
+    let resolverCalls = 0;
+    let tracked = await trackedHtmlCodeFenceLanguages();
+    let baseState = await markdownAnalysisState(renderCacheFullQueryDoc(), "Tail", [
+      liveMdImageSource((source) => {
+        resolverCalls++;
+        return `blob:canonical/${source}`;
+      }),
+    ]);
+    let state = baseState.update({ effects: setCodeFenceLanguages.of(tracked.languages) }).state;
+    resolverCalls = 0;
+    tracked.reset();
+
+    let first = __testBuildCanonicalLiveMdAnalysis(state);
+    expect(first.semantic).toBeNull();
+    expect(first.trace.heavyRenderStarts).toBeGreaterThanOrEqual(5);
+    expect(first.trace.codeFenceParses).toBe(1);
+    expect(tracked.parseCalls()).toBe(1);
+    expect(resolverCalls).toBe(1);
+
+    tracked.reset();
+    let second = __testBuildCanonicalLiveMdAnalysis(state, first.renderCache);
+    expect(second.semantic).toBeNull();
+    expect(second.trace.heavyRenderStarts).toBe(0);
+    expect(second.trace.codeFenceParses).toBe(0);
+    expect(tracked.parseCalls()).toBe(0);
+    expect(resolverCalls).toBe(1);
+    expect(canonicalAnalysis(state, second)).toEqual(canonicalAnalysis(state, first));
+  });
+
+  it("excludes cache ids from render cache keys", async () => {
+    let resolverCalls = 0;
+    let doc = "![Alt](assets/one.png)\n\nTail";
+    let view = await markdownAnalysisView(doc, "Tail", [
+      liveMdImageSource((source) => {
+        resolverCalls++;
+        return `blob:cache-id/${source}`;
+      }),
+    ]);
+    let analysis = __testLiveMdAnalysis(view);
+    let record = recordBySource(view.state, analysis, "![Alt](assets/one.png)");
+    let differentCacheIdRecord = { ...record, cacheId: record.cacheId + 1000 };
+    let trace = emptyLiveMdLeafAnalysisTrace();
+    let direct = compileFullDirectLayoutProjection(
+      projectionCompileInputForTest(view.state, analysis, { trace }),
+      createLeafAnalysisCache([differentCacheIdRecord], differentCacheIdRecord.cacheId + 1),
+    );
+
+    expect(differentCacheIdRecord.analysis.renderKey).toBe(record.analysis.renderKey);
+    expect(differentCacheIdRecord.cacheId).not.toBe(record.cacheId);
+    expect(widgetNamesFromSet(view.state, direct.decorations)).toContain("ImagePreviewWidget");
+    expect(trace.heavyRenderStarts).toBe(0);
+    expect(resolverCalls).toBe(1);
+    view.destroy();
+  });
+
   it("does not leave stale direct replacements when entering and leaving source islands", async () => {
     let cases = [
       {
@@ -1857,6 +2131,7 @@ describe("LiveMD analysis snapshot", () => {
     expect(pending.trace.surfaceDescriptorsMapped).toBe(0);
     expect(pending.trace.directProjectionRecords).toBe(0);
     expect(pending.trace.directProjectionWindows).toEqual([]);
+    expect(pending.trace.heavyRenderStarts).toBe(0);
     expect(pending.trace.widgetConstructions).toBe(0);
     expect(pending.trace.surfaceMapOnlyUpdates).toBe(1);
     expect(pending.trace.surfaceCompileRanges).toEqual([]);
@@ -2262,7 +2537,7 @@ describe("LiveMD analysis snapshot", () => {
     ]);
   });
 
-  it("parses code fence highlights for the runtime surface and explicit compiler oracles", async () => {
+  it("parses code fence highlights on the runtime path and reuses cache for explicit oracles", async () => {
     let doc = "```html\n<script>let a = 1;</script>\n```\n";
     let parseCalls = 0;
     let parserCreate = 0;
@@ -2323,9 +2598,8 @@ describe("LiveMD analysis snapshot", () => {
     expect(nestedParserDelete).toBe(nestedParserCreate);
     expect(treeCreate).toBeGreaterThan(1);
     expect(treeDelete).toBe(treeCreate);
-    expect(
-      decorationClassesFromSet(view.state, initialAnalysis.surfaceDecorations).has(keywordClass),
-    ).toBe(true);
+    expect(decorationClasses(view.state, initialAnalysis).has(keywordClass)).toBe(true);
+    expect(initialAnalysis.trace.heavyRenderStarts).toBe(1);
     expect(initialAnalysis.trace.codeFenceParserSessionsCreated).toBe(
       parserCreate + nestedParserCreate,
     );
@@ -2344,29 +2618,42 @@ describe("LiveMD analysis snapshot", () => {
     nestedParserDelete = 0;
     treeCreate = 0;
     treeDelete = 0;
-    let initialTrace = emptyLiveMdLeafAnalysisTrace();
-    let initialSurface = explicitCodeFenceSurface(
+    let cachedTrace = emptyLiveMdLeafAnalysisTrace();
+    let cachedSurface = explicitCodeFenceSurfaceForAnalysis(
       view.state,
-      [testLightCodeFenceHighlightStyle],
-      initialTrace,
       initialAnalysis,
+      [testLightCodeFenceHighlightStyle],
+      cachedTrace,
     );
-    expect(parseCalls).toBe(1);
-    expect(parserCreate).toBe(1);
-    expect(nestedOwnerMaps).toBe(1);
-    expect(nestedParserCreate).toBeGreaterThan(0);
-    expect(parserDelete).toBe(1);
-    expect(nestedParserDelete).toBe(nestedParserCreate);
-    expect(treeCreate).toBeGreaterThan(1);
-    expect(treeDelete).toBe(treeCreate);
-    expect(decorationClassesFromSet(view.state, initialSurface.decorations).has(keywordClass)).toBe(
+    expect(parseCalls).toBe(0);
+    expect(parserCreate).toBe(0);
+    expect(parserDelete).toBe(0);
+    expect(nestedOwnerMaps).toBe(0);
+    expect(nestedParserCreate).toBe(0);
+    expect(nestedParserDelete).toBe(0);
+    expect(treeCreate).toBe(0);
+    expect(treeDelete).toBe(0);
+    expect(cachedTrace.heavyRenderStarts).toBe(0);
+    expect(cachedTrace.codeFenceParses).toBe(0);
+    expect(decorationClassesFromSet(view.state, cachedSurface.decorations).has(keywordClass)).toBe(
       true,
     );
-    expect(initialTrace.codeFenceParserSessionsCreated).toBe(parserCreate + nestedParserCreate);
-    expect(initialTrace.codeFenceParserSessionsDeleted).toBe(parserDelete + nestedParserDelete);
-    expect(initialTrace.codeFenceParses).toBe(1);
-    expect(initialTrace.codeFenceTreesCreated).toBe(treeCreate);
-    expect(initialTrace.codeFenceTreesDeleted).toBe(treeDelete);
+
+    let darkKeywordClass = testDarkCodeFenceHighlightStyle.style([t.keyword]);
+    if (!darkKeywordClass) throw new Error("Expected dark keyword highlight class");
+    let darkTrace = emptyLiveMdLeafAnalysisTrace();
+    let darkSurface = explicitCodeFenceSurfaceForAnalysis(
+      view.state,
+      initialAnalysis,
+      [testDarkCodeFenceHighlightStyle],
+      darkTrace,
+    );
+    expect(parseCalls).toBe(1);
+    expect(darkTrace.heavyRenderStarts).toBe(1);
+    expect(darkTrace.codeFenceParses).toBe(1);
+    expect(
+      decorationClassesFromSet(view.state, darkSurface.decorations).has(darkKeywordClass),
+    ).toBe(true);
 
     parseCalls = 0;
     parserCreate = 0;
@@ -2380,6 +2667,11 @@ describe("LiveMD analysis snapshot", () => {
     view.dispatch({
       changes: { from: editFrom, to: editFrom + 1, insert: "aa" },
     });
+    let pendingAnalysis = __testLiveMdAnalysis(view);
+    expect(pendingAnalysis.pending).toBeTruthy();
+    expect(parseCalls).toBe(0);
+    expect(pendingAnalysis.trace.codeFenceParses).toBe(0);
+
     await __testFlushLiveMdAnalysis(view);
 
     let editedAnalysis = __testLiveMdAnalysis(view);
@@ -2391,9 +2683,7 @@ describe("LiveMD analysis snapshot", () => {
     expect(nestedParserDelete).toBe(nestedParserCreate);
     expect(treeCreate).toBeGreaterThan(1);
     expect(treeDelete).toBe(treeCreate);
-    expect(
-      decorationClassesFromSet(view.state, editedAnalysis.surfaceDecorations).has(keywordClass),
-    ).toBe(true);
+    expect(editedAnalysis.trace.heavyRenderStarts).toBe(1);
     expect(editedAnalysis.trace.codeFenceParserSessionsCreated).toBe(
       parserCreate + nestedParserCreate,
     );
@@ -2413,32 +2703,103 @@ describe("LiveMD analysis snapshot", () => {
     treeCreate = 0;
     treeDelete = 0;
     let editedTrace = emptyLiveMdLeafAnalysisTrace();
-    let editedSurface = explicitCodeFenceSurface(
+    let editedSurface = explicitCodeFenceSurfaceForAnalysis(
       view.state,
+      editedAnalysis,
       [testLightCodeFenceHighlightStyle],
       editedTrace,
-      editedAnalysis,
     );
-    expect(parseCalls).toBe(1);
-    expect(parserCreate).toBe(1);
-    expect(nestedOwnerMaps).toBe(1);
-    expect(nestedParserCreate).toBeGreaterThan(0);
-    expect(parserDelete).toBe(1);
-    expect(nestedParserDelete).toBe(nestedParserCreate);
-    expect(treeCreate).toBeGreaterThan(1);
-    expect(treeDelete).toBe(treeCreate);
+    expect(parseCalls).toBe(0);
+    expect(parserCreate).toBe(0);
+    expect(parserDelete).toBe(0);
+    expect(nestedOwnerMaps).toBe(0);
+    expect(nestedParserCreate).toBe(0);
+    expect(nestedParserDelete).toBe(0);
+    expect(treeCreate).toBe(0);
+    expect(treeDelete).toBe(0);
     expect(decorationClassesFromSet(view.state, editedSurface.decorations).has(keywordClass)).toBe(
       true,
     );
-    expect(editedTrace.codeFenceParserSessionsCreated).toBe(parserCreate + nestedParserCreate);
-    expect(editedTrace.codeFenceParserSessionsDeleted).toBe(parserDelete + nestedParserDelete);
-    expect(editedTrace.codeFenceParses).toBe(1);
-    expect(editedTrace.codeFenceTreesCreated).toBe(treeCreate);
-    expect(editedTrace.codeFenceTreesDeleted).toBe(treeDelete);
+    expect(editedTrace.heavyRenderStarts).toBe(0);
+    expect(editedTrace.codeFenceParses).toBe(0);
     view.destroy();
   });
 
-  it("updates runtime code fence classes when the highlighter is reconfigured", async () => {
+  it("caches visible code fence highlights by full content and clips emitted decorations", async () => {
+    let doc = "```ts\nlet first = 1;\nconst second = 2;\n```\n";
+    let parseCalls = 0;
+    let languages = new Map(await loadCodeFenceLanguages());
+    let tsParser = languages.get("ts");
+    if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
+    let trackedParser = Object.create(tsParser) as typeof tsParser;
+    trackedParser.parseWith = (...args: Parameters<typeof tsParser.parseWith>) => {
+      parseCalls++;
+      return tsParser.parseWith(...args);
+    };
+    languages.set("ts", trackedParser);
+
+    let state = await markdownAnalysisState(doc, "", [
+      liveMdCodeFenceHighlighting(testLightCodeFenceHighlightStyle),
+    ]);
+    state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
+    let analysis = __testLiveMdAnalysis({ state } as EditorView);
+    if (!analysis.semantic) throw new Error("Expected semantic cache for code fence viewport test");
+    analysis.renderCache.codeFenceHighlights.clear();
+    parseCalls = 0;
+
+    let keywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
+    if (!keywordClass) throw new Error("Expected keyword highlight class");
+    let firstLine = state.doc.line(2);
+    let secondLine = state.doc.line(3);
+    let firstRange = { from: firstLine.from, to: firstLine.to };
+    let secondRange = { from: secondLine.from, to: secondLine.to };
+
+    let firstTrace = emptyLiveMdLeafAnalysisTrace();
+    let firstSurface = compileVisibleSurfaceProjection(
+      projectionCompileInputForTest(state, analysis, {
+        codeFenceHighlighters: [testLightCodeFenceHighlightStyle],
+        trace: firstTrace,
+      }),
+      analysis.semantic.cache,
+      [firstRange],
+      { codeFenceHighlights: true },
+    );
+    let firstKeywordRanges = decorationRangesForClassFromSet(
+      state,
+      firstSurface.decorations,
+      keywordClass,
+    );
+    expect(parseCalls).toBe(1);
+    expect(firstTrace.heavyRenderStarts).toBe(1);
+    expect(firstTrace.codeFenceParses).toBe(1);
+    expect(firstKeywordRanges.length).toBeGreaterThan(0);
+    expect(firstKeywordRanges.every((range) => rangesOverlap(range, firstRange))).toBe(true);
+    expect(firstKeywordRanges.some((range) => rangesOverlap(range, secondRange))).toBe(false);
+
+    let secondTrace = emptyLiveMdLeafAnalysisTrace();
+    let secondSurface = compileVisibleSurfaceProjection(
+      projectionCompileInputForTest(state, analysis, {
+        codeFenceHighlighters: [testLightCodeFenceHighlightStyle],
+        trace: secondTrace,
+      }),
+      analysis.semantic.cache,
+      [secondRange],
+      { codeFenceHighlights: true },
+    );
+    let secondKeywordRanges = decorationRangesForClassFromSet(
+      state,
+      secondSurface.decorations,
+      keywordClass,
+    );
+    expect(parseCalls).toBe(1);
+    expect(secondTrace.heavyRenderStarts).toBe(0);
+    expect(secondTrace.codeFenceParses).toBe(0);
+    expect(secondKeywordRanges.length).toBeGreaterThan(0);
+    expect(secondKeywordRanges.every((range) => rangesOverlap(range, secondRange))).toBe(true);
+    expect(secondKeywordRanges.some((range) => rangesOverlap(range, firstRange))).toBe(false);
+  });
+
+  it("rebuilds runtime code fence highlights when the syntax highlighter changes", async () => {
     let highlighterCompartment = new Compartment();
     let view = await markdownAnalysisView("```ts\nlet answer = 1;\n```\n", "", [
       highlighterCompartment.of(syntaxHighlighting(testLightCodeFenceHighlightStyle)),
@@ -2449,16 +2810,11 @@ describe("LiveMD analysis snapshot", () => {
 
     expect(lightKeywordClass).toBeTruthy();
     expect(darkKeywordClass).toBeTruthy();
-    let initial = __testLiveMdAnalysis(view);
-    let initialClasses = decorationClassesFromSet(view.state, initial.surfaceDecorations);
+    let initialAnalysis = __testLiveMdAnalysis(view);
+    let initialClasses = decorationClasses(view.state, initialAnalysis);
     expect(initialClasses.has(lightKeywordClass!)).toBe(true);
     expect(initialClasses.has(darkKeywordClass!)).toBe(false);
-    expect(initial.trace.codeFenceParses).toBe(1);
-    expect(
-      explicitCodeFenceClasses(view.state, [testLightCodeFenceHighlightStyle]).has(
-        lightKeywordClass!,
-      ),
-    ).toBe(true);
+    expect(initialAnalysis.trace.codeFenceParses).toBe(1);
 
     view.dispatch({
       effects: highlighterCompartment.reconfigure(
@@ -2466,20 +2822,15 @@ describe("LiveMD analysis snapshot", () => {
       ),
     });
 
-    let after = __testLiveMdAnalysis(view);
-    let afterClasses = decorationClassesFromSet(view.state, after.surfaceDecorations);
-    expect(after.trace.codeFenceParses).toBe(1);
-    expect(afterClasses.has(darkKeywordClass!)).toBe(true);
-    expect(afterClasses.has(lightKeywordClass!)).toBe(false);
-    expect(
-      explicitCodeFenceClasses(view.state, [testDarkCodeFenceHighlightStyle]).has(
-        darkKeywordClass!,
-      ),
-    ).toBe(true);
+    let reconfiguredAnalysis = __testLiveMdAnalysis(view);
+    let reconfiguredClasses = decorationClasses(view.state, reconfiguredAnalysis);
+    expect(reconfiguredClasses.has(darkKeywordClass!)).toBe(true);
+    expect(reconfiguredClasses.has(lightKeywordClass!)).toBe(false);
+    expect(reconfiguredAnalysis.trace.codeFenceParses).toBe(1);
     view.destroy();
   });
 
-  it("uses explicit code fence highlighter overrides in the runtime surface", async () => {
+  it("uses explicit code fence highlighter overrides on the runtime parser path", async () => {
     let view = await markdownAnalysisView("```ts\nlet answer = 1;\n```\n", "", [
       syntaxHighlighting(testLightCodeFenceHighlightStyle),
       liveMdCodeFenceHighlighting(testDarkCodeFenceHighlightStyle),
@@ -2490,15 +2841,10 @@ describe("LiveMD analysis snapshot", () => {
 
     expect(darkKeywordClass).toBeTruthy();
     let analysis = __testLiveMdAnalysis(view);
-    let classes = decorationClassesFromSet(view.state, analysis.surfaceDecorations);
+    let classes = decorationClasses(view.state, analysis);
     expect(classes.has(darkKeywordClass!)).toBe(true);
     expect(classes.has(lightKeywordClass!)).toBe(false);
     expect(analysis.trace.codeFenceParses).toBe(1);
-    expect(
-      explicitCodeFenceClasses(view.state, [testDarkCodeFenceHighlightStyle]).has(
-        darkKeywordClass!,
-      ),
-    ).toBe(true);
     view.destroy();
   });
 
@@ -2759,6 +3105,51 @@ async function markdownAnalysisView(doc: string, selectionText = "", extensions:
   return view;
 }
 
+async function markdownLegacyAnalysisView(
+  doc: string,
+  selectionText = "",
+  extensions: Extension = [],
+) {
+  let selection = selectionText ? doc.indexOf(selectionText) : 0;
+  let service = await loadMarkdownParserService();
+  let view = new EditorView({
+    parent: document.body.appendChild(document.createElement("div")),
+    state: EditorState.create({
+      doc,
+      selection: { anchor: selection },
+      extensions: [
+        service.blockLanguage.extension,
+        codeFenceLanguagesField,
+        extensions,
+        liveMdAnalysis,
+      ],
+    }),
+  });
+  ensureSyntaxTree(view.state, doc.length, 5_000);
+  view.dispatch({});
+  return view;
+}
+
+async function trackedHtmlCodeFenceLanguages() {
+  let parseCalls = 0;
+  let languages = new Map(await loadCodeFenceLanguages());
+  let htmlParser = languages.get("html");
+  if (!htmlParser) throw new Error("HTML code fence parser is unavailable");
+  let trackedParser = Object.create(htmlParser) as typeof htmlParser;
+  trackedParser.parseWith = (...args: Parameters<typeof htmlParser.parseWith>) => {
+    parseCalls++;
+    return htmlParser.parseWith(...args);
+  };
+  languages.set("html", trackedParser);
+  return {
+    languages,
+    parseCalls: () => parseCalls,
+    reset() {
+      parseCalls = 0;
+    },
+  };
+}
+
 type TestLiveMdAnalysis = ReturnType<typeof __testLiveMdAnalysis>;
 type TestLeafAnalysisCache = NonNullable<TestLiveMdAnalysis["semantic"]>["cache"];
 type ScheduledLocalOracleMode = "full" | "semantic" | false;
@@ -2853,7 +3244,7 @@ function semanticTransitionOracles(
   let tree = service.blockParser.parse(state.doc);
   try {
     let walked = walkMarkdownBlocks(tree, state.doc);
-    let analysisInput = { service, state, tree };
+    let analysisInput = { renderKeyContext: renderKeyContextForTest(state), service, state, tree };
     let fullTransition = transitionLeafAnalysisCache({
       analysisInput,
       changes,
@@ -2880,13 +3271,29 @@ function markdownParserService(state: EditorState) {
   return service;
 }
 
+function renderKeyContextForTest(state: EditorState): LiveMdRenderKeyContext {
+  let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? null;
+  let highlighters = state.facet(codeFenceHighlighterFacet) ??
+    syntaxHighlighters(state) ?? [liveMdDefaultCodeFenceHighlighter];
+  return {
+    referenceEpoch: liveMdValueEpoch(state.facet(liveMdLinkBaseUrl)),
+    rendererVersion: liveMdRendererVersion,
+    resolverEpoch: liveMdCompositeEpoch(
+      state.facet(liveMdImageSourceResolver),
+      codeFenceLanguages == emptyCodeFenceLanguages ? null : codeFenceLanguages,
+    ),
+    themeEpoch: liveMdCompositeEpoch(...highlighters),
+  };
+}
+
 async function createLocalCacheHarness(doc: string, extensions: Extension = []) {
   let service = await loadMarkdownParserService();
   let state = EditorState.create({ doc, extensions });
   let tree = service.blockParser.parse(state.doc);
   let snapshot = walkMarkdownBlocks(tree, state.doc).snapshot;
+  let renderKeyContext = defaultLiveMdRenderKeyContext;
   let current = buildFreshLeafAnalysisCache({
-    analysisInput: { service, state, tree },
+    analysisInput: { renderKeyContext, service, state, tree },
     snapshot,
   });
   let sourceIslandLeaves: readonly LiveMdSourceIslandLeaf[] =
@@ -2897,6 +3304,7 @@ async function createLocalCacheHarness(doc: string, extensions: Extension = []) 
 
   let harness = {
     current,
+    renderKeyContext,
     service,
     sourceIslandLeaves,
     state,
@@ -2911,7 +3319,12 @@ async function createLocalCacheHarness(doc: string, extensions: Extension = []) 
       );
       let nextTree = service.blockParser.parse(transaction.state.doc, editedTree);
       let local = transitionLeafAnalysisCacheLocal({
-        analysisInput: { service, state: transaction.state, tree: nextTree },
+        analysisInput: {
+          renderKeyContext: harness.renderKeyContext,
+          service,
+          state: transaction.state,
+          tree: nextTree,
+        },
         changes: transaction.changes,
         oldCache: harness.current.cache,
         oldDoc: harness.state.doc,
@@ -2994,6 +3407,8 @@ function projectionCompileInputForTest(
     imageSourceResolver: state.facet(liveMdImageSourceResolver),
     linkBaseUrl: state.facet(liveMdLinkBaseUrl),
     markdownFeatures: state.facet(liveMdMarkdownFeatureFacet),
+    renderKeyContext: analysis.renderKeyContext,
+    renderCache: analysis.renderCache,
     sourceIslandMode: true,
     state,
     trace: options.trace ?? emptyLiveMdLeafAnalysisTrace(),
@@ -3020,11 +3435,11 @@ function expectDirectProjectionMatchesFullOracle(
   );
 }
 
-function explicitCodeFenceSurface(
+function explicitCodeFenceSurfaceForAnalysis(
   state: EditorState,
+  analysis: ReturnType<typeof __testBuildLiveMdAnalysis>,
   highlighters: readonly Highlighter[],
   trace = emptyLiveMdLeafAnalysisTrace(),
-  analysis = __testBuildLiveMdAnalysis(state),
 ) {
   if (!analysis.semantic) throw new Error("Expected semantic cache for code fence oracle");
   return compileVisibleSurfaceProjection(
@@ -3036,10 +3451,6 @@ function explicitCodeFenceSurface(
     state.doc.length ? [{ from: 0, to: state.doc.length }] : [],
     { codeFenceHighlights: true },
   );
-}
-
-function explicitCodeFenceClasses(state: EditorState, highlighters: readonly Highlighter[]) {
-  return decorationClassesFromSet(state, explicitCodeFenceSurface(state, highlighters).decorations);
 }
 
 function imagePreviewSources(state: EditorState) {
@@ -3109,6 +3520,19 @@ function recordBySource(
   return record;
 }
 
+function recordByKind(
+  analysis: ReturnType<typeof __testLiveMdAnalysis>,
+  kind: LeafAnalysisRecord["kind"],
+) {
+  let record = analysis.semantic
+    ? materializeLeafAnalysisCacheRecords(analysis.semantic.cache).find(
+        (candidate) => candidate.kind == kind,
+      )
+    : undefined;
+  if (!record) throw new Error(`Missing semantic record for kind: ${kind}`);
+  return record;
+}
+
 function markerRecordBySource(
   state: EditorState,
   analysis: ReturnType<typeof __testLiveMdAnalysis>,
@@ -3171,6 +3595,19 @@ function decorationClassesFromSet(state: EditorState, decorations: DecorationSet
     }
   });
   return classes;
+}
+
+function decorationRangesForClassFromSet(
+  state: EditorState,
+  decorations: DecorationSet,
+  targetClass: string,
+) {
+  let ranges: DocRange[] = [];
+  decorations.between(0, state.doc.length, (from, to, value) => {
+    let className = (value.spec as { class?: string }).class;
+    if (className?.split(/\s+/).includes(targetClass)) ranges.push({ from, to });
+  });
+  return ranges;
 }
 
 function linkHrefsFromSet(state: EditorState, decorations: DecorationSet) {
@@ -3294,6 +3731,26 @@ function numberedParagraphDoc(count: number) {
 
 function numberedPlainParagraphDoc(count: number) {
   return Array.from({ length: count }, (_value, index) => `paragraph ${index}`).join("\n\n");
+}
+
+function renderCacheFullQueryDoc() {
+  return (
+    "| Name | Value |\n" +
+    "| --- | ---: |\n" +
+    "| alpha | 1 |\n\n" +
+    "![Alt](assets/one.png)\n\n" +
+    "$$\n" +
+    "x\n" +
+    "$$\n\n" +
+    "```mermaid\n" +
+    "graph TD\n" +
+    "A --> B\n" +
+    "```\n\n" +
+    "```html\n" +
+    "<script>let a = 1;</script>\n" +
+    "```\n\n" +
+    "Tail"
+  );
 }
 
 function onlyRecordTouching(cache: TestLeafAnalysisCache, range: DocRange, label: string) {
@@ -3679,13 +4136,26 @@ function canonicalDecorationSpec(spec: Record<string, unknown>) {
       ...normalized,
       widget: {
         name: widget.constructor.name,
-        props: Object.fromEntries(
-          Object.getOwnPropertyNames(widget)
-            .sort()
-            .map((name) => [name, (widget as Record<string, unknown>)[name]]),
-        ),
+        props: canonicalWidgetProps(widget as Record<string, unknown>),
       },
     };
   }
   return normalized;
+}
+
+function canonicalWidgetProps(widget: Record<string, unknown>) {
+  let props = Object.fromEntries(
+    Object.getOwnPropertyNames(widget)
+      .sort()
+      .map((name) => [name, widget[name]]),
+  );
+  let renderHandle = props.renderHandle;
+  if (renderHandle && typeof renderHandle == "object") {
+    let handle = renderHandle as Record<string, unknown>;
+    props.renderHandle = {
+      resultKey: handle.resultKey,
+      source: handle.source,
+    };
+  }
+  return props;
 }

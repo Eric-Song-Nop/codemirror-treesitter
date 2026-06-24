@@ -1,5 +1,4 @@
 import { Text } from "@codemirror/state";
-import { highlightTree, type Tree, type TreeSitterParser } from "@codemirror-treesitter/language";
 import { Decoration } from "@codemirror/view";
 import {
   type LeafAnalysisCache,
@@ -13,15 +12,18 @@ import {
   forEachLeafAnalysisCacheRecordTouchingRanges,
 } from "../analysis/markdown-leaf-cache.js";
 import { type DocRange } from "../analysis/types.js";
-import { resolveLiveMdImageSource } from "../images.js";
-import { deleteLiveMdTree } from "../languages.js";
 import { liveMdLinkMark } from "../links.js";
+import {
+  cachedLiveMdImageSource,
+  cachedLiveMdLatexResult,
+  cachedLiveMdMermaidRequest,
+  cachedLiveMdTableResult,
+} from "../runtime/render-cache.js";
 import { isWhitespaceOnly } from "../util.js";
 import {
   ImagePreviewWidget,
   LatexWidget,
   ListMarkerWidget,
-  type MarkdownTable,
   MermaidWidget,
   TablePreviewWidget,
   TaskCheckboxWidget,
@@ -36,6 +38,7 @@ import {
   rangeTouchesActiveLine as buildRangeTouchesActiveLine,
   rangeTouchesActiveSource as buildRangeTouchesActiveSource,
 } from "./emit.js";
+import { addCodeFenceHighlights } from "./code-fence.js";
 import {
   type LiveMdBuild,
   type LiveMdEffectSpec,
@@ -105,7 +108,13 @@ export function projectLeafRecord(
   let active = buildRangeTouchesActiveLine(build, record.sourceRange.from, record.sourceRange.to);
   for (let spec of projectLeaf(record, active, renderStatus)) {
     for (let mapped of mapSpec(spec, record, build)) {
-      materializeEffectSpecOnce(build, mapped, seen, liveMdEffectOwnerKeys(record, mapped));
+      materializeEffectSpecOnce(
+        build,
+        mapped,
+        seen,
+        liveMdEffectOwnerKeys(record, mapped),
+        record.analysis.renderKey,
+      );
     }
   }
 }
@@ -671,11 +680,12 @@ function materializeEffectSpecOnce(
   spec: LiveMdEffectSpec,
   seen: Set<string>,
   ownerKeys: readonly string[] = [],
+  recordRenderKey = "",
 ) {
   let key = liveMdEffectSpecKey(spec);
   if (seen.has(key)) return;
   seen.add(key);
-  materializeEffectSpec(build, spec, ownerKeys);
+  materializeEffectSpec(build, spec, ownerKeys, recordRenderKey);
 }
 
 export function liveMdRecordOwnerKey(cacheId: number) {
@@ -758,7 +768,14 @@ function liveMdEffectSpecKey(spec: LiveMdEffectSpec) {
     case "atomic":
       return keyParts("atomic", rangeKey(spec));
     case "codeFenceHighlight":
-      return keyParts("codeFenceHighlight", spec.contentFrom, spec.contentTo, spec.language);
+      return keyParts(
+        "codeFenceHighlight",
+        spec.contentFrom,
+        spec.contentTo,
+        spec.emitFrom ?? spec.contentFrom,
+        spec.emitTo ?? spec.contentTo,
+        spec.language,
+      );
     case "lineClass":
       return keyParts("lineClass", rangeKey(spec), spec.className);
     case "mark":
@@ -785,6 +802,8 @@ function liveMdRelativeEffectSpecKey(spec: LiveMdEffectSpec, offset: number) {
         "codeFenceHighlight",
         spec.contentFrom - offset,
         spec.contentTo - offset,
+        (spec.emitFrom ?? spec.contentFrom) - offset,
+        (spec.emitTo ?? spec.contentTo) - offset,
         spec.language,
       );
     case "lineClass":
@@ -873,13 +892,22 @@ function materializeEffectSpec(
   build: LiveMdBuild,
   spec: LiveMdEffectSpec,
   ownerKeys: readonly string[] = [],
+  recordRenderKey = "",
 ) {
   switch (spec.kind) {
     case "atomic":
       addAtom(build, spec.from, spec.to, ownerKeys);
       break;
     case "codeFenceHighlight":
-      addCodeFenceHighlights(build, spec.contentFrom, spec.contentTo, spec.language);
+      addCodeFenceHighlights(
+        build,
+        spec.contentFrom,
+        spec.contentTo,
+        spec.emitFrom ?? spec.contentFrom,
+        spec.emitTo ?? spec.contentTo,
+        spec.language,
+        recordRenderKey,
+      );
       break;
     case "lineClass": {
       if (spec.from == spec.to) {
@@ -897,7 +925,7 @@ function materializeEffectSpec(
         build,
         spec.from,
         spec.to,
-        widgetFromSpec(build, spec.widget),
+        widgetFromSpec(build, spec.widget, recordRenderKey),
         spec.block ?? false,
         spec.atomic ?? false,
         ownerKeys,
@@ -941,109 +969,45 @@ function textMark(mark: Extract<LiveMdDescriptor, { kind: "textMark" }>["mark"])
   }
 }
 
-function widgetFromSpec(build: LiveMdBuild, spec: LiveMdWidgetSpec) {
+function widgetFromSpec(build: LiveMdBuild, spec: LiveMdWidgetSpec, recordRenderKey: string) {
   build.trace.widgetConstructions++;
   switch (spec.kind) {
-    case "imagePreview":
-      return new ImagePreviewWidget(
-        spec.alt,
-        resolveLiveMdImageSource(spec.source, build.imageSourceResolver),
+    case "imagePreview": {
+      let image = cachedLiveMdImageSource(
+        build.renderCache,
+        build.trace,
+        recordRenderKey,
+        spec.source,
+        build.imageSourceResolver,
       );
+      return new ImagePreviewWidget(spec.alt, image.src);
+    }
     case "latex":
-      return new LatexWidget({
-        block: spec.block,
-        displayMode: spec.displayMode,
-        source: spec.source,
-        tex: spec.tex,
-      });
+      return new LatexWidget(
+        {
+          block: spec.block,
+          displayMode: spec.displayMode,
+          source: spec.source,
+          tex: spec.tex,
+        },
+        cachedLiveMdLatexResult(build.renderCache, build.trace, recordRenderKey, {
+          block: spec.block,
+          displayMode: spec.displayMode,
+          source: spec.source,
+          tex: spec.tex,
+        }),
+      );
     case "listMarker":
       return new ListMarkerWidget(spec.marker);
     case "mermaid":
-      return new MermaidWidget({ source: spec.source });
+      return new MermaidWidget(
+        cachedLiveMdMermaidRequest(build.renderCache, build.trace, recordRenderKey, spec.source),
+      );
     case "tablePreview":
-      return new TablePreviewWidget(markdownTable(spec.table));
+      return new TablePreviewWidget(
+        cachedLiveMdTableResult(build.renderCache, build.trace, recordRenderKey, spec.table).table,
+      );
     case "taskMarker":
       return new TaskCheckboxWidget(spec.checked);
-  }
-}
-
-function markdownTable(table: LiveMdTableModel): MarkdownTable {
-  return {
-    alignments: [...table.alignments],
-    header: [...table.header],
-    rows: table.rows.map((row) => [...row]),
-  };
-}
-
-function addCodeFenceHighlights(
-  build: LiveMdBuild,
-  contentFrom: number,
-  contentTo: number,
-  language: string,
-) {
-  let parser = build.codeFenceLanguages.get(language);
-  if (!parser || contentFrom >= contentTo) return;
-
-  let sourceText = Text.of(build.state.sliceDoc(contentFrom, contentTo).split("\n"));
-  let nativeParser = parser.createParser();
-  let nestedParsers = new Map<TreeSitterParser, ReturnType<TreeSitterParser["createParser"]>>();
-  let parsed: ReturnType<typeof parser.parseWith> | null = null;
-  let tree: Tree | null = null;
-  build.trace.codeFenceParserSessionsCreated++;
-  try {
-    build.trace.codeFenceParses++;
-    parsed = parser.parseWith(nativeParser, sourceText);
-    if (!parsed) return;
-    tree = parser.wrapTree(parsed, sourceText, null, undefined, nestedParsers);
-    if (!tree) return;
-    highlightTree(
-      tree,
-      build.codeFenceHighlighters,
-      (from, to, className) => {
-        let decoration = Decoration.mark({ class: className });
-        splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {
-          addMark(build, contentFrom + rangeFrom, contentFrom + rangeTo, decoration);
-        });
-      },
-      0,
-      sourceText.length,
-    );
-  } finally {
-    build.trace.codeFenceParserSessionsCreated += nestedParsers.size;
-    let treeCount = tree ? countNativeTrees(tree) : parsed ? 1 : 0;
-    build.trace.codeFenceTreesCreated += treeCount;
-    if (tree) deleteLiveMdTree(tree);
-    else parsed?.delete();
-    build.trace.codeFenceTreesDeleted += treeCount;
-
-    for (let nestedParser of nestedParsers.values()) {
-      build.trace.codeFenceParserSessionsDeleted++;
-      nestedParser.delete();
-    }
-    build.trace.codeFenceParserSessionsDeleted++;
-    nativeParser.delete();
-  }
-}
-
-function countNativeTrees(tree: Tree): number {
-  let count = tree.tree ? 1 : 0;
-  for (let nested of tree.nested) {
-    count += countNativeTrees(nested.tree);
-  }
-  return count;
-}
-
-function splitTextRangeByLine(
-  text: Text,
-  from: number,
-  to: number,
-  visit: (from: number, to: number) => void,
-) {
-  let cursor = from;
-  while (cursor < to) {
-    let line = text.lineAt(cursor);
-    let rangeTo = Math.min(to, line.to);
-    if (cursor < rangeTo) visit(cursor, rangeTo);
-    cursor = line.to < to ? line.to + 1 : to;
   }
 }

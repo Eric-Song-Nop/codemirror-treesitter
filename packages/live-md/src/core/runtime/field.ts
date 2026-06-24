@@ -37,10 +37,16 @@ import {
   findLeafAnalysisRecordsTouchingRanges,
   leafAnalysisCacheRangesInDoc,
   materializeLeafAnalysisCacheRecords,
+  rekeyLeafAnalysisCache,
   transitionLeafAnalysisCacheLocal,
   transitionLeafAnalysisCache,
   type LeafAnalysisCacheTransition,
 } from "../analysis/markdown-leaf-cache.js";
+import {
+  liveMdRendererVersion,
+  sameLiveMdRenderKeyContext,
+  type LiveMdRenderKeyContext,
+} from "../analysis/markdown-leaf-analysis.js";
 import {
   activeMarkdownSourceRanges,
   analyzeLiveMdSourceIslands,
@@ -96,6 +102,8 @@ import {
   type LiveMdSurfaceProjection,
   type LiveMdSurfaceProjectionState,
 } from "./types.js";
+import { liveMdCompositeEpoch, liveMdValueEpoch } from "./epochs.js";
+import { createLiveMdRenderCache, type LiveMdRenderCache } from "./render-cache.js";
 
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
 const liveMdSchedulerQuietDelay = 24;
@@ -698,6 +706,8 @@ function pendingSourceAnalysis(
     directSourceSafeDecorations,
     legacySurface: baseAnalysis.legacySurface,
     pending,
+    renderCache: value.renderCache,
+    renderKeyContext: baseAnalysis.renderKeyContext,
     revision,
     semantic: baseAnalysis.semantic,
     semanticTrace: baseAnalysis.semantic ? emptyLeafAnalysisCacheTrace() : null,
@@ -1029,6 +1039,21 @@ function runtimeEpochsChanged(left: LiveMdRuntimeEpochs, right: LiveMdRuntimeEpo
   );
 }
 
+function renderKeyContextForState(state: EditorState): LiveMdRenderKeyContext {
+  let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? null;
+  let resolver = state.facet(liveMdImageSourceResolver);
+  let reference = state.facet(liveMdLinkBaseUrl);
+  return {
+    referenceEpoch: liveMdValueEpoch(reference),
+    rendererVersion: liveMdRendererVersion,
+    resolverEpoch: liveMdCompositeEpoch(
+      resolver,
+      codeFenceLanguages == emptyCodeFenceLanguages ? null : codeFenceLanguages,
+    ),
+    themeEpoch: liveMdCompositeEpoch(...codeFenceHighlighters(state)),
+  };
+}
+
 function scheduleLiveMdWork(
   revision: number,
   run: (deadline?: IdleDeadline) => void,
@@ -1170,6 +1195,8 @@ function buildLiveMdAnalysis(
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
   let tree = options.tree ?? syntaxTree(state);
   let markdownParserService = state.facet(liveMdMarkdownParserServiceFacet);
+  let renderCache = options.previous?.renderCache ?? createLiveMdRenderCache();
+  let renderKeyContext = renderKeyContextForState(state);
 
   if (markdownParserService) {
     let semanticAnalysis = buildLiveMdSemanticAnalysis({
@@ -1210,6 +1237,7 @@ function buildLiveMdAnalysis(
       {
         codeFenceLanguages,
         sourceIslandMode: true,
+        renderCache,
         trace: semanticAnalysis.trace,
         yieldCheck: options.yieldCheck,
       },
@@ -1251,6 +1279,8 @@ function buildLiveMdAnalysis(
       directSourceSafeDecorations: direct.sourceSafeDecorations,
       legacySurface,
       pending: null,
+      renderCache,
+      renderKeyContext,
       revision: options.revision ?? options.previous?.revision ?? 0,
       semantic: semanticAnalysis.semantic,
       semanticTrace: trace,
@@ -1268,6 +1298,7 @@ function buildLiveMdAnalysis(
     null,
     tree,
     options.yieldCheck,
+    renderCache,
   );
   let projection = finishProjectionLayers(build);
   return {
@@ -1279,6 +1310,8 @@ function buildLiveMdAnalysis(
     directSourceSafeDecorations: projection.direct.sourceSafeDecorations,
     legacySurface: projection.surface,
     pending: null,
+    renderCache: build.renderCache,
+    renderKeyContext,
     revision: options.revision ?? options.previous?.revision ?? 0,
     semantic: null,
     semanticTrace: null,
@@ -1294,6 +1327,7 @@ function projectionCompileInput(
   activeSourceRanges: readonly DocRange[],
   options: {
     codeFenceLanguages?: CodeFenceLanguageMap;
+    renderCache?: LiveMdRenderCache;
     sourceIslandMode: boolean;
     trace: LiveMdSemanticTrace;
     yieldCheck?: () => void;
@@ -1310,6 +1344,8 @@ function projectionCompileInput(
     imageSourceResolver: state.facet(liveMdImageSourceResolver),
     linkBaseUrl: state.facet(liveMdLinkBaseUrl),
     markdownFeatures: state.facet(liveMdMarkdownFeatureFacet),
+    renderKeyContext: renderKeyContextForState(state),
+    renderCache: options.renderCache ?? createLiveMdRenderCache(),
     sourceIslandMode: options.sourceIslandMode,
     state,
     trace: options.trace,
@@ -1542,6 +1578,7 @@ function compileRuntimeVisibleSurfaceProjection(
   if (!semantic) return emptySurfaceProjection();
 
   let input = projectionCompileInput(state, analysis.activeLines, analysis.activeSourceRanges, {
+    renderCache: analysis.renderCache,
     sourceIslandMode: true,
     trace,
   });
@@ -1594,14 +1631,23 @@ function buildLiveMdSemanticAnalysis(input: {
 }) {
   let previous = input.previous;
   let previousSemantic = input.previous?.semantic ?? null;
+  let renderKeyContext = renderKeyContextForState(input.state);
   if (previous && previousSemantic && canReuseSemanticState(input)) {
     let sourceIslandLeaves = previous.sourceIslandLeaves;
+    let trace = emptyLeafAnalysisCacheTrace();
+    let contextChanged = !sameLiveMdRenderKeyContext(previous.renderKeyContext, renderKeyContext);
+    let semantic = contextChanged
+      ? {
+          cache: rekeyLeafAnalysisCache(previousSemantic.cache, renderKeyContext, trace),
+          revision: previousSemantic.revision + 1,
+        }
+      : previousSemantic;
     return {
       activeSourceRanges:
         input.activeSourceRanges ?? activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
-      semantic: previousSemantic,
+      semantic,
       sourceIslandLeaves,
-      trace: emptyLeafAnalysisCacheTrace(),
+      trace,
       transition: null,
     };
   }
@@ -1615,6 +1661,7 @@ function buildLiveMdSemanticAnalysis(input: {
   ) {
     let transition = transitionLeafAnalysisCacheLocal({
       analysisInput: {
+        renderKeyContext,
         service: input.service,
         state: input.state,
         tree: input.tree,
@@ -1650,6 +1697,7 @@ function buildLiveMdSemanticAnalysis(input: {
     input.yieldCheck?.();
     let fallback = transitionLeafAnalysisCache({
       analysisInput: {
+        renderKeyContext,
         service: input.service,
         state: input.state,
         tree: input.tree,
@@ -1690,6 +1738,7 @@ function buildLiveMdSemanticAnalysis(input: {
     !markdownParserServiceChanged(transaction.startState, transaction.state)
       ? transitionLeafAnalysisCache({
           analysisInput: {
+            renderKeyContext,
             service: input.service,
             state: input.state,
             tree: input.tree,
@@ -1702,6 +1751,7 @@ function buildLiveMdSemanticAnalysis(input: {
         })
       : buildFreshLeafAnalysisCache({
           analysisInput: {
+            renderKeyContext,
             service: input.service,
             state: input.state,
             tree: input.tree,
@@ -1925,8 +1975,11 @@ export function __testBuildLiveMdAnalysis(state: EditorState) {
   return liveMdAnalysisSnapshot(state, buildLiveMdAnalysis(state));
 }
 
-export function __testBuildCanonicalLiveMdAnalysis(state: EditorState) {
-  return buildCanonicalLiveMdAnalysis(state);
+export function __testBuildCanonicalLiveMdAnalysis(
+  state: EditorState,
+  renderCache?: LiveMdRenderCache,
+) {
+  return buildCanonicalLiveMdAnalysis(state, renderCache);
 }
 
 export function __testLiveMdAnalysis(view: EditorView | { state: EditorState }): LiveMdAnalysis {
@@ -1960,7 +2013,10 @@ function waitForScheduledTurn() {
   });
 }
 
-function buildCanonicalLiveMdAnalysis(state: EditorState): LiveMdAnalysis {
+function buildCanonicalLiveMdAnalysis(
+  state: EditorState,
+  renderCache?: LiveMdRenderCache,
+): LiveMdAnalysis {
   let activeLines = getActiveLines(state);
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? emptyCodeFenceLanguages;
   let tree = syntaxTree(state);
@@ -1972,6 +2028,8 @@ function buildCanonicalLiveMdAnalysis(state: EditorState): LiveMdAnalysis {
     codeFenceLanguages,
     markdownAnalysis,
     tree,
+    undefined,
+    renderCache,
   );
   let projection = finishProjectionLayers(build);
   return {
@@ -1987,6 +2045,8 @@ function buildCanonicalLiveMdAnalysis(state: EditorState): LiveMdAnalysis {
     interactiveDecorations: projection.interactiveDecorations,
     legacySurface: projection.surface,
     pending: null,
+    renderCache: build.renderCache,
+    renderKeyContext: renderKeyContextForState(state),
     revision: 0,
     semantic: null,
     semanticTrace: null,
@@ -2009,6 +2069,7 @@ function buildLegacyLiveMdBuild(
   markdownAnalysis: LiveMdSourceIslandAnalysis | null,
   tree: ReturnType<typeof syntaxTree>,
   yieldCheck?: () => void,
+  renderCache?: LiveMdRenderCache,
 ) {
   let build = createLiveMdBuild({
     activeLines,
@@ -2018,6 +2079,8 @@ function buildLegacyLiveMdBuild(
     imageSourceResolver: state.facet(liveMdImageSourceResolver),
     linkBaseUrl: state.facet(liveMdLinkBaseUrl),
     markdownFeatures: state.facet(liveMdMarkdownFeatureFacet),
+    renderKeyContext: renderKeyContextForState(state),
+    renderCache,
     sourceIslandMode: Boolean(markdownAnalysis),
     state,
     trace: emptyLiveMdLeafAnalysisTrace(),

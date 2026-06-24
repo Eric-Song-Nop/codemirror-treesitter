@@ -356,10 +356,12 @@ Cloudflare-specific code, and concrete theme packages.
   ordinary edits stay local. Its `sourceHash` is diagnostic only; exact source
   text is used for the oracle so hash collisions cannot hide changed leaves.
   Direct incremental projection, range-local production analysis, and
-  input-to-paint latency reduction remain future work. PR73's `renderKey` is a
-  placeholder equal to `analysisKey`; it must not be used for KaTeX, Mermaid,
-  code, image, async-result, or other content caches before those caches include
-  source identity plus renderer, resolver, and theme epochs.
+  input-to-paint latency reduction remain future work. PR78 uses `renderKey`
+  with source identity plus renderer, resolver, and highlighter epochs for the
+  synchronous render cache covering image sources, KaTeX, table previews,
+  Mermaid render requests, and code fence highlights. `cacheId` is deliberately
+  excluded from render cache keys so record identity churn does not invalidate
+  unchanged render work.
 
 ## Validation
 
