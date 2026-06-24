@@ -12,7 +12,7 @@ import {
 } from "../src/core/analysis/markdown-leaf-spike.js";
 import { loadMarkdownExtension } from "../src/core/languages.js";
 
-describe("LiveMD changed markdown leaf spike", () => {
+describe("LiveMD changed-leaf oracle", () => {
   it("classifies block leaves with a full TreeCursor walk", async () => {
     let doc = [
       "# ATX",
@@ -60,7 +60,7 @@ describe("LiveMD changed markdown leaf spike", () => {
     ).toEqual([]);
   });
 
-  it("matches the full-walk oracle across planned correctness cases", async () => {
+  it("preserves the range-local leaf discovery contract across planned correctness cases", async () => {
     let cases: Array<{ changes: ChangeSpec; name: string; oldDoc: string }> = [
       {
         name: "paragraph ordinary input",
