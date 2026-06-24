@@ -13,7 +13,7 @@ type LineMarkers = {
 };
 
 export const liveMdKeymap = keymap.of([
-  { key: "Enter", run: continueMarkdownBlock, shift: insertMarkdownRawNewline },
+  { key: "Enter", run: insertLiveMdNewline, shift: insertMarkdownRawNewline },
   { key: "Mod-b", run: surroundSelection("**", "**", "strong text") },
   { key: "Mod-i", run: surroundSelection("_", "_", "emphasis") },
   { key: "Mod-e", run: surroundSelection("`", "`", "code") },
@@ -75,6 +75,11 @@ function lineIsInsideCodeFence(state: EditorState, line: DocLine) {
     if (hasAncestor(node, "fenced_code_block")) return true;
   }
   return false;
+}
+
+function insertLiveMdNewline(view: EditorView) {
+  // LiveMD owns Enter. Never fall through to the setup's syntax indentation command.
+  return continueMarkdownBlock(view) || insertMarkdownRawNewline(view);
 }
 
 function continueMarkdownBlock(view: EditorView) {
