@@ -16,6 +16,7 @@ import {
   firstCanonicalMismatch,
   history,
   installAnalysisTestEnvironment,
+  leafAnalysisCacheNextId,
   leafAnalysisCacheRecordCount,
   loadMarkdownParserService,
   mapRangeForTest,
@@ -380,7 +381,7 @@ describe("LiveMD leaf cache transition performance", () => {
       let fresh = buildFreshLeafAnalysisCache({
         analysisInput: { service: harness.service, state: harness.state, tree: harness.tree },
         snapshot: freshSnapshot,
-        startCacheId: harness.current.cache.nextCacheId,
+        startCacheId: leafAnalysisCacheNextId(harness.current.cache),
       });
       expect(canonicalSemanticRecordsFromCache(harness.state, harness.current.cache)).toEqual(
         canonicalSemanticRecordsFromCache(harness.state, fresh.cache),

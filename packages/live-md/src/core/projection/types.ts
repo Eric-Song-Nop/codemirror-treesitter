@@ -2,11 +2,10 @@ import { type EditorState, type Text } from "@codemirror/state";
 import { type Highlighter } from "@codemirror-treesitter/language";
 import { type Decoration, type WidgetType } from "@codemirror/view";
 import { type LiveMdTableModel, type LiveMdTextMarkKind } from "../analysis/descriptors.js";
-import { type LiveMdLeafAnalysisTrace } from "../analysis/types.js";
+import { type DocRange, type LiveMdLeafAnalysisTrace } from "../analysis/types.js";
 import { type LiveMdMarkdownFeature } from "../features.js";
 import { type LiveMdImageSourceResolver } from "../images.js";
 import { type CodeFenceLanguageMap } from "../languages.js";
-import { type DocRange } from "../analysis/types.js";
 
 export type LiveMdBuild = {
   activeLines: Set<number>;
@@ -41,6 +40,10 @@ export type LiveMdBuildConfig = {
   state: EditorState;
   trace?: LiveMdLeafAnalysisTrace;
   yieldCheck?: () => void;
+};
+
+export type LiveMdProjectionCompileInput = Omit<LiveMdBuildConfig, "trace"> & {
+  trace: LiveMdLeafAnalysisTrace;
 };
 
 export type CodeFenceParser =

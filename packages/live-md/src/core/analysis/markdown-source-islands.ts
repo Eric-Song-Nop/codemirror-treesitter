@@ -12,6 +12,8 @@ import {
   type MarkdownBlockSnapshot,
   type MarkdownMarkerRecord,
 } from "./markdown-block-types.js";
+import { type LeafAnalysisCache } from "./cache/cache.js";
+import { forEachLeafAnalysisCacheRecord } from "./cache/query.js";
 import { type LeafAnalysisRecord } from "./descriptors.js";
 import { isWhitespaceOnly } from "../util.js";
 
@@ -82,25 +84,21 @@ export function sourceIslandLeavesFromLeafAnalysisRecords(
   doc: Text,
   records: readonly LeafAnalysisRecord[],
 ): LiveMdSourceIslandLeaf[] {
-  let leaves = records
-    .filter((record) => record.kind != "marker")
-    .map((record) => ({
-      contextKey: record.contextKey,
-      kind: record.kind as MarkdownLeafKind,
-      sourceRange: record.sourceRange,
-    }));
-  let markers = records
-    .filter((record) => record.kind == "marker")
-    .map(
-      (record): MarkdownMarkerRecord => ({
-        context: record.context,
-        contextKey: record.contextKey,
-        kind: "listMarker",
-        lineRange: record.sourceRange,
-        range: record.range,
-        text: doc.sliceString(record.range.from, record.range.to),
-      }),
-    );
+  let leaves: LiveMdSourceIslandLeaf[] = [];
+  let markers: MarkdownMarkerRecord[] = [];
+  for (let record of records) appendLeafAnalysisRecordSourceIsland(doc, record, leaves, markers);
+  return withMarkerOnlySourceIslands(doc, leaves, markers);
+}
+
+export function sourceIslandLeavesFromLeafAnalysisCache(
+  doc: Text,
+  cache: LeafAnalysisCache,
+): LiveMdSourceIslandLeaf[] {
+  let leaves: LiveMdSourceIslandLeaf[] = [];
+  let markers: MarkdownMarkerRecord[] = [];
+  forEachLeafAnalysisCacheRecord(cache, (record) =>
+    appendLeafAnalysisRecordSourceIsland(doc, record, leaves, markers),
+  );
   return withMarkerOnlySourceIslands(doc, leaves, markers);
 }
 
@@ -339,6 +337,31 @@ function sourceIslandLeaf(leaf: MarkdownLeaf): LiveMdSourceIslandLeaf {
     kind: leaf.kind,
     sourceRange: leaf.sourceRange,
   };
+}
+
+function appendLeafAnalysisRecordSourceIsland(
+  doc: Text,
+  record: LeafAnalysisRecord,
+  leaves: LiveMdSourceIslandLeaf[],
+  markers: MarkdownMarkerRecord[],
+) {
+  if (record.kind != "marker") {
+    leaves.push({
+      contextKey: record.contextKey,
+      kind: record.kind as MarkdownLeafKind,
+      sourceRange: record.sourceRange,
+    });
+    return;
+  }
+
+  markers.push({
+    context: record.context,
+    contextKey: record.contextKey,
+    kind: "listMarker",
+    lineRange: record.sourceRange,
+    range: record.range,
+    text: doc.sliceString(record.range.from, record.range.to),
+  });
 }
 
 function withMarkerOnlySourceIslands(

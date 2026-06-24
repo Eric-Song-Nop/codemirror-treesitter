@@ -20,6 +20,7 @@ import {
   expectRelativeLineClassRange,
   hashDocRange,
   installAnalysisTestEnvironment,
+  leafAnalysisCacheNextId,
   leafAnalysisCacheRecordCount,
   legacyFeatureFullQueryCount,
   lineBySource,
@@ -455,7 +456,10 @@ describe("LiveMD leaf cache transition contract", () => {
           sourceHash: newHash,
         }),
       );
-      let tamperedCache = createLeafAnalysisCache(tamperedRecords, oldTransition.cache.nextCacheId);
+      let tamperedCache = createLeafAnalysisCache(
+        tamperedRecords,
+        leafAnalysisCacheNextId(oldTransition.cache),
+      );
       let changes = oldState.update({
         changes: { from: 0, insert: "bravo", to: oldState.doc.length },
       }).changes;

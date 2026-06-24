@@ -1,7 +1,7 @@
 import { type ChangeDesc, type RangeSet, type RangeValue, type Text } from "@codemirror/state";
 import { type Highlighter, type Tree } from "@codemirror-treesitter/language";
 import { type DecorationSet } from "@codemirror/view";
-import { type LiveMdSemanticState } from "../analysis/descriptors.js";
+import { type LiveMdSemanticState } from "../analysis/markdown-leaf-cache.js";
 import { type LiveMdSourceIslandLeaf } from "../analysis/markdown-source-islands.js";
 import { type DocRange, type LiveMdLeafAnalysisTrace } from "../analysis/types.js";
 import { type LiveMdMarkdownFeature } from "../features.js";

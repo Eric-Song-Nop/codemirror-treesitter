@@ -2,7 +2,6 @@ import { Text } from "@codemirror/state";
 import { highlightTree, type Tree, type TreeSitterParser } from "@codemirror-treesitter/language";
 import { Decoration } from "@codemirror/view";
 import {
-  type LeafAnalysisCache,
   type LeafAnalysisRecord,
   type LiveMdDescriptor,
   type LiveMdTableModel,
@@ -11,6 +10,7 @@ import {
 import {
   forEachLeafAnalysisCacheRecord,
   forEachLeafAnalysisCacheRecordTouchingRanges,
+  type LeafAnalysisCache,
 } from "../analysis/markdown-leaf-cache.js";
 import { type DocRange } from "../analysis/types.js";
 import { resolveLiveMdImageSource } from "../images.js";

@@ -1,4 +1,3 @@
-import { type RangeSet, type RangeValue } from "@codemirror/state";
 import { type MarkdownBlockContext, type MarkdownLeafKind } from "./markdown-block-types.js";
 import { type DocRange } from "./types.js";
 
@@ -103,18 +102,6 @@ export type LeafAnalysisRecord = {
   sourceHash: number;
   sourceRange: DocRange;
   structuralKey: string;
-};
-
-export type LeafAnalysisCache = {
-  records: RangeSet<RangeValue>;
-  safety: RangeSet<RangeValue>;
-  recordCount: number;
-  nextCacheId: number;
-};
-
-export type LiveMdSemanticState = {
-  cache: LeafAnalysisCache;
-  revision: number;
 };
 
 export function offsetLiveMdDescriptor(

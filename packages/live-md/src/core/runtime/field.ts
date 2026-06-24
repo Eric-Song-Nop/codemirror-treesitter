@@ -35,8 +35,8 @@ import {
   buildFreshLeafAnalysisCache,
   emptyLeafAnalysisCacheTrace,
   findLeafAnalysisRecordsTouchingRanges,
+  leafAnalysisCacheNextId,
   leafAnalysisCacheRangesInDoc,
-  materializeLeafAnalysisCacheRecords,
   transitionLeafAnalysisCacheLocal,
   transitionLeafAnalysisCache,
   type LeafAnalysisCacheTransition,
@@ -46,7 +46,7 @@ import {
   analyzeLiveMdSourceIslands,
   findSourceIslandLeaf,
   sourceIslandLeavesInDoc,
-  sourceIslandLeavesFromLeafAnalysisRecords,
+  sourceIslandLeavesFromLeafAnalysisCache,
   type LiveMdSourceIslandAnalysis,
 } from "../analysis/markdown-source-islands.js";
 import { isInsideSkippedRange, matchRoot, queryLiveMdMatches } from "../analysis/query.js";
@@ -1629,10 +1629,7 @@ function buildLiveMdSemanticAnalysis(input: {
     if (!transition.fallback) {
       let sourceIslandLeaves =
         transition.sourceIslandLeaves ??
-        sourceIslandLeavesFromLeafAnalysisRecords(
-          input.state.doc,
-          materializeLeafAnalysisCacheRecords(transition.cache),
-        );
+        sourceIslandLeavesFromLeafAnalysisCache(input.state.doc, transition.cache);
       return {
         activeSourceRanges: activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
         semantic: {
@@ -1665,9 +1662,9 @@ function buildLiveMdSemanticAnalysis(input: {
     fallback.trace.fallbackCount = 1;
     fallback.trace.fixedPointRounds = transition.trace.fixedPointRounds;
     fallback.trace.leavesCollected = walked.snapshot.leaves.length + walked.snapshot.markers.length;
-    let sourceIslandLeaves = sourceIslandLeavesFromLeafAnalysisRecords(
+    let sourceIslandLeaves = sourceIslandLeavesFromLeafAnalysisCache(
       input.state.doc,
-      materializeLeafAnalysisCacheRecords(fallback.cache),
+      fallback.cache,
     );
     return {
       activeSourceRanges: activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
@@ -1707,15 +1704,17 @@ function buildLiveMdSemanticAnalysis(input: {
             tree: input.tree,
           },
           snapshot: walked.snapshot,
-          startCacheId: previousSemantic?.cache.nextCacheId,
+          startCacheId: previousSemantic
+            ? leafAnalysisCacheNextId(previousSemantic.cache)
+            : undefined,
           yieldCheck: input.yieldCheck,
         });
 
   transition.trace.blockNodesVisited = walked.trace.visitedBlockNodes;
   transition.trace.checkedRanges = walked.trace.checkedRanges;
-  let sourceIslandLeaves = sourceIslandLeavesFromLeafAnalysisRecords(
+  let sourceIslandLeaves = sourceIslandLeavesFromLeafAnalysisCache(
     input.state.doc,
-    materializeLeafAnalysisCacheRecords(transition.cache),
+    transition.cache,
   );
   let activeSourceRanges = activeMarkdownSourceRanges(input.state, sourceIslandLeaves);
 
