@@ -41,10 +41,27 @@ export type LiveMdLeafSemanticAnalysis = {
 
 export type LiveMdLeafSemanticAnalysisInput = {
   inlineSession?: MarkdownInlineAnalysisSession;
+  renderKeyContext?: LiveMdRenderKeyContext;
   service: LiveMdMarkdownParserService;
   state: EditorState;
   tree: Tree;
 };
+
+export type LiveMdRenderKeyContext = {
+  referenceEpoch: number;
+  rendererVersion: string;
+  resolverEpoch: number;
+  themeEpoch: number;
+};
+
+export const liveMdRendererVersion = "live-md-renderer-v1";
+
+export const defaultLiveMdRenderKeyContext: LiveMdRenderKeyContext = Object.freeze({
+  referenceEpoch: 0,
+  rendererVersion: liveMdRendererVersion,
+  resolverEpoch: 0,
+  themeEpoch: 0,
+});
 
 export type MarkdownLeafAnalysisUnit =
   | {
@@ -200,7 +217,11 @@ export function analyzeMarkdownLeafAnalysisUnit(
   trace?: LiveMdLeafAnalysisTrace,
 ): LeafAnalysisRecord {
   if (unit.type == "marker") {
-    return createAnalysisRecord(unit, leafAnalysis(unit.kind, unit.structuralEffects, []), cacheId);
+    return createAnalysisRecord(
+      unit,
+      leafAnalysis(unit, unit.structuralEffects, [], renderKeyContext(input)),
+      cacheId,
+    );
   }
 
   let descriptors = hasProblemNode(unit.leaf.node)
@@ -208,8 +229,55 @@ export function analyzeMarkdownLeafAnalysisUnit(
     : relativeDescriptors(leafDescriptors(input, unit.leaf, trace), unit.sourceRange);
   return createAnalysisRecord(
     unit,
-    leafAnalysis(unit.kind, unit.structuralEffects, descriptors),
+    leafAnalysis(unit, unit.structuralEffects, descriptors, renderKeyContext(input)),
     cacheId,
+  );
+}
+
+export function rekeyLeafAnalysis(
+  unit: MarkdownLeafAnalysisUnit,
+  analysis: LeafAnalysis,
+  context: LiveMdRenderKeyContext | undefined,
+): LeafAnalysis {
+  return rekeyLeafAnalysisForSource(analysis, {
+    context,
+    kind: unit.kind,
+    sourceHash: unit.cacheSourceHash,
+    sourceLength: sourceLength(unit.cacheSourceRange),
+  });
+}
+
+export function rekeyLeafAnalysisForSource(
+  analysis: LeafAnalysis,
+  input: {
+    context?: LiveMdRenderKeyContext;
+    kind: string;
+    sourceHash: number;
+    sourceLength: number;
+  },
+): LeafAnalysis {
+  let renderKey = liveMdRenderKey(input);
+  return renderKey == analysis.renderKey ? analysis : { ...analysis, renderKey };
+}
+
+export function liveMdRenderKey(input: {
+  context?: LiveMdRenderKeyContext;
+  kind: string;
+  sourceHash: number;
+  sourceLength: number;
+}) {
+  return stableRenderKey(input, input.context ?? defaultLiveMdRenderKeyContext);
+}
+
+export function sameLiveMdRenderKeyContext(
+  left: LiveMdRenderKeyContext,
+  right: LiveMdRenderKeyContext,
+) {
+  return (
+    left.referenceEpoch == right.referenceEpoch &&
+    left.rendererVersion == right.rendererVersion &&
+    left.resolverEpoch == right.resolverEpoch &&
+    left.themeEpoch == right.themeEpoch
   );
 }
 
@@ -415,25 +483,59 @@ function markerChecked(marker: MarkdownMarkerRecord) {
 }
 
 function leafAnalysis(
-  kind: string,
+  unit: MarkdownLeafAnalysisUnit,
   structuralEffects: readonly LiveMdDescriptor[],
   descriptors: readonly LiveMdDescriptor[],
+  context: LiveMdRenderKeyContext,
 ): LeafAnalysis {
-  let key = stableAnalysisKey(kind, structuralEffects, descriptors);
   return {
-    analysisKey: key,
+    analysisKey: stableAnalysisKey(unit.kind, unit.structuralKey, structuralEffects, descriptors),
     descriptors,
-    renderKey: key,
+    renderKey: liveMdRenderKey({
+      context,
+      kind: unit.kind,
+      sourceHash: unit.cacheSourceHash,
+      sourceLength: sourceLength(unit.cacheSourceRange),
+    }),
     structuralEffects,
   };
 }
 
+function renderKeyContext(input: LiveMdLeafSemanticAnalysisInput) {
+  return input.renderKeyContext ?? defaultLiveMdRenderKeyContext;
+}
+
 function stableAnalysisKey(
   kind: string,
+  structuralKey: string,
   structuralEffects: readonly LiveMdDescriptor[],
   descriptors: readonly LiveMdDescriptor[],
 ) {
-  return hashString(JSON.stringify([kind, structuralEffects, descriptors]));
+  return hashString(
+    JSON.stringify(["live-md-semantic-v1", kind, structuralKey, structuralEffects, descriptors]),
+  );
+}
+
+function stableRenderKey(
+  input: { kind: string; sourceHash: number; sourceLength: number },
+  context: LiveMdRenderKeyContext,
+) {
+  return hashString(
+    JSON.stringify([
+      "live-md-render-key-v2",
+      input.kind,
+      input.sourceHash,
+      input.sourceLength,
+      context.rendererVersion,
+      context.resolverEpoch,
+      context.themeEpoch,
+      context.referenceEpoch,
+    ]),
+  );
+}
+
+function sourceLength(range: DocRange) {
+  return range.to - range.from;
 }
 
 function descriptorKey(descriptors: readonly LiveMdDescriptor[]) {

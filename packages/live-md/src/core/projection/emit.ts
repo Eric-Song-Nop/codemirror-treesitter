@@ -2,8 +2,10 @@ import { RangeSet, RangeSetBuilder, RangeValue, type Range } from "@codemirror/s
 import { Decoration, type DecorationSet, type WidgetType } from "@codemirror/view";
 import { isWhitespaceOnly, forEachLineInRange, splitRangeByLine } from "../util.js";
 import { type MarkdownTable } from "../widgets.js";
+import { defaultLiveMdRenderKeyContext } from "../analysis/markdown-leaf-analysis.js";
 import { emptyLiveMdLeafAnalysisTrace, type DocRange } from "../analysis/types.js";
 import { isLiveMdInteractiveLinkDecoration } from "../links.js";
+import { createLiveMdRenderCache } from "../runtime/render-cache.js";
 import {
   type LiveMdBuild,
   type LiveMdBuildConfig,
@@ -55,6 +57,8 @@ export function createLiveMdBuild(config: LiveMdBuildConfig): LiveMdBuild {
     imageSourceResolver: config.imageSourceResolver,
     linkBaseUrl: config.linkBaseUrl,
     markdownFeatures: config.markdownFeatures,
+    renderKeyContext: config.renderKeyContext ?? defaultLiveMdRenderKeyContext,
+    renderCache: config.renderCache ?? createLiveMdRenderCache(),
     sourceIslandMode: config.sourceIslandMode ?? false,
     state: config.state,
     trace: config.trace ?? emptyLiveMdLeafAnalysisTrace(),

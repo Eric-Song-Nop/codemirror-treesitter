@@ -19,8 +19,13 @@ import {
 import { readTableFromCaptures } from "../analysis/tables.js";
 import { type CapturedTable, type DocRange } from "../analysis/types.js";
 import { type LiveMdFeatureDecoration, type LiveMdFeatureDecorateContext } from "../features.js";
-import { resolveLiveMdImageSource } from "../images.js";
 import { liveMdLinkMark } from "../links.js";
+import {
+  cachedLiveMdImageSource,
+  cachedLiveMdLatexResult,
+  cachedLiveMdTableResult,
+  liveMdFullQueryRenderKey,
+} from "../runtime/render-cache.js";
 import { isWhitespaceOnly } from "../util.js";
 import {
   ImagePreviewWidget,
@@ -247,10 +252,14 @@ function applyImage(build: LiveMdBuild, match: TreeSitterQueryMatch): false | vo
 
   let line = build.state.doc.lineAt(node.from);
   let active = rangeTouchesActiveLine(build, node.from, node.to);
-  let widget = new ImagePreviewWidget(
-    alt,
-    resolveLiveMdImageSource(src, build.imageSourceResolver),
+  let image = cachedLiveMdImageSource(
+    build.renderCache,
+    build.trace,
+    liveMdFullQueryRenderKey,
+    src,
+    build.imageSourceResolver,
   );
+  let widget = new ImagePreviewWidget(alt, image.src);
   if (!active && isOnlyVisibleContentOnLine(build.state, line.from, line.to, node.from, node.to)) {
     addReplace(build, line.from, line.to, widget, true);
     return false;
@@ -279,11 +288,20 @@ function applyLatex(build: LiveMdBuild, match: TreeSitterQueryMatch): false | vo
   if (rangeTouchesActiveLine(build, node.from, node.to)) return;
 
   let range = latexReplacementRange(build.state, node, formula.displayMode);
+  let cachedFormula = { ...formula, block: range.block };
   addReplace(
     build,
     range.from,
     range.to,
-    new LatexWidget({ ...formula, block: range.block }),
+    new LatexWidget(
+      cachedFormula,
+      cachedLiveMdLatexResult(
+        build.renderCache,
+        build.trace,
+        liveMdFullQueryRenderKey,
+        cachedFormula,
+      ),
+    ),
     range.block,
   );
   return false;
@@ -305,7 +323,16 @@ function applyTable(
   let captured = tables.get(nodeKey(node));
   let table = captured ? readTableFromCaptures(build.state, captured) : null;
   if (table && !tableTouchesActiveLine(build, node.from, node.to, table)) {
-    addReplace(build, node.from, node.to, new TablePreviewWidget(table), true);
+    addReplace(
+      build,
+      node.from,
+      node.to,
+      new TablePreviewWidget(
+        cachedLiveMdTableResult(build.renderCache, build.trace, liveMdFullQueryRenderKey, table)
+          .table,
+      ),
+      true,
+    );
     return false;
   }
 

@@ -8,7 +8,10 @@ import {
   analyzeMarkdownLeafAnalysisUnit,
   createAnalysisRecord,
   markdownLeafAnalysisUnits,
+  rekeyLeafAnalysis,
+  rekeyLeafAnalysisForSource,
   type LiveMdLeafSemanticAnalysisInput,
+  type LiveMdRenderKeyContext,
   type MarkdownLeafAnalysisUnit,
 } from "./markdown-leaf-analysis.js";
 import {
@@ -138,6 +141,25 @@ export function createLeafAnalysisCache(
     records: RangeSet.of(ranges.records, true),
     safety: RangeSet.of(ranges.safety, true),
   };
+}
+
+export function rekeyLeafAnalysisCache(
+  cache: LeafAnalysisCache,
+  context: LiveMdRenderKeyContext,
+  trace?: LeafAnalysisCacheTrace,
+): LeafAnalysisCache {
+  let records: LeafAnalysisRecord[] = [];
+  let changed = false;
+  forEachLeafAnalysisCacheRecord(cache, (record) => {
+    let next = rekeyLeafAnalysisRecord(record, context);
+    if (next.analysis != record.analysis) changed = true;
+    records.push(next);
+  });
+  if (trace) {
+    trace.recordsVisited += records.length;
+    trace.recordsReused += records.length;
+  }
+  return changed ? createLeafAnalysisCache(records, cache.nextCacheId) : cache;
 }
 
 function createLeafAnalysisCacheFromRangeSets(
@@ -337,7 +359,13 @@ export function transitionLeafAnalysisCache(input: {
           continue;
         }
         trace.recordsReused++;
-        records.push(createAnalysisRecord(unit, reused.record.analysis, reused.record.cacheId));
+        records.push(
+          createAnalysisRecord(
+            unit,
+            rekeyLeafAnalysis(unit, reused.record.analysis, input.analysisInput.renderKeyContext),
+            reused.record.cacheId,
+          ),
+        );
         continue;
       }
 
@@ -434,7 +462,11 @@ export function transitionLeafAnalysisCacheLocal(
         }
         trace.recordsReused++;
         localRecords.push(
-          createAnalysisRecord(unit, reused.record.analysis, reused.record.cacheId),
+          createAnalysisRecord(
+            unit,
+            rekeyLeafAnalysis(unit, reused.record.analysis, input.analysisInput.renderKeyContext),
+            reused.record.cacheId,
+          ),
         );
         continue;
       }
@@ -659,6 +691,20 @@ function leafRecordPayload(record: LeafAnalysisRecord): LeafRecordPayload {
     sourceRange: relativeRange(record.sourceRange, anchor),
     structuralKey: record.structuralKey,
   });
+}
+
+function rekeyLeafAnalysisRecord(
+  record: LeafAnalysisRecord,
+  context: LiveMdRenderKeyContext,
+): LeafAnalysisRecord {
+  let cacheSourceRange = recordCacheSourceRange(record);
+  let analysis = rekeyLeafAnalysisForSource(record.analysis, {
+    context,
+    kind: record.kind,
+    sourceHash: recordCacheSourceHash(record),
+    sourceLength: cacheSourceRange.to - cacheSourceRange.from,
+  });
+  return analysis == record.analysis ? record : { ...record, analysis };
 }
 
 function recordFromPositioned(from: number, value: RangeValue): LeafAnalysisRecord {
