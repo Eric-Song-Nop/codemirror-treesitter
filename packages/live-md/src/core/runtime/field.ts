@@ -108,6 +108,7 @@ import { createLiveMdRenderCache, type LiveMdRenderCache } from "./render-cache.
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
 const liveMdSchedulerQuietDelay = 24;
 const liveMdSchedulerMaxDeadlineYields = 2;
+const pendingCodeFenceLineDecoration = Decoration.line({ class: "cm-md-code-line" });
 
 type BuildLiveMdAnalysisOptions = {
   activeSourceRanges?: readonly DocRange[] | null;
@@ -685,6 +686,13 @@ function pendingSourceAnalysis(
     changes,
   );
   let directSourceSafeDecorations = value.directSourceSafeDecorations.map(transaction.changes);
+  directSourceSafeDecorations = synthesizePendingCodeFenceLineClass(
+    transaction.state,
+    directSourceSafeDecorations,
+    baseAnalysis,
+    changes,
+    changedOldRanges(changes),
+  );
   let directDestructiveDecorations = clearDecorationRanges(
     value.directDestructiveDecorations.map(transaction.changes),
     safetyRanges,
@@ -802,6 +810,78 @@ function sourceSafetyRanges(
   }
 
   return mergeDocRanges(ranges.map((range) => clampRangeToDoc(range, state)));
+}
+
+function synthesizePendingCodeFenceLineClass(
+  state: EditorState,
+  directSourceSafe: DecorationSet,
+  baseAnalysis: LiveMdRuntimeState,
+  changes: ChangeDesc,
+  oldChangedRanges: readonly DocRange[],
+): DecorationSet {
+  if (!baseAnalysis.semantic) return directSourceSafe;
+
+  let records = findLeafAnalysisRecordsTouchingRanges(
+    baseAnalysis.semantic.cache,
+    oldChangedRanges,
+  );
+  let additions: Range<Decoration>[] = [];
+
+  for (let record of records) {
+    if (record.kind != "fencedCode") continue;
+    for (let descriptor of record.analysis.descriptors) {
+      if (descriptor.kind != "codeFence") continue;
+      let anchor = record.sourceRange.from;
+      let openingMapped = mapRange(
+        {
+          from: descriptor.openingDelimiterRange.from + anchor,
+          to: descriptor.openingDelimiterRange.to + anchor,
+        },
+        changes,
+      );
+      let openingEndLine = state.doc.lineAt(Math.min(openingMapped.to, state.doc.length));
+      let fenceStartLine = openingEndLine.number + 1;
+
+      let fenceEndLine: number;
+      if (descriptor.closingDelimiterRange) {
+        let closingMapped = mapRange(
+          {
+            from: descriptor.closingDelimiterRange.from + anchor,
+            to: descriptor.closingDelimiterRange.to + anchor,
+          },
+          changes,
+        );
+        fenceEndLine =
+          state.doc.lineAt(Math.min(Math.max(closingMapped.from, 0), state.doc.length)).number - 1;
+      } else if (descriptor.contentRange) {
+        let contentMapped = mapRange(
+          { from: descriptor.contentRange.from + anchor, to: descriptor.contentRange.to + anchor },
+          changes,
+        );
+        fenceEndLine = state.doc.lineAt(
+          Math.min(Math.max(contentMapped.to - 1, 0), state.doc.length),
+        ).number;
+      } else {
+        continue;
+      }
+
+      if (fenceEndLine < fenceStartLine) continue;
+
+      changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+        let firstChangedLine = state.doc.lineAt(Math.min(fromB, state.doc.length)).number;
+        let lastChangedPos = toB > fromB ? Math.min(toB, state.doc.length) : fromB;
+        let lastChangedLine = state.doc.lineAt(lastChangedPos).number;
+        for (let lineNumber = firstChangedLine; lineNumber <= lastChangedLine; lineNumber++) {
+          if (lineNumber < fenceStartLine || lineNumber > fenceEndLine) continue;
+          let line = state.doc.line(lineNumber);
+          additions.push(pendingCodeFenceLineDecoration.range(line.from));
+        }
+      });
+    }
+  }
+
+  if (!additions.length) return directSourceSafe;
+  return directSourceSafe.update({ add: additions, sort: true });
 }
 
 function sourceInteractiveSafetyRanges(

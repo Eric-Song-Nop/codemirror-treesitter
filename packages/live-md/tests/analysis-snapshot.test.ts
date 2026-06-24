@@ -2179,6 +2179,183 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("synthesizes cm-md-code-line for new lines inserted inside a code fence during pending input", async () => {
+    let doc = "```ts\nconst value = 1;\n```\n\ntail";
+    let view = await markdownAnalysisView(doc, "tail", [
+      syntaxHighlighting(testLightCodeFenceHighlightStyle),
+    ]);
+    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+
+    let before = __testLiveMdAnalysis(view);
+    let beforeLineRanges = decorationRangesForClassFromSet(
+      view.state,
+      before.directSourceSafeDecorations,
+      "cm-md-code-line",
+    );
+    expect(beforeLineRanges).toEqual([{ from: doc.indexOf("const"), to: doc.indexOf("const") }]);
+
+    let constLineFrom = doc.indexOf("const");
+    view.dispatch({ changes: { from: constLineFrom, insert: "\n" } });
+
+    let pending = __testLiveMdAnalysis(view);
+    expect(pending.pending).toBeTruthy();
+    expect(pending.trace.codeFenceParses).toBe(0);
+    expect(pending.trace.surfaceCompileCalls).toBe(0);
+    expect(pending.trace.blockNodesVisited).toBe(0);
+
+    let pendingLineRanges = decorationRangesForClassFromSet(
+      view.state,
+      pending.directSourceSafeDecorations,
+      "cm-md-code-line",
+    );
+    let newDoc = view.state.doc.toString();
+    let newBlankLineFrom = newDoc.indexOf("\n") + 1;
+    let constLineNewFrom = newDoc.indexOf("const");
+    expect(pendingLineRanges).toContainEqual({ from: newBlankLineFrom, to: newBlankLineFrom });
+    expect(pendingLineRanges).toContainEqual({ from: constLineNewFrom, to: constLineNewFrom });
+    view.destroy();
+  });
+
+  it("synthesizes cm-md-code-line for Enter at the start of code fence content", async () => {
+    let doc = "```ts\nconst value = 1;\n```\n\ntail";
+    let view = await markdownAnalysisView(doc, "tail", [
+      syntaxHighlighting(testLightCodeFenceHighlightStyle),
+    ]);
+    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+
+    let contentFrom = doc.indexOf("const");
+    view.dispatch({ changes: { from: contentFrom, insert: "\n" } });
+
+    let pending = __testLiveMdAnalysis(view);
+    expect(pending.pending).toBeTruthy();
+    expect(pending.trace.codeFenceParses).toBe(0);
+
+    let pendingLineRanges = decorationRangesForClassFromSet(
+      view.state,
+      pending.directSourceSafeDecorations,
+      "cm-md-code-line",
+    );
+    let newDoc = view.state.doc.toString();
+    let newBlankLineFrom = newDoc.indexOf("\n") + 1;
+    expect(pendingLineRanges).toContainEqual({ from: newBlankLineFrom, to: newBlankLineFrom });
+    view.destroy();
+  });
+
+  it("synthesizes cm-md-code-line for Enter in the middle of code fence content", async () => {
+    let doc = "```ts\nconst value = 1;\n```\n\ntail";
+    let view = await markdownAnalysisView(doc, "tail", [
+      syntaxHighlighting(testLightCodeFenceHighlightStyle),
+    ]);
+    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+
+    let midPoint = doc.indexOf("value");
+    view.dispatch({ changes: { from: midPoint, insert: "\n" } });
+
+    let pending = __testLiveMdAnalysis(view);
+    expect(pending.pending).toBeTruthy();
+    expect(pending.trace.codeFenceParses).toBe(0);
+
+    let pendingLineRanges = decorationRangesForClassFromSet(
+      view.state,
+      pending.directSourceSafeDecorations,
+      "cm-md-code-line",
+    );
+    let newDoc = view.state.doc.toString();
+    let newLineFrom = newDoc.indexOf("\nvalue") + 1;
+    expect(pendingLineRanges).toContainEqual({ from: newLineFrom, to: newLineFrom });
+    view.destroy();
+  });
+
+  it("does not synthesize cm-md-code-line for edits outside a code fence", async () => {
+    let doc = "```ts\nconst value = 1;\n```\n\ntail text";
+    let view = await markdownAnalysisView(doc, "tail", [
+      syntaxHighlighting(testLightCodeFenceHighlightStyle),
+    ]);
+    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+
+    let beforeRanges = decorationRangesForClassFromSet(
+      view.state,
+      __testLiveMdAnalysis(view).directSourceSafeDecorations,
+      "cm-md-code-line",
+    );
+
+    view.dispatch({ changes: { from: doc.indexOf("tail"), insert: "new " } });
+
+    let pending = __testLiveMdAnalysis(view);
+    expect(pending.pending).toBeTruthy();
+    expect(pending.trace.codeFenceParses).toBe(0);
+
+    let pendingRanges = decorationRangesForClassFromSet(
+      view.state,
+      pending.directSourceSafeDecorations,
+      "cm-md-code-line",
+    );
+    expect(pendingRanges).toEqual(beforeRanges);
+    view.destroy();
+  });
+
+  it("synthesizes cm-md-code-line for multi-line paste inside a code fence", async () => {
+    let doc = "```ts\nconst value = 1;\n```\n\ntail";
+    let view = await markdownAnalysisView(doc, "tail", [
+      syntaxHighlighting(testLightCodeFenceHighlightStyle),
+    ]);
+    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+
+    let insertAt = doc.indexOf("const");
+    view.dispatch({ changes: { from: insertAt, insert: "let x = 2;\nlet y = 3;\n" } });
+
+    let pending = __testLiveMdAnalysis(view);
+    expect(pending.pending).toBeTruthy();
+    expect(pending.trace.codeFenceParses).toBe(0);
+
+    let pendingLineRanges = decorationRangesForClassFromSet(
+      view.state,
+      pending.directSourceSafeDecorations,
+      "cm-md-code-line",
+    );
+    let newDoc = view.state.doc.toString();
+    let firstNewLineFrom = newDoc.indexOf("let x");
+    let secondNewLineFrom = newDoc.indexOf("let y");
+    let thirdNewLineFrom = newDoc.indexOf("const");
+    expect(pendingLineRanges).toContainEqual({ from: firstNewLineFrom, to: firstNewLineFrom });
+    expect(pendingLineRanges).toContainEqual({ from: secondNewLineFrom, to: secondNewLineFrom });
+    expect(pendingLineRanges).toContainEqual({ from: thirdNewLineFrom, to: thirdNewLineFrom });
+    view.destroy();
+  });
+
+  it("synthesizes cm-md-code-line for an open fence without a closing delimiter", async () => {
+    let doc = "```ts\nconst value = 1;\n\ntail";
+    let view = await markdownAnalysisView(doc, "tail", [
+      syntaxHighlighting(testLightCodeFenceHighlightStyle),
+    ]);
+    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+
+    let before = __testLiveMdAnalysis(view);
+    let beforeLineRanges = decorationRangesForClassFromSet(
+      view.state,
+      before.directSourceSafeDecorations,
+      "cm-md-code-line",
+    );
+    expect(beforeLineRanges.length).toBeGreaterThan(0);
+
+    let contentFrom = doc.indexOf("const");
+    view.dispatch({ changes: { from: contentFrom, insert: "\n" } });
+
+    let pending = __testLiveMdAnalysis(view);
+    expect(pending.pending).toBeTruthy();
+    expect(pending.trace.codeFenceParses).toBe(0);
+
+    let pendingLineRanges = decorationRangesForClassFromSet(
+      view.state,
+      pending.directSourceSafeDecorations,
+      "cm-md-code-line",
+    );
+    let newDoc = view.state.doc.toString();
+    let newBlankLineFrom = newDoc.indexOf("\n") + 1;
+    expect(pendingLineRanges).toContainEqual({ from: newBlankLineFrom, to: newBlankLineFrom });
+    view.destroy();
+  });
+
   it("clears dirty link interaction without opening the old destination on pending input", async () => {
     let opened: string[] = [];
     let doc = "[docs](https://old.example) tail";
