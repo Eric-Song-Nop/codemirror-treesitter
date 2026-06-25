@@ -143,35 +143,13 @@ function indentFor(stack: NodeIterator | null, cx: IndentContext, pos: number): 
     let strategy = indentStrategy(cur.node);
     if (strategy) return strategy(TreeIndentContext.create(cx, pos, cur));
   }
-  return 0;
-}
-
-function ignoreClosed(cx: TreeIndentContext) {
-  return cx.pos == cx.options.simulateBreak && cx.options.simulateDoubleBreak;
+  return null;
 }
 
 function indentStrategy(tree: SyntaxNode): ((context: TreeIndentContext) => number | null) | null {
   let strategy = tree.type.prop(indentNodeProp);
   if (strategy) return strategy;
-  let first = tree.firstChild;
-  let close: readonly string[] | undefined;
-  if (first && (close = first.type.prop(NodeProp.closedBy))) {
-    let last = tree.lastChild;
-    let closed = last && close.includes(last.name);
-    return (cx) =>
-      delimitedStrategy(
-        cx,
-        true,
-        1,
-        undefined,
-        closed && !ignoreClosed(cx) ? last!.from : undefined,
-      );
-  }
-  return tree.parent == null ? topIndent : null;
-}
-
-function topIndent() {
-  return 0;
+  return null;
 }
 
 export class TreeIndentContext extends IndentContext {

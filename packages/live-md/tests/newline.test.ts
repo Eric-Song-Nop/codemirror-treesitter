@@ -115,6 +115,15 @@ describe("newline editing", () => {
     expect(editor.value).toBe("```ts\nconst value = 1;\n\n```");
   });
 
+  it("does not indent every following code fence line after an opening brace", async () => {
+    let codeLineEnd = "```ts\nif (x) {".length;
+    let editor = await mountEditor("```ts\nif (x) {\n}\n```\n\nafter", codeLineEnd);
+
+    pressKey(editor.view, "Enter");
+
+    expect(editor.value).toBe("```ts\nif (x) {\n\n}\n```\n\nafter");
+  });
+
   it("keeps blank-line and soft-line breaks as ordinary editable lines", async () => {
     let blankLineDoc = await mountEditor("first\n\nsecond");
     let softBreak = await mountEditor("first\nsecond");
