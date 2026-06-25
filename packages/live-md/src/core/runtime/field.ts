@@ -96,6 +96,7 @@ import {
 import {
   type LiveMdAnalysis,
   type LiveMdPendingAnalysis,
+  type LiveMdPendingEditSurface,
   type LiveMdRuntimeState,
   type LiveMdRuntimeEpochs,
   type LiveMdSemanticTrace,
@@ -108,7 +109,6 @@ import { createLiveMdRenderCache, type LiveMdRenderCache } from "./render-cache.
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
 const liveMdSchedulerQuietDelay = 24;
 const liveMdSchedulerMaxDeadlineYields = 2;
-const pendingCodeFenceLineDecoration = Decoration.line({ class: "cm-md-code-line" });
 
 type BuildLiveMdAnalysisOptions = {
   activeSourceRanges?: readonly DocRange[] | null;
@@ -392,31 +392,20 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
     private mapPendingSurface(update: ViewUpdate, analysis: LiveMdRuntimeState) {
       let pending = analysis.pending;
       if (!pending) return;
-      let previous = update.startState.field(liveMdAnalysisField, false);
-      let revealRanges = previous
-        ? newlyActiveSourceRanges(previous.activeSourceRanges, analysis.activeSourceRanges)
-        : [];
-      let destructiveSafetyRanges = mergeDocRanges([...pending.safetyRanges, ...revealRanges]);
-      let dirtyCompiledRanges = mergeDocRanges([
-        ...destructiveSafetyRanges,
-        ...pending.interactiveSafetyRanges,
-      ]);
+      let editSurfaceRanges = pending.editSurface.ranges;
       this.surfaceState = {
-        atoms: clearRangeSetRanges(
-          this.surfaceState.atoms.map(update.changes),
-          destructiveSafetyRanges,
-        ),
+        atoms: clearRangeSetRanges(this.surfaceState.atoms.map(update.changes), editSurfaceRanges),
         compiledRanges: subtractDocRanges(
           mapDocRanges(this.surfaceState.compiledRanges, update.changes),
-          dirtyCompiledRanges,
+          editSurfaceRanges,
         ),
         destructive: clearDecorationRanges(
           this.surfaceState.destructive.map(update.changes),
-          destructiveSafetyRanges,
+          editSurfaceRanges,
         ),
         interactive: clearDecorationRanges(
           this.surfaceState.interactive.map(update.changes),
-          pending.interactiveSafetyRanges,
+          editSurfaceRanges,
         ),
         semanticRevision: this.surfaceState.semanticRevision,
         sourceSafe: this.surfaceState.sourceSafe.map(update.changes),
@@ -438,6 +427,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
           atoms: clearRangeSetRanges(this.surfaceState.atoms, revealRanges),
           compiledRanges: subtractDocRanges(this.surfaceState.compiledRanges, revealRanges),
           destructive: clearDecorationRanges(this.surfaceState.destructive, revealRanges),
+          interactive: clearDecorationRanges(this.surfaceState.interactive, revealRanges),
         };
       }
       this.runtime = analysis;
@@ -660,7 +650,14 @@ function pendingSourceAnalysis(
     : transaction.changes;
   let revision = (previousPending?.revision ?? value.revision) + 1;
   let syntaxChangedRanges = pendingSyntaxChangedRanges(previousPending, transaction);
-  let safetyRanges = sourceSafetyRanges(baseAnalysis, transaction.state, changes);
+  let editSurface = pendingEditSurface(
+    previousPending,
+    baseAnalysis,
+    transaction,
+    changes,
+    syntaxChangedRanges,
+  );
+  let safetyRanges = editSurface.ranges;
   let interactiveSafetyRanges = sourceInteractiveSafetyRanges(
     baseAnalysis,
     transaction.state,
@@ -671,6 +668,7 @@ function pendingSourceAnalysis(
     baseAnalysis,
     baseDoc,
     changes,
+    editSurface,
     epochs: previousPending?.epochs ?? runtimeEpochs(transaction.startState),
     interactiveSafetyRanges,
     revision,
@@ -686,20 +684,13 @@ function pendingSourceAnalysis(
     changes,
   );
   let directSourceSafeDecorations = value.directSourceSafeDecorations.map(transaction.changes);
-  directSourceSafeDecorations = synthesizePendingCodeFenceLineClass(
-    transaction.state,
-    directSourceSafeDecorations,
-    baseAnalysis,
-    changes,
-    changedOldRanges(changes),
-  );
   let directDestructiveDecorations = clearDecorationRanges(
     value.directDestructiveDecorations.map(transaction.changes),
-    safetyRanges,
+    editSurface.ranges,
   );
   let directAtomicRanges = clearRangeSetRanges(
     value.directAtomicRanges.map(transaction.changes),
-    safetyRanges,
+    editSurface.ranges,
   );
   let trace = pendingInputTrace(transaction);
   return {
@@ -782,12 +773,55 @@ function pendingSelectionAnalysis(
   };
 }
 
-function sourceSafetyRanges(
+function pendingEditSurface(
+  previousPending: LiveMdPendingAnalysis | null,
+  baseAnalysis: LiveMdRuntimeState,
+  transaction: Transaction,
+  changes: ChangeDesc,
+  syntaxChangedRanges: readonly DocRange[],
+): LiveMdPendingEditSurface {
+  let state = transaction.state;
+  let changedLineRanges = changedPhysicalLineRanges(state, transaction.changes);
+  let selectionLineRanges = selectionPhysicalLineRanges(state);
+  let previousRanges =
+    previousPending?.editSurface.ranges.map((range) => mapRange(range, transaction.changes)) ?? [];
+  let touchedEffectRanges = touchedRecordSafetyRanges(baseAnalysis, state, changes);
+  let syntaxLineRanges = syntaxChangedRanges.map((range) =>
+    lineRangeFor(state, range.from, range.to),
+  );
+  let ranges = mergeDocRanges(
+    [
+      ...changedLineRanges,
+      ...selectionLineRanges,
+      ...previousRanges,
+      ...touchedEffectRanges,
+      ...syntaxLineRanges,
+    ].map((range) => clampRangeToDoc(range, state)),
+  );
+  return {
+    changedLineRanges: mergeDocRanges(
+      changedLineRanges.map((range) => clampRangeToDoc(range, state)),
+    ),
+    ranges,
+    syntaxChangedRanges: mergeDocRanges(
+      syntaxLineRanges.map((range) => clampRangeToDoc(range, state)),
+    ),
+    touchedEffectRanges,
+  };
+}
+
+function selectionPhysicalLineRanges(state: EditorState): readonly DocRange[] {
+  return mergeDocRanges(
+    state.selection.ranges.map((range) => lineRangeFor(state, range.from, range.to)),
+  );
+}
+
+function touchedRecordSafetyRanges(
   baseAnalysis: LiveMdRuntimeState,
   state: EditorState,
   changes: ChangeDesc,
 ): readonly DocRange[] {
-  let ranges: DocRange[] = changedPhysicalLineRanges(state, changes);
+  let ranges: DocRange[] = [];
   let oldChangedRanges = changedOldRanges(changes);
 
   if (baseAnalysis.semantic) {
@@ -795,93 +829,14 @@ function sourceSafetyRanges(
       baseAnalysis.semantic.cache,
       oldChangedRanges,
     )) {
+      ranges.push(mapRange(record.range, changes));
+      ranges.push(mapRange(record.sourceRange, changes));
       ranges.push(mapRange(record.effectRange, changes));
-    }
-  }
-
-  for (let activeRange of baseAnalysis.activeSourceRanges) {
-    if (
-      oldChangedRanges.some((range) =>
-        rangesTouch(activeRange.from, activeRange.to, range.from, range.to),
-      )
-    ) {
-      ranges.push(mapRange(activeRange, changes));
+      ranges.push(mapRange(record.cacheSourceRange ?? record.sourceRange, changes));
     }
   }
 
   return mergeDocRanges(ranges.map((range) => clampRangeToDoc(range, state)));
-}
-
-function synthesizePendingCodeFenceLineClass(
-  state: EditorState,
-  directSourceSafe: DecorationSet,
-  baseAnalysis: LiveMdRuntimeState,
-  changes: ChangeDesc,
-  oldChangedRanges: readonly DocRange[],
-): DecorationSet {
-  if (!baseAnalysis.semantic) return directSourceSafe;
-
-  let records = findLeafAnalysisRecordsTouchingRanges(
-    baseAnalysis.semantic.cache,
-    oldChangedRanges,
-  );
-  let additions: Range<Decoration>[] = [];
-
-  for (let record of records) {
-    if (record.kind != "fencedCode") continue;
-    for (let descriptor of record.analysis.descriptors) {
-      if (descriptor.kind != "codeFence") continue;
-      let anchor = record.sourceRange.from;
-      let openingMapped = mapRange(
-        {
-          from: descriptor.openingDelimiterRange.from + anchor,
-          to: descriptor.openingDelimiterRange.to + anchor,
-        },
-        changes,
-      );
-      let openingEndLine = state.doc.lineAt(Math.min(openingMapped.to, state.doc.length));
-      let fenceStartLine = openingEndLine.number + 1;
-
-      let fenceEndLine: number;
-      if (descriptor.closingDelimiterRange) {
-        let closingMapped = mapRange(
-          {
-            from: descriptor.closingDelimiterRange.from + anchor,
-            to: descriptor.closingDelimiterRange.to + anchor,
-          },
-          changes,
-        );
-        fenceEndLine =
-          state.doc.lineAt(Math.min(Math.max(closingMapped.from, 0), state.doc.length)).number - 1;
-      } else if (descriptor.contentRange) {
-        let contentMapped = mapRange(
-          { from: descriptor.contentRange.from + anchor, to: descriptor.contentRange.to + anchor },
-          changes,
-        );
-        fenceEndLine = state.doc.lineAt(
-          Math.min(Math.max(contentMapped.to - 1, 0), state.doc.length),
-        ).number;
-      } else {
-        continue;
-      }
-
-      if (fenceEndLine < fenceStartLine) continue;
-
-      changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
-        let firstChangedLine = state.doc.lineAt(Math.min(fromB, state.doc.length)).number;
-        let lastChangedPos = toB > fromB ? Math.min(toB, state.doc.length) : fromB;
-        let lastChangedLine = state.doc.lineAt(lastChangedPos).number;
-        for (let lineNumber = firstChangedLine; lineNumber <= lastChangedLine; lineNumber++) {
-          if (lineNumber < fenceStartLine || lineNumber > fenceEndLine) continue;
-          let line = state.doc.line(lineNumber);
-          additions.push(pendingCodeFenceLineDecoration.range(line.from));
-        }
-      });
-    }
-  }
-
-  if (!additions.length) return directSourceSafe;
-  return directSourceSafe.update({ add: additions, sort: true });
 }
 
 function sourceInteractiveSafetyRanges(
@@ -893,7 +848,7 @@ function sourceInteractiveSafetyRanges(
   if (!baseAnalysis.semantic) return fallbackRanges;
 
   let oldChangedRanges = changedOldRanges(changes);
-  let ranges: DocRange[] = [];
+  let ranges: DocRange[] = [...fallbackRanges];
   for (let record of findLeafAnalysisRecordsTouchingRanges(
     baseAnalysis.semantic.cache,
     oldChangedRanges,

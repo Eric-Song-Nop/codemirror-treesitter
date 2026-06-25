@@ -180,7 +180,7 @@ describe("LiveMD links", () => {
     expect(openLink).toHaveBeenCalledWith("https://two.example", "_blank", "noopener,noreferrer");
   });
 
-  it("keeps unchanged links clickable during pending paragraph edits", async () => {
+  it("clears links on the pending edit surface and restores them after commit", async () => {
     let doc = "keep **bold** and [link](https://example.com) tail";
     let editor = await mountEditor(doc);
 
@@ -189,7 +189,10 @@ describe("LiveMD links", () => {
 
     expect(__testLiveMdAnalysis(editor.view).pending).toBeTruthy();
     expect(editor.view.dom.querySelector(".cm-md-strong")).toBeTruthy();
+    expect(clickableLinks(editor.view)).toHaveLength(0);
+    expect(styledLinks(editor.view)).toHaveLength(0);
 
+    await __testFlushLiveMdAnalysis(editor.view);
     let link = firstClickableLink(editor.view);
     expect(link.dataset.liveMdHref).toBe("https://example.com");
 
@@ -251,7 +254,7 @@ describe("LiveMD links", () => {
     expect(firstStyledLink(editor.view).hasAttribute("data-live-md-href")).toBe(false);
   });
 
-  it("tracks only dirty link labels in pending interactive safety ranges", async () => {
+  it("tracks the pending edit surface in interactive safety ranges", async () => {
     let doc = "[one](https://one.example) and [two](https://two.example) tail";
     let state = EditorState.create({
       doc,
@@ -275,7 +278,7 @@ describe("LiveMD links", () => {
       analysis.pending?.interactiveSafetyRanges.map((range) =>
         pendingState.sliceDoc(range.from, range.to),
       ),
-    ).toEqual(["one"]);
+    ).toEqual(["[one](javascript:alert) and [two](https://two.example) tail"]);
   });
 });
 
