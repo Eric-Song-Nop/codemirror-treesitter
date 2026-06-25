@@ -22,10 +22,18 @@ export type LiveMdRuntimeEpochs = {
   markdownParserService: LiveMdMarkdownParserService | null;
 };
 
+export type LiveMdPendingEditSurface = {
+  changedLineRanges: readonly DocRange[];
+  ranges: readonly DocRange[];
+  syntaxChangedRanges: readonly DocRange[];
+  touchedEffectRanges: readonly DocRange[];
+};
+
 export type LiveMdPendingAnalysis = {
   baseAnalysis: LiveMdRuntimeState;
   baseDoc: Text;
   changes: ChangeDesc;
+  editSurface: LiveMdPendingEditSurface;
   epochs: LiveMdRuntimeEpochs;
   interactiveSafetyRanges: readonly DocRange[];
   revision: number;

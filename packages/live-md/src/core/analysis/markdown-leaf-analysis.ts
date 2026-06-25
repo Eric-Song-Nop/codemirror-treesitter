@@ -221,6 +221,7 @@ export function analyzeMarkdownLeafAnalysisUnit(
       unit,
       leafAnalysis(unit, unit.structuralEffects, [], renderKeyContext(input)),
       cacheId,
+      input.state.doc.length,
     );
   }
 
@@ -231,6 +232,7 @@ export function analyzeMarkdownLeafAnalysisUnit(
     unit,
     leafAnalysis(unit, unit.structuralEffects, descriptors, renderKeyContext(input)),
     cacheId,
+    input.state.doc.length,
   );
 }
 
@@ -285,6 +287,7 @@ export function createAnalysisRecord(
   unit: MarkdownLeafAnalysisUnit,
   analysis: LeafAnalysis,
   cacheId: number,
+  docLength?: number,
 ): LeafAnalysisRecord {
   return {
     analysis,
@@ -294,7 +297,7 @@ export function createAnalysisRecord(
     cacheStructuralKey: unit.cacheStructuralKey,
     context: unit.context,
     contextKey: unit.contextKey,
-    effectRange: analysisEffectRange(analysis, unit.sourceRange),
+    effectRange: analysisEffectRange(analysis, unit.sourceRange, docLength),
     kind: unit.kind,
     range: unit.range,
     sourceHash: unit.sourceHash,
@@ -584,7 +587,11 @@ function relativeDescriptors(
   return offsetLiveMdDescriptors(descriptors, -sourceRange.from);
 }
 
-function analysisEffectRange(analysis: LeafAnalysis, sourceRange: DocRange): DocRange {
+function analysisEffectRange(
+  analysis: LeafAnalysis,
+  sourceRange: DocRange,
+  docLength?: number,
+): DocRange {
   let from = sourceRange.from;
   let to = sourceRange.to;
   for (let descriptor of [...analysis.structuralEffects, ...analysis.descriptors]) {
@@ -593,7 +600,15 @@ function analysisEffectRange(analysis: LeafAnalysis, sourceRange: DocRange): Doc
       to = Math.max(to, range.to + sourceRange.from);
     }
   }
+  if (typeof docLength == "number") {
+    from = clamp(from, 0, docLength);
+    to = clamp(to, 0, docLength);
+  }
   return { from, to };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 export function hashDocRange(doc: Text, range: DocRange): number {

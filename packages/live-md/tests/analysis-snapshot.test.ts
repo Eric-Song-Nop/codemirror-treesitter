@@ -5,6 +5,7 @@ import {
   Compartment,
   EditorState,
   RangeSet,
+  type RangeValue,
   StateEffect,
   StateField,
   type Extension,
@@ -355,7 +356,7 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("keeps source-safe inline marks during pending same-block edits", async () => {
+  it("keeps source-safe marks and clears link interactions during pending same-block edits", async () => {
     let doc = "keep **bold** and [link](https://example.com) tail";
     let view = await markdownAnalysisView(doc, "tail");
 
@@ -368,7 +369,7 @@ describe("LiveMD analysis snapshot", () => {
     let pending = __testLiveMdAnalysis(view);
     expect(pending.pending).toBeTruthy();
     expect(decorationClasses(view.state, pending).has("cm-md-strong")).toBe(true);
-    expect(decorationClasses(view.state, pending).has("cm-md-link")).toBe(true);
+    expect(decorationClasses(view.state, pending).has("cm-md-link")).toBe(false);
 
     await __testFlushLiveMdAnalysis(view);
 
@@ -2138,6 +2139,122 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("keeps coalesced fence typing on a pending edit surface until semantic commit", async () => {
+    let view = await markdownAnalysisView("```ts");
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+
+    try {
+      let base = __testLiveMdAnalysis(view);
+      let baseState = view.state;
+      let pending = dispatchPendingInputStep(view, "\n", "code fence enter after opening");
+      pending = dispatchPendingInputStep(view, "const value = 1;", "code fence content");
+      pending = dispatchPendingInputStep(view, "\n```", "code fence closing delimiter");
+
+      await expectCoalescedPendingCommitMatchesOracles(
+        view,
+        base,
+        baseState,
+        pending,
+        "coalesced code fence typing",
+      );
+      expect(recordByKind(__testLiveMdAnalysis(view), "fencedCode")).toBeTruthy();
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps coalesced table typing on a pending edit surface until semantic commit", async () => {
+    let view = await markdownAnalysisView("| Name | Value |");
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+
+    try {
+      let base = __testLiveMdAnalysis(view);
+      let baseState = view.state;
+      let pending = dispatchPendingInputStep(view, "\n", "table header enter");
+      pending = dispatchPendingInputStep(view, "| --- | ---: |", "table delimiter");
+      pending = dispatchPendingInputStep(view, "\n", "table delimiter enter");
+      pending = dispatchPendingInputStep(view, "| alpha | 1 |", "table row");
+
+      await expectCoalescedPendingCommitMatchesOracles(
+        view,
+        base,
+        baseState,
+        pending,
+        "coalesced table typing",
+      );
+      expect(recordByKind(__testLiveMdAnalysis(view), "table")).toBeTruthy();
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps coalesced setext typing on a pending edit surface until semantic commit", async () => {
+    let view = await markdownAnalysisView("Heading");
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+
+    try {
+      let base = __testLiveMdAnalysis(view);
+      let baseState = view.state;
+      let pending = dispatchPendingInputStep(view, "\n", "setext enter after paragraph");
+      pending = dispatchPendingInputStep(view, "---", "setext underline");
+
+      await expectCoalescedPendingCommitMatchesOracles(
+        view,
+        base,
+        baseState,
+        pending,
+        "coalesced setext typing",
+      );
+      expect(recordByKind(__testLiveMdAnalysis(view), "heading")).toBeTruthy();
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps an open EOF fence and Enter/Backspace edits on the pending edit surface", async () => {
+    let view = await markdownAnalysisView("```ts");
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+
+    try {
+      let base = __testLiveMdAnalysis(view);
+      let baseState = view.state;
+      let pending = dispatchPendingInputStep(view, "\n", "open EOF fence enter");
+      view.dispatch(deleteBackwardAtSelection(view, 1));
+      pending = __testLiveMdAnalysis(view);
+      expectPendingEditSurfaceState(view, pending, "open EOF fence backspace");
+
+      await expectCoalescedPendingCommitMatchesOracles(
+        view,
+        base,
+        baseState,
+        pending,
+        "coalesced open EOF fence enter/backspace",
+      );
+      expect(recordByKind(__testLiveMdAnalysis(view), "fencedCode")).toBeTruthy();
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("keeps Enter-created blank lines pending-editable without assigning a committed island", async () => {
+    let view = await markdownAnalysisView("before\n\n```ts", "");
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+
+    try {
+      let step = await dispatchPendingEditStep(
+        view,
+        insertAtSelection(view, "\n"),
+        "blank line after fence opening",
+      );
+
+      expect(step.pending.pending?.editSurface.ranges.length).toBeGreaterThan(0);
+      expect(step.after.activeSourceRanges).toEqual([]);
+      expect(view.contentDOM.textContent).toContain("```ts");
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("keeps unrelated visible code, link, and widget surface stable during pending input", async () => {
     let doc =
       "intro [docs](https://docs.example) **bold**\n\n" +
@@ -2179,7 +2296,7 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("synthesizes cm-md-code-line for new lines inserted inside a code fence during pending input", async () => {
+  it("does not add pending code-fence line classes while editing fence content", async () => {
     let doc = "```ts\nconst value = 1;\n```\n\ntail";
     let view = await markdownAnalysisView(doc, "tail", [
       syntaxHighlighting(testLightCodeFenceHighlightStyle),
@@ -2199,6 +2316,7 @@ describe("LiveMD analysis snapshot", () => {
 
     let pending = __testLiveMdAnalysis(view);
     expect(pending.pending).toBeTruthy();
+    expect(pending.pending?.editSurface.ranges.length).toBeGreaterThan(0);
     expect(pending.trace.codeFenceParses).toBe(0);
     expect(pending.trace.surfaceCompileCalls).toBe(0);
     expect(pending.trace.blockNodesVisited).toBe(0);
@@ -2209,64 +2327,17 @@ describe("LiveMD analysis snapshot", () => {
       "cm-md-code-line",
     );
     let newDoc = view.state.doc.toString();
-    let newBlankLineFrom = newDoc.indexOf("\n") + 1;
     let constLineNewFrom = newDoc.indexOf("const");
-    expect(pendingLineRanges).toContainEqual({ from: newBlankLineFrom, to: newBlankLineFrom });
-    expect(pendingLineRanges).toContainEqual({ from: constLineNewFrom, to: constLineNewFrom });
+    expect(pendingLineRanges).toHaveLength(beforeLineRanges.length);
+    expect(
+      pending.pending?.editSurface.ranges.some((range) =>
+        rangesTouch(range.from, range.to, constLineNewFrom, constLineNewFrom),
+      ),
+    ).toBe(true);
     view.destroy();
   });
 
-  it("synthesizes cm-md-code-line for Enter at the start of code fence content", async () => {
-    let doc = "```ts\nconst value = 1;\n```\n\ntail";
-    let view = await markdownAnalysisView(doc, "tail", [
-      syntaxHighlighting(testLightCodeFenceHighlightStyle),
-    ]);
-    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
-
-    let contentFrom = doc.indexOf("const");
-    view.dispatch({ changes: { from: contentFrom, insert: "\n" } });
-
-    let pending = __testLiveMdAnalysis(view);
-    expect(pending.pending).toBeTruthy();
-    expect(pending.trace.codeFenceParses).toBe(0);
-
-    let pendingLineRanges = decorationRangesForClassFromSet(
-      view.state,
-      pending.directSourceSafeDecorations,
-      "cm-md-code-line",
-    );
-    let newDoc = view.state.doc.toString();
-    let newBlankLineFrom = newDoc.indexOf("\n") + 1;
-    expect(pendingLineRanges).toContainEqual({ from: newBlankLineFrom, to: newBlankLineFrom });
-    view.destroy();
-  });
-
-  it("synthesizes cm-md-code-line for Enter in the middle of code fence content", async () => {
-    let doc = "```ts\nconst value = 1;\n```\n\ntail";
-    let view = await markdownAnalysisView(doc, "tail", [
-      syntaxHighlighting(testLightCodeFenceHighlightStyle),
-    ]);
-    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
-
-    let midPoint = doc.indexOf("value");
-    view.dispatch({ changes: { from: midPoint, insert: "\n" } });
-
-    let pending = __testLiveMdAnalysis(view);
-    expect(pending.pending).toBeTruthy();
-    expect(pending.trace.codeFenceParses).toBe(0);
-
-    let pendingLineRanges = decorationRangesForClassFromSet(
-      view.state,
-      pending.directSourceSafeDecorations,
-      "cm-md-code-line",
-    );
-    let newDoc = view.state.doc.toString();
-    let newLineFrom = newDoc.indexOf("\nvalue") + 1;
-    expect(pendingLineRanges).toContainEqual({ from: newLineFrom, to: newLineFrom });
-    view.destroy();
-  });
-
-  it("does not synthesize cm-md-code-line for edits outside a code fence", async () => {
+  it("keeps committed code-fence line classes stable for edits outside a fence", async () => {
     let doc = "```ts\nconst value = 1;\n```\n\ntail text";
     let view = await markdownAnalysisView(doc, "tail", [
       syntaxHighlighting(testLightCodeFenceHighlightStyle),
@@ -2294,36 +2365,7 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("synthesizes cm-md-code-line for multi-line paste inside a code fence", async () => {
-    let doc = "```ts\nconst value = 1;\n```\n\ntail";
-    let view = await markdownAnalysisView(doc, "tail", [
-      syntaxHighlighting(testLightCodeFenceHighlightStyle),
-    ]);
-    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
-
-    let insertAt = doc.indexOf("const");
-    view.dispatch({ changes: { from: insertAt, insert: "let x = 2;\nlet y = 3;\n" } });
-
-    let pending = __testLiveMdAnalysis(view);
-    expect(pending.pending).toBeTruthy();
-    expect(pending.trace.codeFenceParses).toBe(0);
-
-    let pendingLineRanges = decorationRangesForClassFromSet(
-      view.state,
-      pending.directSourceSafeDecorations,
-      "cm-md-code-line",
-    );
-    let newDoc = view.state.doc.toString();
-    let firstNewLineFrom = newDoc.indexOf("let x");
-    let secondNewLineFrom = newDoc.indexOf("let y");
-    let thirdNewLineFrom = newDoc.indexOf("const");
-    expect(pendingLineRanges).toContainEqual({ from: firstNewLineFrom, to: firstNewLineFrom });
-    expect(pendingLineRanges).toContainEqual({ from: secondNewLineFrom, to: secondNewLineFrom });
-    expect(pendingLineRanges).toContainEqual({ from: thirdNewLineFrom, to: thirdNewLineFrom });
-    view.destroy();
-  });
-
-  it("synthesizes cm-md-code-line for an open fence without a closing delimiter", async () => {
+  it("keeps open-fence pending edits on edit surface without adding line classes", async () => {
     let doc = "```ts\nconst value = 1;\n\ntail";
     let view = await markdownAnalysisView(doc, "tail", [
       syntaxHighlighting(testLightCodeFenceHighlightStyle),
@@ -2343,6 +2385,7 @@ describe("LiveMD analysis snapshot", () => {
 
     let pending = __testLiveMdAnalysis(view);
     expect(pending.pending).toBeTruthy();
+    expect(pending.pending?.editSurface.ranges.length).toBeGreaterThan(0);
     expect(pending.trace.codeFenceParses).toBe(0);
 
     let pendingLineRanges = decorationRangesForClassFromSet(
@@ -2351,8 +2394,13 @@ describe("LiveMD analysis snapshot", () => {
       "cm-md-code-line",
     );
     let newDoc = view.state.doc.toString();
-    let newBlankLineFrom = newDoc.indexOf("\n") + 1;
-    expect(pendingLineRanges).toContainEqual({ from: newBlankLineFrom, to: newBlankLineFrom });
+    let constLineNewFrom = newDoc.indexOf("const");
+    expect(pendingLineRanges).toHaveLength(beforeLineRanges.length);
+    expect(
+      pending.pending?.editSurface.ranges.some((range) =>
+        rangesTouch(range.from, range.to, constLineNewFrom, constLineNewFrom),
+      ),
+    ).toBe(true);
     view.destroy();
   });
 
@@ -3343,12 +3391,12 @@ async function dispatchScheduledLocalEdit(
 
   view.dispatch(transaction);
   let pending = __testLiveMdAnalysis(view);
-  expect(pending.pending, `${label}: source-first pending state`).toBeTruthy();
+  expect(pending.pending, `${label}: pending edit-surface state`).toBeTruthy();
 
   await __testFlushLiveMdAnalysis(view);
 
   let after = __testLiveMdAnalysis(view);
-  expect(after.pending, `${label}: scheduled analysis committed`).toBeNull();
+  expect(after.pending == null, `${label}: scheduled analysis committed`).toBe(true);
   if (options.oracle !== false) {
     expectLocalFullFreshSemanticEquivalence(
       after,
@@ -3362,6 +3410,65 @@ async function dispatchScheduledLocalEdit(
   return { after, before, pending, transaction };
 }
 
+async function dispatchPendingEditStep(view: EditorView, spec: TransactionSpec, label: string) {
+  let before = __testLiveMdAnalysis(view);
+  if (!before.semantic) throw new Error(`${label}: expected semantic cache before edit`);
+  let transaction = view.state.update(spec);
+
+  view.dispatch(transaction);
+  let pending = __testLiveMdAnalysis(view);
+  expectPendingEditSurfaceState(view, pending, label);
+  ensureSyntaxTree(view.state, view.state.doc.length, 5_000);
+
+  await __testFlushLiveMdAnalysis(view);
+
+  let after = __testLiveMdAnalysis(view);
+  expect(after.pending == null, `${label}: scheduled analysis committed`).toBe(true);
+  expectLocalFullFreshSemanticEquivalence(
+    after,
+    before.semantic.cache,
+    transaction,
+    view.state,
+    label,
+    "full",
+  );
+  return { after, before, pending, transaction };
+}
+
+function dispatchPendingInputStep(view: EditorView, text: string, label: string) {
+  view.dispatch(insertAtSelection(view, text));
+  let pending = __testLiveMdAnalysis(view);
+  expectPendingEditSurfaceState(view, pending, label);
+  return pending;
+}
+
+async function expectCoalescedPendingCommitMatchesOracles(
+  view: EditorView,
+  base: TestLiveMdAnalysis,
+  baseState: EditorState,
+  pending: TestLiveMdAnalysis,
+  label: string,
+) {
+  if (!base.semantic) throw new Error(`${label}: expected semantic cache before coalesced edits`);
+  if (!pending.pending) throw new Error(`${label}: expected coalesced pending state`);
+  let changes = pending.pending.changes;
+  ensureSyntaxTree(view.state, view.state.doc.length, 5_000);
+
+  await __testFlushLiveMdAnalysis(view);
+
+  let after = __testLiveMdAnalysis(view);
+  expect(after.pending == null, `${label}: scheduled analysis committed`).toBe(true);
+  expectSemanticTransitionEquivalence(
+    after,
+    base.semantic.cache,
+    baseState,
+    changes,
+    view.state,
+    label,
+    "full",
+  );
+}
+
 function expectLocalFullFreshSemanticEquivalence(
   local: TestLiveMdAnalysis,
   oldCache: TestLeafAnalysisCache,
@@ -3370,13 +3477,28 @@ function expectLocalFullFreshSemanticEquivalence(
   label: string,
   mode: Exclude<ScheduledLocalOracleMode, false>,
 ) {
-  if (!local.semantic) throw new Error(`${label}: expected local semantic cache after edit`);
-  let { freshCache, fullCache } = semanticTransitionOracles(
-    transaction.startState,
-    state,
-    transaction.changes,
+  expectSemanticTransitionEquivalence(
+    local,
     oldCache,
+    transaction.startState,
+    transaction.changes,
+    state,
+    label,
+    mode,
   );
+}
+
+function expectSemanticTransitionEquivalence(
+  local: TestLiveMdAnalysis,
+  oldCache: TestLeafAnalysisCache,
+  startState: EditorState,
+  changes: ChangeDesc,
+  state: EditorState,
+  label: string,
+  mode: Exclude<ScheduledLocalOracleMode, false>,
+) {
+  if (!local.semantic) throw new Error(`${label}: expected local semantic cache after edit`);
+  let { freshCache, fullCache } = semanticTransitionOracles(startState, state, changes, oldCache);
 
   let localTransitionCache = canonicalSemanticTransitionCache(state, local.semantic.cache);
   let fullTransitionCache = canonicalSemanticTransitionCache(state, fullCache);
@@ -3409,6 +3531,138 @@ function expectLocalFullFreshSemanticEquivalence(
     canonicalAnalysis(state, local),
     `${label}: local projection vs canonical full-query projection`,
   ).toEqual(canonicalAnalysis(state, __testBuildCanonicalLiveMdAnalysis(state)));
+}
+
+function expectPendingEditSurfaceState(
+  view: EditorView,
+  analysis: TestLiveMdAnalysis,
+  label: string,
+) {
+  let pending = analysis.pending;
+  expect(pending, `${label}: pending edit surface exists`).toBeTruthy();
+  if (!pending) return;
+
+  expectPendingMapOnlyTrace(analysis.trace, label);
+
+  let head = view.state.selection.main.head;
+  let line = view.state.doc.lineAt(head);
+  let caretLine = { from: line.from, to: line.to };
+  expect(
+    pending.editSurface.ranges.some((range) => rangeCoversLineOrPoint(range, caretLine, head)),
+    `${label}: pending edit surface covers the caret line`,
+  ).toBe(true);
+  expectNoDecorationsTouchRanges(
+    view.state,
+    analysis.directDestructiveDecorations,
+    pending.editSurface.ranges,
+    `${label}: direct destructive decorations`,
+  );
+  expectNoRangeSetTouchRanges(
+    view.state,
+    analysis.directAtomicRanges,
+    pending.editSurface.ranges,
+    `${label}: direct atomic ranges`,
+  );
+  expectNoDecorationsTouchRanges(
+    view.state,
+    analysis.surfaceDestructiveDecorations,
+    pending.editSurface.ranges,
+    `${label}: surface destructive decorations`,
+  );
+  expectNoDecorationsTouchRanges(
+    view.state,
+    analysis.surfaceInteractiveDecorations,
+    pending.editSurface.ranges,
+    `${label}: surface interactive decorations`,
+  );
+  expectNoRangeSetTouchRanges(
+    view.state,
+    analysis.surfaceAtomicRanges,
+    pending.editSurface.ranges,
+    `${label}: surface atomic ranges`,
+  );
+}
+
+function expectPendingMapOnlyTrace(trace: LiveMdLeafAnalysisTrace, label: string) {
+  expect(trace.blockNodesVisited, label).toBe(0);
+  expect(trace.recordsVisited, label).toBe(0);
+  expect(trace.inlineParseCalls, label).toBe(0);
+  expect(trace.codeFenceParses, label).toBe(0);
+  expect(trace.cacheFullMaterializations, label).toBe(0);
+  expect(trace.surfaceCompileCalls, label).toBe(0);
+  expect(trace.surfaceRecordsVisited, label).toBe(0);
+  expect(trace.surfaceDescriptorsMapped, label).toBe(0);
+  expect(trace.directProjectionRecords, label).toBe(0);
+  expect(trace.directProjectionWindows, label).toEqual([]);
+  expect(trace.heavyRenderStarts, label).toBe(0);
+  expect(trace.widgetConstructions, label).toBe(0);
+  expect(trace.surfaceMapOnlyUpdates, label).toBe(1);
+  expect(trace.surfaceCompileRanges, label).toEqual([]);
+}
+
+function insertAtSelection(view: EditorView, text: string): TransactionSpec {
+  let from = view.state.selection.main.head;
+  return {
+    changes: { from, insert: text },
+    selection: { anchor: from + text.length },
+    userEvent: "input.type",
+  };
+}
+
+function deleteBackwardAtSelection(view: EditorView, count: number): TransactionSpec {
+  let to = view.state.selection.main.head;
+  let from = Math.max(0, to - count);
+  return {
+    changes: { from, to },
+    selection: { anchor: from },
+    userEvent: "delete.backward",
+  };
+}
+
+function expectNoDecorationsTouchRanges(
+  state: EditorState,
+  decorations: DecorationSet,
+  ranges: readonly DocRange[],
+  label: string,
+) {
+  let touched: DocRange[] = [];
+  decorations.between(0, state.doc.length, (from, to) => {
+    let decorationRange = { from, to };
+    if (ranges.some((range) => rangesTouchForPendingSurface(range, decorationRange))) {
+      touched.push(decorationRange);
+    }
+  });
+  expect(touched, label).toEqual([]);
+}
+
+function expectNoRangeSetTouchRanges(
+  state: EditorState,
+  rangeSet: RangeSet<RangeValue>,
+  ranges: readonly DocRange[],
+  label: string,
+) {
+  let touched: DocRange[] = [];
+  rangeSet.between(0, state.doc.length, (from, to) => {
+    let atomicRange = { from, to };
+    if (ranges.some((range) => rangesTouchForPendingSurface(range, atomicRange))) {
+      touched.push(atomicRange);
+    }
+  });
+  expect(touched, label).toEqual([]);
+}
+
+function rangeCoversLineOrPoint(range: DocRange, line: DocRange, point: number) {
+  return line.from == line.to
+    ? range.from <= point && point <= range.to
+    : containsDocRange(range, line) || rangesTouchForPendingSurface(range, line);
+}
+
+function rangesTouchForPendingSurface(left: DocRange, right: DocRange) {
+  return left.from <= right.to && right.from <= left.to;
+}
+
+function rangesTouch(fromA: number, toA: number, fromB: number, toB: number) {
+  return fromA <= toB && fromB <= toA;
 }
 
 function semanticTransitionOracles(

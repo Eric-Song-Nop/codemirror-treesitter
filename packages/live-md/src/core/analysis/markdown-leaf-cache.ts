@@ -364,6 +364,7 @@ export function transitionLeafAnalysisCache(input: {
             unit,
             rekeyLeafAnalysis(unit, reused.record.analysis, input.analysisInput.renderKeyContext),
             reused.record.cacheId,
+            input.analysisInput.state.doc.length,
           ),
         );
         continue;
@@ -466,6 +467,7 @@ export function transitionLeafAnalysisCacheLocal(
             unit,
             rekeyLeafAnalysis(unit, reused.record.analysis, input.analysisInput.renderKeyContext),
             reused.record.cacheId,
+            input.analysisInput.state.doc.length,
           ),
         );
         continue;
