@@ -35,11 +35,11 @@ describe("indent helpers", () => {
     expect(indentString(state, state.tabSize + 2)).toBe("\t  ");
   });
 
-  it("uses the outer reference line when a node starts after a multiline sibling", async () => {
+  it("does not infer syntax indentation from bracket-shaped child nodes", async () => {
     let doc = "const value = tag`one\n  two` + [\nvalue\n];\n";
     let state = await javascriptState(doc);
     let valueLine = state.doc.lineAt(doc.indexOf("value", doc.indexOf("[")));
 
-    expect(getIndentation(state, valueLine.from)).toBe(2);
+    expect(getIndentation(state, valueLine.from)).toBe(null);
   });
 });
