@@ -100,6 +100,12 @@ export type LeafAnalysisRecord = {
   effectRange: DocRange;
   kind: MarkdownLeafKind | "marker";
   range: DocRange;
+  /**
+   * Range whose destructive projection must be revealed while an edit to this
+   * record is pending. This stays leaf-local by excluding source-safe
+   * ancestor structure such as line classes and text marks.
+   */
+  revealRange: DocRange;
   sourceHash: number;
   sourceRange: DocRange;
   structuralKey: string;

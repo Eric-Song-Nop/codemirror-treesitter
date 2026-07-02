@@ -762,10 +762,12 @@ function pendingEditSurface(
 ): LiveMdPendingEditSurface {
   let state = transaction.state;
   let changedLineRanges = changedPhysicalLineRanges(state, transaction.changes);
-  let selectionLineRanges = selectionPhysicalLineRanges(state);
+  let selectionLineRanges = selectionPhysicalLineRanges(state).filter((range) =>
+    changedLineRanges.some((changed) => rangesTouchPoint(range, changed)),
+  );
   let previousRanges =
     previousPending?.editSurface.ranges.map((range) => mapRange(range, transaction.changes)) ?? [];
-  let touchedEffectRanges = touchedRecordSafetyRanges(baseAnalysis, state, changes);
+  let touchedRevealRanges = touchedRecordRevealRanges(baseAnalysis, state, changes);
   let syntaxLineRanges = syntaxChangedRanges.map((range) =>
     lineRangeFor(state.doc, range.from, range.to),
   );
@@ -774,7 +776,7 @@ function pendingEditSurface(
       ...changedLineRanges,
       ...selectionLineRanges,
       ...previousRanges,
-      ...touchedEffectRanges,
+      ...touchedRevealRanges,
       ...syntaxLineRanges,
     ].map((range) => clampRangeToDoc(range, state.doc.length)),
   );
@@ -786,7 +788,7 @@ function pendingEditSurface(
     syntaxChangedRanges: mergeDocRanges(
       syntaxLineRanges.map((range) => clampRangeToDoc(range, state.doc.length)),
     ),
-    touchedEffectRanges,
+    touchedEffectRanges: touchedRevealRanges,
   };
 }
 
@@ -796,7 +798,7 @@ function selectionPhysicalLineRanges(state: EditorState): readonly DocRange[] {
   );
 }
 
-function touchedRecordSafetyRanges(
+function touchedRecordRevealRanges(
   baseAnalysis: LiveMdRuntimeState,
   state: EditorState,
   changes: ChangeDesc,
@@ -809,14 +811,44 @@ function touchedRecordSafetyRanges(
       baseAnalysis.semantic.cache,
       oldChangedRanges,
     )) {
-      ranges.push(mapRange(record.range, changes));
-      ranges.push(mapRange(record.sourceRange, changes));
-      ranges.push(mapRange(record.effectRange, changes));
-      ranges.push(mapRange(record.cacheSourceRange ?? record.sourceRange, changes));
+      if (!recordSourceTouchedByRanges(record, oldChangedRanges)) continue;
+      if (!recordNeedsWholeRevealRange(record)) continue;
+      ranges.push(mapRange(record.revealRange, changes));
     }
   }
 
   return mergeDocRanges(ranges.map((range) => clampRangeToDoc(range, state.doc.length)));
+}
+
+function recordNeedsWholeRevealRange(record: LeafAnalysisRecord) {
+  return [...record.analysis.structuralEffects, ...record.analysis.descriptors].some(
+    descriptorNeedsWholeRevealRange,
+  );
+}
+
+function descriptorNeedsWholeRevealRange(descriptor: LiveMdDescriptor) {
+  switch (descriptor.kind) {
+    case "codeFence":
+    case "image":
+    case "latex":
+    case "table":
+      return true;
+    case "lineClass":
+    case "linkMark":
+    case "listMarker":
+    case "syntax":
+    case "taskMarker":
+    case "textMark":
+      return false;
+  }
+}
+
+function recordSourceTouchedByRanges(record: LeafAnalysisRecord, ranges: readonly DocRange[]) {
+  let cacheSourceRange = record.cacheSourceRange ?? record.sourceRange;
+  return ranges.some(
+    (range) =>
+      rangesTouchPoint(record.sourceRange, range) || rangesTouchPoint(cacheSourceRange, range),
+  );
 }
 
 function sourceInteractiveSafetyRanges(

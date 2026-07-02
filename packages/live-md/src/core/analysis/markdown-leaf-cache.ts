@@ -117,6 +117,7 @@ type LeafRecordPayload = {
   effectRange: RelativeRange;
   kind: LeafAnalysisRecord["kind"];
   range: RelativeRange;
+  revealRange: RelativeRange;
   sourceHash: number;
   sourceRange: RelativeRange;
   structuralKey: string;
@@ -205,7 +206,8 @@ export function leafAnalysisCacheRangesInDoc(cache: LeafAnalysisCache, docLength
     if (
       !rangeInDoc(record.range, docLength) ||
       !rangeInDoc(record.sourceRange, docLength) ||
-      !rangeInDoc(record.effectRange, docLength)
+      !rangeInDoc(record.effectRange, docLength) ||
+      !rangeInDoc(record.revealRange, docLength)
     ) {
       inDoc = false;
     }
@@ -676,6 +678,7 @@ function leafRecordDocumentLength(records: readonly LeafAnalysisRecord[]) {
     length = Math.max(
       length,
       record.range.to,
+      record.revealRange.to,
       record.sourceRange.to,
       record.cacheSourceRange?.to ?? 0,
     );
@@ -698,6 +701,7 @@ function leafRecordPayload(record: LeafAnalysisRecord): LeafRecordPayload {
     effectRange: relativeRange(record.effectRange, anchor),
     kind: record.kind,
     range: relativeRange(record.range, anchor),
+    revealRange: relativeRange(record.revealRange, anchor),
     sourceHash: record.sourceHash,
     sourceRange: relativeRange(record.sourceRange, anchor),
     structuralKey: record.structuralKey,
@@ -736,6 +740,7 @@ function recordFromPayload(payload: LeafRecordPayload, anchor: number): LeafAnal
     effectRange: absoluteRange(payload.effectRange, anchor),
     kind: payload.kind,
     range: absoluteRange(payload.range, anchor),
+    revealRange: absoluteRange(payload.revealRange, anchor),
     sourceHash: payload.sourceHash,
     sourceRange: absoluteRange(payload.sourceRange, anchor),
     structuralKey: payload.structuralKey,
