@@ -25,6 +25,11 @@ vp run @codemirror-treesitter/live-md#build
   counts on `LiveMdLeafAnalysisTrace`, and the test suite has an asserted
   paragraph-locality case plus a nested-list inflation baseline for PR-2 to
   flip.
+- **Phase 1 / PR-1:** ready for review on 2026-07-03 in draft PR #87
+  (`codex/live-md-pr1-ranges`). The code adds the shared range-math module,
+  replaces duplicated LiveMD range/hash helpers, and makes the point-aware,
+  inclusive-boundary, and strict-overlap range semantics explicit at call
+  sites.
 
 ---
 
@@ -115,7 +120,7 @@ expected to flip that baseline to `editSurfaceLines <= 3`.
 
 ## Phase 1 — render stability while editing
 
-### PR-1: Shared range-math module _(fixes A6b; mechanical prerequisite)_
+### PR-1: Shared range-math module _(ready in draft PR #87; fixes A6b; mechanical prerequisite)_
 
 **Goal.** One source of truth for range primitives before reveal-policy
 changes touch them; eliminates the divergent `rangesTouch` semantics.
