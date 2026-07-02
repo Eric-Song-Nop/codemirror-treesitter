@@ -26,7 +26,7 @@ export type LiveMdPendingEditSurface = {
   changedLineRanges: readonly DocRange[];
   ranges: readonly DocRange[];
   syntaxChangedRanges: readonly DocRange[];
-  touchedEffectRanges: readonly DocRange[];
+  touchedRevealRanges: readonly DocRange[];
 };
 
 export type LiveMdPendingAnalysis = {
