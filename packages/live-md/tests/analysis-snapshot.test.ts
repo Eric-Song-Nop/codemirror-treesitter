@@ -800,7 +800,7 @@ describe("LiveMD analysis snapshot", () => {
       }
     });
 
-    it("documents nested list pending reveal inflation", async () => {
+    it("keeps a nested list pending reveal local to the edited block", async () => {
       let doc = nestedListItemDoc(50);
       let target = doc.indexOf("nested item line 25") + "nested item line 25".length;
       let view = await markdownAnalysisView(doc, "nested item line 25");
@@ -817,7 +817,67 @@ describe("LiveMD analysis snapshot", () => {
           { oracle: "semantic" },
         );
 
-        expect(pending.trace.editSurfaceLines).toBeGreaterThan(3);
+        let editedLines = 1;
+        expect(pending.trace.editSurfaceLines).toBeLessThanOrEqual(editedLines + 2);
+      } finally {
+        view.destroy();
+      }
+    }, 60_000);
+
+    it("does not reveal untouched selection lines during a pending edit", async () => {
+      let doc = numberedPlainParagraphDoc(20);
+      let target = doc.indexOf("paragraph 10") + "paragraph 10".length;
+      let selection = doc.indexOf("paragraph 2");
+      let view = await markdownAnalysisView(doc, "paragraph 10");
+
+      try {
+        let { pending } = await dispatchScheduledLocalEdit(
+          view,
+          {
+            changes: { from: target, insert: "!" },
+            selection: { anchor: selection },
+          },
+          "pending selection-line reveal locality",
+          { oracle: "semantic" },
+        );
+        let selectedLine = view.state.doc.lineAt(selection);
+        expect(
+          pending.trace.editSurfaceRanges.some((range) =>
+            rangeCoversLineOrPoint(range, selectedLine, selection),
+          ),
+        ).toBe(false);
+      } finally {
+        view.destroy();
+      }
+    }, 60_000);
+
+    it("reveals a destructive table record when editing inside it", async () => {
+      let doc = "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\nTail";
+      let target = doc.indexOf("alpha") + "alpha".length;
+      let view = await markdownAnalysisView(doc, "Tail");
+
+      try {
+        let before = __testLiveMdAnalysis(view);
+        let tableRecord = recordByKind(before, "table");
+        expect(tablePreviewTables(view.state, before)).toHaveLength(1);
+
+        let { pending, transaction } = await dispatchScheduledLocalEdit(
+          view,
+          {
+            changes: { from: target, insert: "!" },
+            selection: { anchor: doc.indexOf("Tail") },
+          },
+          "pending table reveal locality",
+          { oracle: "semantic" },
+        );
+        let mappedRevealRange = mapRangeForTest(tableRecord.revealRange, transaction.changes);
+
+        expect(tablePreviewTables(view.state, pending)).toHaveLength(0);
+        expect(
+          pending.pending?.editSurface.ranges.some((range) =>
+            containsDocRange(range, mappedRevealRange),
+          ),
+        ).toBe(true);
       } finally {
         view.destroy();
       }
@@ -4511,6 +4571,7 @@ function canonicalSemanticRecord(
     effectRange: record.effectRange,
     kind: record.kind,
     range: record.range,
+    revealRange: record.revealRange,
     source: state.sliceDoc(record.sourceRange.from, record.sourceRange.to),
     sourceHash: record.sourceHash.toString(16),
     sourceRange: record.sourceRange,
@@ -4546,6 +4607,8 @@ function compareCanonicalSemanticRecord(
     left.sourceRange.to - right.sourceRange.to ||
     left.effectRange.from - right.effectRange.from ||
     left.effectRange.to - right.effectRange.to ||
+    left.revealRange.from - right.revealRange.from ||
+    left.revealRange.to - right.revealRange.to ||
     left.kind.localeCompare(right.kind) ||
     left.contextKey.localeCompare(right.contextKey) ||
     left.source.localeCompare(right.source) ||
@@ -4589,6 +4652,7 @@ type CanonicalSemanticRecord = {
   effectRange: DocRange;
   kind: string;
   range: DocRange;
+  revealRange: DocRange;
   source: string;
   sourceHash: string;
   sourceRange: DocRange;

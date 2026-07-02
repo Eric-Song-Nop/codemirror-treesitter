@@ -301,6 +301,7 @@ export function createAnalysisRecord(
     effectRange: analysisEffectRange(analysis, unit.sourceRange, docLength),
     kind: unit.kind,
     range: unit.range,
+    revealRange: analysisRevealRange(analysis, unit.sourceRange, docLength),
     sourceHash: unit.sourceHash,
     sourceRange: unit.sourceRange,
     structuralKey: unit.structuralKey,
@@ -594,6 +595,44 @@ function analysisEffectRange(
     to = clamp(to, 0, docLength);
   }
   return { from, to };
+}
+
+function analysisRevealRange(
+  analysis: LeafAnalysis,
+  sourceRange: DocRange,
+  docLength?: number,
+): DocRange {
+  let from = sourceRange.from;
+  let to = sourceRange.to;
+  for (let descriptor of [...analysis.structuralEffects, ...analysis.descriptors]) {
+    if (!descriptorMayProduceDestructiveProjection(descriptor)) continue;
+    for (let range of liveMdDescriptorRanges(descriptor)) {
+      from = Math.min(from, range.from + sourceRange.from);
+      to = Math.max(to, range.to + sourceRange.from);
+    }
+  }
+  if (typeof docLength == "number") {
+    from = clamp(from, 0, docLength);
+    to = clamp(to, 0, docLength);
+  }
+  return { from, to };
+}
+
+function descriptorMayProduceDestructiveProjection(descriptor: LiveMdDescriptor) {
+  switch (descriptor.kind) {
+    case "syntax":
+    case "listMarker":
+    case "taskMarker":
+    case "image":
+    case "latex":
+    case "table":
+    case "codeFence":
+    case "linkMark":
+      return true;
+    case "lineClass":
+    case "textMark":
+      return false;
+  }
 }
 
 function dedupeDescriptors(descriptors: readonly LiveMdDescriptor[]) {

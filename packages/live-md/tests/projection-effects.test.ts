@@ -339,6 +339,7 @@ function leafRecord(
     effectRange: options.sourceRange ?? range,
     kind: options.kind ?? "paragraph",
     range,
+    revealRange: options.sourceRange ?? range,
     sourceHash: 0,
     sourceRange: options.sourceRange ?? range,
     structuralKey: "test",
