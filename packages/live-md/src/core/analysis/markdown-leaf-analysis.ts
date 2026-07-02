@@ -602,8 +602,8 @@ function analysisRevealRange(
   sourceRange: DocRange,
   docLength?: number,
 ): DocRange {
-  let from = sourceRange.from;
-  let to = sourceRange.to;
+  let from = Number.POSITIVE_INFINITY;
+  let to = Number.NEGATIVE_INFINITY;
   for (let descriptor of [...analysis.structuralEffects, ...analysis.descriptors]) {
     if (!descriptorMayProduceDestructiveProjection(descriptor)) continue;
     for (let range of liveMdDescriptorRanges(descriptor)) {
@@ -611,6 +611,7 @@ function analysisRevealRange(
       to = Math.max(to, range.to + sourceRange.from);
     }
   }
+  if (from == Number.POSITIVE_INFINITY) return sourceRange;
   if (typeof docLength == "number") {
     from = clamp(from, 0, docLength);
     to = clamp(to, 0, docLength);
