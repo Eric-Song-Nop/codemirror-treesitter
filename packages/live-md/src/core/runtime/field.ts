@@ -65,12 +65,14 @@ import {
 import {
   clampRangeToDoc,
   countLines,
+  isBroadContainerSyntaxRange,
   lineRangeFor,
   mapInclusiveRange,
   mapRange,
   rangesEqual,
   rangesTouchPoint,
   subtractRanges,
+  textChangeContextRanges,
 } from "../analysis/ranges.js";
 import { liveMdMarkdownFeatureFacet } from "../features.js";
 import { liveMdImageSourceResolver } from "../images.js";
@@ -762,15 +764,20 @@ function pendingEditSurface(
 ): LiveMdPendingEditSurface {
   let state = transaction.state;
   let changedLineRanges = changedPhysicalLineRanges(state, transaction.changes);
+  let textContextRanges = textChangeContextRanges(
+    transaction.startState.doc,
+    state.doc,
+    transaction.changes,
+  );
   let selectionLineRanges = selectionPhysicalLineRanges(state).filter((range) =>
     changedLineRanges.some((changed) => rangesTouchPoint(range, changed)),
   );
   let previousRanges =
     previousPending?.editSurface.ranges.map((range) => mapRange(range, transaction.changes)) ?? [];
   let touchedRevealRanges = touchedRecordRevealRanges(baseAnalysis, state, changes);
-  let syntaxLineRanges = syntaxChangedRanges.map((range) =>
-    lineRangeFor(state.doc, range.from, range.to),
-  );
+  let syntaxLineRanges = syntaxChangedRanges
+    .filter((range) => !isBroadContainerSyntaxRange(range, textContextRanges, state.doc.length))
+    .map((range) => lineRangeFor(state.doc, range.from, range.to));
   let ranges = mergeDocRanges(
     [
       ...changedLineRanges,

@@ -6,7 +6,15 @@ import {
   type MarkdownLeaf,
   type MarkdownLeafKind,
 } from "./markdown-block-types.js";
-import { clamp, mapRange, normalizeRanges, rangesEqual } from "./ranges.js";
+import {
+  clamp,
+  isBroadContainerSyntaxRange,
+  mapRange,
+  normalizeRanges,
+  oldTextChangeContextRanges,
+  rangesEqual,
+  textChangeContextRanges,
+} from "./ranges.js";
 
 /**
  * Gate B validation harness for Markdown leaf discovery after local edits.
@@ -80,20 +88,8 @@ export function findChangedMarkdownLeaves(input: {
   oldTree: Tree;
   syntaxChangedRanges?: readonly DocRange[];
 }): MarkdownChangedLeafResult {
-  let changeRanges: Array<{ newRange: DocRange; oldRange: DocRange }> = [];
-  input.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-    changeRanges.push({
-      newRange: { from: fromB, to: toB },
-      oldRange: { from: fromA, to: toA },
-    });
-  });
-
-  let textContextRanges = changeRanges.map((range) =>
-    expandTextChangeRange(input.oldDoc, input.newDoc, range.oldRange, range.newRange),
-  );
-  let initialOldRanges = changeRanges.map((range) =>
-    expandOldTextChangeRange(input.oldDoc, input.newDoc, range.oldRange, range.newRange),
-  );
+  let textContextRanges = textChangeContextRanges(input.oldDoc, input.newDoc, input.changes);
+  let initialOldRanges = oldTextChangeContextRanges(input.oldDoc, input.newDoc, input.changes);
   let oldTouched = collectMarkdownLeavesInRanges(input.oldTree, input.oldDoc, initialOldRanges);
   let mappedOldTouchedRanges = oldTouched.leaves.map((leaf) => mapRange(leaf, input.changes));
   let syntaxRanges = (input.syntaxChangedRanges ?? [])
@@ -203,60 +199,6 @@ function expandToLineContext(doc: Text, range: DocRange): DocRange {
   let startLine = doc.line(Math.max(1, fromLine.number - 1));
   let endLine = doc.line(Math.min(doc.lines, toLine.number + 1));
   return { from: startLine.from, to: endLine.to };
-}
-
-function expandTextChangeRange(
-  oldDoc: Text,
-  newDoc: Text,
-  oldRange: DocRange,
-  newRange: DocRange,
-): DocRange {
-  if (isSingleLineRange(oldDoc, oldRange) && isSingleLineRange(newDoc, newRange)) {
-    return lineRange(newDoc, newRange);
-  }
-  return expandToLineContext(newDoc, newRange);
-}
-
-function expandOldTextChangeRange(
-  oldDoc: Text,
-  newDoc: Text,
-  oldRange: DocRange,
-  newRange: DocRange,
-): DocRange {
-  if (isSingleLineRange(oldDoc, oldRange) && isSingleLineRange(newDoc, newRange)) {
-    return lineRange(oldDoc, oldRange);
-  }
-  return expandToLineContext(oldDoc, oldRange);
-}
-
-function lineRange(doc: Text, range: DocRange): DocRange {
-  if (doc.length == 0) return { from: 0, to: 0 };
-  let from = clamp(range.from, 0, doc.length);
-  let to = clamp(range.to, 0, doc.length);
-  if (to < from) [from, to] = [to, from];
-  let fromLine = doc.lineAt(from);
-  let toLine = doc.lineAt(to);
-  return { from: fromLine.from, to: toLine.to };
-}
-
-function isSingleLineRange(doc: Text, range: DocRange) {
-  if (doc.length == 0) return true;
-  let from = clamp(range.from, 0, doc.length);
-  let to = clamp(range.to, 0, doc.length);
-  if (to < from) [from, to] = [to, from];
-  return doc.lineAt(from).number == doc.lineAt(to).number;
-}
-
-function isBroadContainerSyntaxRange(
-  range: DocRange,
-  textContextRanges: readonly DocRange[],
-  docLength: number,
-) {
-  let size = range.to - range.from;
-  if (size < Math.min(1024, docLength / 4)) return false;
-  return textContextRanges.some(
-    (textRange) => range.from <= textRange.from && range.to >= textRange.to,
-  );
 }
 
 function hashLeafSource(value: string) {

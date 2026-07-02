@@ -35,6 +35,11 @@ vp run @codemirror-treesitter/live-md#build
   invalidation ranges from pending reveal ranges, keeps nested-list edits
   local to the edited line, preserves destructive table/fence/widget reveal
   behavior, and stops untouched selection lines from joining the edit surface.
+- **Phase 1 / PR-3:** ready for review on 2026-07-03 in draft PR #90
+  (`codex/live-md-pr3-container-syntax`). The code shares the broad
+  container syntax-range filter with the runtime edit-surface path, keeping
+  structural fence-start edits local while preserving committed semantic
+  restructuring.
 
 ---
 
@@ -305,7 +310,7 @@ plus a new test that edits _inside_ a collapsed table/fence and asserts the
 widget is revealed (those edits touch the record's own sourceRange, so they
 still reveal correctly).
 
-### PR-3: Filter broad container syntax ranges from the edit surface _(fixes R2)_
+### PR-3: Filter broad container syntax ranges from the edit surface _(ready in draft PR #90; fixes R2)_
 
 **Goal.** A structural keystroke (`-`, `>`, backtick at line start) must not
 reveal the entire enclosing container.
