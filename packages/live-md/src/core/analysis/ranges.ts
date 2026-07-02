@@ -34,6 +34,46 @@ export function normalizeRanges(ranges: readonly DocRange[], docLength: number):
   );
 }
 
+export function textChangeContextRanges(
+  oldDoc: Text,
+  newDoc: Text,
+  changes: ChangeDesc,
+): DocRange[] {
+  let ranges: DocRange[] = [];
+  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    ranges.push(
+      expandTextChangeRange(oldDoc, newDoc, { from: fromA, to: toA }, { from: fromB, to: toB }),
+    );
+  }, true);
+  return ranges;
+}
+
+export function oldTextChangeContextRanges(
+  oldDoc: Text,
+  newDoc: Text,
+  changes: ChangeDesc,
+): DocRange[] {
+  let ranges: DocRange[] = [];
+  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    ranges.push(
+      expandOldTextChangeRange(oldDoc, newDoc, { from: fromA, to: toA }, { from: fromB, to: toB }),
+    );
+  }, true);
+  return ranges;
+}
+
+export function isBroadContainerSyntaxRange(
+  range: DocRange,
+  textContextRanges: readonly DocRange[],
+  docLength: number,
+) {
+  let size = range.to - range.from;
+  if (size < Math.min(1024, docLength / 4)) return false;
+  return textContextRanges.some(
+    (textRange) => range.from <= textRange.from && range.to >= textRange.to,
+  );
+}
+
 export function subtractRanges(
   ranges: readonly DocRange[],
   remove: readonly DocRange[],
@@ -136,6 +176,59 @@ export function hashDocRange(doc: Text, range: DocRange) {
     }
   }
   return hash >>> 0;
+}
+
+function expandTextChangeRange(
+  oldDoc: Text,
+  newDoc: Text,
+  oldRange: DocRange,
+  newRange: DocRange,
+): DocRange {
+  if (isSingleLineRange(oldDoc, oldRange) && isSingleLineRange(newDoc, newRange)) {
+    return lineRange(newDoc, newRange);
+  }
+  return expandToLineContext(newDoc, newRange);
+}
+
+function expandOldTextChangeRange(
+  oldDoc: Text,
+  newDoc: Text,
+  oldRange: DocRange,
+  newRange: DocRange,
+): DocRange {
+  if (isSingleLineRange(oldDoc, oldRange) && isSingleLineRange(newDoc, newRange)) {
+    return lineRange(oldDoc, oldRange);
+  }
+  return expandToLineContext(oldDoc, oldRange);
+}
+
+function expandToLineContext(doc: Text, range: DocRange): DocRange {
+  if (doc.length == 0) return { from: 0, to: 0 };
+  let from = clamp(Math.min(range.from, range.to), 0, doc.length);
+  let to = clamp(Math.max(range.from, range.to), 0, doc.length);
+  let fromLine = doc.lineAt(from);
+  let toLine = doc.lineAt(to);
+  let startLine = doc.line(Math.max(1, fromLine.number - 1));
+  let endLine = doc.line(Math.min(doc.lines, toLine.number + 1));
+  return { from: startLine.from, to: endLine.to };
+}
+
+function lineRange(doc: Text, range: DocRange): DocRange {
+  if (doc.length == 0) return { from: 0, to: 0 };
+  let from = clamp(range.from, 0, doc.length);
+  let to = clamp(range.to, 0, doc.length);
+  if (to < from) [from, to] = [to, from];
+  let fromLine = doc.lineAt(from);
+  let toLine = doc.lineAt(to);
+  return { from: fromLine.from, to: toLine.to };
+}
+
+function isSingleLineRange(doc: Text, range: DocRange) {
+  if (doc.length == 0) return true;
+  let from = clamp(range.from, 0, doc.length);
+  let to = clamp(range.to, 0, doc.length);
+  if (to < from) [from, to] = [to, from];
+  return doc.lineAt(from).number == doc.lineAt(to).number;
 }
 
 function hashChar(hash: number, value: number) {

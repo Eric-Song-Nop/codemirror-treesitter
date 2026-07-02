@@ -32,11 +32,14 @@ import {
 import {
   clamp,
   clampRangeToDoc,
+  isBroadContainerSyntaxRange,
   mapRange,
   normalizeRanges,
+  oldTextChangeContextRanges,
   rangesEqual,
   rangesSame,
   rangesTouchPoint,
+  textChangeContextRanges,
 } from "./ranges.js";
 
 export type LeafAnalysisCacheTrace = LiveMdLeafAnalysisTrace;
@@ -867,20 +870,8 @@ function collectLocalMarkdownSnapshot(input: LeafAnalysisCacheLocalTransitionInp
 
 function localInitialCheckRanges(input: LeafAnalysisCacheLocalTransitionInput) {
   let newDoc = input.analysisInput.state.doc;
-  let changeRanges: Array<{ newRange: DocRange; oldRange: DocRange }> = [];
-  input.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-    changeRanges.push({
-      newRange: { from: fromB, to: toB },
-      oldRange: { from: fromA, to: toA },
-    });
-  });
-
-  let textContextRanges = changeRanges.map((range) =>
-    expandTextChangeRange(input.oldDoc, newDoc, range.oldRange, range.newRange),
-  );
-  let oldContextRanges = changeRanges.map((range) =>
-    expandOldTextChangeRange(input.oldDoc, newDoc, range.oldRange, range.newRange),
-  );
+  let textContextRanges = textChangeContextRanges(input.oldDoc, newDoc, input.changes);
+  let oldContextRanges = oldTextChangeContextRanges(input.oldDoc, newDoc, input.changes);
   let traceCounters: LeafAnalysisCacheTraceCounters = {
     cacheIndexCallbacks: 0,
     cacheIndexQueries: 0,
@@ -1120,30 +1111,6 @@ function unitIdentityRange(unit: MarkdownLeafAnalysisUnit) {
   return unit.type == "marker" ? unit.cacheSourceRange : unit.range;
 }
 
-function expandTextChangeRange(
-  oldDoc: Text,
-  newDoc: Text,
-  oldRange: DocRange,
-  newRange: DocRange,
-): DocRange {
-  if (isSingleLineRange(oldDoc, oldRange) && isSingleLineRange(newDoc, newRange)) {
-    return lineRange(newDoc, newRange);
-  }
-  return expandToLineContext(newDoc, newRange);
-}
-
-function expandOldTextChangeRange(
-  oldDoc: Text,
-  newDoc: Text,
-  oldRange: DocRange,
-  newRange: DocRange,
-): DocRange {
-  if (isSingleLineRange(oldDoc, oldRange) && isSingleLineRange(newDoc, newRange)) {
-    return lineRange(oldDoc, oldRange);
-  }
-  return expandToLineContext(oldDoc, oldRange);
-}
-
 function expandToLineContext(doc: Text, range: DocRange): DocRange {
   if (doc.length == 0) return { from: 0, to: 0 };
   let from = clamp(Math.min(range.from, range.to), 0, doc.length);
@@ -1153,36 +1120,6 @@ function expandToLineContext(doc: Text, range: DocRange): DocRange {
   let startLine = doc.line(Math.max(1, fromLine.number - 1));
   let endLine = doc.line(Math.min(doc.lines, toLine.number + 1));
   return { from: startLine.from, to: endLine.to };
-}
-
-function lineRange(doc: Text, range: DocRange): DocRange {
-  if (doc.length == 0) return { from: 0, to: 0 };
-  let from = clamp(range.from, 0, doc.length);
-  let to = clamp(range.to, 0, doc.length);
-  if (to < from) [from, to] = [to, from];
-  let fromLine = doc.lineAt(from);
-  let toLine = doc.lineAt(to);
-  return { from: fromLine.from, to: toLine.to };
-}
-
-function isSingleLineRange(doc: Text, range: DocRange) {
-  if (doc.length == 0) return true;
-  let from = clamp(range.from, 0, doc.length);
-  let to = clamp(range.to, 0, doc.length);
-  if (to < from) [from, to] = [to, from];
-  return doc.lineAt(from).number == doc.lineAt(to).number;
-}
-
-function isBroadContainerSyntaxRange(
-  range: DocRange,
-  textContextRanges: readonly DocRange[],
-  docLength: number,
-) {
-  let size = range.to - range.from;
-  if (size < Math.min(1024, docLength / 4)) return false;
-  return textContextRanges.some(
-    (textRange) => range.from <= textRange.from && range.to >= textRange.to,
-  );
 }
 
 function analysisInputWithInlineSession(

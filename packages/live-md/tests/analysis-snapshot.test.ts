@@ -824,6 +824,30 @@ describe("LiveMD analysis snapshot", () => {
       }
     }, 60_000);
 
+    it("keeps a third-backtick fence edit surface local", async () => {
+      let doc = thirdBacktickFenceCreationDoc();
+      let target = doc.indexOf("``\n") + "``".length;
+      let view = await markdownAnalysisView(doc, "tail");
+
+      try {
+        expect(ensureSyntaxTree(view.state, view.state.doc.length, 5_000)).toBeTruthy();
+        let { after, pending } = await dispatchScheduledLocalEdit(
+          view,
+          {
+            changes: { from: target, insert: "`" },
+            selection: { anchor: target + 1 },
+          },
+          "pending third-backtick fence reveal locality",
+          { oracle: "semantic" },
+        );
+
+        expect(pending.trace.editSurfaceLines).toBeLessThanOrEqual(3);
+        expect(recordByKind(after, "fencedCode")).toBeTruthy();
+      } finally {
+        view.destroy();
+      }
+    }, 60_000);
+
     it("does not reveal untouched selection lines during a pending edit", async () => {
       let doc = numberedPlainParagraphDoc(20);
       let target = doc.indexOf("paragraph 10") + "paragraph 10".length;
@@ -4408,6 +4432,11 @@ function nestedListItemDoc(count: number) {
     "",
     "tail",
   ].join("\n");
+}
+
+function thirdBacktickFenceCreationDoc() {
+  let filler = "fence candidate " + "x".repeat(1_500);
+  return ["intro", "", "``", filler, filler, filler, filler, "tail"].join("\n");
 }
 
 function numberedQuoteParagraphDoc(count: number) {
