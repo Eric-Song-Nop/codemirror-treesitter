@@ -30,6 +30,11 @@ vp run @codemirror-treesitter/live-md#build
   replaces duplicated LiveMD range/hash helpers, and makes the point-aware,
   inclusive-boundary, and strict-overlap range semantics explicit at call
   sites.
+- **Phase 1 / PR-2:** ready for review on 2026-07-03 in draft PR #88
+  (`codex/live-md-pr2-reveal-range`). The code separates conservative
+  invalidation ranges from pending reveal ranges, keeps nested-list edits
+  local to the edited line, preserves destructive table/fence/widget reveal
+  behavior, and stops untouched selection lines from joining the edit surface.
 
 ---
 
@@ -47,8 +52,8 @@ new measurement in `tests/analysis-snapshot.test.ts`. The passing locality
 test uses a small plain-paragraph fixture that is local under the current
 policy. A pending selection-only regression test keeps the recorded edit
 surface visible in the trace while a scheduled source analysis is outstanding.
-The nested-list fixture currently asserts that the reveal is inflated; PR-2 is
-expected to flip that baseline to `editSurfaceLines <= 3`.
+The nested-list fixture originally asserted that reveal was inflated; PR-2
+flips that baseline to `editSurfaceLines <= 3`.
 
 **Changes.**
 
