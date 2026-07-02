@@ -6,6 +6,7 @@ import {
   type MarkdownLeaf,
   type MarkdownLeafKind,
 } from "./markdown-block-types.js";
+import { clamp, mapRange, normalizeRanges, rangesEqual } from "./ranges.js";
 
 /**
  * Gate B validation harness for Markdown leaf discovery after local edits.
@@ -94,7 +95,7 @@ export function findChangedMarkdownLeaves(input: {
     expandOldTextChangeRange(input.oldDoc, input.newDoc, range.oldRange, range.newRange),
   );
   let oldTouched = collectMarkdownLeavesInRanges(input.oldTree, input.oldDoc, initialOldRanges);
-  let mappedOldTouchedRanges = oldTouched.leaves.map((leaf) => mapLeafRange(leaf, input.changes));
+  let mappedOldTouchedRanges = oldTouched.leaves.map((leaf) => mapRange(leaf, input.changes));
   let syntaxRanges = (input.syntaxChangedRanges ?? [])
     .filter((range) => !isBroadContainerSyntaxRange(range, textContextRanges, input.newDoc.length))
     .map((range) => expandToLineContext(input.newDoc, range));
@@ -158,7 +159,7 @@ function leafRecord(leaf: MarkdownLeaf, doc: Text): MarkdownLeafRecord {
     kind: leaf.kind,
     nodeId: leaf.nodeId,
     nodeName: leaf.nodeName,
-    sourceHash: hashString(source),
+    sourceHash: hashLeafSource(source),
     sourceText: source,
     to,
   };
@@ -176,15 +177,8 @@ function diffNewLeaves(
 function mapOldLeaf(leaf: MarkdownLeafRecord, changes: ChangeDesc): MarkdownLeafRecord {
   return {
     ...leaf,
-    ...mapLeafRange(leaf, changes),
+    ...mapRange(leaf, changes),
   };
-}
-
-function mapLeafRange(range: DocRange, changes: ChangeDesc): DocRange {
-  let length = changes.length;
-  let from = changes.mapPos(clamp(range.from, 0, length), 1);
-  let to = changes.mapPos(clamp(range.to, 0, length), -1);
-  return from <= to ? { from, to } : { from: to, to: from };
 }
 
 function leafKey(leaf: MarkdownLeafRecord) {
@@ -253,33 +247,6 @@ function isSingleLineRange(doc: Text, range: DocRange) {
   return doc.lineAt(from).number == doc.lineAt(to).number;
 }
 
-function normalizeRanges(ranges: readonly DocRange[], docLength: number) {
-  let sorted = ranges
-    .map((range) => ({
-      from: clamp(Math.min(range.from, range.to), 0, docLength),
-      to: clamp(Math.max(range.from, range.to), 0, docLength),
-    }))
-    .sort((a, b) => a.from - b.from || a.to - b.to);
-  let merged: DocRange[] = [];
-  for (let range of sorted) {
-    let last = merged[merged.length - 1];
-    if (!last || range.from > last.to) {
-      merged.push({ ...range });
-    } else if (range.to > last.to) {
-      last.to = range.to;
-    }
-  }
-  return merged;
-}
-
-function rangesEqual(a: readonly DocRange[], b: readonly DocRange[]) {
-  return a.length == b.length && a.every((range, index) => rangesSame(range, b[index]!));
-}
-
-function rangesSame(a: DocRange, b: DocRange) {
-  return a.from == b.from && a.to == b.to;
-}
-
 function isBroadContainerSyntaxRange(
   range: DocRange,
   textContextRanges: readonly DocRange[],
@@ -292,15 +259,11 @@ function isBroadContainerSyntaxRange(
   );
 }
 
-function hashString(value: string) {
+function hashLeafSource(value: string) {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i++) {
     hash ^= value.charCodeAt(i);
     hash = Math.imul(hash, 16777619);
   }
   return hash >>> 0;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
 }

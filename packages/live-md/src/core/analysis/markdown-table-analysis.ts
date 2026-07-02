@@ -10,6 +10,7 @@ import {
   type LiveMdTableAlignment,
   type LiveMdTableModel,
 } from "./descriptors.js";
+import { rangesOverlap } from "./ranges.js";
 import {
   capture,
   captures,
@@ -384,8 +385,4 @@ function isWhitespaceCode(code: number) {
 
 function nodeRange(node: SyntaxNode): DocRange {
   return { from: node.from, to: node.to };
-}
-
-function rangesOverlap(left: DocRange, right: DocRange) {
-  return left.from < right.to && right.from < left.to;
 }

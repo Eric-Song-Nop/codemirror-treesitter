@@ -19,6 +19,7 @@ import {
   type MarkdownTable,
 } from "../widgets.js";
 import { type LiveMdTableModel } from "../analysis/descriptors.js";
+import { hashString } from "../analysis/ranges.js";
 import { liveMdObjectEpoch } from "./epochs.js";
 
 export type LiveMdRenderCache = {
@@ -292,12 +293,4 @@ function keyParts(...parts: readonly (boolean | number | string | null | undefin
       return `${text.length}:${text}`;
     })
     .join("|");
-}
-
-function hashString(value: string) {
-  let hash = 5381;
-  for (let index = 0; index < value.length; index++) {
-    hash = ((hash << 5) + hash + value.charCodeAt(index)) | 0;
-  }
-  return (hash >>> 0).toString(36);
 }

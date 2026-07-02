@@ -54,10 +54,10 @@ import {
 import {
   analyzeMarkdownLeafSemantics,
   defaultLiveMdRenderKeyContext,
-  hashDocRange,
   liveMdRendererVersion,
   type LiveMdRenderKeyContext,
 } from "../src/core/analysis/markdown-leaf-analysis.js";
+import { hashDocRange } from "../src/core/analysis/ranges.js";
 import {
   compileFullDirectLayoutProjection,
   compileFullSurfaceProjection,

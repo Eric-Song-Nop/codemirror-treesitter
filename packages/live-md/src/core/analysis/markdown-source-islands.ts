@@ -14,6 +14,7 @@ import {
 } from "./markdown-block-types.js";
 import { type LeafAnalysisRecord } from "./descriptors.js";
 import { isWhitespaceOnly } from "../util.js";
+import { mapRange, normalizeRanges, rangesTouchPoint } from "./ranges.js";
 
 export type LiveMdSourceIslandLeaf = {
   contextKey: string;
@@ -432,7 +433,7 @@ function sourceIslandLeafIndexesTouchingRanges(
       if (range.from == range.to ? leafRange.from > range.from : leafRange.from >= range.to) {
         break;
       }
-      if (rangesTouch(leafRange, range) && !seen.has(index)) {
+      if (rangesTouchPoint(leafRange, range) && !seen.has(index)) {
         seen.add(index);
         indexes.push(index);
       }
@@ -531,40 +532,4 @@ function appendMappedSourceIslandLeafSegmentRun(
 
 function isArrayIndexProperty(property: string) {
   return /^(0|[1-9]\d*)$/.test(property);
-}
-
-function normalizeRanges(ranges: readonly DocRange[], docLength: number) {
-  let sorted = ranges
-    .map((range) => ({
-      from: clamp(Math.min(range.from, range.to), 0, docLength),
-      to: clamp(Math.max(range.from, range.to), 0, docLength),
-    }))
-    .sort((left, right) => left.from - right.from || left.to - right.to);
-  let merged: DocRange[] = [];
-  for (let range of sorted) {
-    let last = merged[merged.length - 1];
-    if (!last || range.from > last.to) {
-      merged.push({ ...range });
-    } else if (range.to > last.to) {
-      last.to = range.to;
-    }
-  }
-  return merged;
-}
-
-function mapRange(range: DocRange, changes: ChangeDesc): DocRange {
-  let from = changes.mapPos(clamp(range.from, 0, changes.length), 1);
-  let to = changes.mapPos(clamp(range.to, 0, changes.length), -1);
-  return from <= to ? { from, to } : { from: to, to: from };
-}
-
-function rangesTouch(left: DocRange, right: DocRange) {
-  if (left.from == left.to && right.from == right.to) return left.from == right.from;
-  if (left.from == left.to) return left.from >= right.from && left.from < right.to;
-  if (right.from == right.to) return left.from <= right.from && left.to >= right.from;
-  return left.from < right.to && right.from < left.to;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }

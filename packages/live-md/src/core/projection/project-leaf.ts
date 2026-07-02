@@ -11,6 +11,7 @@ import {
   forEachLeafAnalysisCacheRecord,
   forEachLeafAnalysisCacheRecordTouchingRanges,
 } from "../analysis/markdown-leaf-cache.js";
+import { rangesOverlap } from "../analysis/ranges.js";
 import { type DocRange } from "../analysis/types.js";
 import { liveMdLinkMark } from "../links.js";
 import {
@@ -622,12 +623,8 @@ function rangeTouchesActiveLine(renderStatus: LiveMdRenderStatus, from: number, 
 function rangeTouchesActiveSource(renderStatus: LiveMdRenderStatus, from: number, to: number) {
   return (
     renderStatus.activeSource ||
-    renderStatus.activeSourceRanges.some((range) => rangesOverlap(range, from, to))
+    renderStatus.activeSourceRanges.some((range) => rangesOverlap(range, { from, to }))
   );
-}
-
-function rangesOverlap(range: DocRange, from: number, to: number) {
-  return range.from < to && from < range.to;
 }
 
 function containsRange(outer: DocRange, inner: DocRange) {

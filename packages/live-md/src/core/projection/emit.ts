@@ -3,6 +3,7 @@ import { Decoration, type DecorationSet, type WidgetType } from "@codemirror/vie
 import { isWhitespaceOnly, forEachLineInRange, splitRangeByLine } from "../util.js";
 import { type MarkdownTable } from "../widgets.js";
 import { defaultLiveMdRenderKeyContext } from "../analysis/markdown-leaf-analysis.js";
+import { rangesOverlap } from "../analysis/ranges.js";
 import { emptyLiveMdLeafAnalysisTrace, type DocRange } from "../analysis/types.js";
 import { isLiveMdInteractiveLinkDecoration } from "../links.js";
 import { createLiveMdRenderCache } from "../runtime/render-cache.js";
@@ -417,7 +418,7 @@ export function rangeTouchesActiveLine(build: LiveMdBuild, from: number, to: num
 }
 
 export function rangeTouchesActiveSource(build: LiveMdBuild, from: number, to: number) {
-  return build.activeSourceRanges.some((range) => rangesOverlap(range, from, to));
+  return build.activeSourceRanges.some((range) => rangesOverlap(range, { from, to }));
 }
 
 export function tableTouchesActiveLine(
@@ -437,10 +438,6 @@ export function tableTouchesActiveLine(
   }
   let nextLine = build.state.doc.line(nextLineNumber);
   return isWhitespaceOnly(build.state.sliceDoc(nextLine.from, nextLine.to));
-}
-
-function rangesOverlap(range: DocRange, from: number, to: number) {
-  return range.from < to && from < range.to;
 }
 
 export function isOnlyVisibleContentOnLine(

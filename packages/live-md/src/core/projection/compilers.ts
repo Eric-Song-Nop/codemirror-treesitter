@@ -1,6 +1,7 @@
 import { type ChangeDesc, type Range, RangeSet, type RangeValue } from "@codemirror/state";
 import { Decoration } from "@codemirror/view";
 import { type LeafAnalysisCache, type LeafAnalysisRecord } from "../analysis/descriptors.js";
+import { rangesOverlap } from "../analysis/ranges.js";
 import { type DocRange, type LiveMdLeafAnalysisTrace } from "../analysis/types.js";
 import {
   createLiveMdBuild,
@@ -316,7 +317,7 @@ function clipSurfaceSpec(
     case "syntax":
       return intersectRanges(spec, ranges).map((range) => ({ ...spec, ...range }));
     case "replace":
-      return ranges.some((range) => rangesTouch(range, spec)) ? [spec] : [];
+      return ranges.some((range) => rangesOverlap(range, spec)) ? [spec] : [];
     default:
       return [];
   }
@@ -335,10 +336,6 @@ function intersectRanges(range: DocRange, ranges: readonly DocRange[]) {
     clipped.push({ from, to });
   }
   return clipped;
-}
-
-function rangesTouch(left: DocRange, right: DocRange) {
-  return left.from < right.to && right.from < left.to;
 }
 
 function lineBoundaryFrom(build: LiveMdBuild, position: number) {
