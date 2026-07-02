@@ -30,6 +30,7 @@ import {
   type DocRange,
   type LiveMdLeafAnalysisTrace,
 } from "./types.js";
+import { clamp, hashDocRange, hashString, rangesOverlap } from "./ranges.js";
 import { type LiveMdMarkdownParserService } from "../languages.js";
 
 export type LiveMdLeafSemanticAnalysis = {
@@ -545,14 +546,6 @@ function descriptorKey(descriptors: readonly LiveMdDescriptor[]) {
   return JSON.stringify(descriptors);
 }
 
-function hashString(value: string) {
-  let hash = 5381;
-  for (let index = 0; index < value.length; index++) {
-    hash = ((hash << 5) + hash + value.charCodeAt(index)) | 0;
-  }
-  return (hash >>> 0).toString(36);
-}
-
 function hasProblemNode(node: SyntaxNode): boolean {
   return node.hasError || node.isMissing;
 }
@@ -562,10 +555,6 @@ function hasOverlappingProblemSourceRange(
   problemSourceRanges: readonly DocRange[],
 ) {
   return problemSourceRanges.some((problemRange) => rangesOverlap(range, problemRange));
-}
-
-function rangesOverlap(left: DocRange, right: DocRange) {
-  return left.from < right.to && right.from < left.to;
 }
 
 function compareUnits(left: MarkdownLeafAnalysisUnit, right: MarkdownLeafAnalysisUnit) {
@@ -605,30 +594,6 @@ function analysisEffectRange(
     to = clamp(to, 0, docLength);
   }
   return { from, to };
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
-
-export function hashDocRange(doc: Text, range: DocRange): number {
-  let hash = 0x811c9dc5;
-  for (let iter = doc.iterRange(range.from, range.to); !iter.next().done; ) {
-    if (iter.lineBreak) {
-      hash = hashChar(hash, 10);
-      continue;
-    }
-    let value = iter.value;
-    for (let index = 0; index < value.length; index++) {
-      hash = hashChar(hash, value.charCodeAt(index));
-    }
-  }
-  return hash >>> 0;
-}
-
-function hashChar(hash: number, value: number) {
-  hash ^= value;
-  return Math.imul(hash, 0x01000193);
 }
 
 function dedupeDescriptors(descriptors: readonly LiveMdDescriptor[]) {

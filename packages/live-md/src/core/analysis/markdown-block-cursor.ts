@@ -1,6 +1,7 @@
 import { type Text } from "@codemirror/state";
 import { type DocRange, type SyntaxNode, type Tree } from "@codemirror-treesitter/language";
 import { isWhitespaceOnly } from "../util.js";
+import { clamp, normalizeRanges, rangesSame, rangesTouchInclusive } from "./ranges.js";
 import {
   type MarkdownBlockContext,
   type MarkdownBlockSnapshot,
@@ -142,7 +143,7 @@ function walkRangeCursor(
   builder: SnapshotBuilder,
 ) {
   builder.trace.visitedBlockNodes++;
-  if (!rangesTouch(cursor, range)) return;
+  if (!rangesTouchInclusive(cursor, range)) return;
   collectContainerMarkers(cursor, doc, context, builder, range);
 
   let node = cursor.node;
@@ -251,7 +252,7 @@ function collectQuoteMarkersInRange(
   builder: SnapshotBuilder,
   range: DocRange,
 ) {
-  if (!rangesTouch(cursor, range)) return;
+  if (!rangesTouchInclusive(cursor, range)) return;
 
   let node = cursor.node;
   if (isQuoteMarker(node)) {
@@ -555,33 +556,6 @@ function lineRangesTouchingRange(doc: Text, range: DocRange) {
   return lines;
 }
 
-function normalizeRanges(ranges: readonly DocRange[], docLength: number) {
-  let sorted = ranges
-    .map((range) => ({
-      from: clamp(Math.min(range.from, range.to), 0, docLength),
-      to: clamp(Math.max(range.from, range.to), 0, docLength),
-    }))
-    .sort((a, b) => a.from - b.from || a.to - b.to);
-  let merged: DocRange[] = [];
-  for (let range of sorted) {
-    let last = merged[merged.length - 1];
-    if (!last || range.from > last.to) {
-      merged.push({ ...range });
-    } else if (range.to > last.to) {
-      last.to = range.to;
-    }
-  }
-  return merged;
-}
-
-function rangesTouch(a: DocRange, b: DocRange) {
-  return a.from <= b.to && b.from <= a.to;
-}
-
-function rangesSame(a: DocRange, b: DocRange) {
-  return a.from == b.from && a.to == b.to;
-}
-
 function emptyTrace(): MarkdownBlockTrace {
   return {
     checkedRanges: [],
@@ -591,8 +565,4 @@ function emptyTrace(): MarkdownBlockTrace {
     rounds: 0,
     visitedBlockNodes: 0,
   };
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
 }

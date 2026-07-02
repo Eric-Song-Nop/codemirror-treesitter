@@ -29,6 +29,15 @@ import {
   type DocRange,
   type LiveMdLeafAnalysisTrace,
 } from "./types.js";
+import {
+  clamp,
+  clampRangeToDoc,
+  mapRange,
+  normalizeRanges,
+  rangesEqual,
+  rangesSame,
+  rangesTouchPoint,
+} from "./ranges.js";
 
 export type LeafAnalysisCacheTrace = LiveMdLeafAnalysisTrace;
 
@@ -654,7 +663,7 @@ function leafRecordRanges(records: readonly LeafAnalysisRecord[]): {
   for (let record of records.slice().sort(compareAnalysisRecords)) {
     let payload = leafRecordPayload(record);
     positioned.push(new PositionedLeafRecord(payload).range(record.range.from, record.range.to));
-    let safetyRange = clampRange(recordInvalidationRange(record), docLength);
+    let safetyRange = clampRangeToDoc(recordInvalidationRange(record), docLength);
     safety.push(new LeafRecordRef(payload).range(safetyRange.from, safetyRange.to));
   }
   safety.sort((left, right) => left.from - right.from || left.to - right.to);
@@ -788,12 +797,6 @@ function relativeRange(range: DocRange, anchor: number): RelativeRange {
 
 function absoluteRange(range: RelativeRange, anchor: number): DocRange {
   return { from: range.from + anchor, to: range.to + anchor };
-}
-
-function clampRange(range: DocRange, docLength: number): DocRange {
-  let from = clamp(Math.min(range.from, range.to), 0, docLength);
-  let to = clamp(Math.max(range.from, range.to), 0, docLength);
-  return { from, to };
 }
 
 function patchRangeSet<T extends RangeValue>(
@@ -990,10 +993,10 @@ function changedOldRanges(changes: ChangeDesc) {
 function recordTouchesRanges(record: LeafAnalysisRecord, ranges: readonly DocRange[]) {
   return ranges.some(
     (range) =>
-      rangesTouch(record.range, range) ||
-      rangesTouch(record.sourceRange, range) ||
-      rangesTouch(record.effectRange, range) ||
-      rangesTouch(recordCacheSourceRange(record), range),
+      rangesTouchPoint(record.range, range) ||
+      rangesTouchPoint(record.sourceRange, range) ||
+      rangesTouchPoint(record.effectRange, range) ||
+      rangesTouchPoint(recordCacheSourceRange(record), range),
   );
 }
 
@@ -1176,37 +1179,6 @@ function isBroadContainerSyntaxRange(
   );
 }
 
-function normalizeRanges(ranges: readonly DocRange[], docLength: number) {
-  let sorted = ranges
-    .map((range) => ({
-      from: clamp(Math.min(range.from, range.to), 0, docLength),
-      to: clamp(Math.max(range.from, range.to), 0, docLength),
-    }))
-    .sort((left, right) => left.from - right.from || left.to - right.to);
-  let merged: DocRange[] = [];
-  for (let range of sorted) {
-    let last = merged[merged.length - 1];
-    if (!last || range.from > last.to) {
-      merged.push({ ...range });
-    } else if (range.to > last.to) {
-      last.to = range.to;
-    }
-  }
-  return merged;
-}
-
-function rangesEqual(left: readonly DocRange[], right: readonly DocRange[]) {
-  return (
-    left.length == right.length && left.every((range, index) => rangesSame(range, right[index]!))
-  );
-}
-
-function mapRange(range: DocRange, changes: ChangeDesc): DocRange {
-  let from = changes.mapPos(clamp(range.from, 0, changes.length), 1);
-  let to = changes.mapPos(clamp(range.to, 0, changes.length), -1);
-  return from <= to ? { from, to } : { from: to, to: from };
-}
-
 function analysisInputWithInlineSession(
   input: LiveMdLeafSemanticAnalysisInput,
   session: () => MarkdownInlineAnalysisSession,
@@ -1219,19 +1191,4 @@ function analysisInputWithInlineSession(
 
 function disposeInlineSession(session: MarkdownInlineAnalysisSession | null) {
   session?.dispose();
-}
-
-function rangesSame(left: DocRange, right: DocRange) {
-  return left.from == right.from && left.to == right.to;
-}
-
-function rangesTouch(left: DocRange, right: DocRange) {
-  if (left.from == left.to && right.from == right.to) return left.from == right.from;
-  if (left.from == left.to) return left.from >= right.from && left.from < right.to;
-  if (right.from == right.to) return left.from <= right.from && left.to >= right.from;
-  return left.from < right.to && right.from < left.to;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
 }

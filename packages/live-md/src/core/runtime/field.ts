@@ -13,7 +13,6 @@ import {
 import {
   mergeDocRanges,
   patchRangeSet,
-  rangesTouch,
   syntaxHighlighters,
   syntaxTree,
   syntaxTreeApplyTrace,
@@ -63,6 +62,16 @@ import {
   type DocRange,
   type LiveMdLeafAnalysisTrace,
 } from "../analysis/types.js";
+import {
+  clampRangeToDoc,
+  countLines,
+  lineRangeFor,
+  mapInclusiveRange,
+  mapRange,
+  rangesEqual,
+  rangesTouchPoint,
+  subtractRanges,
+} from "../analysis/ranges.js";
 import { liveMdMarkdownFeatureFacet } from "../features.js";
 import { liveMdImageSourceResolver } from "../images.js";
 import {
@@ -166,7 +175,7 @@ const liveMdAnalysisField = StateField.define<LiveMdRuntimeState>({
     let activeLinesStable = sameSetItems(activeLines, value.activeLines);
     let selectionProjectionStable =
       value.sourceIslandLeaves.length > 0
-        ? activeSourceRanges != null && sameRanges(activeSourceRanges, value.activeSourceRanges)
+        ? activeSourceRanges != null && rangesEqual(activeSourceRanges, value.activeSourceRanges)
         : activeLinesStable;
     let hasLegacyFeatures = hasLegacyDocumentQueryFeature(transaction.state);
     if (
@@ -360,7 +369,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       if (analysis.semantic) {
         let compileRanges = runtimeChanged
           ? visibleRanges
-          : subtractDocRanges(visibleRanges, this.surfaceState.compiledRanges);
+          : subtractRanges(visibleRanges, this.surfaceState.compiledRanges);
         if (compileRanges.length) {
           let surfaceTrace = emptyLiveMdLeafAnalysisTrace();
           let compiledSurface = compileRuntimeVisibleSurfaceProjection(
@@ -395,7 +404,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       let editSurfaceRanges = pending.editSurface.ranges;
       this.surfaceState = {
         atoms: clearRangeSetRanges(this.surfaceState.atoms.map(update.changes), editSurfaceRanges),
-        compiledRanges: subtractDocRanges(
+        compiledRanges: subtractRanges(
           mapDocRanges(this.surfaceState.compiledRanges, update.changes),
           editSurfaceRanges,
         ),
@@ -425,7 +434,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
         this.surfaceState = {
           ...this.surfaceState,
           atoms: clearRangeSetRanges(this.surfaceState.atoms, revealRanges),
-          compiledRanges: subtractDocRanges(this.surfaceState.compiledRanges, revealRanges),
+          compiledRanges: subtractRanges(this.surfaceState.compiledRanges, revealRanges),
           destructive: clearDecorationRanges(this.surfaceState.destructive, revealRanges),
           interactive: clearDecorationRanges(this.surfaceState.interactive, revealRanges),
         };
@@ -582,37 +591,6 @@ function mapDocRanges(ranges: readonly DocRange[], changes: ChangeDesc): readonl
   return mergeDocRanges(ranges.map((range) => mapRange(range, changes)));
 }
 
-function subtractDocRanges(
-  ranges: readonly DocRange[],
-  removeRanges: readonly DocRange[],
-): readonly DocRange[] {
-  if (!ranges.length || !removeRanges.length) return ranges;
-  let removed = mergeDocRanges(removeRanges);
-  let kept: DocRange[] = [];
-  for (let range of ranges) {
-    let segments: DocRange[] = [range];
-    for (let remove of removed) {
-      let next: DocRange[] = [];
-      for (let segment of segments) {
-        if (!docRangesTouch(segment, remove)) {
-          next.push(segment);
-          continue;
-        }
-        if (segment.from < remove.from) {
-          next.push({ from: segment.from, to: Math.min(segment.to, remove.from) });
-        }
-        if (remove.to < segment.to) {
-          next.push({ from: Math.max(segment.from, remove.to), to: segment.to });
-        }
-      }
-      segments = next;
-      if (!segments.length) break;
-    }
-    kept.push(...segments.filter((segment) => segment.from < segment.to));
-  }
-  return mergeDocRanges(kept);
-}
-
 function liveMdSurfaceVisibleRanges(view: EditorView): readonly DocRange[] {
   let viewport = view.viewport;
   let ranges = view.visibleRanges
@@ -694,7 +672,7 @@ function pendingSourceAnalysis(
   );
   let trace = pendingInputTrace(transaction);
   trace.editSurfaceRanges = editSurface.ranges;
-  trace.editSurfaceLines = countLines(transaction.state, editSurface.ranges);
+  trace.editSurfaceLines = countLines(transaction.state.doc, editSurface.ranges);
   return {
     activeLines,
     activeSourceRanges,
@@ -752,7 +730,7 @@ function pendingSelectionAnalysis(
   let revealRanges = newlyActiveSourceRanges(value.activeSourceRanges, activeSourceRanges);
   if (
     sameSetItems(activeLines, value.activeLines) &&
-    sameRanges(activeSourceRanges, value.activeSourceRanges)
+    rangesEqual(activeSourceRanges, value.activeSourceRanges)
   ) {
     return value;
   }
@@ -789,7 +767,7 @@ function pendingEditSurface(
     previousPending?.editSurface.ranges.map((range) => mapRange(range, transaction.changes)) ?? [];
   let touchedEffectRanges = touchedRecordSafetyRanges(baseAnalysis, state, changes);
   let syntaxLineRanges = syntaxChangedRanges.map((range) =>
-    lineRangeFor(state, range.from, range.to),
+    lineRangeFor(state.doc, range.from, range.to),
   );
   let ranges = mergeDocRanges(
     [
@@ -798,15 +776,15 @@ function pendingEditSurface(
       ...previousRanges,
       ...touchedEffectRanges,
       ...syntaxLineRanges,
-    ].map((range) => clampRangeToDoc(range, state)),
+    ].map((range) => clampRangeToDoc(range, state.doc.length)),
   );
   return {
     changedLineRanges: mergeDocRanges(
-      changedLineRanges.map((range) => clampRangeToDoc(range, state)),
+      changedLineRanges.map((range) => clampRangeToDoc(range, state.doc.length)),
     ),
     ranges,
     syntaxChangedRanges: mergeDocRanges(
-      syntaxLineRanges.map((range) => clampRangeToDoc(range, state)),
+      syntaxLineRanges.map((range) => clampRangeToDoc(range, state.doc.length)),
     ),
     touchedEffectRanges,
   };
@@ -814,7 +792,7 @@ function pendingEditSurface(
 
 function selectionPhysicalLineRanges(state: EditorState): readonly DocRange[] {
   return mergeDocRanges(
-    state.selection.ranges.map((range) => lineRangeFor(state, range.from, range.to)),
+    state.selection.ranges.map((range) => lineRangeFor(state.doc, range.from, range.to)),
   );
 }
 
@@ -838,7 +816,7 @@ function touchedRecordSafetyRanges(
     }
   }
 
-  return mergeDocRanges(ranges.map((range) => clampRangeToDoc(range, state)));
+  return mergeDocRanges(ranges.map((range) => clampRangeToDoc(range, state.doc.length)));
 }
 
 function sourceInteractiveSafetyRanges(
@@ -861,7 +839,7 @@ function sourceInteractiveSafetyRanges(
     }
   }
 
-  return mergeDocRanges(ranges.map((range) => clampRangeToDoc(range, state)));
+  return mergeDocRanges(ranges.map((range) => clampRangeToDoc(range, state.doc.length)));
 }
 
 function isDirtyLinkDescriptor(
@@ -871,7 +849,7 @@ function isDirtyLinkDescriptor(
 ) {
   if (descriptor.kind != "linkMark") return false;
   let sourceRange = offsetDocRange(descriptor.sourceRange, sourceOffset);
-  return oldChangedRanges.some((range) => docRangesTouch(sourceRange, range));
+  return oldChangedRanges.some((range) => rangesTouchPoint(sourceRange, range));
 }
 
 function changedOldRanges(changes: ChangeDesc): DocRange[] {
@@ -885,7 +863,7 @@ function changedOldRanges(changes: ChangeDesc): DocRange[] {
 function changedPhysicalLineRanges(state: EditorState, changes: ChangeDesc): DocRange[] {
   let ranges: DocRange[] = [];
   changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
-    ranges.push(lineRangeFor(state, fromB, toB));
+    ranges.push(lineRangeFor(state.doc, fromB, toB));
   }, true);
   return ranges;
 }
@@ -1185,53 +1163,8 @@ function scheduledYieldCheck(deadline: IdleDeadline | undefined, allowDeadlineYi
   };
 }
 
-function mapRange(range: DocRange, changes: ChangeDesc): DocRange {
-  let from = changes.mapPos(clamp(range.from, 0, changes.length), 1);
-  let to = changes.mapPos(clamp(range.to, 0, changes.length), -1);
-  return from <= to ? { from, to } : { from: to, to: from };
-}
-
 function offsetDocRange(range: DocRange, offset: number): DocRange {
   return { from: range.from + offset, to: range.to + offset };
-}
-
-function docRangesTouch(left: DocRange, right: DocRange) {
-  return rangesTouch(left.from, left.to, right.from, right.to);
-}
-
-function mapInclusiveRange(range: DocRange, changes: ChangeDesc): DocRange {
-  let from = changes.mapPos(clamp(range.from, 0, changes.length), -1);
-  let to = changes.mapPos(clamp(range.to, 0, changes.length), 1);
-  return from <= to ? { from, to } : { from: to, to: from };
-}
-
-function clampRangeToDoc(range: DocRange, state: EditorState): DocRange {
-  return {
-    from: clamp(range.from, 0, state.doc.length),
-    to: clamp(range.to, 0, state.doc.length),
-  };
-}
-
-function lineRangeFor(state: EditorState, from: number, to: number): DocRange {
-  let rangeFrom = clamp(from, 0, state.doc.length);
-  let rangeTo = clamp(to, 0, state.doc.length);
-  let firstLine = state.doc.lineAt(rangeFrom);
-  let lastLine = state.doc.lineAt(Math.max(rangeFrom, rangeTo - 1));
-  return { from: firstLine.from, to: rangeTo >= state.doc.length ? rangeTo : lastLine.to };
-}
-
-function countLines(state: EditorState, ranges: readonly DocRange[]) {
-  let lineCount = 0;
-  for (let range of ranges) {
-    let from = clamp(range.from, 0, state.doc.length);
-    let to = clamp(range.to, from, state.doc.length);
-    lineCount += state.doc.lineAt(to).number - state.doc.lineAt(from).number + 1;
-  }
-  return lineCount;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }
 
 function buildLiveMdAnalysis(
@@ -1518,7 +1451,7 @@ function activeDirectProjectionPatch(input: {
   let previousActiveRanges = input.changes
     ? input.previous.activeSourceRanges.map((range) => mapRange(range, input.changes!))
     : input.previous.activeSourceRanges;
-  if (sameRanges(previousActiveRanges, input.currentActiveSourceRanges)) {
+  if (rangesEqual(previousActiveRanges, input.currentActiveSourceRanges)) {
     return { ranges: [], records: [], removeRecordIds: [] };
   }
 
@@ -2190,16 +2123,6 @@ function processMatches(
     }
   }
   applyLiveMdMarkdownFeatures(build, inlineTrees);
-}
-
-function sameRanges(left: readonly DocRange[], right: readonly DocRange[]) {
-  if (left.length != right.length) return false;
-  for (let index = 0; index < left.length; index++) {
-    let leftRange = left[index]!;
-    let rightRange = right[index]!;
-    if (leftRange.from != rightRange.from || leftRange.to != rightRange.to) return false;
-  }
-  return true;
 }
 
 function sameArrayItems<T>(left: readonly T[], right: readonly T[]) {

@@ -6,6 +6,7 @@ import {
   type LiveMdMermaidRenderHandle,
   type LiveMdMermaidRenderResult,
 } from "./runtime/render-cache.js";
+import { hashString } from "./analysis/ranges.js";
 import { isAsciiDigit } from "./util.js";
 
 export type MarkdownTable = {
@@ -538,12 +539,4 @@ function applyTableAlignment(
   alignment: "center" | "default" | "left" | "right" = "default",
 ) {
   if (alignment != "default") element.style.textAlign = alignment;
-}
-
-function hashString(value: string) {
-  let hash = 5381;
-  for (let index = 0; index < value.length; index++) {
-    hash = ((hash << 5) + hash + value.charCodeAt(index)) | 0;
-  }
-  return (hash >>> 0).toString(36);
 }
