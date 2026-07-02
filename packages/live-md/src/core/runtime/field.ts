@@ -693,6 +693,8 @@ function pendingSourceAnalysis(
     editSurface.ranges,
   );
   let trace = pendingInputTrace(transaction);
+  trace.editSurfaceRanges = editSurface.ranges;
+  trace.editSurfaceLines = countLines(transaction.state, editSurface.ranges);
   return {
     activeLines,
     activeSourceRanges,
@@ -1216,6 +1218,16 @@ function lineRangeFor(state: EditorState, from: number, to: number): DocRange {
   let firstLine = state.doc.lineAt(rangeFrom);
   let lastLine = state.doc.lineAt(Math.max(rangeFrom, rangeTo - 1));
   return { from: firstLine.from, to: rangeTo >= state.doc.length ? rangeTo : lastLine.to };
+}
+
+function countLines(state: EditorState, ranges: readonly DocRange[]) {
+  let lineCount = 0;
+  for (let range of ranges) {
+    let from = clamp(range.from, 0, state.doc.length);
+    let to = clamp(range.to, from, state.doc.length);
+    lineCount += state.doc.lineAt(to).number - state.doc.lineAt(from).number + 1;
+  }
+  return lineCount;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -1959,6 +1971,7 @@ const liveMdTraceNumericKeyMap = {
   leavesCollected: true,
   legacyFeatureFullQueryCount: true,
   directProjectionRecords: true,
+  editSurfaceLines: true,
   projectionRecords: true,
   recordsAnalyzed: true,
   cacheFullMaterializations: true,
@@ -1993,6 +2006,10 @@ function mergeLiveMdLeafAnalysisTraces(
     directProjectionWindows: mergeDocRanges([
       ...primary.directProjectionWindows,
       ...secondary.directProjectionWindows,
+    ]),
+    editSurfaceRanges: mergeDocRanges([
+      ...primary.editSurfaceRanges,
+      ...secondary.editSurfaceRanges,
     ]),
     surfaceCompileRanges: mergeDocRanges([
       ...primary.surfaceCompileRanges,

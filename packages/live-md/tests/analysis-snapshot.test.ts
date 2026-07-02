@@ -735,6 +735,63 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   }, 60_000);
 
+  describe("pending reveal locality", () => {
+    it("keeps a middle paragraph edit's reveal within its own block", async () => {
+      let doc = numberedPlainParagraphDoc(20);
+      let target = doc.indexOf("paragraph 10") + "paragraph 10".length;
+      let view = await markdownAnalysisView(doc, "paragraph 10");
+
+      try {
+        expect(ensureSyntaxTree(view.state, view.state.doc.length, 5_000)).toBeTruthy();
+        let { pending } = await dispatchScheduledLocalEdit(
+          view,
+          {
+            changes: { from: target, insert: "!" },
+            selection: { anchor: target + 1 },
+          },
+          "pending paragraph reveal locality",
+          { oracle: "semantic" },
+        );
+        let targetLine = view.state.doc.lineAt(target);
+        let paragraphLines = 1;
+
+        expect(pending.trace.editSurfaceRanges).toEqual(pending.pending?.editSurface.ranges);
+        expect(pending.trace.editSurfaceRanges).toHaveLength(1);
+        expect(
+          pending.trace.editSurfaceRanges.some((range) =>
+            rangeCoversLineOrPoint(range, targetLine, target),
+          ),
+        ).toBe(true);
+        expect(pending.trace.editSurfaceLines).toBeLessThanOrEqual(paragraphLines + 2);
+      } finally {
+        view.destroy();
+      }
+    }, 60_000);
+
+    it.fails("documents nested list pending reveal inflation", async () => {
+      let doc = nestedListItemDoc(50);
+      let target = doc.indexOf("nested item line 25") + "nested item line 25".length;
+      let view = await markdownAnalysisView(doc, "nested item line 25");
+
+      try {
+        expect(ensureSyntaxTree(view.state, view.state.doc.length, 5_000)).toBeTruthy();
+        let { pending } = await dispatchScheduledLocalEdit(
+          view,
+          {
+            changes: { from: target, insert: "!" },
+            selection: { anchor: target + 1 },
+          },
+          "pending nested list reveal locality",
+          { oracle: "semantic" },
+        );
+
+        expect(pending.trace.editSurfaceLines).toBeLessThanOrEqual(3);
+      } finally {
+        view.destroy();
+      }
+    }, 60_000);
+  });
+
   it("keeps local, full-walk, and fresh semantic transitions equivalent across block boundaries", async () => {
     let cases: Array<{
       changes: (doc: string) => TransactionSpec["changes"];
@@ -4203,6 +4260,19 @@ function numberedListDoc(count: number) {
   return Array.from({ length: count }, (_value, index) => `- item ${index} body **bold**`).join(
     "\n",
   );
+}
+
+function nestedListItemDoc(count: number) {
+  return [
+    "- parent",
+    "  - nested item line 0 **bold**",
+    ...Array.from(
+      { length: count - 1 },
+      (_value, index) => `    nested item line ${index + 1} **bold**`,
+    ),
+    "",
+    "tail",
+  ].join("\n");
 }
 
 function numberedQuoteParagraphDoc(count: number) {
