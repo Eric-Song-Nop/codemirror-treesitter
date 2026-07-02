@@ -788,7 +788,7 @@ function pendingEditSurface(
     syntaxChangedRanges: mergeDocRanges(
       syntaxLineRanges.map((range) => clampRangeToDoc(range, state.doc.length)),
     ),
-    touchedEffectRanges: touchedRevealRanges,
+    touchedRevealRanges,
   };
 }
 
@@ -813,6 +813,7 @@ function touchedRecordRevealRanges(
     )) {
       if (!recordSourceTouchedByRanges(record, oldChangedRanges)) continue;
       if (!recordNeedsWholeRevealRange(record)) continue;
+      if (!recordRevealRangeTouchedByRanges(record, oldChangedRanges)) continue;
       ranges.push(mapRange(record.revealRange, changes));
     }
   }
@@ -849,6 +850,10 @@ function recordSourceTouchedByRanges(record: LeafAnalysisRecord, ranges: readonl
     (range) =>
       rangesTouchPoint(record.sourceRange, range) || rangesTouchPoint(cacheSourceRange, range),
   );
+}
+
+function recordRevealRangeTouchedByRanges(record: LeafAnalysisRecord, ranges: readonly DocRange[]) {
+  return ranges.some((range) => rangesTouchPoint(record.revealRange, range));
 }
 
 function sourceInteractiveSafetyRanges(
