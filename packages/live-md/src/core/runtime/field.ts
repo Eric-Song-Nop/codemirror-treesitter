@@ -771,7 +771,7 @@ function pendingSelectionAnalysis(
       directSourceSafeDecorations: value.directSourceSafeDecorations,
     }),
     directDestructiveDecorations,
-    trace: emptyLiveMdLeafAnalysisTrace(),
+    trace: pending ? value.trace : emptyLiveMdLeafAnalysisTrace(),
   };
 }
 

@@ -768,7 +768,39 @@ describe("LiveMD analysis snapshot", () => {
       }
     }, 60_000);
 
-    it.fails("documents nested list pending reveal inflation", async () => {
+    it("preserves edit-surface trace across pending selection-only updates", async () => {
+      let doc = numberedPlainParagraphDoc(20);
+      let target = doc.indexOf("paragraph 10") + "paragraph 10".length;
+      let nextSelection = doc.indexOf("paragraph 11");
+      let view = await markdownAnalysisView(doc, "paragraph 10");
+
+      try {
+        let transaction = view.state.update({
+          changes: { from: target, insert: "!" },
+          selection: { anchor: target + 1 },
+        });
+        view.dispatch(transaction);
+        let pending = __testLiveMdAnalysis(view);
+        expect(pending.pending, "pending source edit").toBeTruthy();
+        expect(pending.trace.editSurfaceRanges).toEqual(pending.pending?.editSurface.ranges);
+        expect(pending.trace.editSurfaceLines).toBeGreaterThan(0);
+
+        view.dispatch({ selection: { anchor: nextSelection } });
+        let afterSelection = __testLiveMdAnalysis(view);
+        expect(afterSelection.pending, "selection update keeps pending source edit").toBeTruthy();
+        expect(afterSelection.pending?.editSurface.ranges).toEqual(
+          pending.pending?.editSurface.ranges,
+        );
+        expect(afterSelection.trace.editSurfaceRanges).toEqual(pending.trace.editSurfaceRanges);
+        expect(afterSelection.trace.editSurfaceLines).toBe(pending.trace.editSurfaceLines);
+
+        await __testFlushLiveMdAnalysis(view);
+      } finally {
+        view.destroy();
+      }
+    });
+
+    it("documents nested list pending reveal inflation", async () => {
       let doc = nestedListItemDoc(50);
       let target = doc.indexOf("nested item line 25") + "nested item line 25".length;
       let view = await markdownAnalysisView(doc, "nested item line 25");
@@ -785,7 +817,7 @@ describe("LiveMD analysis snapshot", () => {
           { oracle: "semantic" },
         );
 
-        expect(pending.trace.editSurfaceLines).toBeLessThanOrEqual(3);
+        expect(pending.trace.editSurfaceLines).toBeGreaterThan(3);
       } finally {
         view.destroy();
       }
