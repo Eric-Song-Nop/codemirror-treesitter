@@ -4,5 +4,6 @@ export {
   __testLiveMdAnalysis,
   __testFlushLiveMdAnalysis,
   __testRefreshLiveMdSurface,
+  __testRefreshLiveMdSurfacePreservingState,
   liveMdAnalysis,
 } from "./runtime/field.js";

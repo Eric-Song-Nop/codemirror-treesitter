@@ -578,6 +578,11 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       this.refresh();
     }
 
+    refreshPreservingStateForTest() {
+      this.surfaceTrace = emptyLiveMdLeafAnalysisTrace();
+      this.refresh();
+    }
+
     private publishSurface() {
       let surface = surfaceProjectionFromState(this.surfaceState);
       this.surface = surface;
@@ -2016,6 +2021,10 @@ export function __testLiveMdAnalysis(view: EditorView | { state: EditorState }):
 
 export function __testRefreshLiveMdSurface(view: EditorView) {
   view.plugin(liveMdSurfacePlugin)?.refreshForTest();
+}
+
+export function __testRefreshLiveMdSurfacePreservingState(view: EditorView) {
+  view.plugin(liveMdSurfacePlugin)?.refreshPreservingStateForTest();
 }
 
 export async function __testFlushLiveMdAnalysis(view: EditorView) {

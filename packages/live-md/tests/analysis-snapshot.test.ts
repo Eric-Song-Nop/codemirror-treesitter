@@ -30,6 +30,7 @@ import {
   __testFlushLiveMdAnalysis,
   __testLiveMdAnalysis,
   __testRefreshLiveMdSurface,
+  __testRefreshLiveMdSurfacePreservingState,
   liveMdAnalysis,
 } from "../src/core/decorations.js";
 import { emptyLiveMdLeafAnalysisTrace } from "../src/core/analysis/types.js";
@@ -3358,7 +3359,7 @@ describe("LiveMD analysis snapshot", () => {
       ).toContain(firstUrl);
 
       viewport = { from: secondLine.from, to: secondLine.to };
-      __testRefreshLiveMdSurface(view);
+      __testRefreshLiveMdSurfacePreservingState(view);
 
       let refreshed = __testLiveMdAnalysis(view);
       let hrefs = linkHrefsFromSet(view.state, refreshed.surfaceInteractiveDecorations);
