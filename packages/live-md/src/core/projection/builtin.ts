@@ -1,24 +1,16 @@
 import { type EditorState } from "@codemirror/state";
-import {
-  syntaxTree,
-  type SyntaxNode,
-  type Tree,
-  type TreeSitterQueryMatch,
-} from "@codemirror-treesitter/language";
+import { type SyntaxNode, type TreeSitterQueryMatch } from "@codemirror-treesitter/language";
 import { Decoration } from "@codemirror/view";
 import {
   capture,
-  captures,
   captureKey,
   isInsideSkippedRange,
   matchKind,
   nodeKey,
-  queryLiveMdMatchesFromSource,
   sortedNodes,
 } from "../analysis/query.js";
 import { readTableFromCaptures } from "../analysis/tables.js";
 import { type CapturedTable, type DocRange } from "../analysis/types.js";
-import { type LiveMdFeatureDecoration, type LiveMdFeatureDecorateContext } from "../features.js";
 import { liveMdLinkMark } from "../links.js";
 import {
   cachedLiveMdImageSource,
@@ -37,7 +29,6 @@ import {
 } from "../widgets.js";
 import { applyCodeFence } from "./code-fence.js";
 import {
-  addAtom,
   addLineClass,
   addLineRangeClass,
   addMark,
@@ -108,60 +99,6 @@ export function processLiveMdMatch(
     processed.add(key);
     handler(build, item.node);
   }
-}
-
-export function applyLiveMdMarkdownFeatures(build: LiveMdBuild, inlineTrees: readonly Tree[]) {
-  if (!build.markdownFeatures.length) return;
-
-  let tree = syntaxTree(build.state);
-  for (let feature of build.markdownFeatures) {
-    if (!feature.query || !feature.decorate) continue;
-    let matches = queryLiveMdMatchesFromSource(
-      tree,
-      feature.query,
-      feature.includeNested ?? false,
-      inlineTrees,
-    );
-    for (let match of matches) {
-      feature.decorate(createLiveMdFeatureDecorateContext(build, match));
-    }
-  }
-}
-
-function createLiveMdFeatureDecorateContext(
-  build: LiveMdBuild,
-  match: TreeSitterQueryMatch,
-): LiveMdFeatureDecorateContext {
-  return {
-    activeLines: build.activeLines,
-    addAtomicRange(from, to) {
-      addAtom(build, from, to);
-    },
-    addLineClass(from, to, className) {
-      addLineRangeClass(build, from, to, className);
-    },
-    addMark(from, to, decoration) {
-      addMark(build, from, to, liveMdFeatureDecoration(decoration));
-    },
-    addReplace(from, to, widget, options) {
-      addReplace(build, from, to, widget, options?.block ?? false, options?.atomic ?? false);
-    },
-    addSyntax(from, to, decoration) {
-      addSyntax(build, from, to, decoration ? liveMdFeatureDecoration(decoration) : undefined);
-    },
-    capture: (name) => capture(match, name),
-    captures: (name) => captures(match, name),
-    match,
-    node: (name) => capture(match, name)?.node ?? null,
-    nodes: (name) => captures(match, name).map((item) => item.node),
-    rangeTouchesActiveLine: (from, to) => rangeTouchesActiveLine(build, from, to),
-    slice: (node) => build.state.sliceDoc(node.from, node.to),
-    state: build.state,
-  };
-}
-
-function liveMdFeatureDecoration(decoration: LiveMdFeatureDecoration) {
-  return typeof decoration == "string" ? Decoration.mark({ class: decoration }) : decoration;
 }
 
 function applyHeadingMatch(build: LiveMdBuild, match: TreeSitterQueryMatch) {

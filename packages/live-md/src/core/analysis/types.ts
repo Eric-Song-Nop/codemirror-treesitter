@@ -25,7 +25,6 @@ export type LiveMdLeafAnalysisTrace = {
   languageApplyMs: number;
   languageWorkIterations: number;
   leavesCollected: number;
-  legacyFeatureFullQueryCount: number;
   directProjectionRecords: number;
   directProjectionWindows: readonly DocRange[];
   editSurfaceRanges: readonly DocRange[];
@@ -74,7 +73,6 @@ export function emptyLiveMdLeafAnalysisTrace(): LiveMdLeafAnalysisTrace {
     languageApplyMs: 0,
     languageWorkIterations: 0,
     leavesCollected: 0,
-    legacyFeatureFullQueryCount: 0,
     directProjectionRecords: 0,
     directProjectionWindows: [],
     editSurfaceRanges: [],

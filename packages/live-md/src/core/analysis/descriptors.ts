@@ -1,6 +1,7 @@
 import { type RangeSet, type RangeValue } from "@codemirror/state";
 import { type MarkdownBlockContext, type MarkdownLeafKind } from "./markdown-block-types.js";
 import { type DocRange } from "./types.js";
+import { type LiveMdFeatureDescriptor } from "../features.js";
 
 export type LiveMdTextMarkKind = "emphasis" | "inlineCode" | "strike" | "strong" | "tablePipe";
 
@@ -80,6 +81,11 @@ export type LiveMdDescriptor =
       mermaidSource: string | null;
       openingDelimiterRange: DocRange;
       range: DocRange;
+    }
+  | {
+      effect: LiveMdFeatureDescriptor;
+      feature: string;
+      kind: "feature";
     };
 
 export type LeafAnalysis = {
@@ -190,6 +196,11 @@ export function offsetLiveMdDescriptor(
         openingDelimiterRange: offsetRange(descriptor.openingDelimiterRange, offset),
         range: offsetRange(descriptor.range, offset),
       };
+    case "feature":
+      return {
+        ...descriptor,
+        effect: offsetLiveMdFeatureDescriptor(descriptor.effect, offset),
+      };
   }
 }
 
@@ -232,7 +243,59 @@ export function liveMdDescriptorRanges(descriptor: LiveMdDescriptor): DocRange[]
         ...(descriptor.closingDelimiterRange ? [descriptor.closingDelimiterRange] : []),
         ...(descriptor.contentRange ? [descriptor.contentRange] : []),
       ];
+    case "feature":
+      return liveMdFeatureDescriptorRanges(descriptor.effect);
   }
+}
+
+export function liveMdDescriptorKey(descriptor: LiveMdDescriptor) {
+  if (descriptor.kind != "feature") return JSON.stringify(descriptor);
+  return JSON.stringify([
+    "feature",
+    descriptor.feature,
+    liveMdFeatureDescriptorKey(descriptor.effect),
+  ]);
+}
+
+export function liveMdDescriptorsKey(descriptors: readonly LiveMdDescriptor[]) {
+  return JSON.stringify(descriptors.map(liveMdDescriptorKey));
+}
+
+export function liveMdFeatureDescriptorKey(descriptor: LiveMdFeatureDescriptor) {
+  switch (descriptor.kind) {
+    case "lineClass":
+      return JSON.stringify(["lineClass", descriptor.range, descriptor.className]);
+    case "mark":
+      return JSON.stringify(["mark", descriptor.range, descriptor.className]);
+    case "syntax":
+      return JSON.stringify(["syntax", descriptor.range, descriptor.className ?? null]);
+    case "replace":
+      return JSON.stringify([
+        "replace",
+        descriptor.range,
+        descriptor.block ?? false,
+        descriptor.atomic ?? false,
+        descriptor.widget.key,
+      ]);
+  }
+}
+
+function offsetLiveMdFeatureDescriptor(
+  descriptor: LiveMdFeatureDescriptor,
+  offset: number,
+): LiveMdFeatureDescriptor {
+  switch (descriptor.kind) {
+    case "lineClass":
+    case "mark":
+    case "syntax":
+      return { ...descriptor, range: offsetRange(descriptor.range, offset) };
+    case "replace":
+      return { ...descriptor, range: offsetRange(descriptor.range, offset) };
+  }
+}
+
+function liveMdFeatureDescriptorRanges(descriptor: LiveMdFeatureDescriptor): DocRange[] {
+  return [descriptor.range];
 }
 
 function offsetRange(range: DocRange, offset: number): DocRange {

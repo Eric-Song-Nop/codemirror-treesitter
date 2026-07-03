@@ -6,7 +6,7 @@ import {
   type TreeSitterQueryMatch,
 } from "@codemirror-treesitter/language";
 import { deleteLiveMdTree, type LiveMdMarkdownParserService } from "../languages.js";
-import { type LiveMdDescriptor } from "./descriptors.js";
+import { type LiveMdDescriptor, liveMdDescriptorRanges } from "./descriptors.js";
 import {
   capture,
   captureKey,
@@ -186,7 +186,9 @@ function filterDescriptorsToRange(
   descriptors: readonly LiveMdDescriptor[],
   within: DocRange,
 ): LiveMdDescriptor[] {
-  return descriptors.filter((descriptor) => rangeInside(descriptor.range, within));
+  return descriptors.filter((descriptor) =>
+    liveMdDescriptorRanges(descriptor).every((range) => rangeInside(range, within)),
+  );
 }
 
 function rangeInside(range: DocRange, within: DocRange) {

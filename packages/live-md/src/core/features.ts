@@ -6,6 +6,8 @@ import type {
   TreeSitterQueryMatch,
   TreeSitterQuerySource,
 } from "@codemirror-treesitter/language";
+import { type MarkdownLeafKind } from "./analysis/markdown-block-types.js";
+import { type DocRange } from "./analysis/types.js";
 
 export type LiveMdMarkdownConfig = {
   features?: readonly LiveMdMarkdownFeature[];
@@ -16,6 +18,50 @@ export type LiveMdFeatureDecoration = Decoration | string;
 export type LiveMdFeatureReplaceOptions = {
   atomic?: boolean;
   block?: boolean;
+};
+
+export type LiveMdFeatureWidgetSpec = {
+  key: string;
+  widget: WidgetType;
+};
+
+export type LiveMdFeatureDescriptor =
+  | {
+      className: string;
+      kind: "lineClass";
+      range: DocRange;
+    }
+  | {
+      className: string;
+      kind: "mark";
+      range: DocRange;
+    }
+  | {
+      className?: string;
+      kind: "syntax";
+      range: DocRange;
+    }
+  | {
+      atomic?: boolean;
+      block?: boolean;
+      kind: "replace";
+      range: DocRange;
+      widget: LiveMdFeatureWidgetSpec;
+    };
+
+export type LiveMdFeatureAnalyzeContext = {
+  capture: (name: string) => TreeSitterQueryCapture | null;
+  captures: (name: string) => readonly TreeSitterQueryCapture[];
+  leaf: {
+    contextKey: string;
+    kind: MarkdownLeafKind;
+    range: DocRange;
+    sourceRange: DocRange;
+  };
+  match: TreeSitterQueryMatch;
+  node: (name: string) => SyntaxNode | null;
+  nodes: (name: string) => readonly SyntaxNode[];
+  slice: (source: DocRange | SyntaxNode) => string;
 };
 
 export type LiveMdFeatureDecorateContext = {
@@ -61,6 +107,8 @@ export type LiveMdFeatureHtmlRenderContext = {
 };
 
 export type LiveMdMarkdownFeature = {
+  analyze?: (context: LiveMdFeatureAnalyzeContext) => readonly LiveMdFeatureDescriptor[];
+  /** @deprecated Use analyze(...) for editor projection. */
   decorate?: (context: LiveMdFeatureDecorateContext) => void;
   includeNested?: boolean;
   name: string;

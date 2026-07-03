@@ -44,7 +44,6 @@ export type LiveMdRuntimeState = {
   activeLines: ReadonlySet<number>;
   activeSourceRanges: readonly DocRange[];
   direct: ProjectionSets;
-  legacySurface: LiveMdSurfaceProjection | null;
   pending: LiveMdPendingAnalysis | null;
   renderCache: LiveMdRenderCache;
   renderKeyContext: LiveMdRenderKeyContext;

@@ -287,7 +287,11 @@ export function buildFreshLeafAnalysisCache(input: {
 }): LeafAnalysisCacheTransition {
   let nextCacheId = input.startCacheId ?? 1;
   let trace = emptyLeafAnalysisCacheTrace();
-  let units = markdownLeafAnalysisUnits(input.analysisInput.state.doc, input.snapshot);
+  let units = markdownLeafAnalysisUnits(
+    input.analysisInput.state.doc,
+    input.snapshot,
+    input.analysisInput.renderKeyContext?.featuresEpoch,
+  );
   trace.recordsVisited = units.length;
   trace.leavesCollected = units.length;
   let records: LeafAnalysisRecord[] = [];
@@ -332,7 +336,11 @@ export function transitionLeafAnalysisCache(input: {
   snapshot: MarkdownBlockSnapshot;
   yieldCheck?: () => void;
 }): LeafAnalysisCacheTransition {
-  let units = markdownLeafAnalysisUnits(input.analysisInput.state.doc, input.snapshot);
+  let units = markdownLeafAnalysisUnits(
+    input.analysisInput.state.doc,
+    input.snapshot,
+    input.analysisInput.renderKeyContext?.featuresEpoch,
+  );
   let trace = emptyLeafAnalysisCacheTrace();
   let oldCandidates = mappedOldRecordCandidates(
     materializeLeafAnalysisCacheRecords(input.oldCache, trace),
@@ -425,7 +433,11 @@ export function transitionLeafAnalysisCacheLocal(
     };
   }
 
-  let units = markdownLeafAnalysisUnits(input.analysisInput.state.doc, local.snapshot);
+  let units = markdownLeafAnalysisUnits(
+    input.analysisInput.state.doc,
+    local.snapshot,
+    input.analysisInput.renderKeyContext?.featuresEpoch,
+  );
   let oldChangedRanges = changedOldRanges(input.changes);
   let localWindows = localReplacementRanges(input.analysisInput.state.doc.length, local.snapshot);
   let trace = local.trace;
@@ -1099,7 +1111,6 @@ function recordCacheSourceHash(record: LeafAnalysisRecord) {
 }
 
 function recordCacheStructuralKey(record: LeafAnalysisRecord) {
-  if (record.kind != "marker") return record.structuralKey;
   return record.cacheStructuralKey ?? record.structuralKey;
 }
 

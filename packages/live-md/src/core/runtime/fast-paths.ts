@@ -29,7 +29,7 @@ export function taskToggleFastPath(input: {
   tree: Tree;
   value: LiveMdRuntimeState;
 }): LiveMdRuntimeState | null {
-  if (!input.value.semantic || input.value.pending || input.value.legacySurface) return null;
+  if (!input.value.semantic || input.value.pending) return null;
   let toggle = taskToggleChange(input.transaction);
   if (!toggle) return null;
 
@@ -111,7 +111,6 @@ export function taskToggleFastPath(input: {
     activeLines: input.activeLines,
     activeSourceRanges: input.activeSourceRanges,
     direct: projectionSetsFromLayer(direct),
-    legacySurface: null,
     pending: null,
     renderCache: input.value.renderCache,
     renderKeyContext: input.value.renderKeyContext,

@@ -98,15 +98,23 @@ await prepareLiveMd();
 const imageAssetUrlMap = new Map<string, string>();
 const callouts = liveMdMarkdownFeature({
   name: "callouts",
-  query: "(block_quote) @callout @html",
-  decorate({ addLineClass, node, slice }) {
+  query: `
+    (block_quote) @html
+    (paragraph) @callout
+  `,
+  analyze({ leaf, node, slice }) {
     let callout = node("callout");
-    if (!callout || !slice(callout).startsWith("> [!")) return;
-    addLineClass(callout.from, callout.to, "cm-md-callout");
+    if (!callout || !slice(leaf.sourceRange).startsWith("> [!")) return [];
+    return [
+      {
+        className: "cm-md-callout",
+        kind: "lineClass",
+        range: leaf.sourceRange,
+      },
+    ];
   },
-  async renderHtml({ renderDefault, node, slice }) {
-    let callout = node("callout");
-    if (!callout || !slice(callout).startsWith("> [!")) return null;
+  async renderHtml({ renderDefault, slice, target }) {
+    if (target.name != "block_quote" || !slice(target).startsWith("> [!")) return null;
     return (await renderDefault())
       .replace("<blockquote>", '<aside class="live-md-callout">')
       .replace("</blockquote>", "</aside>");
@@ -152,20 +160,20 @@ editor.destroy();
 `placeholder`, `readOnly`, `autofocus`, `focus`, `root`, `config`,
 `extensions`, `imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`.
 `config.markdown.features` is the query-driven Markdown syntax layer. A
-`LiveMdMarkdownFeature` can contribute a Tree-sitter query and a constrained
-decoration callback for marks, line classes, syntax visibility, replacement
-widgets, and atomic ranges. It can also provide a separate `renderHtml(...)`
-hook for `renderMarkdownToHtml(...)`; the hook receives the matched target
-node, capture helpers, `slice(...)`, `renderDefault()`, `renderChildren(...)`,
-and `renderInline(...)` so export logic does not depend on editor-only
-decoration semantics. Editor `decorate(...)` hooks continue to run inside an
-active source island; built-in destructive replacements are suppressed by the
-active source range, while custom features use `activeLines` and
-`rangeTouchesActiveLine(...)` when they need active-source-specific behavior.
-Features run after the standard LiveMD Markdown decorations and are
-reconfigured by `setConfig(...)`. Markdown syntax
-extensions are called features, not plugins; plugins are reserved for host
-behavior.
+`LiveMdMarkdownFeature` can contribute a Tree-sitter query and a leaf-scoped
+`analyze(...)` hook that returns DOM-free descriptors for marks, line classes,
+syntax visibility, and keyed replacement widgets. The editor runs feature
+queries per Markdown leaf during semantic analysis, so feature output uses the
+same cache, pending-edit behavior, and projection layers as built-in LiveMD
+syntax. Features can also provide a separate `renderHtml(...)` hook for
+`renderMarkdownToHtml(...)`; the hook receives the matched target node, capture
+helpers, `slice(...)`, `renderDefault()`, `renderChildren(...)`, and
+`renderInline(...)` so export logic does not depend on editor projection
+semantics. Deprecated `decorate(...)` callbacks remain typed for source
+compatibility but are no longer invoked by the editor runtime. Features run
+after the standard LiveMD Markdown descriptors and are reconfigured by
+`setConfig(...)`. Markdown syntax extensions are called features, not plugins;
+plugins are reserved for host behavior.
 `config.plugins` is the host-behavior layer: each `LiveMdPlugin` can provide a
 CodeMirror `extension` and an optional `mount` hook that may return cleanup for
 plugin changes through `setConfig(...)` and for `destroy()`.
@@ -191,13 +199,13 @@ need to override fenced-code highlighting explicitly. The controller exposes `vi
 `ready`, `setValue()`, `setConfig()`, `setExtensions()`, `setPersistKey()`,
 `setPlaceholder()`, `setReadOnly()`, and `destroy()`.
 
-This v3 migration baseline intentionally uses full-document LiveMD decoration
-analysis. It is a correctness reset, not a performance improvement. The old
-viewport/dirty-range feature API was removed with that reset:
-`LiveMdFeatureDecorateContext` no longer exposes `ranges`, and the
-`LiveMdFeatureDocRange` type is no longer exported. Query-driven features should
-emit decorations for their matched syntax and use `activeLines` plus
-`rangeTouchesActiveLine(...)` when they need active-line-specific behavior.
+Query-driven editor features should use `analyze(...)` and return descriptor
+ranges in document coordinates. The hook receives capture helpers, `slice(...)`,
+and leaf metadata (`kind`, `range`, `sourceRange`, and `contextKey`) but no
+editor state or selection data; analysis is intentionally selection-independent.
+Feature identity and `analyze(...)` configuration participate in semantic cache
+keys, so `setConfig(...)` invalidates stale feature records through the normal
+analysis path.
 Blank lines are ordinary editable document text. In a normal paragraph,
 `Enter` and `Shift+Enter` both insert one newline. Their behavior differs only
 inside structural Markdown contexts: `Enter` keeps list, task-list, and
@@ -217,9 +225,8 @@ HTML with the package Tree-sitter Markdown parser. Hosts can pass the same
 customize block-level export output with `renderHtml(...)`. Inline query
 replacement during export is intentionally not part of this hook yet; use
 `renderInline(...)` from a block-level feature when custom output needs nested
-inline Markdown. `renderHtml(...)` always queries the block tree; a feature's
-`includeNested` setting only affects editor `decorate(...)` queries. The export
-hook is separate from editor-only `decorate(...)` callbacks:
+inline Markdown. `renderHtml(...)` always queries the block tree. The export
+hook is separate from editor-only `analyze(...)` descriptors:
 
 ```ts
 const callouts = liveMdMarkdownFeature({
@@ -348,12 +355,12 @@ Cloudflare-specific code, and concrete theme packages.
   `createInitialMarkdown(...)`.
 - The custom element installs package CSS into Shadow DOM; hosts can also import
   `./style.css` for bundler-visible styling.
-- The PR73 runtime still performs a full block walk, but built-in Markdown
-  behavior flows through an immutable leaf semantic cache before projection.
+- The runtime performs a full block walk when needed, but Markdown behavior
+  flows through an immutable leaf semantic cache before projection.
   Unchanged leaf records can retain `cacheId` and analysis object identity after
-  ordinary edits. Custom query-driven Markdown features remain on the
-  compatibility full-query path and are conservatively recomputed for
-  correctness when present.
+  ordinary edits. Custom query-driven Markdown features run during per-leaf
+  semantic analysis and project through the same direct and surface layers as
+  built-in descriptors.
 - The changed-leaf harness remains a range-local oracle check on top of the
   production block cursor. Its result is `Gate B: PASS` for range-local
   changed-leaf discovery: local changed leaves match the full-walk oracle, and
@@ -378,6 +385,6 @@ vp run @codemirror-treesitter/live-md#build
 ```
 
 The LiveMD test suite covers web component behavior, readonly commands,
-leaf-local analysis equivalence against the canonical full-query oracle,
+leaf-local analysis equivalence against the canonical semantic oracle,
 feature registration, code fences, LaTeX, Mermaid, newline editing, Markdown
 HTML rendering, and style installation.

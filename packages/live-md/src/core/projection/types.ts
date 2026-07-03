@@ -4,7 +4,7 @@ import { type Decoration, type WidgetType } from "@codemirror/view";
 import { type LiveMdTableModel, type LiveMdTextMarkKind } from "../analysis/descriptors.js";
 import { type LiveMdRenderKeyContext } from "../analysis/markdown-leaf-analysis.js";
 import { type LiveMdLeafAnalysisTrace } from "../analysis/types.js";
-import { type LiveMdMarkdownFeature } from "../features.js";
+import { type LiveMdFeatureWidgetSpec, type LiveMdMarkdownFeature } from "../features.js";
 import { type LiveMdImageSourceResolver } from "../images.js";
 import { type CodeFenceLanguageMap } from "../languages.js";
 import { type DocRange } from "../analysis/types.js";
@@ -135,6 +135,10 @@ export type LiveMdWidgetSpec =
   | {
       checked: boolean;
       kind: "taskMarker";
+    }
+  | {
+      kind: "feature";
+      spec: LiveMdFeatureWidgetSpec;
     };
 
 export type LiveMdEffectSpec =

@@ -1,5 +1,11 @@
 import { type EditorState, type Text } from "@codemirror/state";
-import { type SyntaxNode, type Tree } from "@codemirror-treesitter/language";
+import {
+  queryNodeMatches,
+  queryTreeMatches,
+  type SyntaxNode,
+  type Tree,
+  type TreeSitterQueryMatch,
+} from "@codemirror-treesitter/language";
 import { markdownBlockContextKey, walkMarkdownBlocks } from "./markdown-block-cursor.js";
 import {
   type MarkdownBlockContext,
@@ -16,7 +22,9 @@ import {
   type LeafAnalysis,
   type LeafAnalysisRecord,
   type LiveMdDescriptor,
+  liveMdDescriptorKey,
   liveMdDescriptorRanges,
+  liveMdDescriptorsKey,
   offsetLiveMdDescriptors,
 } from "./descriptors.js";
 import { analyzeMarkdownFenceDescriptor } from "./markdown-fence-analysis.js";
@@ -31,6 +39,12 @@ import {
   type LiveMdLeafAnalysisTrace,
 } from "./types.js";
 import { clamp, hashDocRange, hashString, rangesOverlap, rangesSame } from "./ranges.js";
+import { capture, captures, matchRoot } from "./query.js";
+import {
+  liveMdMarkdownFeatureFacet,
+  type LiveMdFeatureAnalyzeContext,
+  type LiveMdMarkdownFeature,
+} from "../features.js";
 import { type LiveMdMarkdownParserService } from "../languages.js";
 
 export type LiveMdLeafSemanticAnalysis = {
@@ -49,6 +63,7 @@ export type LiveMdLeafSemanticAnalysisInput = {
 };
 
 export type LiveMdRenderKeyContext = {
+  featuresEpoch: number;
   referenceEpoch: number;
   rendererVersion: string;
   resolverEpoch: number;
@@ -58,6 +73,7 @@ export type LiveMdRenderKeyContext = {
 export const liveMdRendererVersion = "live-md-renderer-v1";
 
 export const defaultLiveMdRenderKeyContext: LiveMdRenderKeyContext = Object.freeze({
+  featuresEpoch: 0,
   referenceEpoch: 0,
   rendererVersion: liveMdRendererVersion,
   resolverEpoch: 0,
@@ -141,7 +157,11 @@ export function analyzeSnapshotRecords(
   let analysisInput = input.inlineSession ? input : { ...input, inlineSession };
   let records: LeafAnalysisRecord[] = [];
   let nextCacheId = startCacheId;
-  let units = markdownLeafAnalysisUnits(input.state.doc, snapshot);
+  let units = markdownLeafAnalysisUnits(
+    input.state.doc,
+    snapshot,
+    renderKeyContext(input).featuresEpoch,
+  );
   trace.recordsVisited = units.length;
   try {
     for (let unit of units) {
@@ -157,6 +177,7 @@ export function analyzeSnapshotRecords(
 export function markdownLeafAnalysisUnits(
   doc: Text,
   snapshot: MarkdownBlockSnapshot,
+  featuresEpoch = 0,
 ): MarkdownLeafAnalysisUnit[] {
   let units: MarkdownLeafAnalysisUnit[] = [];
   let problemSourceRanges = snapshot.leaves
@@ -172,7 +193,7 @@ export function markdownLeafAnalysisUnits(
     units.push({
       cacheSourceHash: sourceHash,
       cacheSourceRange: leaf.sourceRange,
-      cacheStructuralKey: structuralKey,
+      cacheStructuralKey: cacheStructuralKey(structuralKey, featuresEpoch),
       context: leaf.context,
       contextKey: leaf.contextKey,
       kind: leaf.kind,
@@ -195,7 +216,10 @@ export function markdownLeafAnalysisUnits(
     units.push({
       cacheSourceHash: hashDocRange(doc, marker.range),
       cacheSourceRange: marker.range,
-      cacheStructuralKey: markerCacheStructuralKey(marker, sourceSafeOnly),
+      cacheStructuralKey: cacheStructuralKey(
+        markerCacheStructuralKey(marker, sourceSafeOnly),
+        featuresEpoch,
+      ),
       context: marker.context,
       contextKey: marker.contextKey,
       kind: "marker",
@@ -228,7 +252,10 @@ export function analyzeMarkdownLeafAnalysisUnit(
 
   let descriptors = hasProblemNode(unit.leaf.node)
     ? []
-    : relativeDescriptors(leafDescriptors(input, unit.leaf, trace), unit.sourceRange);
+    : relativeDescriptors(
+        [...leafDescriptors(input, unit.leaf, trace), ...featureDescriptors(input, unit.leaf)],
+        unit.sourceRange,
+      );
   return createAnalysisRecord(
     unit,
     leafAnalysis(unit, unit.structuralEffects, descriptors, renderKeyContext(input)),
@@ -277,6 +304,7 @@ export function sameLiveMdRenderKeyContext(
   right: LiveMdRenderKeyContext,
 ) {
   return (
+    left.featuresEpoch == right.featuresEpoch &&
     left.referenceEpoch == right.referenceEpoch &&
     left.rendererVersion == right.rendererVersion &&
     left.resolverEpoch == right.resolverEpoch &&
@@ -414,6 +442,67 @@ function leafDescriptors(
     case "indentedCode":
       return [];
   }
+}
+
+function featureDescriptors(
+  input: LiveMdLeafSemanticAnalysisInput,
+  leaf: MarkdownLeaf,
+): LiveMdDescriptor[] {
+  let descriptors: LiveMdDescriptor[] = [];
+  for (let feature of input.state.facet(liveMdMarkdownFeatureFacet)) {
+    if (!feature.query || !feature.analyze) continue;
+    for (let match of queryFeatureMatches(input.tree, leaf, feature)) {
+      for (let effect of feature.analyze(featureAnalyzeContext(input.state.doc, leaf, match))) {
+        descriptors.push({ effect, feature: feature.name, kind: "feature" });
+      }
+    }
+  }
+  return descriptors;
+}
+
+function queryFeatureMatches(
+  tree: Tree,
+  leaf: MarkdownLeaf,
+  feature: LiveMdMarkdownFeature,
+): readonly TreeSitterQueryMatch[] {
+  if (!feature.query) return [];
+  let includeNested = feature.includeNested ?? false;
+  if (typeof feature.query == "string") {
+    return queryNodeMatches(leaf.node, feature.query, {
+      includeNested,
+    });
+  }
+  return queryTreeMatches(tree, feature.query, {
+    from: leaf.node.from,
+    includeNested,
+    to: leaf.node.to,
+  }).filter((match) => {
+    let root = matchRoot(match) ?? match.captures[0]?.node ?? null;
+    return Boolean(root && root.from >= leaf.node.from && root.to <= leaf.node.to);
+  });
+}
+
+function featureAnalyzeContext(
+  doc: Text,
+  leaf: MarkdownLeaf,
+  match: TreeSitterQueryMatch,
+): LiveMdFeatureAnalyzeContext {
+  return {
+    capture: (name) => capture(match, name),
+    captures: (name) => captures(match, name),
+    leaf: {
+      contextKey: leaf.contextKey,
+      kind: leaf.kind,
+      range: leaf.range,
+      sourceRange: leaf.sourceRange,
+    },
+    match,
+    node: (name) => capture(match, name)?.node ?? null,
+    nodes: (name) => captures(match, name).map((item) => item.node),
+    slice(source) {
+      return doc.sliceString(source.from, source.to);
+    },
+  };
 }
 
 function headingInlineDescriptors(
@@ -591,7 +680,13 @@ function stableAnalysisKey(
   descriptors: readonly LiveMdDescriptor[],
 ) {
   return hashString(
-    JSON.stringify(["live-md-semantic-v1", kind, structuralKey, structuralEffects, descriptors]),
+    JSON.stringify([
+      "live-md-semantic-v1",
+      kind,
+      structuralKey,
+      liveMdDescriptorsKey(structuralEffects),
+      liveMdDescriptorsKey(descriptors),
+    ]),
   );
 }
 
@@ -618,7 +713,11 @@ function sourceLength(range: DocRange) {
 }
 
 function descriptorKey(descriptors: readonly LiveMdDescriptor[]) {
-  return JSON.stringify(descriptors);
+  return liveMdDescriptorsKey(descriptors);
+}
+
+function cacheStructuralKey(structuralKey: string, featuresEpoch: number) {
+  return featuresEpoch ? `${structuralKey}|f:${featuresEpoch.toString(16)}` : structuralKey;
 }
 
 function hasProblemNode(node: SyntaxNode): boolean {
@@ -727,6 +826,26 @@ function revealDescriptorRanges(
     }
     case "lineClass":
       return [];
+    case "feature":
+      return revealFeatureDescriptorRanges(descriptor.effect, sourceRange, doc);
+  }
+}
+
+function revealFeatureDescriptorRanges(
+  descriptor: Extract<LiveMdDescriptor, { kind: "feature" }>["effect"],
+  sourceRange: DocRange,
+  doc?: Text,
+) {
+  switch (descriptor.kind) {
+    case "replace":
+      return [offsetRangeForReveal(descriptor.range, sourceRange)];
+    case "syntax": {
+      let range = offsetRangeForReveal(descriptor.range, sourceRange);
+      return rangeCrossesLine(doc, range) ? [range] : [];
+    }
+    case "lineClass":
+    case "mark":
+      return [];
   }
 }
 
@@ -748,7 +867,7 @@ function dedupeDescriptors(descriptors: readonly LiveMdDescriptor[]) {
   let deduped: LiveMdDescriptor[] = [];
   let seen = new Set<string>();
   for (let descriptor of descriptors) {
-    let key = JSON.stringify(descriptor);
+    let key = liveMdDescriptorKey(descriptor);
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(descriptor);
