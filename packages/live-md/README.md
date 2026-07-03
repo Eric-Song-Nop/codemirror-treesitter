@@ -307,7 +307,9 @@ starts `prepareLiveMd()` in the background, and dispatches a global
   projection helpers, and StateField lifecycle. `markdown-block-types.ts` and
   `markdown-block-cursor.ts` are the production Markdown block snapshot path
   for leaf classification, structured quote/list/task context, marker records,
-  and sorted lookup inputs. `descriptors.ts`,
+  and sorted lookup inputs. `ranges.ts` is the shared source of truth for range
+  math (clamp/map/touch/overlap/normalize/subtract) and content hashing used
+  across analysis, projection, and runtime. `descriptors.ts`,
   `markdown-leaf-analysis.ts`, `markdown-inline-analysis.ts`,
   `markdown-table-analysis.ts`, and `markdown-fence-analysis.ts` implement the
   full-walk leaf-local semantic baseline. `projection/project-leaf.ts` maps
