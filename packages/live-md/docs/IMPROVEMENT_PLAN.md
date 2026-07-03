@@ -40,6 +40,11 @@ vp run @codemirror-treesitter/live-md#build
   container syntax-range filter with the runtime edit-surface path, keeping
   structural fence-start edits local while preserving committed semantic
   restructuring.
+- **Phase 1 / PR-4:** implemented on 2026-07-03 in
+  `codex/live-md-pr4-origin-reveal`. The code makes pending reveal
+  origin-sensitive, keeps remote/history-excluded and distant undo changes
+  non-revealing, adds a guarded synchronous task-checkbox fast path, and keeps
+  dirty link interactions safe while edits are pending.
 
 ---
 
@@ -354,7 +359,7 @@ reveal the entire enclosing container.
 **Files.** `markdown-leaf-cache.ts` (export move), `runtime/field.ts`, tests.
 **Size.** ~60 lines. **Risk.** Low.
 
-### PR-4: Origin-sensitive reveal policy + synchronous task toggle _(fixes R3)_
+### PR-4: Origin-sensitive reveal policy + synchronous task toggle _(implemented; fixes R3)_
 
 **Goal.** Only edits the local selection interacts with reveal raw source;
 checkbox clicks, undo of distant ranges, and remote collaboration edits keep

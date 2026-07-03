@@ -1,6 +1,6 @@
 import { type EditorState, type Text } from "@codemirror/state";
 import { type SyntaxNode, type Tree } from "@codemirror-treesitter/language";
-import { walkMarkdownBlocks } from "./markdown-block-cursor.js";
+import { markdownBlockContextKey, walkMarkdownBlocks } from "./markdown-block-cursor.js";
 import {
   type MarkdownBlockContext,
   type MarkdownBlockSnapshot,
@@ -30,7 +30,7 @@ import {
   type DocRange,
   type LiveMdLeafAnalysisTrace,
 } from "./types.js";
-import { clamp, hashDocRange, hashString, rangesOverlap } from "./ranges.js";
+import { clamp, hashDocRange, hashString, rangesOverlap, rangesSame } from "./ranges.js";
 import { type LiveMdMarkdownParserService } from "../languages.js";
 
 export type LiveMdLeafSemanticAnalysis = {
@@ -307,6 +307,79 @@ export function createAnalysisRecord(
     sourceRange: unit.sourceRange,
     structuralKey: unit.structuralKey,
   };
+}
+
+export function analyzeTaskMarkerRecordFastPath(input: {
+  checked: boolean;
+  doc: Text;
+  markerRange: DocRange;
+  record: LeafAnalysisRecord;
+  renderKeyContext: LiveMdRenderKeyContext;
+}): LeafAnalysisRecord | null {
+  if (input.record.kind != "marker") return null;
+  let context = taskMarkerContextWithChecked(
+    input.record.context,
+    input.markerRange,
+    input.checked,
+  );
+  if (!context) return null;
+
+  let line = input.doc.lineAt(input.markerRange.from);
+  let sourceRange = { from: line.from, to: line.to };
+  let marker = {
+    context,
+    contextKey: markdownBlockContextKey(context),
+    kind: "taskMarker" as const,
+    lineRange: sourceRange,
+    range: input.markerRange,
+    text: input.doc.sliceString(input.markerRange.from, input.markerRange.to),
+  };
+  if (markerChecked(marker) != input.checked) return null;
+
+  let structuralEffects = relativeDescriptors(markerDescriptors(marker, false), sourceRange);
+  let structuralKey = descriptorKey(structuralEffects);
+  let unit: MarkdownLeafAnalysisUnit = {
+    cacheSourceHash: hashDocRange(input.doc, input.markerRange),
+    cacheSourceRange: input.markerRange,
+    cacheStructuralKey: markerCacheStructuralKey(marker, false),
+    context,
+    contextKey: marker.contextKey,
+    kind: "marker",
+    marker,
+    range: input.markerRange,
+    sourceHash: hashDocRange(input.doc, sourceRange),
+    sourceRange,
+    structuralEffects,
+    structuralKey,
+    type: "marker",
+  };
+
+  return createAnalysisRecord(
+    unit,
+    leafAnalysis(unit, structuralEffects, [], input.renderKeyContext),
+    input.record.cacheId,
+    input.doc,
+  );
+}
+
+function taskMarkerContextWithChecked(
+  context: MarkdownBlockContext,
+  markerRange: DocRange,
+  checked: boolean,
+): MarkdownBlockContext | null {
+  let changed = false;
+  let listPath = context.listPath.map((item) => {
+    if (!item.task || !rangesSame(item.task.range, markerRange)) return item;
+    changed = true;
+    return {
+      ...item,
+      task: {
+        checked,
+        range: markerRange,
+      },
+    };
+  });
+  return changed ? { ...context, listPath } : null;
 }
 
 function leafDescriptors(

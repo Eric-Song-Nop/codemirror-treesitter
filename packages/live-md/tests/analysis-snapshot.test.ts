@@ -8,9 +8,9 @@ import {
   type RangeValue,
   StateEffect,
   StateField,
+  Transaction,
   type Extension,
   type StateCommand,
-  type Transaction,
   type TransactionSpec,
 } from "@codemirror/state";
 import { history, redo, undo } from "@codemirror-treesitter/commands";
@@ -180,6 +180,7 @@ describe("LiveMD analysis snapshot", () => {
     let editFrom = doc.indexOf("alpha");
     view.dispatch({
       changes: { from: editFrom, to: editFrom + "alpha".length, insert: "bravo" },
+      selection: { anchor: editFrom + "bravo".length },
     });
 
     let pending = __testLiveMdAnalysis(view);
@@ -201,6 +202,8 @@ describe("LiveMD analysis snapshot", () => {
     let committed = __testLiveMdAnalysis(view);
     expect(committed.pending).toBeNull();
     expect(committed.trace.recordsVisited).toBeGreaterThan(0);
+    view.dispatch({ selection: { anchor: view.state.doc.toString().indexOf("after") } });
+    committed = __testLiveMdAnalysis(view);
     expect(tablePreviewTables(view.state, committed)[0]?.rows[0]?.[0]).toBe("bravo");
     view.destroy();
   });
@@ -875,6 +878,142 @@ describe("LiveMD analysis snapshot", () => {
       }
     }, 60_000);
 
+    it("does not reveal remote or history-excluded changes", async () => {
+      let cases = [
+        {
+          annotation: Transaction.remote.of(true),
+          label: "remote",
+        },
+        {
+          annotation: Transaction.addToHistory.of(false),
+          label: "history-excluded",
+        },
+      ];
+
+      for (let testCase of cases) {
+        let doc = numberedPlainParagraphDoc(20);
+        let target = doc.indexOf("paragraph 10") + "paragraph 10".length;
+        let view = await markdownAnalysisView(doc, "paragraph 10");
+
+        try {
+          let before = __testLiveMdAnalysis(view);
+          if (!before.semantic) throw new Error(`${testCase.label}: expected semantic cache`);
+          let transaction = view.state.update({
+            annotations: testCase.annotation,
+            changes: { from: target, insert: "!" },
+            selection: { anchor: target + 1 },
+          });
+
+          view.dispatch(transaction);
+          let pending = __testLiveMdAnalysis(view);
+          expect(pending.pending, `${testCase.label}: pending analysis`).toBeTruthy();
+          expect(pending.pending?.editSurface.ranges, `${testCase.label}: reveal ranges`).toEqual(
+            [],
+          );
+          expect(pending.trace.editSurfaceLines, `${testCase.label}: reveal line count`).toBe(0);
+
+          await __testFlushLiveMdAnalysis(view);
+          let after = __testLiveMdAnalysis(view);
+          expect(after.pending, `${testCase.label}: scheduled analysis committed`).toBeNull();
+          expectLocalFullFreshSemanticEquivalence(
+            after,
+            before.semantic.cache,
+            transaction,
+            view.state,
+            `${testCase.label} non-revealing edit`,
+            "semantic",
+          );
+        } finally {
+          view.destroy();
+        }
+      }
+    }, 60_000);
+
+    it("does not reveal undo changes away from the restored selection", async () => {
+      let doc = numberedPlainParagraphDoc(20);
+      let target = doc.indexOf("paragraph 10") + "paragraph 10".length;
+      let selection = doc.indexOf("paragraph 2");
+      let view = await markdownAnalysisView(doc, "paragraph 2");
+
+      try {
+        let before = __testLiveMdAnalysis(view);
+        if (!before.semantic) throw new Error("undo distant edit: expected semantic cache");
+        let transaction = view.state.update({
+          changes: { from: target, insert: "!" },
+          selection: { anchor: selection },
+          userEvent: "undo",
+        });
+
+        view.dispatch(transaction);
+        let pending = __testLiveMdAnalysis(view);
+        expect(pending.pending, "undo distant edit: pending analysis").toBeTruthy();
+        expect(pending.pending?.editSurface.ranges).toEqual([]);
+        expect(pending.trace.editSurfaceLines).toBe(0);
+
+        await __testFlushLiveMdAnalysis(view);
+        let after = __testLiveMdAnalysis(view);
+        expectLocalFullFreshSemanticEquivalence(
+          after,
+          before.semantic.cache,
+          transaction,
+          view.state,
+          "undo distant edit",
+          "semantic",
+        );
+      } finally {
+        view.destroy();
+      }
+    }, 60_000);
+
+    it("toggles task checkboxes synchronously without clearing a pending edit surface", async () => {
+      let cases = [
+        { doc: "before\n\n- [ ] todo\n\nafter", insert: "x", marker: "[ ]", checked: "true" },
+        { doc: "before\n\n- [x] todo\n\nafter", insert: " ", marker: "[x]", checked: "false" },
+      ];
+
+      for (let testCase of cases) {
+        let toggleFrom = testCase.doc.indexOf(testCase.marker) + 1;
+        let view = await markdownAnalysisView(testCase.doc, "after");
+
+        try {
+          let before = __testLiveMdAnalysis(view);
+          if (!before.semantic) throw new Error("task toggle fast path: expected semantic cache");
+          expect(widgetNamesFromSet(view.state, before.decorations)).toContain(
+            "TaskCheckboxWidget",
+          );
+
+          let transaction = view.state.update({
+            changes: { from: toggleFrom, insert: testCase.insert, to: toggleFrom + 1 },
+            userEvent: "input.task",
+          });
+
+          view.dispatch(transaction);
+          let after = __testLiveMdAnalysis(view);
+          let fresh = __testBuildLiveMdAnalysis(view.state);
+          let markerLine = view.state.doc.lineAt(toggleFrom);
+
+          expect(after.pending).toBeNull();
+          expect(after.trace.editSurfaceRanges).toEqual([]);
+          expect(after.trace.editSurfaceLines).toBe(0);
+          expect(after.surfaceInvalidationRanges).toEqual([
+            { from: markerLine.from, to: markerLine.to },
+          ]);
+          expect(widgetNamesFromSet(view.state, after.decorations)).toContain("TaskCheckboxWidget");
+          expect(view.dom.querySelector(".cm-md-task-toggle")?.getAttribute("aria-checked")).toBe(
+            testCase.checked,
+          );
+          expect(canonicalSemanticCache(view.state, after)).toEqual(
+            canonicalSemanticCache(view.state, fresh),
+          );
+          expect(canonicalAnalysis(view.state, after)).toEqual(
+            canonicalAnalysis(view.state, fresh),
+          );
+        } finally {
+          view.destroy();
+        }
+      }
+    }, 60_000);
+
     it("reveals a destructive table record when editing inside it", async () => {
       let doc = "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\nTail";
       let target = doc.indexOf("alpha") + "alpha".length;
@@ -890,7 +1029,7 @@ describe("LiveMD analysis snapshot", () => {
           view,
           {
             changes: { from: target, insert: "!" },
-            selection: { anchor: doc.indexOf("Tail") },
+            selection: { anchor: target + 1 },
           },
           "pending table reveal locality",
           { oracle: "semantic" },
@@ -903,6 +1042,8 @@ describe("LiveMD analysis snapshot", () => {
             containsDocRange(range, mappedRevealRange),
           ),
         ).toBe(true);
+        view.dispatch({ selection: { anchor: view.state.doc.toString().indexOf("Tail") } });
+        expect(tablePreviewTables(view.state)).toHaveLength(1);
       } finally {
         view.destroy();
       }
@@ -2514,7 +2655,10 @@ describe("LiveMD analysis snapshot", () => {
     expect(beforeLineRanges).toEqual([{ from: doc.indexOf("const"), to: doc.indexOf("const") }]);
 
     let constLineFrom = doc.indexOf("const");
-    view.dispatch({ changes: { from: constLineFrom, insert: "\n" } });
+    view.dispatch({
+      changes: { from: constLineFrom, insert: "\n" },
+      selection: { anchor: constLineFrom + 1 },
+    });
 
     let pending = __testLiveMdAnalysis(view);
     expect(pending.pending).toBeTruthy();
@@ -2583,7 +2727,10 @@ describe("LiveMD analysis snapshot", () => {
     expect(beforeLineRanges.length).toBeGreaterThan(0);
 
     let contentFrom = doc.indexOf("const");
-    view.dispatch({ changes: { from: contentFrom, insert: "\n" } });
+    view.dispatch({
+      changes: { from: contentFrom, insert: "\n" },
+      selection: { anchor: contentFrom + 1 },
+    });
 
     let pending = __testLiveMdAnalysis(view);
     expect(pending.pending).toBeTruthy();
