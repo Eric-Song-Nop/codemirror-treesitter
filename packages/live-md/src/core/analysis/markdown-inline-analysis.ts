@@ -81,6 +81,7 @@ export function createMarkdownInlineAnalysisSession(
     dispose() {
       if (disposed) return;
       disposed = true;
+      if (input.trace) input.trace.inlineParserSessionDisposals++;
       parser.delete();
     },
   };

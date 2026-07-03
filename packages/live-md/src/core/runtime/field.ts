@@ -29,14 +29,17 @@ import { type LeafAnalysisRecord, type LiveMdDescriptor } from "../analysis/desc
 import {
   buildFreshLeafAnalysisCache,
   createLeafAnalysisCache,
+  disposeLeafAnalysisResumeState,
   emptyLeafAnalysisCacheTrace,
   findLeafAnalysisRecordsTouchingRanges,
   leafAnalysisCacheRangesInDoc,
+  takeLeafAnalysisResumeStateFromYield,
   materializeLeafAnalysisCacheRecords,
   rekeyLeafAnalysisCache,
   transitionLeafAnalysisCacheLocal,
   transitionLeafAnalysisCache,
   type LeafAnalysisCacheTransition,
+  type LeafAnalysisResumeState,
 } from "../analysis/markdown-leaf-cache.js";
 import {
   analyzeMarkdownLeafSemantics,
@@ -120,6 +123,7 @@ const liveMdSchedulerMaxInputYields = 5;
 
 type BuildLiveMdAnalysisOptions = {
   activeSourceRanges?: readonly DocRange[] | null;
+  leafAnalysisResume?: LeafAnalysisResumeState | null;
   previous?: LiveMdRuntimeState;
   revision?: number;
   transaction?: Transaction;
@@ -242,6 +246,8 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
   class LiveMdSchedulerPlugin {
     private destroyed = false;
     private lastCommitWasCheap = false;
+    private resume: LeafAnalysisResumeState | null = null;
+    private resumeEpochs: LiveMdRuntimeEpochs | null = null;
     private scheduled: LiveMdScheduledWork | null = null;
     private yieldedRevision = -1;
     private deadlineYieldCount = 0;
@@ -269,6 +275,7 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
       this.destroyed = true;
       this.scheduled?.cancel();
       this.scheduled = null;
+      this.clearResume();
     }
 
     private scheduleIfPending() {
@@ -276,10 +283,18 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
       if (!pending) {
         this.scheduled?.cancel();
         this.scheduled = null;
+        this.clearResume();
         this.resetYieldCount();
         return;
       }
-      if (this.yieldedRevision != pending.revision) this.resetYieldCount(pending.revision);
+      if (this.yieldedRevision != pending.revision) {
+        this.clearResume();
+        this.resetYieldCount(pending.revision);
+      }
+      let currentEpochs = runtimeEpochs(this.view.state);
+      if (this.resumeEpochs && runtimeEpochsChanged(this.resumeEpochs, currentEpochs)) {
+        this.clearResume();
+      }
       if (this.scheduled?.revision == pending.revision) return;
       this.scheduled?.cancel();
       this.scheduled = scheduleLiveMdWork(
@@ -298,7 +313,10 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
       if (this.destroyed) return;
       let current = this.view.state.field(liveMdAnalysisField, false);
       let pending = current?.pending;
-      if (!pending || pending.revision != revision) return;
+      if (!pending || pending.revision != revision) {
+        this.clearResume();
+        return;
+      }
       if (!syntaxTreeAvailable(this.view.state, this.view.state.doc.length)) {
         this.scheduleIfPending();
         return;
@@ -313,15 +331,22 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
       try {
         yieldCheck();
         analysis = buildLiveMdAnalysis(this.view.state, getActiveLines(this.view.state), {
+          leafAnalysisResume: this.resume?.revision == revision ? this.resume : null,
           previous: pending.baseAnalysis,
           revision,
           transitionBase: pending,
           tree: syntaxTree(this.view.state),
           yieldCheck,
         });
-        yieldCheck();
+        this.clearResume();
       } catch (error) {
         if (error instanceof LiveMdScheduledYield) {
+          let resume = takeLeafAnalysisResumeStateFromYield(error);
+          if (resume?.revision == revision) {
+            this.replaceResume(resume);
+          } else if (resume) {
+            disposeLeafAnalysisResumeState(resume);
+          }
           if (error.reason == "deadline") this.deadlineYieldCount++;
           this.scheduleIfPending();
           return;
@@ -329,6 +354,7 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
         throw error;
       }
       this.resetYieldCount();
+      this.clearResume();
       this.view.dispatch({
         effects: commitLiveMdScheduledAnalysis.of({
           analysis,
@@ -343,6 +369,19 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
       this.yieldedRevision = revision;
       this.deadlineYieldCount = 0;
       this.inputYieldCount = 0;
+    }
+
+    private replaceResume(resume: LeafAnalysisResumeState) {
+      if (this.resume == resume) return;
+      this.clearResume();
+      this.resume = resume;
+      this.resumeEpochs = runtimeEpochs(this.view.state);
+    }
+
+    private clearResume() {
+      disposeLeafAnalysisResumeState(this.resume);
+      this.resume = null;
+      this.resumeEpochs = null;
     }
 
     private shouldYieldForInput(revision: number) {
@@ -1203,6 +1242,7 @@ function buildLiveMdAnalysis(
       service: markdownParserService,
       state,
       transaction: options.transaction,
+      leafAnalysisResume: options.leafAnalysisResume,
       transitionBase: options.transitionBase,
       tree,
       yieldCheck: options.yieldCheck,
@@ -1520,6 +1560,7 @@ function emptySurfaceProjection(): SurfaceProjection {
 
 function buildLiveMdSemanticAnalysis(input: {
   activeSourceRanges?: readonly DocRange[] | null;
+  leafAnalysisResume?: LeafAnalysisResumeState | null;
   previous?: LiveMdRuntimeState;
   service: LiveMdMarkdownParserService;
   state: EditorState;
@@ -1569,6 +1610,8 @@ function buildLiveMdSemanticAnalysis(input: {
       oldCache: previousSemantic.cache,
       oldDoc: transitionBase.baseDoc,
       oldSourceIslandLeaves: transitionBase.baseAnalysis.sourceIslandLeaves,
+      resume: input.leafAnalysisResume,
+      revision: transitionBase.revision,
       syntaxChangedRanges: transitionBase.syntaxChangedRanges,
       yieldCheck: input.yieldCheck,
     });
@@ -1604,6 +1647,8 @@ function buildLiveMdSemanticAnalysis(input: {
       changes: transitionBase.changes,
       oldCache: previousSemantic.cache,
       oldDoc: transitionBase.baseDoc,
+      resume: input.leafAnalysisResume,
+      revision: transitionBase.revision,
       snapshot: walked.snapshot,
       yieldCheck: input.yieldCheck,
     });
@@ -1645,6 +1690,8 @@ function buildLiveMdSemanticAnalysis(input: {
           changes: transaction.changes,
           oldCache: previousSemantic.cache,
           oldDoc: transaction.startState.doc,
+          resume: input.leafAnalysisResume,
+          revision: semanticResumeRevision(input),
           snapshot: walked.snapshot,
           yieldCheck: input.yieldCheck,
         })
@@ -1655,6 +1702,8 @@ function buildLiveMdSemanticAnalysis(input: {
             state: input.state,
             tree: input.tree,
           },
+          resume: input.leafAnalysisResume,
+          revision: semanticResumeRevision(input),
           snapshot: walked.snapshot,
           startCacheId: previousSemantic?.cache.nextCacheId,
           yieldCheck: input.yieldCheck,
@@ -1678,6 +1727,15 @@ function buildLiveMdSemanticAnalysis(input: {
     trace: transition.trace,
     transition,
   };
+}
+
+function semanticResumeRevision(input: {
+  previous?: LiveMdRuntimeState;
+  transitionBase?: LiveMdPendingAnalysis;
+}) {
+  return (
+    input.transitionBase?.revision ?? input.previous?.pending?.revision ?? input.previous?.revision
+  );
 }
 
 function canReuseSemanticState(input: {
@@ -1812,6 +1870,7 @@ const liveMdTraceNumericKeyMap = {
   fixedPointRounds: true,
   inlineParsedChars: true,
   inlineParseCalls: true,
+  inlineParserSessionDisposals: true,
   inlineParserSessions: true,
   languageApplyMs: true,
   languageWorkIterations: true,
