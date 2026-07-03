@@ -46,6 +46,11 @@ vp run @codemirror-treesitter/live-md#build
   changes non-revealing, bridges Loro sync transactions to CodeMirror's remote
   annotation, adds a guarded synchronous task-checkbox fast path, and keeps dirty
   link interactions safe while edits are pending.
+- **Phase 1 / PR-5:** implemented on 2026-07-03 in draft PR #92
+  (`codex/live-md-pr5-pending-window`). The code caps input-pending scheduler
+  yields, schedules cheap follow-up commits without the fixed quiet delay, and
+  restores stale pending reveal ranges from mapped base projection sets so
+  sustained typing does not grow the raw-source window unboundedly.
 
 ---
 
@@ -450,10 +455,23 @@ generic path on anything unexpected; keep the guard conditions strict and
 covered by the random-edit equivalence test (extend it to include task
 toggles in the edit mix).
 
-### PR-5: Bound the pending window under sustained typing _(fixes R4, part of A4)_
+### PR-5: Bound the pending window under sustained typing _(implemented; fixes R4, part of A4)_
 
 **Goal.** Fluent typing must not grow the revealed region unboundedly; the
 common single-block edit should commit within ~1 frame.
+
+**Implemented.** `LiveMdSchedulerPlugin` now tracks deadline yields and
+input-pending yields separately, counts input-pending deferrals before and
+during scheduled analysis, and stops honoring input-pending yields after five
+deferrals for the same pending revision. Cheap committed semantic transitions
+(`recordsAnalyzed <= 8 && fallbackCount == 0`) schedule the next idle task
+with no fixed quiet delay. Pending edit surfaces now drop previous reveal
+ranges that are neither re-touched nor selection-local, restore direct
+destructive/atomic projections from the mapped base analysis, and mirror
+destructive/atomic surface restoration from the surface plugin's pending-base
+snapshot. Tests cover sustained typing while `isInputPending()` always returns
+true and stale table reveal restoration while another pending edit moves
+elsewhere.
 
 **Changes, in three independent steps (can be split):**
 
