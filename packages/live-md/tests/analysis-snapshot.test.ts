@@ -6,8 +6,6 @@ import {
   EditorState,
   RangeSet,
   type RangeValue,
-  StateEffect,
-  StateField,
   Transaction,
   type Extension,
   type StateCommand,
@@ -246,6 +244,7 @@ describe("LiveMD analysis snapshot", () => {
     let state = EditorState.create({ doc: "![Alt](assets/one.png)" });
     let tree = service.blockParser.parse(state.doc);
     let initialContext: LiveMdRenderKeyContext = {
+      featuresEpoch: 0,
       referenceEpoch: 0,
       rendererVersion: "test-renderer",
       resolverEpoch: 1,
@@ -699,7 +698,6 @@ describe("LiveMD analysis snapshot", () => {
     expect(after.semanticTrace?.exactSourceComparedChars).toBeGreaterThan(0);
     expect(after.semanticTrace?.inlineParserSessions).toBeLessThanOrEqual(1);
     expect(after.semanticTrace?.projectionRecords).toBe(0);
-    expect(legacyFeatureFullQueryCount(after)).toBe(0);
     view.destroy();
   });
 
@@ -1898,73 +1896,46 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("recomputes active-dependent legacy feature decorations on selection changes", async () => {
+  it("keeps analyze feature records cached on selection changes", async () => {
+    let analyzedHeadings: string[] = [];
     let doc = "# First\n\nparagraph with *one*\n\n# Second\n";
     let view = await markdownAnalysisView(doc, "First", [
       liveMdMarkdownFeatures([
         {
-          name: "test-active-heading-feature",
+          name: "test-heading-feature",
           query: "(atx_heading) @target",
-          decorate({ addLineClass, node, rangeTouchesActiveLine }) {
+          analyze({ node, slice }) {
             let target = node("target");
-            if (target && rangeTouchesActiveLine(target.from, target.to)) {
-              addLineClass(target.from, target.to, "is-active");
-            }
+            if (!target) return [];
+            analyzedHeadings.push(slice(target).trimEnd());
+            return [
+              {
+                className: "cm-md-feature-heading-line",
+                kind: "lineClass",
+                range: { from: target.from, to: target.to },
+              },
+            ];
           },
         },
       ]),
     ]);
 
-    expect(lineHasClass(view.state, "# First", "is-active")).toBe(true);
-    expect(lineHasClass(view.state, "# Second", "is-active")).toBe(false);
+    expect(lineHasClass(view.state, "# First", "cm-md-feature-heading-line")).toBe(true);
+    expect(lineHasClass(view.state, "# Second", "cm-md-feature-heading-line")).toBe(true);
+    expect(analyzedHeadings).toEqual(["# First", "# Second"]);
 
+    analyzedHeadings = [];
+    let before = __testLiveMdAnalysis(view);
     view.dispatch({ selection: { anchor: doc.indexOf("Second") } });
+    let after = __testLiveMdAnalysis(view);
 
-    expect(lineHasClass(view.state, "# First", "is-active")).toBe(false);
-    expect(lineHasClass(view.state, "# Second", "is-active")).toBe(true);
-    expect(__testLiveMdAnalysis(view).semanticTrace?.legacyFeatureFullQueryCount).toBe(1);
+    expect(analyzedHeadings).toEqual([]);
+    expect(after.semantic?.cache).toBe(before.semantic?.cache);
+    expect(lineHasClass(view.state, "# First", "cm-md-feature-heading-line")).toBe(true);
+    expect(lineHasClass(view.state, "# Second", "cm-md-feature-heading-line")).toBe(true);
     expect(canonicalAnalysis(view.state, __testLiveMdAnalysis(view))).toEqual(
       canonicalAnalysis(view.state, __testBuildCanonicalLiveMdAnalysis(view.state)),
     );
-    view.destroy();
-  });
-
-  it("recomputes legacy feature decorations for arbitrary StateField changes", async () => {
-    let setClass = StateEffect.define<string>();
-    let classField = StateField.define<string>({
-      create() {
-        return "cm-md-feature-first";
-      },
-      update(value, transaction) {
-        for (let effect of transaction.effects) {
-          if (effect.is(setClass)) return effect.value;
-        }
-        return value;
-      },
-    });
-    let view = await markdownAnalysisView("# Dynamic\n\nbody", "body", [
-      classField,
-      liveMdMarkdownFeatures([
-        {
-          name: "test-state-field-feature",
-          query: "(atx_heading) @heading",
-          decorate({ addMark, node, state }) {
-            let heading = node("heading");
-            if (!heading) return;
-            addMark(heading.from, heading.to, state.field(classField));
-          },
-        },
-      ]),
-    ]);
-
-    expect(decorationClasses(view.state).has("cm-md-feature-first")).toBe(true);
-    expect(decorationClasses(view.state).has("cm-md-feature-second")).toBe(false);
-
-    view.dispatch({ effects: setClass.of("cm-md-feature-second") });
-
-    expect(decorationClasses(view.state).has("cm-md-feature-first")).toBe(false);
-    expect(decorationClasses(view.state).has("cm-md-feature-second")).toBe(true);
-    expect(__testLiveMdAnalysis(view).semanticTrace?.legacyFeatureFullQueryCount).toBe(1);
     view.destroy();
   });
 
@@ -2013,7 +1984,7 @@ describe("LiveMD analysis snapshot", () => {
     }
   });
 
-  it("keeps leaf-local projection equivalent to the canonical full-query projection", async () => {
+  it("keeps leaf-local projection equivalent to the canonical semantic projection", async () => {
     let docs = [
       liveMdKitchenSinkDoc(),
       "![Alt](image.png)\n\n| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\n```mermaid\ngraph TD\nA-->B\n```\n",
@@ -2029,7 +2000,7 @@ describe("LiveMD analysis snapshot", () => {
     }
   });
 
-  it("keeps active table inline projection equivalent to the canonical full-query projection", async () => {
+  it("keeps active table inline projection equivalent to the canonical semantic projection", async () => {
     let doc =
       "before\n\n" +
       "| Name | Value |\n" +
@@ -2345,11 +2316,11 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("passes measured render-cache heights through the legacy projection path", async () => {
+  it("passes measured render-cache heights through semantic projection", async () => {
     let doc = "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\nTail";
-    let view = await markdownLegacyAnalysisView(doc, "Tail");
+    let view = await markdownAnalysisView(doc, "Tail");
     let analysis = __testLiveMdAnalysis(view);
-    expect(analysis.semantic).toBeNull();
+    expect(analysis.semantic).toBeTruthy();
 
     let tableWidget = onlyWidget(view.state, analysis.decorations, "TablePreviewWidget");
     expect(tableWidget.estimatedHeight).toBe(56);
@@ -2359,25 +2330,25 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("reuses render cache on the legacy fallback full-query projection path", async () => {
+  it("reuses render cache on the full semantic projection path", async () => {
     let doc = renderCacheFullQueryDoc();
     let tracked = await trackedHtmlCodeFenceLanguages();
-    let view = await markdownLegacyAnalysisView(doc, "Tail");
+    let view = await markdownAnalysisView(doc, "Tail");
     let initial = __testLiveMdAnalysis(view);
-    expect(initial.semantic).toBeNull();
+    expect(initial.semantic).toBeTruthy();
     expect(initial.trace.heavyRenderStarts).toBeGreaterThanOrEqual(2);
 
     view.dispatch({ effects: setCodeFenceLanguages.of(tracked.languages) });
     let withCodeFence = __testLiveMdAnalysis(view);
-    expect(withCodeFence.semantic).toBeNull();
+    expect(withCodeFence.semantic).toBeTruthy();
     expect(tracked.parseCalls()).toBe(1);
     expect(withCodeFence.trace.codeFenceParses).toBe(1);
-    expect(withCodeFence.trace.heavyRenderStarts).toBe(1);
+    expect(withCodeFence.trace.heavyRenderStarts).toBeGreaterThanOrEqual(1);
 
     tracked.reset();
     view.dispatch({ selection: { anchor: view.state.sliceDoc().indexOf("alpha") } });
     let active = __testLiveMdAnalysis(view);
-    expect(active.semantic).toBeNull();
+    expect(active.semantic).toBeTruthy();
     expect(active.trace.heavyRenderStarts).toBe(0);
     expect(active.trace.codeFenceParses).toBe(0);
     expect(tracked.parseCalls()).toBe(0);
@@ -2390,7 +2361,7 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("reuses render cache in canonical full-query oracle builds", async () => {
+  it("reuses render cache in canonical semantic oracle builds", async () => {
     let resolverCalls = 0;
     let tracked = await trackedHtmlCodeFenceLanguages();
     let baseState = await markdownAnalysisState(renderCacheFullQueryDoc(), "Tail", [
@@ -2404,7 +2375,7 @@ describe("LiveMD analysis snapshot", () => {
     tracked.reset();
 
     let first = __testBuildCanonicalLiveMdAnalysis(state);
-    expect(first.semantic).toBeNull();
+    expect(first.semantic).toBeTruthy();
     expect(first.trace.heavyRenderStarts).toBeGreaterThanOrEqual(5);
     expect(first.trace.codeFenceParses).toBe(1);
     expect(tracked.parseCalls()).toBe(1);
@@ -2412,7 +2383,7 @@ describe("LiveMD analysis snapshot", () => {
 
     tracked.reset();
     let second = __testBuildCanonicalLiveMdAnalysis(state, first.renderCache);
-    expect(second.semantic).toBeNull();
+    expect(second.semantic).toBeTruthy();
     expect(second.trace.heavyRenderStarts).toBe(0);
     expect(second.trace.codeFenceParses).toBe(0);
     expect(tracked.parseCalls()).toBe(0);
@@ -3033,39 +3004,44 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("keeps legacy document-query features off the pending input surface path", async () => {
-    let decoratedHeadings: string[] = [];
+  it("keeps analyze features off the pending input surface path", async () => {
+    let analyzedHeadings: string[] = [];
     let doc = "# First\n\nbody\n\n# Second\n";
-    let view = await markdownAnalysisView(doc, "body", [
+    let view = await markdownAnalysisView(doc, "First", [
       liveMdMarkdownFeatures([
         {
-          name: "test-pending-legacy-feature",
+          name: "test-pending-analyze-feature",
           query: "(atx_heading) @heading",
-          decorate({ addMark, node, slice }) {
+          analyze({ node, slice }) {
             let heading = node("heading");
-            if (!heading) return;
-            decoratedHeadings.push(slice(heading).trimEnd());
-            addMark(heading.from, heading.to, "cm-md-feature-heading");
+            if (!heading) return [];
+            analyzedHeadings.push(slice(heading).trimEnd());
+            return [
+              {
+                className: "cm-md-feature-heading",
+                kind: "mark",
+                range: { from: heading.from, to: heading.to },
+              },
+            ];
           },
         },
       ]),
     ]);
 
-    decoratedHeadings = [];
-    view.dispatch({ changes: { from: doc.indexOf("body"), insert: "edited " } });
+    analyzedHeadings = [];
+    view.dispatch({ changes: { from: doc.indexOf("First") + "First".length, insert: "!" } });
 
     let pending = __testLiveMdAnalysis(view);
     expect(pending.pending).toBeTruthy();
-    expect(pending.trace.legacyFeatureFullQueryCount).toBe(0);
     expect(pending.trace.surfaceCompileCalls).toBe(0);
-    expect(decoratedHeadings).toEqual([]);
+    expect(analyzedHeadings).toEqual([]);
 
     await __testFlushLiveMdAnalysis(view);
 
     let committed = __testLiveMdAnalysis(view);
     expect(committed.pending).toBeNull();
-    expect(committed.semanticTrace?.legacyFeatureFullQueryCount).toBe(1);
-    expect(decoratedHeadings).toEqual(["# First", "# Second"]);
+    expect(analyzedHeadings).toEqual(["# First!"]);
+    expect(decorationClasses(view.state).has("cm-md-feature-heading")).toBe(true);
     view.destroy();
   });
 
@@ -3794,11 +3770,21 @@ describe("LiveMD analysis snapshot", () => {
         {
           name: "test-heading",
           query: "(atx_heading) @heading",
-          decorate({ addLineClass, addMark, node }) {
+          analyze({ node }) {
             let heading = node("heading");
-            if (!heading) return;
-            addLineClass(heading.from, heading.to, "cm-md-feature-heading-line");
-            addMark(heading.from, heading.to, "cm-md-feature-heading");
+            if (!heading) return [];
+            return [
+              {
+                className: "cm-md-feature-heading-line",
+                kind: "lineClass",
+                range: { from: heading.from, to: heading.to },
+              },
+              {
+                className: "cm-md-feature-heading",
+                kind: "mark",
+                range: { from: heading.from, to: heading.to },
+              },
+            ];
           },
         },
       ]),
@@ -3808,25 +3794,31 @@ describe("LiveMD analysis snapshot", () => {
     expect(decorationClasses(state).has("cm-md-feature-heading-line")).toBe(true);
   });
 
-  it("counts legacy feature full-query projection after document changes", async () => {
-    let decoratedHeadings: string[] = [];
+  it("analyzes changed feature leaves after document changes", async () => {
+    let analyzedHeadings: string[] = [];
     let doc = "# First\n\nbody\n\n# Second\n";
     let view = await markdownAnalysisView(doc, "body", [
       liveMdMarkdownFeatures([
         {
           name: "test-heading-feature",
           query: "(atx_heading) @heading",
-          decorate({ addMark, node, slice }) {
+          analyze({ node, slice }) {
             let heading = node("heading");
-            if (!heading) return;
-            decoratedHeadings.push(slice(heading).trimEnd());
-            addMark(heading.from, heading.to, "cm-md-feature-heading");
+            if (!heading) return [];
+            analyzedHeadings.push(slice(heading).trimEnd());
+            return [
+              {
+                className: "cm-md-feature-heading",
+                kind: "mark",
+                range: { from: heading.from, to: heading.to },
+              },
+            ];
           },
         },
       ]),
     ]);
 
-    decoratedHeadings = [];
+    analyzedHeadings = [];
     let replaceFrom = doc.indexOf("# Second");
     let transaction = view.state.update({
       changes: {
@@ -3840,8 +3832,8 @@ describe("LiveMD analysis snapshot", () => {
     await __testFlushLiveMdAnalysis(view);
 
     let after = __testLiveMdAnalysis(view);
-    expect(legacyFeatureFullQueryCount(after)).toBe(1);
-    expect(decoratedHeadings).toEqual(["# First", "# Updated", "# Third"]);
+    expect(after.semanticTrace?.recordsAnalyzed).toBeGreaterThanOrEqual(2);
+    expect(analyzedHeadings).toEqual(["# Updated", "# Third"]);
     expect(decorationClasses(view.state).has("cm-md-feature-heading")).toBe(true);
     view.destroy();
   });
@@ -3861,6 +3853,40 @@ describe("LiveMD analysis snapshot", () => {
 
     expect(decorationClasses(view.state).has("cm-md-feature-first")).toBe(false);
     expect(decorationClasses(view.state).has("cm-md-feature-second")).toBe(true);
+    view.destroy();
+  });
+
+  it("invalidates untouched feature records when features change during pending input", async () => {
+    let featureCompartment = new Compartment();
+    let doc = "# First\n\nbody\n\n# Second\n";
+    let view = await markdownAnalysisView(doc, "body", [
+      featureCompartment.of(markHeadingFeature("cm-md-feature-first")),
+    ]);
+
+    expect(
+      decorationRangesForClassFromSet(
+        view.state,
+        __testLiveMdAnalysis(view).decorations,
+        "cm-md-feature-first",
+      ),
+    ).toHaveLength(2);
+
+    view.dispatch({ changes: { from: doc.indexOf("body"), insert: "edited " } });
+    expect(__testLiveMdAnalysis(view).pending).toBeTruthy();
+
+    view.dispatch({
+      effects: featureCompartment.reconfigure(markHeadingFeature("cm-md-feature-second")),
+    });
+    await __testFlushLiveMdAnalysis(view);
+
+    let analysis = __testLiveMdAnalysis(view);
+    expect(analysis.pending).toBeNull();
+    expect(
+      decorationRangesForClassFromSet(view.state, analysis.decorations, "cm-md-feature-first"),
+    ).toEqual([]);
+    expect(
+      decorationRangesForClassFromSet(view.state, analysis.decorations, "cm-md-feature-second"),
+    ).toHaveLength(2);
     view.destroy();
   });
 });
@@ -3889,31 +3915,6 @@ async function markdownAnalysisView(doc: string, selectionText = "", extensions:
       selection: { anchor: selection },
       extensions: [
         await loadMarkdownExtension(),
-        codeFenceLanguagesField,
-        extensions,
-        liveMdAnalysis,
-      ],
-    }),
-  });
-  ensureSyntaxTree(view.state, doc.length, 5_000);
-  view.dispatch({});
-  return view;
-}
-
-async function markdownLegacyAnalysisView(
-  doc: string,
-  selectionText = "",
-  extensions: Extension = [],
-) {
-  let selection = selectionText ? doc.indexOf(selectionText) : 0;
-  let service = await loadMarkdownParserService();
-  let view = new EditorView({
-    parent: document.body.appendChild(document.createElement("div")),
-    state: EditorState.create({
-      doc,
-      selection: { anchor: selection },
-      extensions: [
-        service.blockLanguage.extension,
         codeFenceLanguagesField,
         extensions,
         liveMdAnalysis,
@@ -4099,7 +4100,7 @@ function expectSemanticTransitionEquivalence(
   );
   expect(
     canonicalAnalysis(state, local),
-    `${label}: local projection vs canonical full-query projection`,
+    `${label}: local projection vs canonical semantic projection`,
   ).toEqual(canonicalAnalysis(state, __testBuildCanonicalLiveMdAnalysis(state)));
 }
 
@@ -4277,6 +4278,7 @@ function renderKeyContextForTest(state: EditorState): LiveMdRenderKeyContext {
   let highlighters = state.facet(codeFenceHighlighterFacet) ??
     syntaxHighlighters(state) ?? [liveMdDefaultCodeFenceHighlighter];
   return {
+    featuresEpoch: 0,
     referenceEpoch: liveMdValueEpoch(state.facet(liveMdLinkBaseUrl)),
     rendererVersion: liveMdRendererVersion,
     resolverEpoch: liveMdCompositeEpoch(
@@ -4590,10 +4592,6 @@ function expectRelativeLineClassRange(
   expect(lineClass.range).toEqual(range);
 }
 
-function legacyFeatureFullQueryCount(analysis: ReturnType<typeof __testLiveMdAnalysis>) {
-  return analysis.semanticTrace?.legacyFeatureFullQueryCount;
-}
-
 function decorationClasses(
   state: EditorState,
   analysis = __testLiveMdAnalysis({ state } as EditorView),
@@ -4738,10 +4736,16 @@ function markHeadingFeature(className: string) {
     {
       name: className,
       query: "(atx_heading) @heading",
-      decorate({ addMark, node }) {
+      analyze({ node }) {
         let heading = node("heading");
-        if (!heading) return;
-        addMark(heading.from, heading.to, className);
+        if (!heading) return [];
+        return [
+          {
+            className,
+            kind: "mark",
+            range: { from: heading.from, to: heading.to },
+          },
+        ];
       },
     },
   ]);

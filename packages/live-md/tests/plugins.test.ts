@@ -259,10 +259,16 @@ function headingClassFeature(className: string): LiveMdMarkdownFeature {
   return {
     name: className,
     query: "(atx_heading) @heading",
-    decorate({ addMark, node }) {
+    analyze({ node }) {
       let heading = node("heading");
-      if (!heading) return;
-      addMark(heading.from, heading.to, className);
+      if (!heading) return [];
+      return [
+        {
+          className,
+          kind: "mark",
+          range: { from: heading.from, to: heading.to },
+        },
+      ];
     },
   };
 }

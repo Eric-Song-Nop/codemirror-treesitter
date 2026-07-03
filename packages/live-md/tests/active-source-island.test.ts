@@ -342,15 +342,22 @@ describe("LiveMD active source islands", () => {
     ).toEqual(["*one*", "*three*"]);
   });
 
-  it("keeps legacy markdown feature decorations active inside source islands", async () => {
+  it("keeps analyze markdown feature decorations active inside source islands", async () => {
     let state = await markdownState("# Active\n\n# Inactive", {
       extensions: liveMdMarkdownFeatures([
         {
           name: "mark-heading",
           query: "(atx_heading) @heading",
-          decorate({ addMark, node }) {
+          analyze({ node }) {
             let heading = node("heading");
-            if (heading) addMark(heading.from, heading.to, "cm-md-test-heading");
+            if (!heading) return [];
+            return [
+              {
+                className: "cm-md-test-heading",
+                kind: "mark",
+                range: { from: heading.from, to: heading.to },
+              },
+            ];
           },
         },
       ]),

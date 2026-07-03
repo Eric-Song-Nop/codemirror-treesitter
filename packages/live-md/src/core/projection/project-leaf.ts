@@ -5,6 +5,7 @@ import {
   type LeafAnalysisRecord,
   type LiveMdDescriptor,
   type LiveMdTableModel,
+  liveMdFeatureDescriptorKey,
   offsetLiveMdDescriptors,
 } from "../analysis/descriptors.js";
 import {
@@ -14,6 +15,7 @@ import {
 import { rangesOverlap } from "../analysis/ranges.js";
 import { type DocRange } from "../analysis/types.js";
 import { liveMdLinkMark } from "../links.js";
+import { type LiveMdFeatureDescriptor } from "../features.js";
 import {
   cachedLiveMdImageSource,
   cachedLiveMdLatexResult,
@@ -205,6 +207,8 @@ function descriptorMayProduceDirectLayout(descriptor: LiveMdDescriptor) {
     case "lineClass":
     case "table":
       return true;
+    case "feature":
+      return featureDescriptorMayProduceDirectLayout(descriptor.effect);
     case "linkMark":
     case "listMarker":
     case "syntax":
@@ -284,6 +288,49 @@ function projectDescriptor(
       return projectTable(descriptor, active, renderStatus);
     case "codeFence":
       return projectCodeFence(descriptor, active, renderStatus);
+    case "feature":
+      return projectFeature(descriptor.effect, active, renderStatus);
+  }
+}
+
+function projectFeature(
+  descriptor: LiveMdFeatureDescriptor,
+  active: boolean,
+  renderStatus: LiveMdRenderStatus,
+): readonly LiveMdEffectSpec[] {
+  switch (descriptor.kind) {
+    case "lineClass":
+      return [
+        {
+          className: descriptor.className,
+          from: descriptor.range.from,
+          kind: "lineClass",
+          to: descriptor.range.to,
+        },
+      ];
+    case "mark":
+      return [
+        {
+          from: descriptor.range.from,
+          kind: "mark",
+          mark: { className: descriptor.className, kind: "class" },
+          to: descriptor.range.to,
+        },
+      ];
+    case "syntax":
+      return [syntaxSpec(descriptor.range.from, descriptor.range.to, descriptor.className)];
+    case "replace":
+      if (isEditableSource(active, renderStatus)) return [];
+      return [
+        {
+          atomic: descriptor.atomic,
+          block: descriptor.block,
+          from: descriptor.range.from,
+          kind: "replace",
+          to: descriptor.range.to,
+          widget: { kind: "feature", spec: descriptor.widget },
+        },
+      ];
   }
 }
 
@@ -757,6 +804,8 @@ function liveMdDescriptorKey(descriptor: LiveMdDescriptor) {
         descriptor.language,
         descriptor.mermaidSource,
       );
+    case "feature":
+      return keyParts("feature", descriptor.feature, liveMdFeatureDescriptorKey(descriptor.effect));
   }
 }
 
@@ -851,6 +900,19 @@ function widgetSpecKey(widget: LiveMdWidgetSpec) {
       return keyParts("tablePreview", tableShapeKey(widget.table));
     case "taskMarker":
       return keyParts("taskMarker", widget.checked ? 1 : 0);
+    case "feature":
+      return keyParts("feature", widget.spec.key);
+  }
+}
+
+function featureDescriptorMayProduceDirectLayout(descriptor: LiveMdFeatureDescriptor) {
+  switch (descriptor.kind) {
+    case "lineClass":
+    case "replace":
+      return true;
+    case "mark":
+    case "syntax":
+      return false;
   }
 }
 
@@ -1022,5 +1084,7 @@ function widgetFromSpec(
     }
     case "taskMarker":
       return new TaskCheckboxWidget(spec.checked);
+    case "feature":
+      return spec.spec.widget;
   }
 }
