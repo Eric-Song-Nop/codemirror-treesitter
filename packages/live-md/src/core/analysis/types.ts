@@ -21,6 +21,7 @@ export type LiveMdLeafAnalysisTrace = {
   fixedPointRounds: number;
   inlineParsedChars: number;
   inlineParseCalls: number;
+  inlineParserSessionDisposals: number;
   inlineParserSessions: number;
   languageApplyMs: number;
   languageWorkIterations: number;
@@ -69,6 +70,7 @@ export function emptyLiveMdLeafAnalysisTrace(): LiveMdLeafAnalysisTrace {
     fixedPointRounds: 0,
     inlineParsedChars: 0,
     inlineParseCalls: 0,
+    inlineParserSessionDisposals: 0,
     inlineParserSessions: 0,
     languageApplyMs: 0,
     languageWorkIterations: 0,

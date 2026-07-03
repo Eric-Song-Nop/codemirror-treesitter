@@ -64,15 +64,58 @@ export type LeafAnalysisCacheLocalTransitionInput = {
   oldCache: LeafAnalysisCache;
   oldDoc: Text;
   oldSourceIslandLeaves?: readonly LiveMdSourceIslandLeaf[];
+  resume?: LeafAnalysisResumeState | null;
+  revision?: number;
   syntaxChangedRanges?: readonly DocRange[];
   yieldCheck?: () => void;
 };
 
-type MappedOldRecord = {
+export type LeafAnalysisMappedOldRecord = {
   cacheSourceRange: DocRange;
   record: LeafAnalysisRecord;
   range: DocRange;
   sourceRange: DocRange;
+};
+
+type MappedOldRecord = LeafAnalysisMappedOldRecord;
+
+export type LeafAnalysisOldCandidates = ReadonlyMap<string, readonly LeafAnalysisMappedOldRecord[]>;
+
+export type LeafAnalysisResumeKind = "fresh" | "local" | "transition";
+
+export type LeafAnalysisResumeState = {
+  /**
+   * Local transitions need this to finish changed-range bookkeeping after a
+   * resume. Empty for fresh and full-cache transitions.
+   */
+  changedOldIds: Set<number>;
+  /**
+   * Local records that must patch projection layers after the cache commit.
+   * Empty for fresh and full-cache transitions.
+   */
+  changedRecords: LeafAnalysisRecord[];
+  /** Inline parser session owned by the resume until commit or cancellation. */
+  inlineSession: MarkdownInlineAnalysisSession | null;
+  kind: LeafAnalysisResumeKind;
+  /** Local transition replacement windows, empty for fresh/full transitions. */
+  localWindows: readonly DocRange[];
+  nextCacheId: number;
+  /** Old changed ranges used by source-island local transitions. */
+  oldChangedRanges: readonly DocRange[];
+  /**
+   * Original old records used to build oldCandidates. Kept because the map is
+   * keyed by match signature while local patching needs the original set.
+   */
+  oldCandidateRecords: LeafAnalysisRecord[];
+  oldCandidates: LeafAnalysisOldCandidates;
+  /** Completed records in sorted unit order. */
+  records: LeafAnalysisRecord[];
+  revision: number;
+  snapshot: MarkdownBlockSnapshot;
+  trace: LeafAnalysisCacheTrace;
+  /** Next unit index to process. */
+  unitIndex: number;
+  usedOldIds: Set<number>;
 };
 
 type ReusableOldRecord = {
@@ -138,8 +181,43 @@ class LeafRecordRef extends RangeValue {
   }
 }
 
+const leafAnalysisResumeStateKey: unique symbol = Symbol("leafAnalysisResumeState");
+
+type LeafAnalysisYieldError = {
+  [leafAnalysisResumeStateKey]?: LeafAnalysisResumeState;
+};
+
 export function emptyLeafAnalysisCacheTrace(): LeafAnalysisCacheTrace {
   return emptyLiveMdLeafAnalysisTrace();
+}
+
+export function leafAnalysisResumeStateFromYield(error: unknown): LeafAnalysisResumeState | null {
+  if (!isObject(error)) return null;
+  return (error as LeafAnalysisYieldError)[leafAnalysisResumeStateKey] ?? null;
+}
+
+export function takeLeafAnalysisResumeStateFromYield(
+  error: unknown,
+): LeafAnalysisResumeState | null {
+  let resumeState = leafAnalysisResumeStateFromYield(error);
+  if (resumeState && isObject(error)) {
+    delete (error as LeafAnalysisYieldError)[leafAnalysisResumeStateKey];
+  }
+  return resumeState;
+}
+
+export function disposeLeafAnalysisResumeState(
+  resumeState: LeafAnalysisResumeState | null | undefined,
+) {
+  if (!resumeState) return;
+  disposeInlineSession(resumeState.inlineSession);
+  resumeState.inlineSession = null;
+}
+
+export function cancelLeafAnalysisResumeState(
+  resumeState: LeafAnalysisResumeState | null | undefined,
+) {
+  disposeLeafAnalysisResumeState(resumeState);
 }
 
 export function createLeafAnalysisCache(
@@ -281,24 +359,45 @@ function rangeInDoc(range: DocRange, docLength: number) {
 
 export function buildFreshLeafAnalysisCache(input: {
   analysisInput: LiveMdLeafSemanticAnalysisInput;
+  resume?: LeafAnalysisResumeState | null;
+  revision?: number;
   snapshot: MarkdownBlockSnapshot;
   startCacheId?: number;
   yieldCheck?: () => void;
 }): LeafAnalysisCacheTransition {
-  let nextCacheId = input.startCacheId ?? 1;
-  let trace = emptyLeafAnalysisCacheTrace();
+  let resume = resumeStateFor(input.resume, "fresh", input.revision);
+  let snapshot = resume?.snapshot ?? input.snapshot;
+  let nextCacheId = resume?.nextCacheId ?? input.startCacheId ?? 1;
+  let trace = resume?.trace ?? emptyLeafAnalysisCacheTrace();
   let units = markdownLeafAnalysisUnits(
     input.analysisInput.state.doc,
-    input.snapshot,
+    snapshot,
     input.analysisInput.renderKeyContext?.featuresEpoch,
   );
-  trace.recordsVisited = units.length;
-  trace.leavesCollected = units.length;
-  let records: LeafAnalysisRecord[] = [];
-  let inlineSession: MarkdownInlineAnalysisSession | null = null;
+  if (!resume) {
+    trace.recordsVisited = units.length;
+    trace.leavesCollected = units.length;
+  }
+  let records = resume?.records ?? [];
+  let inlineSession = resume?.inlineSession ?? null;
+  let resumeState =
+    resume ??
+    createLeafAnalysisResumeState({
+      inlineSession,
+      kind: "fresh",
+      nextCacheId,
+      oldCandidateRecords: [],
+      oldCandidates: new Map(),
+      records,
+      revision: input.revision ?? -1,
+      snapshot,
+      trace,
+    });
+  let completed = false;
   try {
-    for (let index = 0; index < units.length; index++) {
-      if (index % 32 == 0) input.yieldCheck?.();
+    for (let index = resumeState.unitIndex; index < units.length; index++) {
+      updateLeafAnalysisResumeProgress(resumeState, index, nextCacheId, inlineSession);
+      if (index % 32 == 0) checkpointLeafAnalysisResume(input.yieldCheck, resumeState);
       let unit = units[index]!;
       trace.recordsAnalyzed++;
       records.push(
@@ -309,22 +408,32 @@ export function buildFreshLeafAnalysisCache(input: {
           trace,
         ),
       );
+      updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
     }
+    completed = true;
+  } catch (error) {
+    disposeLeafAnalysisResumeStateUnlessYield(error, resumeState);
+    throw error;
   } finally {
-    disposeInlineSession(inlineSession);
+    if (completed) disposeLeafAnalysisResumeState(resumeState);
   }
+
   return {
     cache: createLeafAnalysisCache(records, nextCacheId),
     trace,
   };
 
   function inlineSessionHolder() {
-    return (inlineSession ??= createMarkdownInlineAnalysisSession({
-      blockTree: input.analysisInput.tree,
-      doc: input.analysisInput.state.doc,
-      service: input.analysisInput.service,
-      trace,
-    }));
+    if (!inlineSession) {
+      inlineSession = createMarkdownInlineAnalysisSession({
+        blockTree: input.analysisInput.tree,
+        doc: input.analysisInput.state.doc,
+        service: input.analysisInput.service,
+        trace,
+      });
+      resumeState.inlineSession = inlineSession;
+    }
+    return inlineSession;
   }
 }
 
@@ -333,31 +442,52 @@ export function transitionLeafAnalysisCache(input: {
   changes: ChangeDesc;
   oldCache: LeafAnalysisCache;
   oldDoc: Text;
+  resume?: LeafAnalysisResumeState | null;
+  revision?: number;
   snapshot: MarkdownBlockSnapshot;
   yieldCheck?: () => void;
 }): LeafAnalysisCacheTransition {
+  let resume = resumeStateFor(input.resume, "transition", input.revision);
+  let snapshot = resume?.snapshot ?? input.snapshot;
   let units = markdownLeafAnalysisUnits(
     input.analysisInput.state.doc,
-    input.snapshot,
+    snapshot,
     input.analysisInput.renderKeyContext?.featuresEpoch,
   );
-  let trace = emptyLeafAnalysisCacheTrace();
-  let oldCandidates = mappedOldRecordCandidates(
-    materializeLeafAnalysisCacheRecords(input.oldCache, trace),
-    input.changes,
-    input.yieldCheck,
-    trace,
-  );
-  let nextCacheId = input.oldCache.nextCacheId;
-  trace.recordsVisited = units.length;
-  trace.leavesCollected = units.length;
-  let records: LeafAnalysisRecord[] = [];
-  let usedOldIds = new Set<number>();
-  let inlineSession: MarkdownInlineAnalysisSession | null = null;
+  let trace = resume?.trace ?? emptyLeafAnalysisCacheTrace();
+  let oldCandidateRecords =
+    resume?.oldCandidateRecords ?? materializeLeafAnalysisCacheRecords(input.oldCache, trace);
+  let oldCandidates =
+    resume?.oldCandidates ??
+    mappedOldRecordCandidates(oldCandidateRecords, input.changes, input.yieldCheck, trace);
+  let nextCacheId = resume?.nextCacheId ?? input.oldCache.nextCacheId;
+  if (!resume) {
+    trace.recordsVisited = units.length;
+    trace.leavesCollected = units.length;
+  }
+  let records = resume?.records ?? [];
+  let usedOldIds = resume?.usedOldIds ?? new Set<number>();
+  let inlineSession = resume?.inlineSession ?? null;
+  let resumeState =
+    resume ??
+    createLeafAnalysisResumeState({
+      inlineSession,
+      kind: "transition",
+      nextCacheId,
+      oldCandidateRecords: [...oldCandidateRecords],
+      oldCandidates,
+      records,
+      revision: input.revision ?? -1,
+      snapshot,
+      trace,
+      usedOldIds,
+    });
+  let completed = false;
 
   try {
-    for (let index = 0; index < units.length; index++) {
-      if (index % 32 == 0) input.yieldCheck?.();
+    for (let index = resumeState.unitIndex; index < units.length; index++) {
+      updateLeafAnalysisResumeProgress(resumeState, index, nextCacheId, inlineSession);
+      if (index % 32 == 0) checkpointLeafAnalysisResume(input.yieldCheck, resumeState);
       let unit = units[index]!;
       let reused = reusableOldRecord(
         input.oldDoc,
@@ -378,6 +508,7 @@ export function transitionLeafAnalysisCache(input: {
               trace,
             ),
           );
+          updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
           continue;
         }
         trace.recordsReused++;
@@ -389,6 +520,7 @@ export function transitionLeafAnalysisCache(input: {
             input.analysisInput.state.doc,
           ),
         );
+        updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
         continue;
       }
 
@@ -401,9 +533,14 @@ export function transitionLeafAnalysisCache(input: {
           trace,
         ),
       );
+      updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
     }
+    completed = true;
+  } catch (error) {
+    disposeLeafAnalysisResumeStateUnlessYield(error, resumeState);
+    throw error;
   } finally {
-    disposeInlineSession(inlineSession);
+    if (completed) disposeLeafAnalysisResumeState(resumeState);
   }
 
   return {
@@ -412,20 +549,25 @@ export function transitionLeafAnalysisCache(input: {
   };
 
   function inlineSessionHolder() {
-    return (inlineSession ??= createMarkdownInlineAnalysisSession({
-      blockTree: input.analysisInput.tree,
-      doc: input.analysisInput.state.doc,
-      service: input.analysisInput.service,
-      trace,
-    }));
+    if (!inlineSession) {
+      inlineSession = createMarkdownInlineAnalysisSession({
+        blockTree: input.analysisInput.tree,
+        doc: input.analysisInput.state.doc,
+        service: input.analysisInput.service,
+        trace,
+      });
+      resumeState.inlineSession = inlineSession;
+    }
+    return inlineSession;
   }
 }
 
 export function transitionLeafAnalysisCacheLocal(
   input: LeafAnalysisCacheLocalTransitionInput,
 ): LeafAnalysisCacheTransition {
-  let local = collectLocalMarkdownSnapshot(input);
-  if (local.trace.fallbackCount) {
+  let resume = resumeStateFor(input.resume, "local", input.revision);
+  let local = resume ? null : collectLocalMarkdownSnapshot(input);
+  if (local?.trace.fallbackCount) {
     return {
       cache: input.oldCache,
       fallback: "fullWalk",
@@ -433,37 +575,75 @@ export function transitionLeafAnalysisCacheLocal(
     };
   }
 
+  let snapshot = resume?.snapshot ?? local!.snapshot;
   let units = markdownLeafAnalysisUnits(
     input.analysisInput.state.doc,
-    local.snapshot,
+    snapshot,
     input.analysisInput.renderKeyContext?.featuresEpoch,
   );
-  let oldChangedRanges = changedOldRanges(input.changes);
-  let localWindows = localReplacementRanges(input.analysisInput.state.doc.length, local.snapshot);
-  let trace = local.trace;
-  let oldCandidateEntries = uniqueRecordEntries([
-    ...local.oldAffectedEntries,
-    ...localCandidateEntries(input.oldCache, input.changes, oldChangedRanges, localWindows, trace),
-  ]);
-  let oldCandidateRecords = oldCandidateEntries.map((entry) => entry.record);
-  let changedOldIds = new Set<number>();
-  trace.recordsCollected = oldCandidateEntries.length;
-  let oldCandidates = mappedOldRecordCandidates(
-    oldCandidateRecords,
-    input.changes,
-    input.yieldCheck,
-    trace,
-  );
-  let nextCacheId = input.oldCache.nextCacheId;
-  trace.recordsVisited = units.length;
-  let localRecords: LeafAnalysisRecord[] = [];
-  let changedRecords: LeafAnalysisRecord[] = [];
-  let usedOldIds = new Set<number>();
-  let inlineSession: MarkdownInlineAnalysisSession | null = null;
+  let trace = resume?.trace ?? local!.trace;
+  let oldChangedRanges = resume?.oldChangedRanges ?? changedOldRanges(input.changes);
+  let localWindows =
+    resume?.localWindows ?? localReplacementRanges(input.analysisInput.state.doc.length, snapshot);
+  let oldCandidateRecords: readonly LeafAnalysisRecord[];
+  let oldCandidateCount: number;
+  let oldCandidates: LeafAnalysisOldCandidates;
+  if (resume) {
+    oldCandidateRecords = resume.oldCandidateRecords;
+    oldCandidateCount = resume.oldCandidateRecords.length;
+    oldCandidates = resume.oldCandidates;
+  } else {
+    let oldCandidateEntries = uniqueRecordEntries([
+      ...local!.oldAffectedEntries,
+      ...localCandidateEntries(
+        input.oldCache,
+        input.changes,
+        oldChangedRanges,
+        localWindows,
+        trace,
+      ),
+    ]);
+    oldCandidateRecords = oldCandidateEntries.map((entry) => entry.record);
+    oldCandidateCount = oldCandidateEntries.length;
+    trace.recordsCollected = oldCandidateCount;
+    oldCandidates = mappedOldRecordCandidates(
+      oldCandidateRecords,
+      input.changes,
+      input.yieldCheck,
+      trace,
+    );
+  }
+  let nextCacheId = resume?.nextCacheId ?? input.oldCache.nextCacheId;
+  if (!resume) trace.recordsVisited = units.length;
+  let localRecords = resume?.records ?? [];
+  let changedRecords = resume?.changedRecords ?? [];
+  let changedOldIds = resume?.changedOldIds ?? new Set<number>();
+  let usedOldIds = resume?.usedOldIds ?? new Set<number>();
+  let inlineSession = resume?.inlineSession ?? null;
+  let resumeState =
+    resume ??
+    createLeafAnalysisResumeState({
+      changedOldIds,
+      changedRecords,
+      inlineSession,
+      kind: "local",
+      localWindows,
+      nextCacheId,
+      oldCandidateRecords: [...oldCandidateRecords],
+      oldCandidates,
+      oldChangedRanges,
+      records: localRecords,
+      revision: input.revision ?? -1,
+      snapshot,
+      trace,
+      usedOldIds,
+    });
+  let completed = false;
 
   try {
-    for (let index = 0; index < units.length; index++) {
-      if (index % 32 == 0) input.yieldCheck?.();
+    for (let index = resumeState.unitIndex; index < units.length; index++) {
+      updateLeafAnalysisResumeProgress(resumeState, index, nextCacheId, inlineSession);
+      if (index % 32 == 0) checkpointLeafAnalysisResume(input.yieldCheck, resumeState);
       let unit = units[index]!;
       let reused = reusableOldRecord(
         input.oldDoc,
@@ -485,6 +665,7 @@ export function transitionLeafAnalysisCacheLocal(
           changedOldIds.add(reused.record.cacheId);
           localRecords.push(record);
           changedRecords.push(record);
+          updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
           continue;
         }
         trace.recordsReused++;
@@ -496,6 +677,7 @@ export function transitionLeafAnalysisCacheLocal(
             input.analysisInput.state.doc,
           ),
         );
+        updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
         continue;
       }
 
@@ -508,14 +690,19 @@ export function transitionLeafAnalysisCacheLocal(
       );
       localRecords.push(record);
       changedRecords.push(record);
+      updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
     }
+    completed = true;
+  } catch (error) {
+    disposeLeafAnalysisResumeStateUnlessYield(error, resumeState);
+    throw error;
   } finally {
-    disposeInlineSession(inlineSession);
+    if (completed) disposeLeafAnalysisResumeState(resumeState);
   }
 
   localRecords.sort(compareAnalysisRecords);
   changedRecords.sort(compareAnalysisRecords);
-  trace.recordsReused += cacheRecordCount(input.oldCache) - oldCandidateEntries.length;
+  trace.recordsReused += cacheRecordCount(input.oldCache) - oldCandidateCount;
   let sourceIslandLeaves =
     input.oldSourceIslandLeaves &&
     transitionSourceIslandLeavesFromLeafAnalysisRecords({
@@ -567,13 +754,100 @@ export function transitionLeafAnalysisCacheLocal(
   };
 
   function inlineSessionHolder() {
-    return (inlineSession ??= createMarkdownInlineAnalysisSession({
-      blockTree: input.analysisInput.tree,
-      doc: input.analysisInput.state.doc,
-      service: input.analysisInput.service,
-      trace,
-    }));
+    if (!inlineSession) {
+      inlineSession = createMarkdownInlineAnalysisSession({
+        blockTree: input.analysisInput.tree,
+        doc: input.analysisInput.state.doc,
+        service: input.analysisInput.service,
+        trace,
+      });
+      resumeState.inlineSession = inlineSession;
+    }
+    return inlineSession;
   }
+}
+
+function resumeStateFor(
+  resumeState: LeafAnalysisResumeState | null | undefined,
+  kind: LeafAnalysisResumeKind,
+  revision: number | undefined,
+) {
+  if (!resumeState) return null;
+  if (resumeState.kind != kind) return null;
+  if (revision !== undefined && resumeState.revision != revision) return null;
+  return resumeState;
+}
+
+function createLeafAnalysisResumeState(input: {
+  changedOldIds?: Set<number>;
+  changedRecords?: LeafAnalysisRecord[];
+  inlineSession?: MarkdownInlineAnalysisSession | null;
+  kind: LeafAnalysisResumeKind;
+  localWindows?: readonly DocRange[];
+  nextCacheId: number;
+  oldChangedRanges?: readonly DocRange[];
+  oldCandidateRecords: readonly LeafAnalysisRecord[];
+  oldCandidates: LeafAnalysisOldCandidates;
+  records: LeafAnalysisRecord[];
+  revision: number;
+  snapshot: MarkdownBlockSnapshot;
+  trace: LeafAnalysisCacheTrace;
+  usedOldIds?: Set<number>;
+}): LeafAnalysisResumeState {
+  return {
+    changedOldIds: input.changedOldIds ?? new Set(),
+    changedRecords: input.changedRecords ?? [],
+    inlineSession: input.inlineSession ?? null,
+    kind: input.kind,
+    localWindows: input.localWindows ?? [],
+    nextCacheId: input.nextCacheId,
+    oldChangedRanges: input.oldChangedRanges ?? [],
+    oldCandidateRecords: [...input.oldCandidateRecords],
+    oldCandidates: input.oldCandidates,
+    records: input.records,
+    revision: input.revision,
+    snapshot: input.snapshot,
+    trace: input.trace,
+    unitIndex: 0,
+    usedOldIds: input.usedOldIds ?? new Set(),
+  };
+}
+
+function updateLeafAnalysisResumeProgress(
+  resumeState: LeafAnalysisResumeState,
+  unitIndex: number,
+  nextCacheId: number,
+  inlineSession: MarkdownInlineAnalysisSession | null,
+) {
+  resumeState.unitIndex = unitIndex;
+  resumeState.nextCacheId = nextCacheId;
+  resumeState.inlineSession = inlineSession;
+}
+
+function checkpointLeafAnalysisResume(
+  yieldCheck: (() => void) | undefined,
+  resumeState: LeafAnalysisResumeState,
+) {
+  try {
+    yieldCheck?.();
+  } catch (error) {
+    if (isObject(error)) {
+      (error as LeafAnalysisYieldError)[leafAnalysisResumeStateKey] = resumeState;
+    }
+    throw error;
+  }
+}
+
+function disposeLeafAnalysisResumeStateUnlessYield(
+  error: unknown,
+  resumeState: LeafAnalysisResumeState,
+) {
+  if (leafAnalysisResumeStateFromYield(error) == resumeState) return;
+  disposeLeafAnalysisResumeState(resumeState);
+}
+
+function isObject(value: unknown): value is object {
+  return (typeof value == "object" && value != null) || typeof value == "function";
 }
 
 function mappedOldRecordCandidates(

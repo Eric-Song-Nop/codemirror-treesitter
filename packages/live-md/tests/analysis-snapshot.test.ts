@@ -42,8 +42,10 @@ import {
 import { walkMarkdownBlocks } from "../src/core/analysis/markdown-block-cursor.js";
 import {
   buildFreshLeafAnalysisCache,
+  disposeLeafAnalysisResumeState,
   createLeafAnalysisCache,
   findLeafAnalysisRecordsTouchingRanges,
+  leafAnalysisResumeStateFromYield,
   leafAnalysisCacheRecordCount,
   materializeLeafAnalysisCacheRecords,
   transitionLeafAnalysisCache,
@@ -279,6 +281,211 @@ describe("LiveMD analysis snapshot", () => {
       expect(transitionedRecord.analysis.descriptors).toBe(initialRecord.analysis.descriptors);
     } finally {
       deleteLiveMdTree(tree);
+    }
+  });
+
+  it("resumes yielded full cache transitions without redoing completed units", async () => {
+    let service = await loadMarkdownParserService();
+    let state = EditorState.create({ doc: emphasisParagraphDoc(96, "old") });
+    let tree = service.blockParser.parse(state.doc);
+    let nextTree: Tree | null = null;
+
+    try {
+      let initial = buildFreshLeafAnalysisCache({
+        analysisInput: { service, state, tree },
+        snapshot: walkMarkdownBlocks(tree, state.doc).snapshot,
+      });
+      let transaction = state.update({
+        changes: replaceAllTextChanges(state.doc.toString(), "_old_", "_new_"),
+      });
+      nextTree = service.blockParser.parse(transaction.state.doc);
+      let snapshot = walkMarkdownBlocks(nextTree, transaction.state.doc).snapshot;
+      let uninterrupted = transitionLeafAnalysisCache({
+        analysisInput: { service, state: transaction.state, tree: nextTree },
+        changes: transaction.changes,
+        oldCache: initial.cache,
+        oldDoc: state.doc,
+        snapshot,
+      });
+      let checkpoint = 0;
+      let yielded: unknown = null;
+
+      try {
+        transitionLeafAnalysisCache({
+          analysisInput: { service, state: transaction.state, tree: nextTree },
+          changes: transaction.changes,
+          oldCache: initial.cache,
+          oldDoc: state.doc,
+          revision: 7,
+          snapshot,
+          yieldCheck() {
+            checkpoint++;
+            if (checkpoint == 5) throw new Error("scheduled yield");
+          },
+        });
+      } catch (error) {
+        yielded = error;
+      }
+
+      let resume = leafAnalysisResumeStateFromYield(yielded);
+      expect(resume?.kind).toBe("transition");
+      expect(resume?.revision).toBe(7);
+      expect(resume?.unitIndex).toBeGreaterThan(0);
+      expect(resume?.records).toHaveLength(resume!.unitIndex);
+      expect(resume?.trace.inlineParserSessions).toBe(1);
+      expect(resume?.trace.inlineParserSessionDisposals).toBe(0);
+
+      let resumed = transitionLeafAnalysisCache({
+        analysisInput: { service, state: transaction.state, tree: nextTree },
+        changes: transaction.changes,
+        oldCache: initial.cache,
+        oldDoc: state.doc,
+        resume,
+        revision: 7,
+        snapshot,
+      });
+
+      expect(materializeLeafAnalysisCacheRecords(resumed.cache)).toEqual(
+        materializeLeafAnalysisCacheRecords(uninterrupted.cache),
+      );
+      expect(resumed.trace.recordsAnalyzed).toBe(uninterrupted.trace.recordsAnalyzed);
+      expect(resumed.trace.inlineParserSessions).toBe(1);
+      expect(resumed.trace.inlineParserSessionDisposals).toBe(1);
+    } finally {
+      deleteLiveMdTree(tree);
+      if (nextTree) deleteLiveMdTree(nextTree);
+    }
+  });
+
+  it("resumes yielded local cache transitions without redoing completed units", async () => {
+    let service = await loadMarkdownParserService();
+    let state = EditorState.create({ doc: emphasisParagraphDoc(96, "old") });
+    let tree = service.blockParser.parse(state.doc);
+    let nextTree: Tree | null = null;
+
+    try {
+      let initial = buildFreshLeafAnalysisCache({
+        analysisInput: { service, state, tree },
+        snapshot: walkMarkdownBlocks(tree, state.doc).snapshot,
+      });
+      let sourceIslandLeaves = sourceIslandLeavesFromLeafAnalysisRecords(
+        state.doc,
+        materializeLeafAnalysisCacheRecords(initial.cache),
+      );
+      let transaction = state.update({
+        changes: replaceAllTextChanges(state.doc.toString(), "_old_", "_new_"),
+      });
+      nextTree = service.blockParser.parse(transaction.state.doc);
+      let uninterrupted = transitionLeafAnalysisCacheLocal({
+        analysisInput: { service, state: transaction.state, tree: nextTree },
+        changes: transaction.changes,
+        oldCache: initial.cache,
+        oldDoc: state.doc,
+        oldSourceIslandLeaves: sourceIslandLeaves,
+      });
+      let checkpoint = 0;
+      let yielded: unknown = null;
+
+      try {
+        transitionLeafAnalysisCacheLocal({
+          analysisInput: { service, state: transaction.state, tree: nextTree },
+          changes: transaction.changes,
+          oldCache: initial.cache,
+          oldDoc: state.doc,
+          oldSourceIslandLeaves: sourceIslandLeaves,
+          revision: 13,
+          yieldCheck() {
+            checkpoint++;
+            if (checkpoint == 6) throw new Error("scheduled yield");
+          },
+        });
+      } catch (error) {
+        yielded = error;
+      }
+
+      let resume = leafAnalysisResumeStateFromYield(yielded);
+      expect(resume?.kind).toBe("local");
+      expect(resume?.revision).toBe(13);
+      expect(resume?.unitIndex).toBeGreaterThan(0);
+      expect(resume?.records).toHaveLength(resume!.unitIndex);
+      expect(resume?.trace.inlineParserSessions).toBe(1);
+      expect(resume?.trace.inlineParserSessionDisposals).toBe(0);
+
+      let resumed = transitionLeafAnalysisCacheLocal({
+        analysisInput: { service, state: transaction.state, tree: nextTree },
+        changes: transaction.changes,
+        oldCache: initial.cache,
+        oldDoc: state.doc,
+        oldSourceIslandLeaves: sourceIslandLeaves,
+        resume,
+        revision: 13,
+      });
+
+      expect(resumed.fallback).toBeUndefined();
+      expect(materializeLeafAnalysisCacheRecords(resumed.cache)).toEqual(
+        materializeLeafAnalysisCacheRecords(uninterrupted.cache),
+      );
+      expect(canonicalSourceIslandLeaves(resumed.sourceIslandLeaves ?? [])).toEqual(
+        canonicalSourceIslandLeaves(uninterrupted.sourceIslandLeaves ?? []),
+      );
+      expect(resumed.trace.recordsAnalyzed).toBe(uninterrupted.trace.recordsAnalyzed);
+      expect(resumed.trace.inlineParserSessions).toBe(1);
+      expect(resumed.trace.inlineParserSessionDisposals).toBe(1);
+    } finally {
+      deleteLiveMdTree(tree);
+      if (nextTree) deleteLiveMdTree(nextTree);
+    }
+  });
+
+  it("disposes inline parser sessions when a yielded cache resume is cancelled", async () => {
+    let service = await loadMarkdownParserService();
+    let state = EditorState.create({ doc: emphasisParagraphDoc(96, "old") });
+    let tree = service.blockParser.parse(state.doc);
+    let nextTree: Tree | null = null;
+
+    try {
+      let initial = buildFreshLeafAnalysisCache({
+        analysisInput: { service, state, tree },
+        snapshot: walkMarkdownBlocks(tree, state.doc).snapshot,
+      });
+      let transaction = state.update({
+        changes: replaceAllTextChanges(state.doc.toString(), "_old_", "_new_"),
+      });
+      nextTree = service.blockParser.parse(transaction.state.doc);
+      let snapshot = walkMarkdownBlocks(nextTree, transaction.state.doc).snapshot;
+      let checkpoint = 0;
+      let yielded: unknown = null;
+
+      try {
+        transitionLeafAnalysisCache({
+          analysisInput: { service, state: transaction.state, tree: nextTree },
+          changes: transaction.changes,
+          oldCache: initial.cache,
+          oldDoc: state.doc,
+          revision: 11,
+          snapshot,
+          yieldCheck() {
+            checkpoint++;
+            if (checkpoint == 5) throw new Error("scheduled yield");
+          },
+        });
+      } catch (error) {
+        yielded = error;
+      }
+
+      let resume = leafAnalysisResumeStateFromYield(yielded);
+      expect(resume).toBeTruthy();
+      expect(resume?.trace.inlineParserSessions).toBe(1);
+      expect(resume?.trace.inlineParserSessionDisposals).toBe(0);
+
+      disposeLeafAnalysisResumeState(resume);
+
+      expect(resume?.inlineSession).toBeNull();
+      expect(resume?.trace.inlineParserSessionDisposals).toBe(1);
+      expect(resume?.trace.inlineParserSessions).toBe(resume?.trace.inlineParserSessionDisposals);
+    } finally {
+      deleteLiveMdTree(tree);
+      if (nextTree) deleteLiveMdTree(nextTree);
     }
   });
 
@@ -4755,6 +4962,24 @@ function numberedParagraphDoc(count: number) {
   return Array.from({ length: count }, (_value, index) => `paragraph ${index} **bold**`).join(
     "\n\n",
   );
+}
+
+function emphasisParagraphDoc(count: number, word: string) {
+  return Array.from({ length: count }, (_value, index) => `paragraph ${index} _${word}_`).join(
+    "\n\n",
+  );
+}
+
+function replaceAllTextChanges(doc: string, search: string, insert: string) {
+  let changes: Array<{ from: number; insert: string; to: number }> = [];
+  let from = 0;
+  while (from < doc.length) {
+    let match = doc.indexOf(search, from);
+    if (match < 0) break;
+    changes.push({ from: match, insert, to: match + search.length });
+    from = match + search.length;
+  }
+  return changes;
 }
 
 function numberedPlainParagraphDoc(count: number) {
