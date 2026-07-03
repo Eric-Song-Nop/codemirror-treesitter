@@ -81,7 +81,7 @@ vp run @codemirror-treesitter/live-md#build
   segmented-leaves Proxy with an explicit `SourceIslandIndex`, keeps local
   transition lookups lazy behind `at`/`find`, makes `toArray()` materialization
   explicit at call sites, and updates the laziness tests to spy on `toArray()`.
-- **Phase 2 / PR-12:** implemented on 2026-07-03
+- **Phase 2 / PR-12:** implemented on 2026-07-03 in draft PR #98
   (`codex/live-md-pr12-small-batch`). The code hardens code-fence highlight
   cache hits with exact source verification, centralizes descriptor/table key
   writers, evicts distant surface projection ranges, adds scroll-direction
