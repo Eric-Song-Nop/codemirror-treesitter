@@ -37,7 +37,7 @@ export function liveMdLinkOpen(handler: LiveMdLinkOpenHandler | null | undefined
 }
 
 export function liveMdLinkMark(destination: null | string | undefined, baseUrl: null | string) {
-  let href = normalizeLiveMdLinkDestination(destination, baseUrl);
+  let href = resolveLiveMdLinkHref(destination, baseUrl);
   if (!href) return plainLinkMark;
 
   let cached = linkMarkCache.get(href);
@@ -52,6 +52,13 @@ export function liveMdLinkMark(destination: null | string | undefined, baseUrl: 
     linkMarkCache.set(href, cached);
   }
   return cached;
+}
+
+export function resolveLiveMdLinkHref(
+  destination: null | string | undefined,
+  baseUrl: null | string,
+) {
+  return normalizeLiveMdLinkDestination(destination, baseUrl);
 }
 
 export function liveMdLinkInteractions(): Extension {

@@ -7,15 +7,18 @@ import {
   type LiveMdMermaidRenderHandle,
   type LiveMdMermaidRenderResult,
 } from "./runtime/render-cache.js";
-import { liveMdTableContentKey } from "./analysis/descriptors.js";
+import {
+  type LiveMdInlineContent,
+  type LiveMdTableCellModel,
+  type LiveMdTableModel,
+  liveMdTableContentKey,
+} from "./analysis/descriptors.js";
+import { resolveLiveMdImageSource, type LiveMdImageSourceResolver } from "./images.js";
+import { resolveLiveMdLinkHref } from "./links.js";
 import { hashString } from "./analysis/ranges.js";
 import { isAsciiDigit } from "./util.js";
 
-export type MarkdownTable = {
-  alignments: Array<"center" | "default" | "left" | "right">;
-  header: string[];
-  rows: string[][];
-};
+export type MarkdownTable = LiveMdTableModel;
 
 const latexOptions: KatexOptions = {
   maxExpand: 1000,
@@ -393,6 +396,8 @@ export class ImagePreviewWidget extends WidgetType {
 export class TablePreviewWidget extends WidgetType {
   private heightKey: string | null;
   private heights: LiveMdMeasuredHeights | null;
+  private imageSourceResolver: LiveMdImageSourceResolver | null;
+  private linkBaseUrl: string | null;
   private table: MarkdownTable;
   private tableKey: string;
 
@@ -400,16 +405,24 @@ export class TablePreviewWidget extends WidgetType {
     table: MarkdownTable,
     heights: LiveMdMeasuredHeights | null = null,
     heightKey: string | null = null,
+    linkBaseUrl: string | null = null,
+    imageSourceResolver: LiveMdImageSourceResolver | null = null,
   ) {
     super();
     this.heightKey = heightKey;
     this.heights = heights;
+    this.imageSourceResolver = imageSourceResolver;
+    this.linkBaseUrl = linkBaseUrl;
     this.table = table;
     this.tableKey = liveMdTableContentKey(table);
   }
 
   eq(other: TablePreviewWidget) {
-    return other.tableKey == this.tableKey;
+    return (
+      other.heightKey == this.heightKey &&
+      other.linkBaseUrl == this.linkBaseUrl &&
+      other.tableKey == this.tableKey
+    );
   }
 
   toDOM(view: EditorView) {
@@ -421,7 +434,8 @@ export class TablePreviewWidget extends WidgetType {
     wrapper.addEventListener("mousedown", (event) => {
       event.preventDefault();
     });
-    wrapper.addEventListener("click", () => {
+    wrapper.addEventListener("click", (event) => {
+      if (event.shiftKey && eventTargetLiveMdLink(event.target)) return;
       view.dispatch({
         selection: { anchor: view.posAtDOM(wrapper) },
         scrollIntoView: true,
@@ -435,7 +449,10 @@ export class TablePreviewWidget extends WidgetType {
     let headerRow = document.createElement("tr");
     this.table.header.forEach((cell, index) => {
       let heading = document.createElement("th");
-      heading.textContent = cell;
+      appendTableCellContent(heading, this.table.headerCells?.[index] ?? null, cell, {
+        imageSourceResolver: this.imageSourceResolver,
+        linkBaseUrl: this.linkBaseUrl,
+      });
       applyTableAlignment(heading, this.table.alignments[index]);
       headerRow.append(heading);
     });
@@ -443,11 +460,14 @@ export class TablePreviewWidget extends WidgetType {
     table.append(thead);
 
     let tbody = document.createElement("tbody");
-    this.table.rows.forEach((row) => {
+    this.table.rows.forEach((row, rowIndex) => {
       let tableRow = document.createElement("tr");
       row.forEach((cell, index) => {
         let value = document.createElement("td");
-        value.textContent = cell;
+        appendTableCellContent(value, this.table.rowCells?.[rowIndex]?.[index] ?? null, cell, {
+          imageSourceResolver: this.imageSourceResolver,
+          linkBaseUrl: this.linkBaseUrl,
+        });
         applyTableAlignment(value, this.table.alignments[index]);
         tableRow.append(value);
       });
@@ -464,6 +484,133 @@ export class TablePreviewWidget extends WidgetType {
       measuredHeight(this.heights, this.heightKey) ?? tableRowHeight * (this.table.rows.length + 1)
     );
   }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+type TableInlineDomContext = {
+  imageSourceResolver: LiveMdImageSourceResolver | null;
+  linkBaseUrl: string | null;
+};
+
+function appendTableCellContent(
+  parent: HTMLElement,
+  cell: LiveMdTableCellModel | null,
+  fallbackText: string,
+  context: TableInlineDomContext,
+) {
+  if (!cell) {
+    parent.textContent = fallbackText;
+    return;
+  }
+  appendInlineContent(parent, cell.inline, context);
+}
+
+function appendInlineContent(
+  parent: HTMLElement | DocumentFragment,
+  content: LiveMdInlineContent,
+  context: TableInlineDomContext,
+) {
+  for (let node of content) {
+    switch (node.kind) {
+      case "emphasis": {
+        let element = document.createElement("em");
+        element.className = "cm-md-emphasis";
+        appendInlineContent(element, node.children, context);
+        parent.append(element);
+        break;
+      }
+      case "hardBreak":
+        parent.append(document.createElement("br"));
+        break;
+      case "image":
+        parent.append(tableInlineImage(node.alt, node.source, node.title, context));
+        break;
+      case "inlineCode": {
+        let element = document.createElement("code");
+        element.className = "cm-md-inline-code";
+        element.textContent = node.text;
+        parent.append(element);
+        break;
+      }
+      case "latex":
+        parent.append(tableInlineLatex(node));
+        break;
+      case "link": {
+        let element = document.createElement("a");
+        element.className = "cm-md-link";
+        let href = resolveLiveMdLinkHref(node.destination, context.linkBaseUrl);
+        if (href) element.dataset.liveMdHref = href;
+        if (node.title) element.title = node.title;
+        appendInlineContent(element, node.children, context);
+        parent.append(element);
+        break;
+      }
+      case "strike": {
+        let element = document.createElement("del");
+        element.className = "cm-md-strike";
+        appendInlineContent(element, node.children, context);
+        parent.append(element);
+        break;
+      }
+      case "strong": {
+        let element = document.createElement("strong");
+        element.className = "cm-md-strong";
+        appendInlineContent(element, node.children, context);
+        parent.append(element);
+        break;
+      }
+      case "text":
+        parent.append(document.createTextNode(node.text));
+        break;
+    }
+  }
+}
+
+function tableInlineImage(
+  alt: string,
+  source: string,
+  title: string | null,
+  context: TableInlineDomContext,
+) {
+  let resolved = resolveLiveMdImageSource(source, context.imageSourceResolver);
+  let image = document.createElement("img");
+  image.alt = alt;
+  image.src = resolved.src;
+  if (resolved.width) image.width = resolved.width;
+  if (resolved.height) image.height = resolved.height;
+  if (title) image.title = title;
+  return image;
+}
+
+function tableInlineLatex(node: Extract<LiveMdInlineContent[number], { kind: "latex" }>) {
+  let element = document.createElement("span");
+  element.className = node.displayMode
+    ? "cm-md-latex cm-md-latex-display"
+    : "cm-md-latex cm-md-latex-inline";
+  element.dataset.source = node.source;
+  let rendered = renderLatexFormula({
+    block: false,
+    displayMode: node.displayMode,
+    source: node.source,
+    tex: node.tex,
+  });
+  if (rendered.ok) {
+    element.innerHTML = rendered.html;
+  } else {
+    element.classList.add("is-error");
+    element.textContent = node.source;
+    if (rendered.message) element.title = rendered.message;
+  }
+  return element;
+}
+
+function eventTargetLiveMdLink(target: EventTarget | null) {
+  return target instanceof Element
+    ? target.closest<HTMLElement>(".cm-md-link[data-live-md-href]")
+    : null;
 }
 
 function loadMermaid() {
