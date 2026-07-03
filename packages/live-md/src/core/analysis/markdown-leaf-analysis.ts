@@ -33,6 +33,7 @@ import {
   createMarkdownInlineAnalysisSession,
   type MarkdownInlineAnalysisSession,
 } from "./markdown-inline-analysis.js";
+import { createMarkdownInlineRenderSession } from "./markdown-inline-render.js";
 import { analyzeMarkdownTableAnalysis } from "./markdown-table-analysis.js";
 import {
   emptyLiveMdLeafAnalysisTrace,
@@ -423,12 +424,22 @@ function leafDescriptors(
     case "heading":
       return [...headingDescriptors(leaf.node), ...headingInlineDescriptors(inlineSession, leaf)];
     case "table": {
-      let table = analyzeMarkdownTableAnalysis(input.state.doc, input.tree, leaf.range);
-      if (trace) trace.tableCellsParsed += table.inlineRanges.length;
-      return dedupeDescriptors([
-        ...(table.descriptor ? [table.descriptor] : []),
-        ...table.inlineRanges.flatMap((range) => inlineSession.analyze(range)),
-      ]);
+      let inlineRenderSession = createMarkdownInlineRenderSession(input.service);
+      try {
+        let table = analyzeMarkdownTableAnalysis(
+          input.state.doc,
+          input.tree,
+          leaf.range,
+          inlineRenderSession,
+        );
+        if (trace) trace.tableCellsParsed += table.inlineRanges.length;
+        return dedupeDescriptors([
+          ...(table.descriptor ? [table.descriptor] : []),
+          ...table.inlineRanges.flatMap((range) => inlineSession.analyze(range)),
+        ]);
+      } finally {
+        inlineRenderSession.dispose();
+      }
     }
     case "fencedCode": {
       let fence = analyzeMarkdownFenceDescriptor(input.state.doc, leaf.node);
