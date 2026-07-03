@@ -427,8 +427,11 @@ describe("LiveMD analysis snapshot", () => {
       expect(materializeLeafAnalysisCacheRecords(resumed.cache)).toEqual(
         materializeLeafAnalysisCacheRecords(uninterrupted.cache),
       );
-      expect(canonicalSourceIslandLeaves(resumed.sourceIslandLeaves ?? [])).toEqual(
-        canonicalSourceIslandLeaves(uninterrupted.sourceIslandLeaves ?? []),
+      if (!resumed.sourceIslandLeaves || !uninterrupted.sourceIslandLeaves) {
+        throw new Error("Expected local transition source island leaves");
+      }
+      expect(canonicalSourceIslandLeaves(resumed.sourceIslandLeaves)).toEqual(
+        canonicalSourceIslandLeaves(uninterrupted.sourceIslandLeaves),
       );
       expect(resumed.trace.recordsAnalyzed).toBe(uninterrupted.trace.recordsAnalyzed);
       expect(resumed.trace.inlineParserSessions).toBe(1);
