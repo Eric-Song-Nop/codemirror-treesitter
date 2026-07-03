@@ -4,11 +4,11 @@ import { ensureSyntaxTree } from "@codemirror-treesitter/language";
 import {
   defineLiveMdEditor,
   prepareLiveMd,
+  unstableLiveMdAnalysisTrace,
   type LiveMdEditorElement,
 } from "@codemirror-treesitter/live-md";
 import { createInitialMarkdown } from "@codemirror-treesitter/live-md/fixtures";
 import type { EditorView } from "@codemirror/view";
-import { __testLiveMdAnalysis } from "../../../packages/live-md/src/core/decorations.js";
 
 type BenchmarkGroup = "clipboard" | "delete" | "edit" | "render" | "selection";
 
@@ -331,8 +331,9 @@ async function measureColdRender(
   forceFullParse(view);
   await nextFrame();
   readLayout(view);
+  let duration = performance.now() - start;
   collectTraceStats(view, traceStats);
-  return metric(`${label}: load, parse, and layout`, [performance.now() - start]);
+  return metric(`${label}: load, parse, and layout`, [duration]);
 }
 
 function benchmarkView(session: BenchmarkSession) {
@@ -349,8 +350,9 @@ async function measureStep(view: EditorView, step: BenchmarkStep, traceStats: Be
     forceFullParse(view);
     await nextFrame();
     readLayout(view);
+    let duration = performance.now() - start;
     collectTraceStats(view, traceStats);
-    samples.push(performance.now() - start);
+    samples.push(duration);
   }
   return metric(step.label, samples);
 }
@@ -374,8 +376,7 @@ function emptyTraceStats(): BenchmarkTraceStats {
 }
 
 function collectTraceStats(view: EditorView, stats: BenchmarkTraceStats) {
-  let analysis = __testLiveMdAnalysis(view);
-  let trace = analysis.semanticTrace ?? analysis.trace;
+  let trace = unstableLiveMdAnalysisTrace(view);
   stats.fallbackCount += trace.fallbackCount;
   stats.maxFixedPointRounds = Math.max(stats.maxFixedPointRounds, trace.fixedPointRounds);
   stats.maxRecordsAnalyzed = Math.max(stats.maxRecordsAnalyzed, trace.recordsAnalyzed);

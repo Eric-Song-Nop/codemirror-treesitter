@@ -5,5 +5,7 @@ export {
   __testFlushLiveMdAnalysis,
   __testRefreshLiveMdSurface,
   __testRefreshLiveMdSurfacePreservingState,
+  unstableLiveMdAnalysisTrace,
   liveMdAnalysis,
+  type LiveMdAnalysisTraceSnapshot,
 } from "./runtime/field.js";
