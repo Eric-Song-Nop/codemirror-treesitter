@@ -40,8 +40,8 @@ vp run @codemirror-treesitter/live-md#build
   container syntax-range filter with the runtime edit-surface path, keeping
   structural fence-start edits local while preserving committed semantic
   restructuring.
-- **Phase 1 / PR-4:** implemented on 2026-07-03 in
-  `codex/live-md-pr4-origin-reveal`. The code makes pending reveal
+- **Phase 1 / PR-4:** ready for review on 2026-07-03 in draft PR #91
+  (`codex/live-md-pr4-origin-reveal`). The code makes pending reveal
   origin-sensitive, keeps remote/history-excluded and distant undo changes
   non-revealing, adds a guarded synchronous task-checkbox fast path, and keeps
   dirty link interactions safe while edits are pending.
