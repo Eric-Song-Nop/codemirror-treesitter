@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { StateField, Transaction } from "@codemirror/state";
 import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
 import { EphemeralStore, LoroDoc, UndoManager } from "loro-crdt";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -110,6 +111,48 @@ describe("liveMdLoroCollaboration", () => {
     });
 
     expect(text.toString()).toBe("first");
+    await editor.ready;
+    editor.destroy();
+  });
+
+  it("marks imported Loro changes as remote CodeMirror transactions", async () => {
+    let doc = new LoroDoc();
+    let text = doc.getText("markdown");
+    text.insert(0, "base");
+    doc.commit();
+
+    let remoteFlags: boolean[] = [];
+    let remoteRecorder = StateField.define<null>({
+      create: () => null,
+      update(value, transaction) {
+        if (transaction.docChanged) {
+          remoteFlags.push(transaction.annotation(Transaction.remote) === true);
+        }
+        return value;
+      },
+    });
+
+    let parent = document.createElement("div");
+    document.body.append(parent);
+    let editor = createLiveMdEditor({
+      defaultValue: "base",
+      extensions: [liveMdLoroCollaboration({ doc }), remoteRecorder],
+      parent,
+    });
+
+    await flushMicrotasks();
+    remoteFlags = [];
+
+    let remoteDoc = new LoroDoc();
+    remoteDoc.import(doc.export({ mode: "snapshot" }));
+    let from = doc.oplogVersion();
+    remoteDoc.getText("markdown").insert("base".length, " remote");
+    remoteDoc.commit();
+    doc.import(remoteDoc.export({ from, mode: "update" }));
+
+    await flushMicrotasks();
+    expect(editor.value).toBe("base remote");
+    expect(remoteFlags).toContain(true);
     await editor.ready;
     editor.destroy();
   });

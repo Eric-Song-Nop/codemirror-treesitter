@@ -1,4 +1,4 @@
-import { StateEffect, type Extension } from "@codemirror/state";
+import { EditorState, StateEffect, Transaction, type Extension } from "@codemirror/state";
 import { ViewPlugin, type EditorView } from "@codemirror/view";
 import type { LiveMdPlugin } from "@codemirror-treesitter/live-md";
 import { LoroExtensions, redo as loroRedo, undo as loroUndo } from "loro-codemirror";
@@ -29,6 +29,7 @@ const drainLoroInitGuard = StateEffect.define<void>();
 export function liveMdLoroCollaboration(options: LiveMdLoroCollaborationOptions): Extension {
   let getTextFromDoc = createLiveMdLoroTextGetter(options.text);
   return [
+    markLoroSyncTransactionsRemote(),
     LoroExtensions(options.doc, options.presence, options.undoManager, getTextFromDoc),
     drainMatchingInitialLoroDispatch(options.doc, getTextFromDoc),
   ];
@@ -49,6 +50,36 @@ export function createLiveMdLoroTextGetter(text: LiveMdLoroTextSource = "markdow
 
 export function getLiveMdLoroText(doc: LoroDoc, text: LiveMdLoroTextSource = "markdown"): LoroText {
   return createLiveMdLoroTextGetter(text)(doc);
+}
+
+function markLoroSyncTransactionsRemote(): Extension {
+  return EditorState.transactionExtender.of((transaction) => {
+    if (
+      !transaction.docChanged ||
+      transaction.annotation(Transaction.remote) === true ||
+      !transactionHasLoroSyncAnnotation(transaction)
+    ) {
+      return null;
+    }
+    return { annotations: Transaction.remote.of(true) };
+  });
+}
+
+function transactionHasLoroSyncAnnotation(transaction: Transaction) {
+  return (
+    transaction as Transaction & {
+      annotations?: readonly { value: unknown }[];
+    }
+  ).annotations?.some((annotation) => isLoroSyncAnnotationValue(annotation.value));
+}
+
+function isLoroSyncAnnotationValue(value: unknown) {
+  if (value == "undo") return true;
+  return (
+    typeof value == "object" &&
+    value != null &&
+    (value as { constructor?: { name?: string } }).constructor?.name == "LoroSyncPluginValue"
+  );
 }
 
 function drainMatchingInitialLoroDispatch(
