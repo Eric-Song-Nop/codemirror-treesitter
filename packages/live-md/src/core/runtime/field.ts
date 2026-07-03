@@ -780,16 +780,7 @@ function pendingEditSurface(
       ...syntaxLineRanges,
     ].map((range) => clampRangeToDoc(range, state.doc.length)),
   );
-  return {
-    changedLineRanges: mergeDocRanges(
-      changedLineRanges.map((range) => clampRangeToDoc(range, state.doc.length)),
-    ),
-    ranges,
-    syntaxChangedRanges: mergeDocRanges(
-      syntaxLineRanges.map((range) => clampRangeToDoc(range, state.doc.length)),
-    ),
-    touchedRevealRanges,
-  };
+  return { ranges };
 }
 
 function selectionPhysicalLineRanges(state: EditorState): readonly DocRange[] {
@@ -811,37 +802,14 @@ function touchedRecordRevealRanges(
       baseAnalysis.semantic.cache,
       oldChangedRanges,
     )) {
+      if (!record.revealRange) continue;
       if (!recordSourceTouchedByRanges(record, oldChangedRanges)) continue;
-      if (!recordNeedsWholeRevealRange(record)) continue;
-      if (!recordRevealRangeTouchedByRanges(record, oldChangedRanges)) continue;
+      if (!recordRevealRangeTouchedByRanges(record.revealRange, oldChangedRanges)) continue;
       ranges.push(mapRange(record.revealRange, changes));
     }
   }
 
   return mergeDocRanges(ranges.map((range) => clampRangeToDoc(range, state.doc.length)));
-}
-
-function recordNeedsWholeRevealRange(record: LeafAnalysisRecord) {
-  return [...record.analysis.structuralEffects, ...record.analysis.descriptors].some(
-    descriptorNeedsWholeRevealRange,
-  );
-}
-
-function descriptorNeedsWholeRevealRange(descriptor: LiveMdDescriptor) {
-  switch (descriptor.kind) {
-    case "codeFence":
-    case "image":
-    case "latex":
-    case "table":
-      return true;
-    case "lineClass":
-    case "linkMark":
-    case "listMarker":
-    case "syntax":
-    case "taskMarker":
-    case "textMark":
-      return false;
-  }
 }
 
 function recordSourceTouchedByRanges(record: LeafAnalysisRecord, ranges: readonly DocRange[]) {
@@ -852,8 +820,8 @@ function recordSourceTouchedByRanges(record: LeafAnalysisRecord, ranges: readonl
   );
 }
 
-function recordRevealRangeTouchedByRanges(record: LeafAnalysisRecord, ranges: readonly DocRange[]) {
-  return ranges.some((range) => rangesTouchPoint(record.revealRange, range));
+function recordRevealRangeTouchedByRanges(revealRange: DocRange, ranges: readonly DocRange[]) {
+  return ranges.some((range) => rangesTouchPoint(revealRange, range));
 }
 
 function sourceInteractiveSafetyRanges(

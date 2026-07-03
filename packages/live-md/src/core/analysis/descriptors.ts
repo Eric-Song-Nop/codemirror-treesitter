@@ -102,10 +102,13 @@ export type LeafAnalysisRecord = {
   range: DocRange;
   /**
    * Range whose destructive projection must be revealed while an edit to this
-   * record is pending. This stays leaf-local by excluding source-safe
-   * ancestor structure such as line classes and text marks.
+   * record is pending, or null when the record projects nothing destructive
+   * (line classes and text marks are source-safe). Leaf records scan only
+   * their own leaf-local descriptors; marker records scan structuralEffects,
+   * which hold the marker's own listMarker/taskMarker descriptors. Invariant:
+   * revealRange, when non-null, is contained in effectRange.
    */
-  revealRange: DocRange;
+  revealRange: DocRange | null;
   sourceHash: number;
   sourceRange: DocRange;
   structuralKey: string;

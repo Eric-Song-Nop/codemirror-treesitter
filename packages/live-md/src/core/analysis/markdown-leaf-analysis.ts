@@ -222,7 +222,7 @@ export function analyzeMarkdownLeafAnalysisUnit(
       unit,
       leafAnalysis(unit, unit.structuralEffects, [], renderKeyContext(input)),
       cacheId,
-      input.state.doc.length,
+      input.state.doc,
     );
   }
 
@@ -233,7 +233,7 @@ export function analyzeMarkdownLeafAnalysisUnit(
     unit,
     leafAnalysis(unit, unit.structuralEffects, descriptors, renderKeyContext(input)),
     cacheId,
-    input.state.doc.length,
+    input.state.doc,
   );
 }
 
@@ -288,8 +288,9 @@ export function createAnalysisRecord(
   unit: MarkdownLeafAnalysisUnit,
   analysis: LeafAnalysis,
   cacheId: number,
-  docLength?: number,
+  doc?: Text,
 ): LeafAnalysisRecord {
+  let docLength = doc?.length;
   return {
     analysis,
     cacheId,
@@ -301,7 +302,7 @@ export function createAnalysisRecord(
     effectRange: analysisEffectRange(analysis, unit.sourceRange, docLength),
     kind: unit.kind,
     range: unit.range,
-    revealRange: analysisRevealRange(analysis, unit.sourceRange, docLength),
+    revealRange: analysisRevealRange(analysis, unit.kind, unit.sourceRange, doc),
     sourceHash: unit.sourceHash,
     sourceRange: unit.sourceRange,
     structuralKey: unit.structuralKey,
@@ -599,41 +600,71 @@ function analysisEffectRange(
 
 function analysisRevealRange(
   analysis: LeafAnalysis,
+  unitKind: LeafAnalysisRecord["kind"],
   sourceRange: DocRange,
-  docLength?: number,
-): DocRange {
+  doc?: Text,
+): DocRange | null {
+  let scanned =
+    unitKind == "marker"
+      ? [...analysis.structuralEffects, ...analysis.descriptors]
+      : analysis.descriptors;
   let from = Number.POSITIVE_INFINITY;
   let to = Number.NEGATIVE_INFINITY;
-  for (let descriptor of [...analysis.structuralEffects, ...analysis.descriptors]) {
-    if (!descriptorMayProduceDestructiveProjection(descriptor)) continue;
-    for (let range of liveMdDescriptorRanges(descriptor)) {
-      from = Math.min(from, range.from + sourceRange.from);
-      to = Math.max(to, range.to + sourceRange.from);
+  for (let descriptor of scanned) {
+    for (let range of revealDescriptorRanges(descriptor, sourceRange, doc)) {
+      from = Math.min(from, range.from);
+      to = Math.max(to, range.to);
     }
   }
-  if (from == Number.POSITIVE_INFINITY) return sourceRange;
-  if (typeof docLength == "number") {
-    from = clamp(from, 0, docLength);
-    to = clamp(to, 0, docLength);
+  if (from == Number.POSITIVE_INFINITY) return null;
+  if (doc) {
+    from = clamp(from, 0, doc.length);
+    to = clamp(to, 0, doc.length);
   }
   return { from, to };
 }
 
-function descriptorMayProduceDestructiveProjection(descriptor: LiveMdDescriptor) {
+function revealDescriptorRanges(
+  descriptor: LiveMdDescriptor,
+  sourceRange: DocRange,
+  doc?: Text,
+): readonly DocRange[] {
   switch (descriptor.kind) {
-    case "syntax":
-    case "listMarker":
-    case "taskMarker":
     case "image":
     case "latex":
     case "table":
     case "codeFence":
     case "linkMark":
-      return true;
+      return liveMdDescriptorRanges(descriptor).map((range) =>
+        offsetRangeForReveal(range, sourceRange),
+      );
+    case "listMarker":
+    case "syntax":
+    case "taskMarker":
+      return liveMdDescriptorRanges(descriptor)
+        .map((range) => offsetRangeForReveal(range, sourceRange))
+        .filter((range) => rangeCrossesLine(doc, range));
+    case "textMark": {
+      let range = offsetRangeForReveal(descriptor.range, sourceRange);
+      return rangeCrossesLine(doc, range) ? [range] : [];
+    }
     case "lineClass":
-    case "textMark":
-      return false;
+      return [];
   }
+}
+
+function offsetRangeForReveal(range: DocRange, sourceRange: DocRange): DocRange {
+  return {
+    from: range.from + sourceRange.from,
+    to: range.to + sourceRange.from,
+  };
+}
+
+function rangeCrossesLine(doc: Text | undefined, range: DocRange) {
+  if (!doc || range.from >= range.to) return false;
+  let from = clamp(range.from, 0, doc.length);
+  let to = clamp(range.to, from, doc.length);
+  return doc.lineAt(from).number != doc.lineAt(Math.max(from, to - 1)).number;
 }
 
 function dedupeDescriptors(descriptors: readonly LiveMdDescriptor[]) {
