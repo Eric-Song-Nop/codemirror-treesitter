@@ -111,6 +111,16 @@ describe("LiveMD Markdown block cursor", () => {
     ]);
   });
 
+  it("keeps block marker text inside non-paragraph leaves", async () => {
+    let doc = "```md\n- literal list marker\n> literal quote marker\n```\n";
+    let state = await markdownState(doc);
+    let snapshot = walkMarkdownBlocks(markdownTree(state), state.doc).snapshot;
+    let leaf = snapshot.leaves[0]!;
+
+    expect(leaf.kind).toBe("fencedCode");
+    expect(state.sliceDoc(leaf.sourceRange.from, leaf.sourceRange.to)).toBe(doc.trimEnd());
+  });
+
   it("walks large paragraph, list, and quote documents with sorted ownership", async () => {
     let paragraphDoc = Array.from({ length: 10_000 }, (_, index) => `paragraph ${index}`).join(
       "\n\n",

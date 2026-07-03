@@ -76,6 +76,11 @@ vp run @codemirror-treesitter/live-md#build
   units and inline parser sessions across scheduler yields, disposes resumes on
   commit, cancel, stale revisions, epoch changes, and plugin destroy, and adds
   full/local resume plus cancelled-session regression coverage.
+- **Phase 2 / PR-10:** implemented on 2026-07-03. The code documents the local
+  invalidation contract, expands local discovery seeds to line context up
+  front, indexes marker-only source-island candidates by physical line, exposes
+  fallback/fixed-point trace stats in the benchmark app, and keeps fallback
+  behavior asserted as an anomaly in tests.
 - **Phase 2 / PR-11:** implemented on 2026-07-03 in draft PR #97
   (`codex/live-md-pr11-source-island-index`). The code replaces the
   segmented-leaves Proxy with an explicit `SourceIslandIndex`, keeps local
@@ -849,6 +854,14 @@ why it is sequenced after the reveal-policy PRs — those remove most of the
 _visible_ pain; this one is a latency optimization.
 
 ### PR-10: Explicit invalidation contract for local discovery _(fixes A3)_
+
+**Implemented.** The local discovery contract now lives in
+`docs/INVALIDATION.md` and on `collectLocalMarkdownSnapshot`. New and old text
+change seeds are line-context expanded up front, marker-only source islands are
+derived from markers indexed by physical line without overlapping leaf source
+ranges, full-walk fallback remains traced through `fallbackCount`, and focused
+local edit tests assert no fallback plus one-round convergence for simple
+line-local cases.
 
 **Goal.** Replace "heuristic + retry + oracle tests" with a stated invariant
 the code enforces.

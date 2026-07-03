@@ -1110,6 +1110,27 @@ function patchRangeSet<T extends RangeValue>(
   return additions.length ? next.update({ add: additions, sort: true }) : next;
 }
 
+/**
+ * Collect the smallest block snapshot that can safely replace the changed
+ * cache window.
+ *
+ * Local discovery is valid only when the first collection is already closed
+ * over every range that can affect leaf identity. The initial seed contains:
+ *
+ * - the new and old text-change lines plus one physical line on each side,
+ *   covering setext headings, list-item lazy continuation, and blank-line
+ *   separator edits whose parse effect is defined by a neighboring line;
+ * - mapped old record safety ranges, covering cached leaves whose
+ *   source/effect/cache ranges diverge from their syntax node after trimming;
+ * - syntax-change ranges after broad-container filtering, covering real
+ *   structural reparses that are smaller than the whole-container fallback
+ *   threshold.
+ *
+ * The fixed-point loop remains as a safety net. In normal edits these seeds
+ * make the first collection closed, so `fixedPointRounds` should be 1; reaching
+ * the retry limit is traced as `fallbackCount` and handled by the caller's
+ * full-walk path.
+ */
 function collectLocalMarkdownSnapshot(input: LeafAnalysisCacheLocalTransitionInput) {
   let doc = input.analysisInput.state.doc;
   let seed = localInitialCheckRanges(input);
@@ -1156,8 +1177,18 @@ function collectLocalMarkdownSnapshot(input: LeafAnalysisCacheLocalTransitionInp
 
 function localInitialCheckRanges(input: LeafAnalysisCacheLocalTransitionInput) {
   let newDoc = input.analysisInput.state.doc;
-  let textContextRanges = textChangeContextRanges(input.oldDoc, newDoc, input.changes);
-  let oldContextRanges = oldTextChangeContextRanges(input.oldDoc, newDoc, input.changes);
+  let textContextRanges = normalizeRanges(
+    textChangeContextRanges(input.oldDoc, newDoc, input.changes).map((range) =>
+      expandToLineContext(newDoc, range),
+    ),
+    newDoc.length,
+  );
+  let oldContextRanges = normalizeRanges(
+    oldTextChangeContextRanges(input.oldDoc, newDoc, input.changes).map((range) =>
+      expandToLineContext(input.oldDoc, range),
+    ),
+    input.oldDoc.length,
+  );
   let traceCounters: LeafAnalysisCacheTraceCounters = {
     cacheIndexCallbacks: 0,
     cacheIndexQueries: 0,

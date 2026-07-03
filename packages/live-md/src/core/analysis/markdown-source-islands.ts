@@ -358,14 +358,14 @@ function withMarkerOnlySourceIslands(
 ): LiveMdSourceIslandLeaf[] {
   let markerLeaves: LiveMdSourceIslandLeaf[] = [];
   let leafIndex = 0;
-  for (let group of markerLineGroups(markers)) {
-    let line = group[0]!.lineRange;
+  for (let group of markersByLine(markers)) {
+    let line = group.lineRange;
     while (leafIndex < leaves.length && leaves[leafIndex]!.sourceRange.to <= line.from) {
       leafIndex++;
     }
     if (lineOverlapsLeaf(line.from, line.to, leaves, leafIndex)) continue;
     if (!lineContainsOnlyMarkers(doc, line, group)) continue;
-    let owner = group[group.length - 1]!;
+    let owner = group.markers[group.markers.length - 1]!;
     markerLeaves.push({
       contextKey: owner.contextKey,
       kind: "marker",
@@ -376,7 +376,7 @@ function withMarkerOnlySourceIslands(
   return [...leaves, ...markerLeaves].sort(compareSourceIslandLeaf);
 }
 
-function markerLineGroups(markers: readonly MarkdownMarkerRecord[]) {
+function markersByLine(markers: readonly MarkdownMarkerRecord[]) {
   let groups = new Map<string, MarkdownMarkerRecord[]>();
   for (let marker of markers) {
     let key = `${marker.lineRange.from}:${marker.lineRange.to}`;
@@ -387,10 +387,19 @@ function markerLineGroups(markers: readonly MarkdownMarkerRecord[]) {
       groups.set(key, [marker]);
     }
   }
-  return Array.from(groups.values()).map((group) =>
-    group.sort(
+  let indexed = [];
+  for (let markers of groups.values()) {
+    markers.sort(
       (left, right) => left.range.from - right.range.from || left.range.to - right.range.to,
-    ),
+    );
+    indexed.push({
+      lineRange: markers[0]!.lineRange,
+      markers,
+    });
+  }
+  return indexed.sort(
+    (left, right) =>
+      left.lineRange.from - right.lineRange.from || left.lineRange.to - right.lineRange.to,
   );
 }
 
@@ -411,10 +420,10 @@ function lineOverlapsLeaf(
 function lineContainsOnlyMarkers(
   doc: Text,
   line: DocRange,
-  markers: readonly MarkdownMarkerRecord[],
+  group: { markers: readonly MarkdownMarkerRecord[] },
 ) {
   let position = line.from;
-  for (let marker of markers) {
+  for (let marker of group.markers) {
     if (!isWhitespaceOnly(doc.sliceString(position, marker.range.from))) return false;
     position = Math.max(position, marker.range.to);
   }
