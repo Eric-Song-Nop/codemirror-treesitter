@@ -87,16 +87,18 @@ describe("Mermaid render cache", () => {
     let handle = cachedLiveMdMermaidRequest(cache, trace, "record-measured", "flowchart TD\nA");
     let element = new MermaidWidget(handle, cache.measuredHeights).toDOM(inertView);
     Object.defineProperty(element, "getBoundingClientRect", {
-      value: () => ({ height: 224 }),
+      value: () => ({ height: element.style.minHeight ? 160 : 96 }),
     });
     document.body.append(element);
+    expect(element.style.minHeight).toBe("160px");
 
     await waitForMermaidSvg(element);
 
     expect(handle.result?.ok).toBe(true);
-    expect(cache.measuredHeights.get(handle.result!.resultKey)).toBe(224);
-    expect(cache.measuredHeights.get(handle.resultKey)).toBe(224);
-    expect(new MermaidWidget(handle, cache.measuredHeights).estimatedHeight).toBe(224);
+    expect(cache.measuredHeights.get(handle.result!.resultKey)).toBe(96);
+    expect(cache.measuredHeights.get(handle.resultKey)).toBe(96);
+    expect(element.style.minHeight).toBe("96px");
+    expect(new MermaidWidget(handle, cache.measuredHeights).estimatedHeight).toBe(96);
   });
 
   it("reuses the pending render promise and applies settled success synchronously", async () => {

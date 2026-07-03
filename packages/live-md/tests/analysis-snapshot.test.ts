@@ -2322,6 +2322,29 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("keeps image measured heights scoped to caption content", async () => {
+    let doc = "![Alt](assets/shared.png)\n\n![](assets/shared.png)\n\nTail";
+    let view = await markdownAnalysisView(doc, "Tail");
+    let analysis = __testLiveMdAnalysis(view);
+    let widgets = widgetInstancesFromSet(
+      view.state,
+      analysis.directDecorations,
+      "ImagePreviewWidget",
+    ) as Array<{
+      estimatedHeight: number;
+      heightKey: string;
+    }>;
+
+    expect(widgets).toHaveLength(2);
+    let [captioned, plain] = widgets;
+    expect(captioned!.heightKey).not.toBe(plain!.heightKey);
+
+    analysis.renderCache.measuredHeights.set(captioned!.heightKey, 188);
+    expect(captioned!.estimatedHeight).toBe(188);
+    expect(plain!.estimatedHeight).toBe(-1);
+    view.destroy();
+  });
+
   it("passes measured render-cache heights through the legacy projection path", async () => {
     let doc = "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\nTail";
     let view = await markdownLegacyAnalysisView(doc, "Tail");
