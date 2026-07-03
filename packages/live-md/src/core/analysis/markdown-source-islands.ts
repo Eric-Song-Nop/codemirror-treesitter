@@ -22,40 +22,35 @@ export type LiveMdSourceIslandLeaf = {
   sourceRange: DocRange;
 };
 
+export type SourceIslandIndex = {
+  readonly length: number;
+  at(index: number): LiveMdSourceIslandLeaf | undefined;
+  find(doc: Text, position: number, assoc: -1 | 0 | 1): LiveMdSourceIslandLeaf | null;
+  /** Materializes; O(n). Prefer at()/find(). */
+  toArray(): readonly LiveMdSourceIslandLeaf[];
+};
+
 export type LiveMdSourceIslandAnalysis = {
   activeSourceRanges: readonly DocRange[];
-  leaves: readonly LiveMdSourceIslandLeaf[];
+  leaves: SourceIslandIndex;
 };
 
 const sourceIslandLeafSegments = Symbol("sourceIslandLeafSegments");
 
 type SourceIslandLeafSegment =
   | {
-      leaves: readonly LiveMdSourceIslandLeaf[];
+      leaves: SourceIslandIndex;
       type: "leaves";
     }
   | {
       changes: ChangeDesc;
       fromIndex: number;
-      leaves: readonly LiveMdSourceIslandLeaf[];
+      leaves: SourceIslandIndex;
       toIndex: number;
       type: "mapped";
     };
 
-type SourceIslandLeafCallback<T> = (
-  value: LiveMdSourceIslandLeaf,
-  index: number,
-  array: readonly LiveMdSourceIslandLeaf[],
-) => T;
-
-type SegmentedSourceIslandLeaves = {
-  readonly [index: number]: LiveMdSourceIslandLeaf;
-  readonly length: number;
-  [Symbol.iterator](): IterableIterator<LiveMdSourceIslandLeaf>;
-  every(callback: SourceIslandLeafCallback<unknown>, thisArg?: unknown): boolean;
-  filter(callback: SourceIslandLeafCallback<unknown>, thisArg?: unknown): LiveMdSourceIslandLeaf[];
-  map<T>(callback: SourceIslandLeafCallback<T>, thisArg?: unknown): T[];
-  some(callback: SourceIslandLeafCallback<unknown>, thisArg?: unknown): boolean;
+type SegmentedSourceIslandIndex = SourceIslandIndex & {
   [sourceIslandLeafSegments]?: readonly SourceIslandLeafSegment[];
 };
 
@@ -75,14 +70,16 @@ export function analyzeLiveMdSourceIslands(input: {
 export function sourceIslandLeavesFromMarkdownSnapshot(
   doc: Text,
   snapshot: MarkdownBlockSnapshot,
-): LiveMdSourceIslandLeaf[] {
-  return withMarkerOnlySourceIslands(doc, snapshot.leaves.map(sourceIslandLeaf), snapshot.markers);
+): SourceIslandIndex {
+  return sourceIslandIndexFromLeaves(
+    withMarkerOnlySourceIslands(doc, snapshot.leaves.map(sourceIslandLeaf), snapshot.markers),
+  );
 }
 
 export function sourceIslandLeavesFromLeafAnalysisRecords(
   doc: Text,
   records: readonly LeafAnalysisRecord[],
-): LiveMdSourceIslandLeaf[] {
+): SourceIslandIndex {
   let leaves = records
     .filter((record) => record.kind != "marker")
     .map((record) => ({
@@ -102,7 +99,7 @@ export function sourceIslandLeavesFromLeafAnalysisRecords(
         text: doc.sliceString(record.range.from, record.range.to),
       }),
     );
-  return withMarkerOnlySourceIslands(doc, leaves, markers);
+  return sourceIslandIndexFromLeaves(withMarkerOnlySourceIslands(doc, leaves, markers));
 }
 
 export function transitionSourceIslandLeavesFromLeafAnalysisRecords(input: {
@@ -112,8 +109,8 @@ export function transitionSourceIslandLeavesFromLeafAnalysisRecords(input: {
   localWindows: readonly DocRange[];
   oldChangedRanges: readonly DocRange[];
   oldDoc: Text;
-  oldLeaves: readonly LiveMdSourceIslandLeaf[];
-}): readonly LiveMdSourceIslandLeaf[] {
+  oldLeaves: SourceIslandIndex;
+}): SourceIslandIndex {
   let oldLocalWindows = input.localWindows.map((range) =>
     mapRange(range, input.changes.invertedDesc),
   );
@@ -127,27 +124,47 @@ export function transitionSourceIslandLeavesFromLeafAnalysisRecords(input: {
     ...mappedSourceIslandLeafSegments(input.oldLeaves, input.changes, excludedIndexes),
   ];
   if (localLeaves.length) segments.push({ leaves: localLeaves, type: "leaves" });
-  return createSegmentedSourceIslandLeaves(segments);
+  return createSegmentedSourceIslandIndex(segments);
 }
 
-export function sourceIslandLeavesInDoc(
+export function sourceIslandIndexFromLeaves(
   leaves: readonly LiveMdSourceIslandLeaf[],
-  docLength: number,
-) {
-  let segments = (leaves as SegmentedSourceIslandLeaves)[sourceIslandLeafSegments];
+): SourceIslandIndex {
+  let index: SourceIslandIndex = {
+    length: leaves.length,
+    at(position) {
+      if (!Number.isInteger(position) || position < 0 || position >= leaves.length) {
+        return undefined;
+      }
+      return leaves[position];
+    },
+    find(doc, position, assoc) {
+      return findSourceIslandLeafInIndex(doc, index, position, assoc);
+    },
+    toArray() {
+      return leaves;
+    },
+  };
+  return index;
+}
+
+export function sourceIslandLeavesInDoc(leaves: SourceIslandIndex, docLength: number) {
+  let segments = (leaves as SegmentedSourceIslandIndex)[sourceIslandLeafSegments];
   if (segments) return true;
-  return leaves.every(
-    (leaf) =>
-      leaf.sourceRange.from >= 0 &&
-      leaf.sourceRange.from <= leaf.sourceRange.to &&
-      leaf.sourceRange.to <= docLength,
-  );
+  for (let index = 0; index < leaves.length; index++) {
+    let leaf = leaves.at(index)!;
+    if (
+      leaf.sourceRange.from < 0 ||
+      leaf.sourceRange.from > leaf.sourceRange.to ||
+      leaf.sourceRange.to > docLength
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
-export function activeMarkdownSourceRanges(
-  state: EditorState,
-  leaves: readonly LiveMdSourceIslandLeaf[],
-) {
+export function activeMarkdownSourceRanges(state: EditorState, leaves: SourceIslandIndex) {
   let active: DocRange[] = [];
   let seen = new Set<string>();
   for (let range of state.selection.ranges) {
@@ -164,31 +181,18 @@ export function activeMarkdownSourceRanges(
 
 export function findSourceIslandLeaf(
   doc: Text,
-  leaves: readonly LiveMdSourceIslandLeaf[],
+  leaves: SourceIslandIndex,
   position: number,
   assoc: -1 | 0 | 1,
 ) {
-  let index = lastLeafStartingAtOrBefore(leaves, position);
-  if (index >= 0) {
-    let leaf = leaves[index]!;
-    if (leafOwnsCaret(doc, leaf, position, assoc)) return leaf;
-    if (leaf.sourceRange.from == position && index > 0) {
-      let previous = leaves[index - 1]!;
-      if (leafOwnsCaret(doc, previous, position, assoc)) return previous;
-    }
-  }
-  return null;
+  return leaves.find(doc, position, assoc);
 }
 
-function leafAtSelectionHead(
-  doc: Text,
-  leaves: readonly LiveMdSourceIslandLeaf[],
-  range: SelectionRange,
-) {
-  return findSourceIslandLeaf(doc, leaves, range.head, range.assoc);
+function leafAtSelectionHead(doc: Text, leaves: SourceIslandIndex, range: SelectionRange) {
+  return leaves.find(doc, range.head, range.assoc);
 }
 
-function createSegmentedSourceIslandLeaves(segments: readonly SourceIslandLeafSegment[]) {
+function createSegmentedSourceIslandIndex(segments: readonly SourceIslandLeafSegment[]) {
   let sortedSegments = segments
     .filter((segment) => segmentLength(segment) > 0)
     .slice()
@@ -200,38 +204,25 @@ function createSegmentedSourceIslandLeaves(segments: readonly SourceIslandLeafSe
     count += segmentLength(segment);
   }
   let materialized: readonly LiveMdSourceIslandLeaf[] | null = null;
-  let target = {
+  let index: SegmentedSourceIslandIndex = {
     get length() {
       return count;
     },
-    every(callback: Parameters<SegmentedSourceIslandLeaves["every"]>[0], thisArg?: unknown) {
-      return materializedLeaves().every(callback, thisArg);
+    at(position) {
+      return sourceIslandLeafAt(position);
     },
-    filter(callback: Parameters<SegmentedSourceIslandLeaves["filter"]>[0], thisArg?: unknown) {
-      return materializedLeaves().filter(callback, thisArg);
+    find(doc, position, assoc) {
+      return findSourceIslandLeafInIndex(doc, index, position, assoc);
     },
-    map<T>(callback: SourceIslandLeafCallback<T>, thisArg?: unknown) {
-      return materializedLeaves().map(callback, thisArg);
-    },
-    some(callback: Parameters<SegmentedSourceIslandLeaves["some"]>[0], thisArg?: unknown) {
-      return materializedLeaves().some(callback, thisArg);
-    },
-    [Symbol.iterator]() {
-      return materializedLeaves()[Symbol.iterator]();
+    toArray() {
+      return materializedLeaves();
     },
     [sourceIslandLeafSegments]: sortedSegments,
   };
-  return new Proxy(target, {
-    get(object, property, receiver) {
-      if (typeof property == "string" && isArrayIndexProperty(property)) {
-        return sourceIslandLeafAt(Number(property));
-      }
-      return Reflect.get(object, property, receiver);
-    },
-  }) as unknown as readonly LiveMdSourceIslandLeaf[];
+  return index;
 
   function sourceIslandLeafAt(index: number) {
-    if (index < 0 || index >= count) return undefined;
+    if (!Number.isInteger(index) || index < 0 || index >= count) return undefined;
     let segmentIndex = segmentIndexAt(starts, index);
     let segment = sortedSegments[segmentIndex]!;
     return sourceIslandLeafInSegment(segment, index - starts[segmentIndex]!);
@@ -282,8 +273,8 @@ function segmentLength(segment: SourceIslandLeafSegment) {
 function sourceIslandLeafInSegment(segment: SourceIslandLeafSegment, index: number) {
   let leaf =
     segment.type == "leaves"
-      ? segment.leaves[index]!
-      : mapSourceIslandLeaf(segment.leaves[segment.fromIndex + index]!, segment.changes);
+      ? segment.leaves.at(index)!
+      : mapSourceIslandLeaf(segment.leaves.at(segment.fromIndex + index)!, segment.changes);
   return leaf;
 }
 
@@ -297,12 +288,30 @@ function mapSourceIslandLeaf(
   };
 }
 
-function lastLeafStartingAtOrBefore(leaves: readonly LiveMdSourceIslandLeaf[], position: number) {
+function findSourceIslandLeafInIndex(
+  doc: Text,
+  leaves: SourceIslandIndex,
+  position: number,
+  assoc: -1 | 0 | 1,
+) {
+  let index = lastLeafStartingAtOrBefore(leaves, position);
+  if (index >= 0) {
+    let leaf = leaves.at(index)!;
+    if (leafOwnsCaret(doc, leaf, position, assoc)) return leaf;
+    if (leaf.sourceRange.from == position && index > 0) {
+      let previous = leaves.at(index - 1)!;
+      if (leafOwnsCaret(doc, previous, position, assoc)) return previous;
+    }
+  }
+  return null;
+}
+
+function lastLeafStartingAtOrBefore(leaves: SourceIslandIndex, position: number) {
   let low = 0;
   let high = leaves.length;
   while (low < high) {
     let mid = (low + high) >> 1;
-    if (leaves[mid]!.sourceRange.from <= position) {
+    if (leaves.at(mid)!.sourceRange.from <= position) {
       low = mid + 1;
     } else {
       high = mid;
@@ -421,7 +430,7 @@ function compareSourceIslandLeaf(left: LiveMdSourceIslandLeaf, right: LiveMdSour
 }
 
 function sourceIslandLeafIndexesTouchingRanges(
-  leaves: readonly LiveMdSourceIslandLeaf[],
+  leaves: SourceIslandIndex,
   ranges: readonly DocRange[],
 ) {
   let indexes: number[] = [];
@@ -429,7 +438,7 @@ function sourceIslandLeafIndexesTouchingRanges(
   for (let range of ranges) {
     let index = firstSourceIslandLeafPossiblyTouchingRange(leaves, range);
     for (; index < leaves.length; index++) {
-      let leafRange = leaves[index]!.sourceRange;
+      let leafRange = leaves.at(index)!.sourceRange;
       if (range.from == range.to ? leafRange.from > range.from : leafRange.from >= range.to) {
         break;
       }
@@ -442,15 +451,12 @@ function sourceIslandLeafIndexesTouchingRanges(
   return indexes.sort((left, right) => left - right);
 }
 
-function firstSourceIslandLeafPossiblyTouchingRange(
-  leaves: readonly LiveMdSourceIslandLeaf[],
-  range: DocRange,
-) {
+function firstSourceIslandLeafPossiblyTouchingRange(leaves: SourceIslandIndex, range: DocRange) {
   let low = 0;
   let high = leaves.length;
   while (low < high) {
     let mid = (low + high) >> 1;
-    if (leaves[mid]!.sourceRange.to < range.from) {
+    if (leaves.at(mid)!.sourceRange.to < range.from) {
       low = mid + 1;
     } else {
       high = mid;
@@ -460,7 +466,7 @@ function firstSourceIslandLeafPossiblyTouchingRange(
 }
 
 function mappedSourceIslandLeafSegments(
-  leaves: readonly LiveMdSourceIslandLeaf[],
+  leaves: SourceIslandIndex,
   changes: ChangeDesc,
   excludedIndexes: readonly number[],
 ) {
@@ -478,13 +484,13 @@ function mappedSourceIslandLeafSegments(
 
 function appendMappedSourceIslandLeafRun(
   target: SourceIslandLeafSegment[],
-  leaves: readonly LiveMdSourceIslandLeaf[],
+  leaves: SourceIslandIndex,
   changes: ChangeDesc,
   fromIndex: number,
   toIndex: number,
 ) {
   if (fromIndex >= toIndex) return;
-  let sourceSegments = (leaves as SegmentedSourceIslandLeaves)[sourceIslandLeafSegments];
+  let sourceSegments = (leaves as SegmentedSourceIslandIndex)[sourceIslandLeafSegments];
   if (!sourceSegments) {
     target.push({ changes, fromIndex, leaves, toIndex, type: "mapped" });
     return;
@@ -528,8 +534,4 @@ function appendMappedSourceIslandLeafSegmentRun(
     segment.fromIndex + fromIndex,
     segment.fromIndex + toIndex,
   );
-}
-
-function isArrayIndexProperty(property: string) {
-  return /^(0|[1-9]\d*)$/.test(property);
 }

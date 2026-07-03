@@ -22,7 +22,7 @@ import { type MarkdownBlockSnapshot } from "./markdown-block-types.js";
 import { collectMarkdownBlocksInRanges } from "./markdown-block-cursor.js";
 import {
   transitionSourceIslandLeavesFromLeafAnalysisRecords,
-  type LiveMdSourceIslandLeaf,
+  type SourceIslandIndex,
 } from "./markdown-source-islands.js";
 import {
   emptyLiveMdLeafAnalysisTrace,
@@ -52,7 +52,7 @@ export type LeafAnalysisCacheTransition = {
   newEffectRanges?: readonly DocRange[];
   removedRecordIds?: readonly number[];
   fallback?: "fullWalk";
-  sourceIslandLeaves?: readonly LiveMdSourceIslandLeaf[];
+  sourceIslandLeaves?: SourceIslandIndex;
   trace: LeafAnalysisCacheTrace;
 };
 
@@ -63,7 +63,7 @@ export type LeafAnalysisCacheLocalTransitionInput = {
   oldAffectedRecords?: readonly LeafAnalysisRecord[];
   oldCache: LeafAnalysisCache;
   oldDoc: Text;
-  oldSourceIslandLeaves?: readonly LiveMdSourceIslandLeaf[];
+  oldSourceIslandLeaves?: SourceIslandIndex;
   resume?: LeafAnalysisResumeState | null;
   revision?: number;
   syntaxChangedRanges?: readonly DocRange[];

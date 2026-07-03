@@ -50,6 +50,7 @@ import {
 import {
   activeMarkdownSourceRanges,
   findSourceIslandLeaf,
+  sourceIslandIndexFromLeaves,
   sourceIslandLeavesInDoc,
   sourceIslandLeavesFromLeafAnalysisRecords,
 } from "../analysis/markdown-source-islands.js";
@@ -1315,7 +1316,7 @@ function buildLiveMdAnalysis(
     semantic: null,
     semanticTrace: null,
     surfaceInvalidationRanges: [],
-    sourceIslandLeaves: [],
+    sourceIslandLeaves: sourceIslandIndexFromLeaves([]),
     trace: emptyLiveMdLeafAnalysisTrace(),
     tree,
   };
@@ -2037,7 +2038,7 @@ function buildCanonicalLiveMdAnalysis(
     semanticTrace: cache ? trace : null,
     sourceSafeDecorations: projection.sourceSafeDecorations,
     surfaceInvalidationRanges: [],
-    sourceIslandLeaves: cache?.analysis.sourceIslandLeaves ?? [],
+    sourceIslandLeaves: cache?.analysis.sourceIslandLeaves ?? sourceIslandIndexFromLeaves([]),
     surfaceAtomicRanges: projection.surface.atomicRanges,
     surfaceDecorations: projection.surface.decorations,
     surfaceDestructiveDecorations: projection.surface.destructiveDecorations,

@@ -29,6 +29,7 @@ import {
 import {
   activeMarkdownSourceRanges,
   analyzeLiveMdSourceIslands,
+  sourceIslandIndexFromLeaves,
   type LiveMdSourceIslandLeaf,
 } from "../src/core/analysis/markdown-source-islands.js";
 import { compileFullSurfaceProjection } from "../src/core/projection/compilers.js";
@@ -401,6 +402,7 @@ describe("LiveMD active source islands", () => {
     expect(analysis.leaves).toHaveLength(10_000);
     expect(
       analysis.leaves
+        .toArray()
         .slice(0, 2)
         .map((leaf) => state.sliceDoc(leaf.sourceRange.from, leaf.sourceRange.to)),
     ).toEqual(["paragraph 0", "paragraph 1"]);
@@ -418,7 +420,9 @@ describe("LiveMD active source islands", () => {
     }
 
     let reads = 0;
-    let leaves = ranges.map((range) => countedSourceIslandLeaf(range, () => reads++));
+    let leaves = sourceIslandIndexFromLeaves(
+      ranges.map((range) => countedSourceIslandLeaf(range, () => reads++)),
+    );
     let target = ranges[9_500]!;
     let state = EditorState.create({
       doc: parts.join("\n\n"),
