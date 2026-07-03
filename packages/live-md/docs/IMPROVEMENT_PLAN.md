@@ -58,6 +58,12 @@ vp run @codemirror-treesitter/live-md#build
   direct, legacy, and async Mermaid render-size stability.
 - **Phase 1:** completed on 2026-07-03 after PR-6. The render-stability
   acceptance criteria below are now covered by tests.
+- **Phase 2 / PR-7:** implemented on 2026-07-03 in draft PR #94
+  (`codex/live-md-pr7-projection-state`). The code introduces the shared
+  projection-state module, converts direct runtime and surface plugin
+  projection layers to `ProjectionSets`, centralizes pending map, restore,
+  reveal, patch, filter, and join behavior, and adds explicit layer-join
+  invariant coverage.
 
 ---
 
@@ -597,10 +603,20 @@ finishing async renders.
 
 ## Phase 2 — architecture consolidation
 
-### PR-7: Single pending-projection state machine _(fixes A2)_
+### PR-7: Single pending-projection state machine _(implemented; fixes A2)_
 
 **Goal.** One implementation of map/clear/patch for projection layers,
 consumed by both the StateField (direct) and the surface plugin (surface).
+
+**Implemented.** `core/runtime/projection-state.ts` now owns projection set
+mapping, stale-range restoration, reveal clearing, owner-key patching, range
+replacement, filtering, merging, and decoration joining. `LiveMdRuntimeState`
+stores direct projection output as `direct: ProjectionSets`, while
+`LiveMdSurfaceProjectionState` uses the same set names plus its compiled
+range metadata. The field, surface plugin, direct compiler, and task-toggle
+fast path now delegate through the shared helpers without changing pending
+reveal behavior, including dirty-link interactive clearing and PR-5 stale
+destructive/atomic restoration.
 
 **Changes.**
 
