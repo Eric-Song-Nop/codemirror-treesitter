@@ -67,6 +67,7 @@ import {
   mapInclusiveRange,
   mapRange,
   rangesEqual,
+  rangesOverlap,
   rangesTouchInclusive,
   rangesTouchPoint,
   subtractRanges,
@@ -74,6 +75,7 @@ import {
 } from "../analysis/ranges.js";
 import { liveMdMarkdownFeatureFacet } from "../features.js";
 import { liveMdImageSourceResolver } from "../images.js";
+import { liveMdEditContinuationField } from "../edit-continuation.js";
 import {
   codeFenceHighlighterFacet,
   codeFenceLanguagesField,
@@ -171,7 +173,7 @@ const liveMdAnalysisField = StateField.define<LiveMdRuntimeState>({
       if (transaction.isUserEvent("input.task") && value.semantic && !value.pending) {
         let trace = pendingInputTrace(transaction);
         let activeLines = getActiveLines(transaction.state);
-        let activeSourceRanges = activeMarkdownSourceRanges(
+        let activeSourceRanges = liveMdActiveSourceRanges(
           transaction.state,
           value.sourceIslandLeaves,
         );
@@ -201,7 +203,7 @@ const liveMdAnalysisField = StateField.define<LiveMdRuntimeState>({
     let activeLines = getActiveLines(transaction.state);
     let activeSourceRanges =
       tree == value.tree && !transaction.docChanged
-        ? activeMarkdownSourceRanges(transaction.state, value.sourceIslandLeaves)
+        ? liveMdActiveSourceRanges(transaction.state, value.sourceIslandLeaves)
         : null;
     let activeLinesStable = sameSetItems(activeLines, value.activeLines);
     let selectionProjectionStable =
@@ -773,7 +775,7 @@ function pendingSourceAnalysis(
   };
   let activeLines = getActiveLines(transaction.state);
   let sourceIslandLeaves = baseAnalysis.sourceIslandLeaves;
-  let activeSourceRanges = activePendingSourceRanges(
+  let activeSourceRanges = liveMdPendingActiveSourceRanges(
     transaction.state,
     baseDoc,
     sourceIslandLeaves,
@@ -831,13 +833,13 @@ function pendingSelectionAnalysis(
   let activeLines = getActiveLines(transaction.state);
   let pending = value.pending;
   let activeSourceRanges = pending
-    ? activePendingSourceRanges(
+    ? liveMdPendingActiveSourceRanges(
         transaction.state,
         pending.baseDoc,
         pending.baseAnalysis.sourceIslandLeaves,
         pending.changes,
       )
-    : activeMarkdownSourceRanges(transaction.state, value.sourceIslandLeaves);
+    : liveMdActiveSourceRanges(transaction.state, value.sourceIslandLeaves);
   let revealRanges = newlyActiveSourceRanges(value.activeSourceRanges, activeSourceRanges);
   if (
     sameSetItems(activeLines, value.activeLines) &&
@@ -1040,6 +1042,36 @@ function newlyActiveSourceRanges(
   return current.filter(
     (range) => !previous.some((oldRange) => range.from == oldRange.from && range.to == oldRange.to),
   );
+}
+
+function liveMdActiveSourceRanges(
+  state: EditorState,
+  leaves: LiveMdRuntimeState["sourceIslandLeaves"],
+): readonly DocRange[] {
+  return appendEditContinuationSourceRange(state, activeMarkdownSourceRanges(state, leaves));
+}
+
+function liveMdPendingActiveSourceRanges(
+  state: EditorState,
+  baseDoc: LiveMdPendingAnalysis["baseDoc"],
+  leaves: LiveMdRuntimeState["sourceIslandLeaves"],
+  changes: ChangeDesc,
+): readonly DocRange[] {
+  return appendEditContinuationSourceRange(
+    state,
+    activePendingSourceRanges(state, baseDoc, leaves, changes),
+  );
+}
+
+function appendEditContinuationSourceRange(
+  state: EditorState,
+  ranges: readonly DocRange[],
+): readonly DocRange[] {
+  let continuation = state.field(liveMdEditContinuationField, false);
+  if (!continuation) return ranges;
+  let sourceRange = clampRangeToDoc(continuation.sourceRange, state.doc.length);
+  if (ranges.some((range) => rangesOverlap(range, sourceRange))) return ranges;
+  return [...ranges, sourceRange];
 }
 
 function activePendingSourceRanges(
@@ -1655,7 +1687,7 @@ function buildLiveMdSemanticAnalysis(input: {
       : previousSemantic;
     return {
       activeSourceRanges:
-        input.activeSourceRanges ?? activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
+        input.activeSourceRanges ?? liveMdActiveSourceRanges(input.state, sourceIslandLeaves),
       semantic,
       sourceIslandLeaves,
       trace,
@@ -1694,7 +1726,7 @@ function buildLiveMdSemanticAnalysis(input: {
           materializeLeafAnalysisCacheRecords(transition.cache),
         );
       return {
-        activeSourceRanges: activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
+        activeSourceRanges: liveMdActiveSourceRanges(input.state, sourceIslandLeaves),
         semantic: {
           cache: transition.cache,
           revision: (previousSemantic.revision ?? 0) + 1,
@@ -1733,7 +1765,7 @@ function buildLiveMdSemanticAnalysis(input: {
       materializeLeafAnalysisCacheRecords(fallback.cache),
     );
     return {
-      activeSourceRanges: activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
+      activeSourceRanges: liveMdActiveSourceRanges(input.state, sourceIslandLeaves),
       semantic: {
         cache: fallback.cache,
         revision: (previousSemantic.revision ?? 0) + 1,
@@ -1786,7 +1818,7 @@ function buildLiveMdSemanticAnalysis(input: {
     input.state.doc,
     materializeLeafAnalysisCacheRecords(transition.cache),
   );
-  let activeSourceRanges = activeMarkdownSourceRanges(input.state, sourceIslandLeaves);
+  let activeSourceRanges = liveMdActiveSourceRanges(input.state, sourceIslandLeaves);
 
   return {
     activeSourceRanges,

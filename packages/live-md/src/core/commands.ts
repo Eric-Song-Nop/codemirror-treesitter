@@ -2,6 +2,7 @@ import { EditorSelection, type EditorState } from "@codemirror/state";
 import { indentWithTab } from "@codemirror-treesitter/commands";
 import { queryTreeCaptures, syntaxTree, type SyntaxNode } from "@codemirror-treesitter/language";
 import { EditorView, keymap, type Command } from "@codemirror/view";
+import { isPotentialPipeTableRow, setLiveMdEditContinuation } from "./edit-continuation.js";
 import { hasAncestor, isAsciiDigit, isWhitespace, isWhitespaceOnly, type DocLine } from "./util.js";
 import lineMarkerQuerySource from "./queries/line-markers.scm?raw";
 
@@ -119,8 +120,9 @@ function continueMarkdownBlock(view: EditorView) {
     return insertContinuation(view, cursor, state.sliceDoc(line.from, markers.quoteTo));
   }
 
-  if (cursor == line.to && isPotentialPipeTableRow(state.sliceDoc(line.from, line.to))) {
-    return false;
+  if (cursor == line.to) {
+    let tableRange = completedPipeTableRangeEndingAtLine(state, line);
+    if (tableRange) return insertTableContinuation(view, cursor, tableRange);
   }
 
   if (cursor == line.to) {
@@ -166,6 +168,27 @@ function insertMarkdownNewline(view: EditorView, cursor: number) {
   return true;
 }
 
+function insertTableContinuation(
+  view: EditorView,
+  cursor: number,
+  sourceRange: { from: number; to: number },
+) {
+  if (view.state.readOnly) return true;
+
+  view.dispatch({
+    changes: { from: cursor, insert: "\n" },
+    effects: setLiveMdEditContinuation.of({
+      kind: "table",
+      lineRange: { from: cursor + 1, to: cursor + 1 },
+      sourceRange,
+    }),
+    scrollIntoView: true,
+    selection: { anchor: cursor + 1 },
+    userEvent: "input.markdownTableContinuation",
+  });
+  return true;
+}
+
 function insertMarkdownRawNewline(view: EditorView) {
   if (view.state.readOnly) return true;
 
@@ -178,10 +201,32 @@ function insertMarkdownRawNewline(view: EditorView) {
   return true;
 }
 
-function isPotentialPipeTableRow(text: string) {
+function completedPipeTableRangeEndingAtLine(state: EditorState, line: DocLine) {
+  if (!isPotentialPipeTableRow(state.sliceDoc(line.from, line.to))) return null;
+
+  let firstLineNumber = line.number;
+  while (firstLineNumber > 1) {
+    let previous = state.doc.line(firstLineNumber - 1);
+    if (!isPotentialPipeTableRow(state.sliceDoc(previous.from, previous.to))) break;
+    firstLineNumber--;
+  }
+
+  let delimiterLineNumber = firstLineNumber + 1;
+  if (delimiterLineNumber > line.number) return null;
+
+  let delimiterLine = state.doc.line(delimiterLineNumber);
+  if (!isPipeTableDelimiterRow(state.sliceDoc(delimiterLine.from, delimiterLine.to))) return null;
+  return { from: state.doc.line(firstLineNumber).from, to: line.to };
+}
+
+function isPipeTableDelimiterRow(text: string) {
   let trimmed = text.trim();
   if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return false;
-  return trimmed.indexOf("|", 1) < trimmed.length - 1;
+  let cells = trimmed
+    .slice(1, -1)
+    .split("|")
+    .map((cell) => cell.trim());
+  return cells.length > 0 && cells.every((cell) => /^:?-+:?$/.test(cell));
 }
 
 function nextMarker(marker: string) {
