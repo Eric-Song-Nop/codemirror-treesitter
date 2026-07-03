@@ -2,6 +2,7 @@
 
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { __testFlushLiveMdAnalysis } from "../src/core/decorations.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
 
 let locationDescriptor: PropertyDescriptor | undefined;
@@ -64,6 +65,20 @@ describe("newline editing", () => {
     pressKey(editor.view, "Enter");
 
     expect(editor.value).toBe("| Name | Value |\n");
+  });
+
+  it("keeps a completed table in source after Enter creates a continuation line", async () => {
+    let editor = await mountEditor("| a | b |\n| --- | --- |");
+
+    pressKey(editor.view, "Enter");
+
+    expect(editor.value).toBe("| a | b |\n| --- | --- |\n");
+    expect(editor.view.dom.querySelector(".cm-md-table-preview")).toBeNull();
+
+    await __testFlushLiveMdAnalysis(editor.view);
+
+    expect(editor.view.dom.querySelector(".cm-md-table-preview")).toBeNull();
+    expect(editor.view.contentDOM.textContent).toContain("| a | b |");
   });
 
   it("keeps list continuation behavior on Enter", async () => {

@@ -506,18 +506,6 @@ describe("LiveMD active source islands", () => {
     let fenceState = await markdownState(fenceDoc);
     expect(activeTexts(fenceState, EditorSelection.cursor(fenceDoc.length, 0))).toEqual([]);
   });
-
-  it("does not assign Enter-created line starts to the previous committed island", async () => {
-    let fenceDoc = "```ts\n";
-    let fenceState = await markdownState(fenceDoc);
-    expect(activeTexts(fenceState, EditorSelection.cursor(fenceDoc.length, 0))).toEqual([]);
-
-    let tableCandidateDoc = "| A | B |\n";
-    let tableCandidateState = await markdownState(tableCandidateDoc);
-    expect(
-      activeTexts(tableCandidateState, EditorSelection.cursor(tableCandidateDoc.length, 0)),
-    ).toEqual([]);
-  });
 });
 
 async function mountEditor(

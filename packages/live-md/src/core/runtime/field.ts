@@ -4,6 +4,7 @@ import {
   RangeSet,
   StateEffect,
   StateField,
+  type Text,
   Transaction,
   type Extension,
 } from "@codemirror/state";
@@ -67,6 +68,7 @@ import {
   mapInclusiveRange,
   mapRange,
   rangesEqual,
+  rangesOverlap,
   rangesTouchInclusive,
   rangesTouchPoint,
   subtractRanges,
@@ -74,6 +76,7 @@ import {
 } from "../analysis/ranges.js";
 import { liveMdMarkdownFeatureFacet } from "../features.js";
 import { liveMdImageSourceResolver } from "../images.js";
+import { liveMdEditContinuationField } from "../edit-continuation.js";
 import {
   codeFenceHighlighterFacet,
   codeFenceLanguagesField,
@@ -171,7 +174,7 @@ const liveMdAnalysisField = StateField.define<LiveMdRuntimeState>({
       if (transaction.isUserEvent("input.task") && value.semantic && !value.pending) {
         let trace = pendingInputTrace(transaction);
         let activeLines = getActiveLines(transaction.state);
-        let activeSourceRanges = activeMarkdownSourceRanges(
+        let activeSourceRanges = liveMdActiveSourceRanges(
           transaction.state,
           value.sourceIslandLeaves,
         );
@@ -201,7 +204,7 @@ const liveMdAnalysisField = StateField.define<LiveMdRuntimeState>({
     let activeLines = getActiveLines(transaction.state);
     let activeSourceRanges =
       tree == value.tree && !transaction.docChanged
-        ? activeMarkdownSourceRanges(transaction.state, value.sourceIslandLeaves)
+        ? liveMdActiveSourceRanges(transaction.state, value.sourceIslandLeaves)
         : null;
     let activeLinesStable = sameSetItems(activeLines, value.activeLines);
     let selectionProjectionStable =
@@ -521,6 +524,9 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       let mappedCurrent = mapProjectionSets(this.surfaceState, update.changes, []);
       let restored = restoreProjectionSets(mappedCurrent, mappedBase, restoreRanges);
       let revealed = revealProjectionSets(restored, editSurfaceRanges);
+      revealed = revealProjectionSets(revealed, pending.editSurface.structuralLineClearRanges, {
+        clearStructuralLineDecorations: true,
+      });
       let sets = clearInteractiveProjectionSets(revealed, interactiveSafetyRanges);
       this.surfaceState = {
         ...sets,
@@ -773,7 +779,7 @@ function pendingSourceAnalysis(
   };
   let activeLines = getActiveLines(transaction.state);
   let sourceIslandLeaves = baseAnalysis.sourceIslandLeaves;
-  let activeSourceRanges = activePendingSourceRanges(
+  let activeSourceRanges = liveMdPendingActiveSourceRanges(
     transaction.state,
     baseDoc,
     sourceIslandLeaves,
@@ -787,6 +793,9 @@ function pendingSourceAnalysis(
     editSurface.restoreRanges,
   );
   let direct = revealProjectionSets(restoredDirect, editSurface.ranges);
+  direct = revealProjectionSets(direct, editSurface.structuralLineClearRanges, {
+    clearStructuralLineDecorations: true,
+  });
   let trace = pendingInputTrace(transaction);
   trace.editSurfaceRanges = editSurface.ranges;
   trace.editSurfaceLines = countLines(transaction.state.doc, editSurface.ranges);
@@ -831,13 +840,13 @@ function pendingSelectionAnalysis(
   let activeLines = getActiveLines(transaction.state);
   let pending = value.pending;
   let activeSourceRanges = pending
-    ? activePendingSourceRanges(
+    ? liveMdPendingActiveSourceRanges(
         transaction.state,
         pending.baseDoc,
         pending.baseAnalysis.sourceIslandLeaves,
         pending.changes,
       )
-    : activeMarkdownSourceRanges(transaction.state, value.sourceIslandLeaves);
+    : liveMdActiveSourceRanges(transaction.state, value.sourceIslandLeaves);
   let revealRanges = newlyActiveSourceRanges(value.activeSourceRanges, activeSourceRanges);
   if (
     sameSetItems(activeLines, value.activeLines) &&
@@ -916,7 +925,74 @@ function pendingEditSurface(
   return {
     ranges,
     restoreRanges,
+    structuralLineClearRanges: structuralLineClearRanges(
+      transaction.startState.doc,
+      state.doc,
+      changedRanges,
+    ),
   };
+}
+
+function structuralLineClearRanges(
+  oldDoc: Text,
+  newDoc: Text,
+  changedRanges: readonly ReturnType<typeof changedRangePairs>[number][],
+): readonly DocRange[] {
+  let ranges: DocRange[] = [];
+  for (let changed of changedRanges) {
+    if (changeCrossesLineBoundary(oldDoc, newDoc, changed.oldRange, changed.newRange)) {
+      ranges.push(changed.newLineRange);
+      continue;
+    }
+
+    let oldLine = oldDoc.lineAt(changed.oldRange.from);
+    let newLine = newDoc.lineAt(changed.newRange.from);
+    if (
+      markdownLineStructureSignature(oldLine.text) != markdownLineStructureSignature(newLine.text)
+    ) {
+      ranges.push(changed.newLineRange);
+    }
+  }
+  return mergeDocRanges(ranges.map((range) => clampRangeToDoc(range, newDoc.length)));
+}
+
+function changeCrossesLineBoundary(
+  oldDoc: Text,
+  newDoc: Text,
+  oldRange: DocRange,
+  newRange: DocRange,
+) {
+  return !rangeStaysOnOneLine(oldDoc, oldRange) || !rangeStaysOnOneLine(newDoc, newRange);
+}
+
+function rangeStaysOnOneLine(doc: Text, range: DocRange) {
+  if (!doc.length) return true;
+  let from = Math.max(0, Math.min(range.from, doc.length));
+  let to = Math.max(from, Math.min(range.to, doc.length));
+  return doc.lineAt(from).number == doc.lineAt(to).number;
+}
+
+function markdownLineStructureSignature(text: string) {
+  let rest = text.replace(/^\s{0,3}/u, "");
+  if (/^(?:```|~~~)/u.test(rest)) return "codeFence";
+  if (/^#{1,6}(?:\s|$)/u.test(rest)) return "heading";
+  if (rest.startsWith(">")) return "quote";
+  if (/^(?:[-+*]|\d+[.)])(?:\s+|$)/u.test(rest)) {
+    let task = /^(?:[-+*]|\d+[.)])\s+\[[ xX]\](?:\s+|$)/u.exec(rest);
+    return task ? `task:${task[0].toLowerCase()}` : "list";
+  }
+  if (isPipeTableDelimiterLine(rest)) return "tableDelimiter";
+  if (isPotentialPipeTableLine(rest)) return "tablePipe";
+  return "";
+}
+
+function isPipeTableDelimiterLine(text: string) {
+  let cells = text.trim().replace(/^\|/u, "").replace(/\|$/u, "").split("|");
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/u.test(cell.trim()));
+}
+
+function isPotentialPipeTableLine(text: string) {
+  return text.includes("|") && !/^\s*$/u.test(text);
 }
 
 function selectionPhysicalLineRanges(state: EditorState): readonly DocRange[] {
@@ -1040,6 +1116,36 @@ function newlyActiveSourceRanges(
   return current.filter(
     (range) => !previous.some((oldRange) => range.from == oldRange.from && range.to == oldRange.to),
   );
+}
+
+function liveMdActiveSourceRanges(
+  state: EditorState,
+  leaves: LiveMdRuntimeState["sourceIslandLeaves"],
+): readonly DocRange[] {
+  return appendEditContinuationSourceRange(state, activeMarkdownSourceRanges(state, leaves));
+}
+
+function liveMdPendingActiveSourceRanges(
+  state: EditorState,
+  baseDoc: LiveMdPendingAnalysis["baseDoc"],
+  leaves: LiveMdRuntimeState["sourceIslandLeaves"],
+  changes: ChangeDesc,
+): readonly DocRange[] {
+  return appendEditContinuationSourceRange(
+    state,
+    activePendingSourceRanges(state, baseDoc, leaves, changes),
+  );
+}
+
+function appendEditContinuationSourceRange(
+  state: EditorState,
+  ranges: readonly DocRange[],
+): readonly DocRange[] {
+  let continuation = state.field(liveMdEditContinuationField, false);
+  if (!continuation) return ranges;
+  let sourceRange = clampRangeToDoc(continuation.sourceRange, state.doc.length);
+  if (ranges.some((range) => rangesOverlap(range, sourceRange))) return ranges;
+  return [...ranges, sourceRange];
 }
 
 function activePendingSourceRanges(
@@ -1483,16 +1589,24 @@ function directProjectionPatchInput(
       currentActiveSourceRanges: semanticAnalysis.activeSourceRanges,
       currentCache: semanticAnalysis.semantic.cache,
       previous,
+      state,
     });
+    let ranges = mergeDocRanges([
+      ...(transition.mappedOldEffectRanges ?? []),
+      ...(transition.newEffectRanges ?? []),
+      ...activePatch.ranges,
+    ]);
+    let recordRanges = directLayoutRecordLookupRanges(
+      state,
+      ranges,
+      options.transitionBase.changes,
+    );
     return {
       changes: options.transitionBase.changes,
-      ranges: mergeDocRanges([
-        ...(transition.mappedOldEffectRanges ?? []),
-        ...(transition.newEffectRanges ?? []),
-        ...activePatch.ranges,
-      ]),
+      ranges,
       records: uniqueLeafAnalysisRecords([
         ...(transition.changedRecords ?? []),
+        ...directLayoutRecordsTouchingRanges(semanticAnalysis.semantic.cache, recordRanges),
         ...activePatch.records,
       ]),
       removeRecordIds: uniqueNumbers([
@@ -1514,6 +1628,7 @@ function directProjectionPatchInput(
       currentActiveSourceRanges: semanticAnalysis.activeSourceRanges,
       currentCache: semanticAnalysis.semantic.cache,
       previous,
+      state,
     });
     return {
       ranges: activePatch.ranges,
@@ -1525,11 +1640,46 @@ function directProjectionPatchInput(
   return null;
 }
 
+function directLayoutRecordLookupRanges(
+  state: EditorState,
+  ranges: readonly DocRange[],
+  changes?: ChangeDesc,
+) {
+  let lookup = ranges.map((range) => lineRangeWithNeighbors(state, range.from, range.to));
+  changes?.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    lookup.push(lineRangeWithNeighbors(state, fromB, toB));
+  }, true);
+  return mergeDocRanges(lookup);
+}
+
+function lineRangeWithNeighbors(state: EditorState, from: number, to: number) {
+  let doc = state.doc;
+  if (!doc.length) return { from: 0, to: 0 };
+  let range = lineRangeFor(doc, from, to);
+  let firstLine = doc.lineAt(range.from);
+  let lastLine = doc.lineAt(Math.max(range.from, range.to - 1));
+  let startLine = doc.line(Math.max(1, firstLine.number - 1));
+  let endLine = doc.line(Math.min(doc.lines, lastLine.number + 1));
+  return { from: startLine.from, to: endLine.to };
+}
+
+function directLayoutRecordsTouchingRanges(
+  cache: NonNullable<LiveMdRuntimeState["semantic"]>["cache"],
+  ranges: readonly DocRange[],
+) {
+  let records: LeafAnalysisRecord[] = [];
+  for (let record of findLeafAnalysisRecordsTouchingRanges(cache, ranges)) {
+    if (liveMdRecordMayProduceDirectLayout(record)) records.push(record);
+  }
+  return records;
+}
+
 function activeDirectProjectionPatch(input: {
   changes?: ChangeDesc;
   currentActiveSourceRanges: readonly DocRange[];
   currentCache: NonNullable<LiveMdRuntimeState["semantic"]>["cache"];
   previous: LiveMdRuntimeState;
+  state: EditorState;
 }): {
   ranges: readonly DocRange[];
   records: readonly LeafAnalysisRecord[];
@@ -1558,10 +1708,15 @@ function activeDirectProjectionPatch(input: {
     ...previousActiveRanges,
     ...input.currentActiveSourceRanges,
   ]);
+  let currentRecordRanges = directLayoutRecordLookupRanges(
+    input.state,
+    currentReprojectRanges,
+    input.changes,
+  );
   let records: LeafAnalysisRecord[] = [];
   for (let record of findLeafAnalysisRecordsTouchingRanges(
     input.currentCache,
-    currentReprojectRanges,
+    currentRecordRanges,
   )) {
     if (!liveMdRecordMayProduceDirectLayout(record)) continue;
     records.push(record);
@@ -1655,7 +1810,7 @@ function buildLiveMdSemanticAnalysis(input: {
       : previousSemantic;
     return {
       activeSourceRanges:
-        input.activeSourceRanges ?? activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
+        input.activeSourceRanges ?? liveMdActiveSourceRanges(input.state, sourceIslandLeaves),
       semantic,
       sourceIslandLeaves,
       trace,
@@ -1694,7 +1849,7 @@ function buildLiveMdSemanticAnalysis(input: {
           materializeLeafAnalysisCacheRecords(transition.cache),
         );
       return {
-        activeSourceRanges: activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
+        activeSourceRanges: liveMdActiveSourceRanges(input.state, sourceIslandLeaves),
         semantic: {
           cache: transition.cache,
           revision: (previousSemantic.revision ?? 0) + 1,
@@ -1733,7 +1888,7 @@ function buildLiveMdSemanticAnalysis(input: {
       materializeLeafAnalysisCacheRecords(fallback.cache),
     );
     return {
-      activeSourceRanges: activeMarkdownSourceRanges(input.state, sourceIslandLeaves),
+      activeSourceRanges: liveMdActiveSourceRanges(input.state, sourceIslandLeaves),
       semantic: {
         cache: fallback.cache,
         revision: (previousSemantic.revision ?? 0) + 1,
@@ -1786,7 +1941,7 @@ function buildLiveMdSemanticAnalysis(input: {
     input.state.doc,
     materializeLeafAnalysisCacheRecords(transition.cache),
   );
-  let activeSourceRanges = activeMarkdownSourceRanges(input.state, sourceIslandLeaves);
+  let activeSourceRanges = liveMdActiveSourceRanges(input.state, sourceIslandLeaves);
 
   return {
     activeSourceRanges,
@@ -1887,6 +2042,10 @@ function liveMdAnalysisSnapshot(
     runtime.direct.sourceSafeDecorations,
     surface.sourceSafeDecorations,
   ]);
+  let structuralLineDecorations = RangeSet.join([
+    runtime.direct.structuralLineDecorations,
+    surface.structuralLineDecorations,
+  ]);
   let destructiveDecorations = RangeSet.join([
     runtime.direct.destructiveDecorations,
     surface.destructiveDecorations,
@@ -1900,13 +2059,16 @@ function liveMdAnalysisSnapshot(
     directDecorations,
     directDestructiveDecorations: runtime.direct.destructiveDecorations,
     directSourceSafeDecorations: runtime.direct.sourceSafeDecorations,
+    directStructuralLineDecorations: runtime.direct.structuralLineDecorations,
     interactiveDecorations: surface.interactiveDecorations,
     sourceSafeDecorations,
+    structuralLineDecorations,
     surfaceAtomicRanges: surface.atomicRanges,
     surfaceDecorations: surface.decorations,
     surfaceDestructiveDecorations: surface.destructiveDecorations,
     surfaceInteractiveDecorations: surface.interactiveDecorations,
     surfaceSourceSafeDecorations: surface.sourceSafeDecorations,
+    surfaceStructuralLineDecorations: surface.structuralLineDecorations,
     trace: mergeLiveMdLeafAnalysisTraces(runtime.trace, surfaceSnapshot.trace),
   };
   if (explicitSurfaceSnapshot) {
@@ -2107,6 +2269,7 @@ function buildCanonicalLiveMdAnalysis(
         direct: projectionLayerFromSets(emptyProjectionSets()),
         interactiveDecorations: Decoration.none,
         sourceSafeDecorations: Decoration.none,
+        structuralLineDecorations: Decoration.none,
         surface: projectionLayerFromSets(emptyProjectionSets()),
       };
   return {
@@ -2120,6 +2283,7 @@ function buildCanonicalLiveMdAnalysis(
     directDecorations: projection.direct.decorations,
     directDestructiveDecorations: projection.direct.destructiveDecorations,
     directSourceSafeDecorations: projection.direct.sourceSafeDecorations,
+    directStructuralLineDecorations: projection.direct.structuralLineDecorations,
     interactiveDecorations: projection.interactiveDecorations,
     pending: null,
     renderCache: canonicalRenderCache,
@@ -2128,6 +2292,7 @@ function buildCanonicalLiveMdAnalysis(
     semantic: cache ? { cache: cache.cache, revision: 0 } : null,
     semanticTrace: cache ? trace : null,
     sourceSafeDecorations: projection.sourceSafeDecorations,
+    structuralLineDecorations: projection.structuralLineDecorations,
     surfaceInvalidationRanges: [],
     sourceIslandLeaves: cache?.analysis.sourceIslandLeaves ?? sourceIslandIndexFromLeaves([]),
     surfaceAtomicRanges: projection.surface.atomicRanges,
@@ -2135,6 +2300,7 @@ function buildCanonicalLiveMdAnalysis(
     surfaceDestructiveDecorations: projection.surface.destructiveDecorations,
     surfaceInteractiveDecorations: projection.surface.interactiveDecorations,
     surfaceSourceSafeDecorations: projection.surface.sourceSafeDecorations,
+    surfaceStructuralLineDecorations: projection.surface.structuralLineDecorations,
     trace,
     tree,
   };

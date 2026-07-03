@@ -26,6 +26,7 @@ export type LiveMdRuntimeEpochs = {
 export type LiveMdPendingEditSurface = {
   ranges: readonly DocRange[];
   restoreRanges: readonly DocRange[];
+  structuralLineClearRanges: readonly DocRange[];
 };
 
 export type LiveMdPendingAnalysis = {
@@ -62,6 +63,7 @@ export type LiveMdSurfaceProjection = {
   destructiveDecorations: DecorationSet;
   interactiveDecorations: DecorationSet;
   sourceSafeDecorations: DecorationSet;
+  structuralLineDecorations: DecorationSet;
 };
 
 export type LiveMdSurfaceProjectionState = {
@@ -71,6 +73,7 @@ export type LiveMdSurfaceProjectionState = {
   interactiveDecorations: DecorationSet;
   semanticRevision: number;
   sourceSafeDecorations: DecorationSet;
+  structuralLineDecorations: DecorationSet;
 };
 
 export type LiveMdAnalysis = LiveMdRuntimeState & {
@@ -80,12 +83,15 @@ export type LiveMdAnalysis = LiveMdRuntimeState & {
   directDecorations: DecorationSet;
   directDestructiveDecorations: DecorationSet;
   directSourceSafeDecorations: DecorationSet;
+  directStructuralLineDecorations: DecorationSet;
   destructiveDecorations: DecorationSet;
   interactiveDecorations: DecorationSet;
   sourceSafeDecorations: DecorationSet;
+  structuralLineDecorations: DecorationSet;
   surfaceAtomicRanges: RangeSet<RangeValue>;
   surfaceDecorations: DecorationSet;
   surfaceDestructiveDecorations: DecorationSet;
   surfaceInteractiveDecorations: DecorationSet;
   surfaceSourceSafeDecorations: DecorationSet;
+  surfaceStructuralLineDecorations: DecorationSet;
 };

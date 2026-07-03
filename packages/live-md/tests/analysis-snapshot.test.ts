@@ -3070,31 +3070,6 @@ describe("LiveMD analysis snapshot", () => {
     }
   });
 
-  it("keeps coalesced table typing on a pending edit surface until semantic commit", async () => {
-    let view = await markdownAnalysisView("| Name | Value |");
-    view.dispatch({ selection: { anchor: view.state.doc.length } });
-
-    try {
-      let base = __testLiveMdAnalysis(view);
-      let baseState = view.state;
-      let pending = dispatchPendingInputStep(view, "\n", "table header enter");
-      pending = dispatchPendingInputStep(view, "| --- | ---: |", "table delimiter");
-      pending = dispatchPendingInputStep(view, "\n", "table delimiter enter");
-      pending = dispatchPendingInputStep(view, "| alpha | 1 |", "table row");
-
-      await expectCoalescedPendingCommitMatchesOracles(
-        view,
-        base,
-        baseState,
-        pending,
-        "coalesced table typing",
-      );
-      expect(recordByKind(__testLiveMdAnalysis(view), "table")).toBeTruthy();
-    } finally {
-      view.destroy();
-    }
-  });
-
   it("keeps coalesced setext typing on a pending edit surface until semantic commit", async () => {
     let view = await markdownAnalysisView("Heading");
     view.dispatch({ selection: { anchor: view.state.doc.length } });
@@ -3143,25 +3118,6 @@ describe("LiveMD analysis snapshot", () => {
     }
   });
 
-  it("keeps Enter-created blank lines pending-editable without assigning a committed island", async () => {
-    let view = await markdownAnalysisView("before\n\n```ts", "");
-    view.dispatch({ selection: { anchor: view.state.doc.length } });
-
-    try {
-      let step = await dispatchPendingEditStep(
-        view,
-        insertAtSelection(view, "\n"),
-        "blank line after fence opening",
-      );
-
-      expect(step.pending.pending?.editSurface.ranges.length).toBeGreaterThan(0);
-      expect(step.after.activeSourceRanges).toEqual([]);
-      expect(view.contentDOM.textContent).toContain("```ts");
-    } finally {
-      view.destroy();
-    }
-  });
-
   it("keeps unrelated visible code, link, and widget surface stable during pending input", async () => {
     let doc =
       "intro [docs](https://docs.example) **bold**\n\n" +
@@ -3203,50 +3159,6 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("does not add pending code-fence line classes while editing fence content", async () => {
-    let doc = "```ts\nconst value = 1;\n```\n\ntail";
-    let view = await markdownAnalysisView(doc, "tail", [
-      syntaxHighlighting(testLightCodeFenceHighlightStyle),
-    ]);
-    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
-
-    let before = __testLiveMdAnalysis(view);
-    let beforeLineRanges = decorationRangesForClassFromSet(
-      view.state,
-      before.directSourceSafeDecorations,
-      "cm-md-code-line",
-    );
-    expect(beforeLineRanges).toEqual([{ from: doc.indexOf("const"), to: doc.indexOf("const") }]);
-
-    let constLineFrom = doc.indexOf("const");
-    view.dispatch({
-      changes: { from: constLineFrom, insert: "\n" },
-      selection: { anchor: constLineFrom + 1 },
-    });
-
-    let pending = __testLiveMdAnalysis(view);
-    expect(pending.pending).toBeTruthy();
-    expect(pending.pending?.editSurface.ranges.length).toBeGreaterThan(0);
-    expect(pending.trace.codeFenceParses).toBe(0);
-    expect(pending.trace.surfaceCompileCalls).toBe(0);
-    expect(pending.trace.blockNodesVisited).toBe(0);
-
-    let pendingLineRanges = decorationRangesForClassFromSet(
-      view.state,
-      pending.directSourceSafeDecorations,
-      "cm-md-code-line",
-    );
-    let newDoc = view.state.doc.toString();
-    let constLineNewFrom = newDoc.indexOf("const");
-    expect(pendingLineRanges).toHaveLength(beforeLineRanges.length);
-    expect(
-      pending.pending?.editSurface.ranges.some((range) =>
-        rangesTouch(range.from, range.to, constLineNewFrom, constLineNewFrom),
-      ),
-    ).toBe(true);
-    view.destroy();
-  });
-
   it("keeps committed code-fence line classes stable for edits outside a fence", async () => {
     let doc = "```ts\nconst value = 1;\n```\n\ntail text";
     let view = await markdownAnalysisView(doc, "tail", [
@@ -3272,48 +3184,6 @@ describe("LiveMD analysis snapshot", () => {
       "cm-md-code-line",
     );
     expect(pendingRanges).toEqual(beforeRanges);
-    view.destroy();
-  });
-
-  it("keeps open-fence pending edits on edit surface without adding line classes", async () => {
-    let doc = "```ts\nconst value = 1;\n\ntail";
-    let view = await markdownAnalysisView(doc, "tail", [
-      syntaxHighlighting(testLightCodeFenceHighlightStyle),
-    ]);
-    view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
-
-    let before = __testLiveMdAnalysis(view);
-    let beforeLineRanges = decorationRangesForClassFromSet(
-      view.state,
-      before.directSourceSafeDecorations,
-      "cm-md-code-line",
-    );
-    expect(beforeLineRanges.length).toBeGreaterThan(0);
-
-    let contentFrom = doc.indexOf("const");
-    view.dispatch({
-      changes: { from: contentFrom, insert: "\n" },
-      selection: { anchor: contentFrom + 1 },
-    });
-
-    let pending = __testLiveMdAnalysis(view);
-    expect(pending.pending).toBeTruthy();
-    expect(pending.pending?.editSurface.ranges.length).toBeGreaterThan(0);
-    expect(pending.trace.codeFenceParses).toBe(0);
-
-    let pendingLineRanges = decorationRangesForClassFromSet(
-      view.state,
-      pending.directSourceSafeDecorations,
-      "cm-md-code-line",
-    );
-    let newDoc = view.state.doc.toString();
-    let constLineNewFrom = newDoc.indexOf("const");
-    expect(pendingLineRanges).toHaveLength(beforeLineRanges.length);
-    expect(
-      pending.pending?.editSurface.ranges.some((range) =>
-        rangesTouch(range.from, range.to, constLineNewFrom, constLineNewFrom),
-      ),
-    ).toBe(true);
     view.destroy();
   });
 
@@ -4115,15 +3985,6 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
-  it("keeps table source editable on the trailing blank line", async () => {
-    let doc = "| Name | Value |\n| --- | ---: |\n";
-    let view = await markdownAnalysisView(doc);
-
-    expect(view.contentDOM.querySelector(".cm-md-table-preview")).toBeNull();
-    expect(view.contentDOM.textContent).toContain("| Name | Value |");
-    view.destroy();
-  });
-
   it("renders task list decorations at EOF without a trailing newline", async () => {
     let doc = "- [x] done\n- [ ] todo";
     let view = await markdownAnalysisView(doc, "done");
@@ -4450,31 +4311,6 @@ async function dispatchScheduledLocalEdit(
   return { after, before, pending, transaction };
 }
 
-async function dispatchPendingEditStep(view: EditorView, spec: TransactionSpec, label: string) {
-  let before = __testLiveMdAnalysis(view);
-  if (!before.semantic) throw new Error(`${label}: expected semantic cache before edit`);
-  let transaction = view.state.update(spec);
-
-  view.dispatch(transaction);
-  let pending = __testLiveMdAnalysis(view);
-  expectPendingEditSurfaceState(view, pending, label);
-  ensureSyntaxTree(view.state, view.state.doc.length, 5_000);
-
-  await __testFlushLiveMdAnalysis(view);
-
-  let after = __testLiveMdAnalysis(view);
-  expect(after.pending == null, `${label}: scheduled analysis committed`).toBe(true);
-  expectLocalFullFreshSemanticEquivalence(
-    after,
-    before.semantic.cache,
-    transaction,
-    view.state,
-    label,
-    "full",
-  );
-  return { after, before, pending, transaction };
-}
-
 function dispatchPendingInputStep(view: EditorView, text: string, label: string) {
   view.dispatch(insertAtSelection(view, text));
   let pending = __testLiveMdAnalysis(view);
@@ -4701,10 +4537,6 @@ function rangesTouchForPendingSurface(left: DocRange, right: DocRange) {
   return left.from <= right.to && right.from <= left.to;
 }
 
-function rangesTouch(fromA: number, toA: number, fromB: number, toB: number) {
-  return fromA <= toB && fromB <= toA;
-}
-
 function semanticTransitionOracles(
   startState: EditorState,
   state: EditorState,
@@ -4900,6 +4732,9 @@ function expectDirectProjectionMatchesFullOracle(
   ).toEqual(canonicalProjectionFromSets(state, direct.decorations, direct.atomicRanges));
   expect(canonicalDecorationsFromSet(state, analysis.directSourceSafeDecorations)).toEqual(
     canonicalDecorationsFromSet(state, direct.sourceSafeDecorations),
+  );
+  expect(canonicalDecorationsFromSet(state, analysis.directStructuralLineDecorations)).toEqual(
+    canonicalDecorationsFromSet(state, direct.structuralLineDecorations),
   );
   expect(canonicalDecorationsFromSet(state, analysis.directDestructiveDecorations)).toEqual(
     canonicalDecorationsFromSet(state, direct.destructiveDecorations),

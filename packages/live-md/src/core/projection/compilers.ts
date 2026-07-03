@@ -1,8 +1,12 @@
 import { type ChangeDesc, RangeSet } from "@codemirror/state";
 import { Decoration } from "@codemirror/view";
 import { type LeafAnalysisCache, type LeafAnalysisRecord } from "../analysis/descriptors.js";
-import { rangesOverlap } from "../analysis/ranges.js";
-import { type DocRange, type LiveMdLeafAnalysisTrace } from "../analysis/types.js";
+import { lineRangeFor, rangesOverlap } from "../analysis/ranges.js";
+import {
+  emptyLiveMdLeafAnalysisTrace,
+  type DocRange,
+  type LiveMdLeafAnalysisTrace,
+} from "../analysis/types.js";
 import {
   createLiveMdBuild,
   finishProjectionLayers,
@@ -67,14 +71,15 @@ export function compileFullDirectLayoutProjection(
 
 export function compileIncrementalDirectLayoutProjection(
   input: LiveMdProjectionCompileInput,
-  _cache: LeafAnalysisCache,
+  cache: LeafAnalysisCache,
   patch: LiveMdDirectProjectionPatchInput,
 ): LiveMdProjectionLayer {
   let ranges = mergeCompileRanges(patch.ranges);
+  let patchRanges = expandedDirectPatchRanges(input, patch.ranges, patch.changes);
   let previous = patch.changes
     ? mapProjectionSets(patch.previous, patch.changes, [])
     : patch.previous;
-  if (!ranges.length) return projectionLayerFromSets(previous);
+  if (!patchRanges.length) return projectionLayerFromSets(previous);
 
   input.trace.directProjectionWindows = mergeCompileRanges([
     ...input.trace.directProjectionWindows,
@@ -92,7 +97,12 @@ export function compileIncrementalDirectLayoutProjection(
   let compiled = projectionSetsFromLayer(finishProjectionLayers(build).direct);
   let removeOwnerKeys = new Set(patch.removeRecordIds.map(liveMdRecordOwnerKey));
 
-  return projectionLayerFromSets(patchProjectionSets(previous, ranges, compiled, removeOwnerKeys));
+  let patched = patchProjectionSets(previous, patchRanges, compiled, removeOwnerKeys);
+  patched = {
+    ...patched,
+    structuralLineDecorations: compileFullDirectStructuralLineDecorations(input, cache),
+  };
+  return projectionLayerFromSets(patched);
 }
 
 export function compileFullSurfaceProjection(
@@ -162,12 +172,25 @@ export function compileProjectionLayersFromCache(
       direct.sourceSafeDecorations,
       surface.sourceSafeDecorations,
     ]),
+    structuralLineDecorations: RangeSet.join([
+      direct.structuralLineDecorations,
+      surface.structuralLineDecorations,
+    ]),
     surface,
   };
 }
 
 function createCompileBuild(input: LiveMdProjectionCompileInput): LiveMdBuild {
   return createLiveMdBuild(input);
+}
+
+function compileFullDirectStructuralLineDecorations(
+  input: LiveMdProjectionCompileInput,
+  cache: LeafAnalysisCache,
+) {
+  let build = createCompileBuild({ ...input, trace: emptyLiveMdLeafAnalysisTrace() });
+  projectLeafCacheRecords(build, cache, (spec) => (spec.kind == "lineClass" ? [spec] : []));
+  return finishProjectionLayers(build).direct.structuralLineDecorations;
 }
 
 function recordSurfaceCompile(input: LiveMdProjectionCompileInput, ranges: readonly DocRange[]) {
@@ -193,6 +216,29 @@ function mergeCompileRanges(ranges: readonly DocRange[]) {
     }
   }
   return merged;
+}
+
+function expandedDirectPatchRanges(
+  input: LiveMdProjectionCompileInput,
+  ranges: readonly DocRange[],
+  changes: ChangeDesc | undefined,
+) {
+  let expanded = ranges.map((range) => lineRangeWithNeighbors(input, range.from, range.to));
+  changes?.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    expanded.push(lineRangeWithNeighbors(input, fromB, toB));
+  }, true);
+  return mergeCompileRanges(expanded);
+}
+
+function lineRangeWithNeighbors(input: LiveMdProjectionCompileInput, from: number, to: number) {
+  let doc = input.state.doc;
+  if (!doc.length) return { from: 0, to: 0 };
+  let range = lineRangeFor(doc, from, to);
+  let firstLine = doc.lineAt(range.from);
+  let lastLine = doc.lineAt(Math.max(range.from, range.to - 1));
+  let startLine = doc.line(Math.max(1, firstLine.number - 1));
+  let endLine = doc.line(Math.min(doc.lines, lastLine.number + 1));
+  return { from: startLine.from, to: endLine.to };
 }
 
 function fullSurfaceSpec(
@@ -274,5 +320,6 @@ function emptyProjectionLayer(): LiveMdProjectionLayer {
     destructiveDecorations: Decoration.none,
     interactiveDecorations: Decoration.none,
     sourceSafeDecorations: Decoration.none,
+    structuralLineDecorations: Decoration.none,
   };
 }

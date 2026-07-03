@@ -20,6 +20,7 @@ export type LiveMdProjectionLayer = {
   destructiveDecorations: DecorationSet;
   interactiveDecorations: DecorationSet;
   sourceSafeDecorations: DecorationSet;
+  structuralLineDecorations: DecorationSet;
 };
 
 export type LiveMdProjectionLayers = {
@@ -29,6 +30,7 @@ export type LiveMdProjectionLayers = {
   direct: LiveMdProjectionLayer;
   interactiveDecorations: DecorationSet;
   sourceSafeDecorations: DecorationSet;
+  structuralLineDecorations: DecorationSet;
   surface: LiveMdProjectionLayer;
 };
 
@@ -219,14 +221,18 @@ export function finishProjectionLayers(build: LiveMdBuild): LiveMdProjectionLaye
     }
   }
   let lineDecorationSet = lineDecorations.finish();
-  let directSourceSafe = lineDecorationSet;
+  let directStructuralLineDecorations = lineDecorationSet;
   let directDestructive = RangeSet.of(directDestructiveDecorations, true);
   let direct = {
     atomicRanges: finishAtomicRanges(build, "direct"),
-    decorations: RangeSet.join([lineDecorationSet, RangeSet.of(directDecorations, true)]),
+    decorations: RangeSet.join([
+      directStructuralLineDecorations,
+      RangeSet.of(directDecorations, true),
+    ]),
     destructiveDecorations: directDestructive,
     interactiveDecorations: Decoration.none,
-    sourceSafeDecorations: directSourceSafe,
+    sourceSafeDecorations: Decoration.none,
+    structuralLineDecorations: directStructuralLineDecorations,
   };
   let surfaceInteractive = RangeSet.of(surfaceInteractiveDecorations, true);
   let surface = {
@@ -235,9 +241,14 @@ export function finishProjectionLayers(build: LiveMdBuild): LiveMdProjectionLaye
     destructiveDecorations: RangeSet.of(surfaceDestructiveDecorations, true),
     interactiveDecorations: surfaceInteractive,
     sourceSafeDecorations: RangeSet.of(surfaceSourceSafeDecorations, true),
+    structuralLineDecorations: Decoration.none,
   };
   let sourceSafe = RangeSet.join([direct.sourceSafeDecorations, surface.sourceSafeDecorations]);
   let destructive = RangeSet.join([direct.destructiveDecorations, surface.destructiveDecorations]);
+  let structuralLineDecorations = RangeSet.join([
+    direct.structuralLineDecorations,
+    surface.structuralLineDecorations,
+  ]);
   return {
     atomicRanges: RangeSet.join([direct.atomicRanges, surface.atomicRanges]),
     decorations: RangeSet.join([direct.decorations, surface.decorations]),
@@ -245,6 +256,7 @@ export function finishProjectionLayers(build: LiveMdBuild): LiveMdProjectionLaye
     direct,
     interactiveDecorations: surface.interactiveDecorations,
     sourceSafeDecorations: sourceSafe,
+    structuralLineDecorations,
     surface,
   };
 }
