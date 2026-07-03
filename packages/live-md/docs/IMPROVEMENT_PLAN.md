@@ -70,6 +70,12 @@ vp run @codemirror-treesitter/live-md#build
   shared projection layers, migrates in-repo feature examples and tests, removes
   the legacy full-document query/decorate projection path, and moves the
   canonical oracle to semantic analysis plus full projection compilation.
+- **Phase 2 / PR-9:** implemented on 2026-07-03 in draft PR #96
+  (`codex/live-md-pr9-resumable-analysis`). The code adds resumable leaf-analysis
+  transition state for fresh, full, and local cache paths, preserves completed
+  units and inline parser sessions across scheduler yields, disposes resumes on
+  commit, cancel, stale revisions, epoch changes, and plugin destroy, and adds
+  full/local resume plus cancelled-session regression coverage.
 
 ---
 
@@ -783,7 +789,7 @@ liveMdCompositeEpoch(...state.facet(liveMdMarkdownFeatureFacet))` and
 8a, migrate all in-repo consumers (`apps/local-md-workspace` callouts if
 any), soak, then 8b.
 
-### PR-9: Resumable scheduled analysis _(fixes A4 fully)_
+### PR-9: Resumable scheduled analysis _(implemented; fixes A4 fully)_
 
 **Goal.** Yielding preserves completed per-unit work; commit latency becomes
 proportional to _remaining_ work.
