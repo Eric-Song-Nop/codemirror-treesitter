@@ -3,7 +3,7 @@ import { type Highlighter, type Tree } from "@codemirror-treesitter/language";
 import { type DecorationSet } from "@codemirror/view";
 import { type LiveMdSemanticState } from "../analysis/descriptors.js";
 import { type LiveMdRenderKeyContext } from "../analysis/markdown-leaf-analysis.js";
-import { type LiveMdSourceIslandLeaf } from "../analysis/markdown-source-islands.js";
+import { type SourceIslandIndex } from "../analysis/markdown-source-islands.js";
 import { type DocRange, type LiveMdLeafAnalysisTrace } from "../analysis/types.js";
 import { type LiveMdMarkdownFeature } from "../features.js";
 import { type LiveMdImageSourceResolver } from "../images.js";
@@ -51,7 +51,7 @@ export type LiveMdRuntimeState = {
   semantic: LiveMdSemanticState | null;
   semanticTrace: LiveMdSemanticTrace | null;
   surfaceInvalidationRanges: readonly DocRange[];
-  sourceIslandLeaves: readonly LiveMdSourceIslandLeaf[];
+  sourceIslandLeaves: SourceIslandIndex;
   trace: LiveMdLeafAnalysisTrace;
   tree: Tree;
 };

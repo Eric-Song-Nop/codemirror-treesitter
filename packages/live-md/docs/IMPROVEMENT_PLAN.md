@@ -76,6 +76,11 @@ vp run @codemirror-treesitter/live-md#build
   units and inline parser sessions across scheduler yields, disposes resumes on
   commit, cancel, stale revisions, epoch changes, and plugin destroy, and adds
   full/local resume plus cancelled-session regression coverage.
+- **Phase 2 / PR-11:** implemented on 2026-07-03 in draft PR #97
+  (`codex/live-md-pr11-source-island-index`). The code replaces the
+  segmented-leaves Proxy with an explicit `SourceIslandIndex`, keeps local
+  transition lookups lazy behind `at`/`find`, makes `toArray()` materialization
+  explicit at call sites, and updates the laziness tests to spy on `toArray()`.
 
 ---
 
@@ -875,7 +880,15 @@ the code enforces.
 **Size.** ~250 lines + docs. **Risk.** Medium (touches identity), guarded by
 the oracle suite.
 
-### PR-11: Replace the segmented-leaves Proxy with an explicit index _(fixes A6a)_
+### PR-11: Replace the segmented-leaves Proxy with an explicit index _(implemented; fixes A6a)_
+
+**Implemented.** `markdown-source-islands.ts` now exposes `SourceIslandIndex`
+with `length`, `at`, `find`, and explicit `toArray()` materialization. The
+segmented transition path keeps lazy per-segment mapping under `at`/`find`,
+while the old array Proxy, numeric property trap, and shadow array methods are
+gone. Runtime state and semantic cache transitions carry the index type, task
+toggle source-island updates wrap the index lazily, and tests assert local
+transitions plus selection-only reprojection do not call `toArray()`.
 
 **Changes.**
 

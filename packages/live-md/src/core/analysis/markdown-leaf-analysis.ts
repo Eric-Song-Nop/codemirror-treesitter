@@ -16,7 +16,7 @@ import {
 import {
   activeMarkdownSourceRanges,
   sourceIslandLeavesFromMarkdownSnapshot,
-  type LiveMdSourceIslandLeaf,
+  type SourceIslandIndex,
 } from "./markdown-source-islands.js";
 import {
   type LeafAnalysis,
@@ -50,7 +50,7 @@ import { type LiveMdMarkdownParserService } from "../languages.js";
 export type LiveMdLeafSemanticAnalysis = {
   activeSourceRanges: readonly DocRange[];
   records: readonly LeafAnalysisRecord[];
-  sourceIslandLeaves: readonly LiveMdSourceIslandLeaf[];
+  sourceIslandLeaves: SourceIslandIndex;
   trace: LiveMdLeafAnalysisTrace;
 };
 

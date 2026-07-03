@@ -11,7 +11,10 @@ import {
   rekeyLeafAnalysisForSource,
   type LiveMdRenderKeyContext,
 } from "../analysis/markdown-leaf-analysis.js";
-import { type LiveMdSourceIslandLeaf } from "../analysis/markdown-source-islands.js";
+import {
+  type LiveMdSourceIslandLeaf,
+  type SourceIslandIndex,
+} from "../analysis/markdown-source-islands.js";
 import { type DocRange } from "../analysis/types.js";
 import { hashDocRange, lineRangeFor, mapRange, rangesSame } from "../analysis/ranges.js";
 import {
@@ -280,16 +283,30 @@ function recordIsConfinedToLine(record: LeafAnalysisRecord, line: DocRange) {
 }
 
 function mapTaskSourceIslandLeaves(
-  leaves: readonly LiveMdSourceIslandLeaf[],
+  leaves: SourceIslandIndex,
   oldMarkerLine: DocRange,
   oldContextKey: string,
   newContextKey: string,
 ) {
-  return leaves.map((leaf) =>
+  let mapped = (leaf: LiveMdSourceIslandLeaf): LiveMdSourceIslandLeaf =>
     leaf.contextKey == oldContextKey && containsRange(oldMarkerLine, leaf.sourceRange)
       ? { ...leaf, contextKey: newContextKey }
-      : leaf,
-  );
+      : leaf;
+  let index: SourceIslandIndex = {
+    length: leaves.length,
+    at(position) {
+      let leaf = leaves.at(position);
+      return leaf ? mapped(leaf) : undefined;
+    },
+    find(doc, position, assoc) {
+      let leaf = leaves.find(doc, position, assoc);
+      return leaf ? mapped(leaf) : null;
+    },
+    toArray() {
+      return leaves.toArray().map(mapped);
+    },
+  };
+  return index;
 }
 
 function taskMarkerTextChecked(text: string, checked: boolean) {

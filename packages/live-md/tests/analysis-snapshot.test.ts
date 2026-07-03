@@ -23,7 +23,7 @@ import {
   type DocRange,
   type Highlighter,
 } from "@codemirror-treesitter/language";
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   __testBuildCanonicalLiveMdAnalysis,
   __testBuildLiveMdAnalysis,
@@ -65,9 +65,11 @@ import {
 } from "../src/core/projection/compilers.js";
 import {
   activeMarkdownSourceRanges,
+  sourceIslandIndexFromLeaves,
   sourceIslandLeavesFromLeafAnalysisRecords,
   transitionSourceIslandLeavesFromLeafAnalysisRecords,
   type LiveMdSourceIslandLeaf,
+  type SourceIslandIndex,
 } from "../src/core/analysis/markdown-source-islands.js";
 import { type LeafAnalysisRecord } from "../src/core/analysis/descriptors.js";
 import { type LiveMdLeafAnalysisTrace } from "../src/core/analysis/types.js";
@@ -425,8 +427,11 @@ describe("LiveMD analysis snapshot", () => {
       expect(materializeLeafAnalysisCacheRecords(resumed.cache)).toEqual(
         materializeLeafAnalysisCacheRecords(uninterrupted.cache),
       );
-      expect(canonicalSourceIslandLeaves(resumed.sourceIslandLeaves ?? [])).toEqual(
-        canonicalSourceIslandLeaves(uninterrupted.sourceIslandLeaves ?? []),
+      if (!resumed.sourceIslandLeaves || !uninterrupted.sourceIslandLeaves) {
+        throw new Error("Expected local transition source island leaves");
+      }
+      expect(canonicalSourceIslandLeaves(resumed.sourceIslandLeaves)).toEqual(
+        canonicalSourceIslandLeaves(uninterrupted.sourceIslandLeaves),
       );
       expect(resumed.trace.recordsAnalyzed).toBe(uninterrupted.trace.recordsAnalyzed);
       expect(resumed.trace.inlineParserSessions).toBe(1);
@@ -545,7 +550,7 @@ describe("LiveMD analysis snapshot", () => {
     let view = await markdownAnalysisView(doc, "paragraph 950");
     let before = __testLiveMdAnalysis(view);
     let reads = 0;
-    for (let leaf of before.sourceIslandLeaves) {
+    for (let leaf of before.sourceIslandLeaves.toArray()) {
       let sourceRange = leaf.sourceRange;
       Object.defineProperty(leaf, "sourceRange", {
         configurable: true,
@@ -1715,6 +1720,7 @@ describe("LiveMD analysis snapshot", () => {
         changes: { from: secondTarget, insert: "?" },
       });
       tree2 = service.blockParser.parse(transaction2.state.doc);
+      let materializeLocal1 = vi.spyOn(local1.sourceIslandLeaves!, "toArray");
       let local2 = transitionLeafAnalysisCacheLocal({
         analysisInput: { service, state: transaction2.state, tree: tree2 },
         changes: transaction2.changes,
@@ -1727,6 +1733,7 @@ describe("LiveMD analysis snapshot", () => {
       expect(local2.trace.recordsAnalyzed).toBe(1);
       expect(local2.trace.recordsVisited).toBeLessThan(5);
       expect(local2.trace.cacheFullMaterializations).toBe(0);
+      expect(materializeLocal1).not.toHaveBeenCalled();
     } finally {
       deleteLiveMdTree(tree0);
       if (tree1) deleteLiveMdTree(tree1);
@@ -1748,12 +1755,14 @@ describe("LiveMD analysis snapshot", () => {
       );
       if (!after.semantic) throw new Error("Expected semantic cache after local edit");
 
+      let materializeSourceIslands = vi.spyOn(after.sourceIslandLeaves, "toArray");
       view.dispatch({ selection: { anchor: view.state.doc.toString().indexOf("paragraph 900") } });
 
       let reprojected = __testLiveMdAnalysis(view);
       expect(reprojected.semantic?.cache).toBe(after.semantic.cache);
       expect(reprojected.semanticTrace?.projectionRecords).toBe(0);
       expect(reprojected.semanticTrace?.cacheFullMaterializations).toBe(0);
+      expect(materializeSourceIslands).not.toHaveBeenCalled();
     } finally {
       view.destroy();
     }
@@ -2033,21 +2042,23 @@ describe("LiveMD analysis snapshot", () => {
     let state0 = EditorState.create({ doc: "x".repeat(count * 10) });
     let transaction = state0.update({ changes: { from: point, insert: "!" } });
     let reads = 0;
-    let oldLeaves: LiveMdSourceIslandLeaf[] = Array.from({ length: count }, (_value, index) => {
-      let sourceRange = { from: index * 10, to: (index + 1) * 10 };
-      let leaf = {
-        contextKey: `leaf-${index}`,
-        kind: "paragraph" as const,
-      } as LiveMdSourceIslandLeaf;
-      Object.defineProperty(leaf, "sourceRange", {
-        configurable: true,
-        get() {
-          reads++;
-          return sourceRange;
-        },
-      });
-      return leaf;
-    });
+    let oldLeaves = sourceIslandIndexFromLeaves(
+      Array.from({ length: count }, (_value, index) => {
+        let sourceRange = { from: index * 10, to: (index + 1) * 10 };
+        let leaf = {
+          contextKey: `leaf-${index}`,
+          kind: "paragraph" as const,
+        } as LiveMdSourceIslandLeaf;
+        Object.defineProperty(leaf, "sourceRange", {
+          configurable: true,
+          get() {
+            reads++;
+            return sourceRange;
+          },
+        });
+        return leaf;
+      }),
+    );
 
     let transitioned = transitionSourceIslandLeavesFromLeafAnalysisRecords({
       changes: transaction.changes,
@@ -2060,7 +2071,7 @@ describe("LiveMD analysis snapshot", () => {
     });
 
     expect(transitioned.length).toBe(count - 2);
-    expect(transitioned[499]?.contextKey).toBe("leaf-501");
+    expect(transitioned.at(499)?.contextKey).toBe("leaf-501");
     expect(reads).toBeLessThan(200);
   });
 
@@ -4622,11 +4633,10 @@ async function createLocalCacheHarness(doc: string, extensions: Extension = []) 
     analysisInput: { renderKeyContext, service, state, tree },
     snapshot,
   });
-  let sourceIslandLeaves: readonly LiveMdSourceIslandLeaf[] =
-    sourceIslandLeavesFromLeafAnalysisRecords(
-      state.doc,
-      materializeLeafAnalysisCacheRecords(current.cache),
-    );
+  let sourceIslandLeaves: SourceIslandIndex = sourceIslandLeavesFromLeafAnalysisRecords(
+    state.doc,
+    materializeLeafAnalysisCacheRecords(current.cache),
+  );
 
   let harness = {
     current,
@@ -5333,8 +5343,9 @@ function canonicalSemanticTransitionCache(
   return records.sort(compareCanonicalSemanticTransitionRecord);
 }
 
-function canonicalSourceIslandLeaves(leaves: readonly LiveMdSourceIslandLeaf[]) {
+function canonicalSourceIslandLeaves(leaves: SourceIslandIndex) {
   return leaves
+    .toArray()
     .map((leaf) => ({
       contextKey: leaf.contextKey,
       kind: leaf.kind,
