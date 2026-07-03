@@ -7,10 +7,54 @@ export type LiveMdTextMarkKind = "emphasis" | "inlineCode" | "strike" | "strong"
 
 export type LiveMdTableAlignment = "center" | "default" | "left" | "right";
 
+export type LiveMdInlineContent = readonly LiveMdInlineNode[];
+
+export type LiveMdInlineNode =
+  | {
+      kind: "emphasis" | "strike" | "strong";
+      children: LiveMdInlineContent;
+    }
+  | {
+      kind: "hardBreak";
+    }
+  | {
+      alt: string;
+      kind: "image";
+      source: string;
+      title: string | null;
+    }
+  | {
+      kind: "inlineCode";
+      text: string;
+    }
+  | {
+      children: LiveMdInlineContent;
+      destination: string | null;
+      kind: "link";
+      title: string | null;
+    }
+  | {
+      displayMode: boolean;
+      kind: "latex";
+      source: string;
+      tex: string;
+    }
+  | {
+      kind: "text";
+      text: string;
+    };
+
+export type LiveMdTableCellModel = {
+  inline: LiveMdInlineContent;
+  text: string;
+};
+
 export type LiveMdTableModel = {
   alignments: readonly LiveMdTableAlignment[];
   header: readonly string[];
+  headerCells?: readonly LiveMdTableCellModel[];
   rows: readonly (readonly string[])[];
+  rowCells?: readonly (readonly LiveMdTableCellModel[])[];
 };
 
 export type LiveMdLatexFormulaDescriptor = {
@@ -354,9 +398,48 @@ export function liveMdTableContentKey(table: LiveMdTableModel) {
     ...table.alignments,
     table.header.length,
     ...table.header,
+    table.headerCells ? inlineCellsKey(table.headerCells) : null,
     table.rows.length,
     ...table.rows.map((row) => liveMdStableKeyParts(row.length, ...row)),
+    table.rowCells ? liveMdStableKeyParts(...table.rowCells.map(inlineCellsKey)) : null,
   );
+}
+
+function inlineCellsKey(cells: readonly LiveMdTableCellModel[]) {
+  return liveMdStableKeyParts(
+    cells.length,
+    ...cells.map((cell) => liveMdStableKeyParts(cell.text, inlineContentKey(cell.inline))),
+  );
+}
+
+function inlineContentKey(content: LiveMdInlineContent): string {
+  return liveMdStableKeyParts(...content.map(inlineNodeKey));
+}
+
+function inlineNodeKey(node: LiveMdInlineNode): string {
+  switch (node.kind) {
+    case "emphasis":
+    case "strike":
+    case "strong":
+      return liveMdStableKeyParts(node.kind, inlineContentKey(node.children));
+    case "hardBreak":
+      return liveMdStableKeyParts(node.kind);
+    case "image":
+      return liveMdStableKeyParts(node.kind, node.source, node.alt, node.title);
+    case "inlineCode":
+      return liveMdStableKeyParts(node.kind, node.text);
+    case "link":
+      return liveMdStableKeyParts(
+        node.kind,
+        node.destination,
+        node.title,
+        inlineContentKey(node.children),
+      );
+    case "latex":
+      return liveMdStableKeyParts(node.kind, node.displayMode, node.source, node.tex);
+    case "text":
+      return liveMdStableKeyParts(node.kind, node.text);
+  }
 }
 
 export function liveMdStableKeyParts(
