@@ -178,7 +178,9 @@ reference-stable values when updating an editor. LiveMD uses reference equality
 to avoid reconfiguring unchanged feature and plugin compartments.
 `extensions` remains the direct CodeMirror escape hatch and is applied after
 plugin extensions. `imageSource` maps normalized Markdown image destinations to
-preview URLs, which lets host apps serve local files through blob URLs.
+preview URLs, or to `{ src, width, height }` when the host knows image
+dimensions, which lets local-file previews reserve stable layout through blob
+URLs.
 `linkBaseUrl` is used to resolve relative Markdown links for Shift-click link
 jumps. Link jumps open in a new browsing context by default; hosts can add
 `liveMdLinkOpen(handler)` through `extensions` to customize navigation. Fenced

@@ -26,6 +26,7 @@ export type LiveMdRenderCache = {
   codeFenceHighlights: Map<string, LiveMdCodeFenceHighlightResult>;
   images: Map<string, LiveMdImageRenderResult>;
   latex: Map<string, LatexRenderResult>;
+  measuredHeights: Map<string, number>;
   mermaid: Map<string, LiveMdMermaidRenderHandle>;
   tables: Map<string, LiveMdTableRenderResult>;
 };
@@ -42,8 +43,10 @@ export type LiveMdCodeFenceHighlightResult = {
 };
 
 export type LiveMdImageRenderResult = {
+  height?: number;
   resultKey: string;
   src: string;
+  width?: number;
 };
 
 export type LiveMdMermaidRenderResult =
@@ -87,6 +90,7 @@ export function createLiveMdRenderCache(): LiveMdRenderCache {
     codeFenceHighlights: new Map(),
     images: new Map(),
     latex: new Map(),
+    measuredHeights: new Map(),
     mermaid: new Map(),
     tables: new Map(),
   };
@@ -111,10 +115,10 @@ export function cachedLiveMdImageSource(
   if (cached) return cached;
 
   trace.heavyRenderStarts++;
-  let src = resolveLiveMdImageSource(source, resolver);
+  let image = resolveLiveMdImageSource(source, resolver);
   let result = {
-    resultKey: hashString(src),
-    src,
+    ...image,
+    resultKey: hashString(keyParts(image.src, image.width, image.height)),
   };
   cache.images.set(key, result);
   return result;

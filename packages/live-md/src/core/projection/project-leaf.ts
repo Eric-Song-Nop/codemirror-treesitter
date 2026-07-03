@@ -922,7 +922,7 @@ function materializeEffectSpec(
         build,
         spec.from,
         spec.to,
-        widgetFromSpec(build, spec.widget, recordRenderKey),
+        widgetFromSpec(build, spec.widget, recordRenderKey, spec.block ?? false),
         spec.block ?? false,
         spec.atomic ?? false,
         ownerKeys,
@@ -966,7 +966,12 @@ function textMark(mark: Extract<LiveMdDescriptor, { kind: "textMark" }>["mark"])
   }
 }
 
-function widgetFromSpec(build: LiveMdBuild, spec: LiveMdWidgetSpec, recordRenderKey: string) {
+function widgetFromSpec(
+  build: LiveMdBuild,
+  spec: LiveMdWidgetSpec,
+  recordRenderKey: string,
+  block: boolean,
+) {
   build.trace.widgetConstructions++;
   switch (spec.kind) {
     case "imagePreview": {
@@ -977,7 +982,7 @@ function widgetFromSpec(build: LiveMdBuild, spec: LiveMdWidgetSpec, recordRender
         spec.source,
         build.imageSourceResolver,
       );
-      return new ImagePreviewWidget(spec.alt, image.src);
+      return new ImagePreviewWidget(spec.alt, image, build.renderCache.measuredHeights, block);
     }
     case "latex":
       return new LatexWidget(
@@ -993,17 +998,28 @@ function widgetFromSpec(build: LiveMdBuild, spec: LiveMdWidgetSpec, recordRender
           source: spec.source,
           tex: spec.tex,
         }),
+        build.renderCache.measuredHeights,
       );
     case "listMarker":
       return new ListMarkerWidget(spec.marker);
     case "mermaid":
       return new MermaidWidget(
         cachedLiveMdMermaidRequest(build.renderCache, build.trace, recordRenderKey, spec.source),
+        build.renderCache.measuredHeights,
       );
-    case "tablePreview":
+    case "tablePreview": {
+      let result = cachedLiveMdTableResult(
+        build.renderCache,
+        build.trace,
+        recordRenderKey,
+        spec.table,
+      );
       return new TablePreviewWidget(
-        cachedLiveMdTableResult(build.renderCache, build.trace, recordRenderKey, spec.table).table,
+        result.table,
+        build.renderCache.measuredHeights,
+        result.resultKey,
       );
+    }
     case "taskMarker":
       return new TaskCheckboxWidget(spec.checked);
   }

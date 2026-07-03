@@ -3,6 +3,7 @@ import type { RenderOptions as BeautifulMermaidRenderOptions } from "beautiful-m
 import katex, { type KatexOptions } from "katex";
 import type { Mermaid } from "mermaid";
 import {
+  type LiveMdImageRenderResult,
   type LiveMdMermaidRenderHandle,
   type LiveMdMermaidRenderResult,
 } from "./runtime/render-cache.js";
@@ -46,6 +47,12 @@ export type LatexRenderResult =
 export type MermaidDiagram = {
   source: string;
 };
+
+type LiveMdMeasuredHeights = Map<string, number>;
+
+const defaultBlockLatexHeight = 40;
+const defaultMermaidHeight = 160;
+const tableRowHeight = 28;
 
 const latexWidgetResults = new WeakMap<LatexWidget, LatexRenderResult>();
 
@@ -97,13 +104,21 @@ export class TaskCheckboxWidget extends WidgetType {
 export class LatexWidget extends WidgetType {
   private block: boolean;
   private displayMode: boolean;
+  private heightKey: string | null;
+  private heights: LiveMdMeasuredHeights | null;
   private source: string;
   private tex: string;
 
-  constructor(formula: LatexFormula, rendered: LatexRenderResult | null = null) {
+  constructor(
+    formula: LatexFormula,
+    rendered: LatexRenderResult | null = null,
+    heights: LiveMdMeasuredHeights | null = null,
+  ) {
     super();
     this.block = formula.block;
     this.displayMode = formula.displayMode;
+    this.heightKey = rendered?.resultKey ?? null;
+    this.heights = heights;
     this.source = formula.source;
     this.tex = formula.tex;
     if (rendered) latexWidgetResults.set(this, rendered);
@@ -143,6 +158,11 @@ export class LatexWidget extends WidgetType {
     }
 
     return element;
+  }
+
+  get estimatedHeight() {
+    if (!this.block) return -1;
+    return measuredHeight(this.heights, this.heightKey) ?? defaultBlockLatexHeight;
   }
 
   ignoreEvent() {
@@ -194,13 +214,20 @@ let mermaidPromise: Promise<Mermaid> | null = null;
 let mermaidRenderSequence = 0;
 
 export class MermaidWidget extends WidgetType {
+  private heightKey: string;
+  private heights: LiveMdMeasuredHeights | null;
   private renderHandle: LiveMdMermaidRenderHandle | null;
   private source: string;
 
-  constructor(diagram: MermaidDiagram | LiveMdMermaidRenderHandle) {
+  constructor(
+    diagram: MermaidDiagram | LiveMdMermaidRenderHandle,
+    heights: LiveMdMeasuredHeights | null = null,
+  ) {
     super();
     this.renderHandle = isLiveMdMermaidRenderHandle(diagram) ? diagram : null;
     this.source = diagram.source;
+    this.heightKey = this.renderHandle?.resultKey ?? hashString(this.source);
+    this.heights = heights;
   }
 
   eq(other: MermaidWidget) {
@@ -211,6 +238,7 @@ export class MermaidWidget extends WidgetType {
     let element = document.createElement("div");
     element.className = "cm-md-mermaid";
     element.dataset.source = this.source;
+    element.style.minHeight = `${this.estimatedHeight}px`;
     element.tabIndex = 0;
     element.setAttribute("role", "button");
     element.setAttribute("aria-label", "Edit Mermaid diagram");
@@ -225,12 +253,24 @@ export class MermaidWidget extends WidgetType {
       });
       view.focus();
     });
-    renderMermaidInto(element, this.renderHandle ?? ephemeralMermaidRenderHandle(this.source));
+    renderMermaidInto(
+      element,
+      this.renderHandle ?? ephemeralMermaidRenderHandle(this.source),
+      this.heights,
+    );
     return element;
   }
 
   destroy(dom: HTMLElement) {
     delete dom.dataset.mermaidRenderToken;
+  }
+
+  get estimatedHeight() {
+    return (
+      measuredHeight(this.heights, this.renderHandle?.result?.resultKey ?? null) ??
+      measuredHeight(this.heights, this.heightKey) ??
+      defaultMermaidHeight
+    );
   }
 
   ignoreEvent() {
@@ -261,16 +301,40 @@ export class ListMarkerWidget extends WidgetType {
 
 export class ImagePreviewWidget extends WidgetType {
   private alt: string;
+  private block: boolean;
+  private height: number | undefined;
+  private heightKey: string;
+  private heights: LiveMdMeasuredHeights | null;
+  private resultKey: string;
   private src: string;
+  private width: number | undefined;
 
-  constructor(alt: string, src: string) {
+  constructor(
+    alt: string,
+    image: LiveMdImageRenderResult | string,
+    heights: LiveMdMeasuredHeights | null = null,
+    block = false,
+  ) {
     super();
     this.alt = alt;
-    this.src = src;
+    this.block = block;
+    this.height = typeof image == "string" ? undefined : image.height;
+    this.heightKey = typeof image == "string" ? imageHeightKey(image) : imageHeightKey(image.src);
+    this.heights = heights;
+    this.resultKey = typeof image == "string" ? hashString(image) : image.resultKey;
+    this.src = typeof image == "string" ? image : image.src;
+    this.width = typeof image == "string" ? undefined : image.width;
   }
 
   eq(other: ImagePreviewWidget) {
-    return other.alt == this.alt && other.src == this.src;
+    return (
+      other.alt == this.alt &&
+      other.block == this.block &&
+      other.height == this.height &&
+      other.resultKey == this.resultKey &&
+      other.src == this.src &&
+      other.width == this.width
+    );
   }
 
   toDOM(view: EditorView) {
@@ -294,6 +358,16 @@ export class ImagePreviewWidget extends WidgetType {
     let image = document.createElement("img");
     image.alt = this.alt;
     image.src = this.src;
+    if (this.width) image.width = this.width;
+    if (this.height) image.height = this.height;
+    image.addEventListener("load", () => {
+      if (!this.block) return;
+      rememberMeasuredHeight(
+        this.heights,
+        this.heightKey,
+        measuredElementHeight(figure) ?? image.naturalHeight,
+      );
+    });
     figure.append(image);
 
     if (this.alt) {
@@ -305,17 +379,30 @@ export class ImagePreviewWidget extends WidgetType {
     return figure;
   }
 
+  get estimatedHeight() {
+    if (!this.block) return -1;
+    return this.height ?? measuredHeight(this.heights, this.heightKey) ?? -1;
+  }
+
   ignoreEvent() {
     return false;
   }
 }
 
 export class TablePreviewWidget extends WidgetType {
+  private heightKey: string | null;
+  private heights: LiveMdMeasuredHeights | null;
   private table: MarkdownTable;
   private tableKey: string;
 
-  constructor(table: MarkdownTable) {
+  constructor(
+    table: MarkdownTable,
+    heights: LiveMdMeasuredHeights | null = null,
+    heightKey: string | null = null,
+  ) {
     super();
+    this.heightKey = heightKey;
+    this.heights = heights;
     this.table = table;
     this.tableKey = JSON.stringify(table);
   }
@@ -370,6 +457,12 @@ export class TablePreviewWidget extends WidgetType {
 
     return wrapper;
   }
+
+  get estimatedHeight() {
+    return (
+      measuredHeight(this.heights, this.heightKey) ?? tableRowHeight * (this.table.rows.length + 1)
+    );
+  }
 }
 
 function loadMermaid() {
@@ -389,14 +482,18 @@ function loadBeautifulMermaid() {
   return beautifulMermaidPromise;
 }
 
-function renderMermaidInto(element: HTMLElement, handle: LiveMdMermaidRenderHandle) {
+function renderMermaidInto(
+  element: HTMLElement,
+  handle: LiveMdMermaidRenderHandle,
+  heights: LiveMdMeasuredHeights | null,
+) {
   let renderToken = String(++mermaidRenderSequence);
   element.dataset.mermaidRenderToken = renderToken;
   element.classList.remove("is-error");
   element.removeAttribute("title");
 
   if (handle.result) {
-    applyMermaidResult(element, handle.result);
+    applyMermaidResult(element, handle.result, heights, handle.resultKey);
     return;
   }
 
@@ -404,7 +501,7 @@ function renderMermaidInto(element: HTMLElement, handle: LiveMdMermaidRenderHand
 
   void cachedMermaidRenderResult(handle).then((result) => {
     if (!isCurrentMermaidRender(element, renderToken)) return;
-    applyMermaidResult(element, result);
+    applyMermaidResult(element, result, heights, handle.resultKey);
   });
 }
 
@@ -436,7 +533,12 @@ async function renderLiveMdMermaidResult(source: string): Promise<LiveMdMermaidR
   }
 }
 
-function applyMermaidResult(element: HTMLElement, result: LiveMdMermaidRenderResult) {
+function applyMermaidResult(
+  element: HTMLElement,
+  result: LiveMdMermaidRenderResult,
+  heights: LiveMdMeasuredHeights | null,
+  fallbackHeightKey: string,
+) {
   if (result.ok) {
     let render = document.createElement("div");
     render.className = "cm-md-mermaid-render";
@@ -448,6 +550,7 @@ function applyMermaidResult(element: HTMLElement, result: LiveMdMermaidRenderRes
     element.replaceChildren(mermaidMessage("Unable to render Mermaid diagram"));
     if (result.message) element.title = result.message;
   }
+  rememberMeasuredElementHeight(heights, result.resultKey, element, fallbackHeightKey);
 }
 
 async function renderMermaidSvg(source: string): Promise<MermaidRenderResult> {
@@ -524,6 +627,63 @@ function ephemeralMermaidRenderHandle(source: string): LiveMdMermaidRenderHandle
     resultKey: hashString(source),
     source,
   };
+}
+
+function imageHeightKey(src: string) {
+  return `image:${src}`;
+}
+
+function measuredHeight(heights: LiveMdMeasuredHeights | null, key: string | null) {
+  if (!heights || !key) return null;
+  return normalizedHeight(heights.get(key));
+}
+
+function rememberMeasuredElementHeight(
+  heights: LiveMdMeasuredHeights | null,
+  key: string,
+  element: HTMLElement,
+  fallbackKey?: string,
+) {
+  let height = measuredElementHeight(element);
+  if (rememberMeasuredHeight(heights, key, height)) {
+    if (fallbackKey) rememberMeasuredHeight(heights, fallbackKey, height);
+    return;
+  }
+
+  requestMeasureFrame(() => {
+    let deferredHeight = measuredElementHeight(element);
+    if (rememberMeasuredHeight(heights, key, deferredHeight) && fallbackKey) {
+      rememberMeasuredHeight(heights, fallbackKey, deferredHeight);
+    }
+  });
+}
+
+function measuredElementHeight(element: HTMLElement) {
+  return normalizedHeight(element.getBoundingClientRect().height);
+}
+
+function rememberMeasuredHeight(
+  heights: LiveMdMeasuredHeights | null,
+  key: string | null,
+  value: number | null | undefined,
+) {
+  let height = normalizedHeight(value);
+  if (!heights || !key || height == null) return false;
+  heights.set(key, height);
+  return true;
+}
+
+function normalizedHeight(value: number | null | undefined) {
+  if (typeof value != "number" || !Number.isFinite(value) || value <= 0) return null;
+  return Math.round(value);
+}
+
+function requestMeasureFrame(callback: () => void) {
+  if (typeof requestAnimationFrame == "function") {
+    requestAnimationFrame(callback);
+  } else {
+    setTimeout(callback, 0);
+  }
 }
 
 export function replaceWithWidget(from: number, to: number, widget: WidgetType, block = false) {

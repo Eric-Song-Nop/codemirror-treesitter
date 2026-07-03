@@ -35,6 +35,7 @@ export function applyCodeFence(build: LiveMdBuild, match: TreeSitterQueryMatch):
             liveMdFullQueryRenderKey,
             diagram.source,
           ),
+          build.renderCache.measuredHeights,
         ),
         true,
       );

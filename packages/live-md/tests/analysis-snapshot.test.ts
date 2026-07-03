@@ -2277,6 +2277,65 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("passes measured render-cache heights into direct block widget estimates", async () => {
+    let doc =
+      "| Name | Value |\n" +
+      "| --- | ---: |\n" +
+      "| alpha | 1 |\n" +
+      "| beta | 2 |\n\n" +
+      "![Alt](assets/one.png)\n\n" +
+      "$$\n" +
+      "x\n" +
+      "$$\n\n" +
+      "```mermaid\n" +
+      "graph TD\n" +
+      "A --> B\n" +
+      "```\n\n" +
+      "Tail";
+    let view = await markdownAnalysisView(doc, "Tail", [
+      liveMdImageSource((source) => ({
+        height: 180,
+        src: `blob:dimensions/${source}`,
+        width: 320,
+      })),
+    ]);
+    let analysis = __testLiveMdAnalysis(view);
+    let tableWidget = onlyWidget(view.state, analysis.directDecorations, "TablePreviewWidget");
+    let imageWidget = onlyWidget(view.state, analysis.directDecorations, "ImagePreviewWidget");
+    let latexWidget = onlyWidget(view.state, analysis.directDecorations, "LatexWidget");
+    let mermaidWidget = onlyWidget(view.state, analysis.directDecorations, "MermaidWidget");
+
+    expect(tableWidget.estimatedHeight).toBe(84);
+    expect(imageWidget.estimatedHeight).toBe(180);
+    expect(latexWidget.estimatedHeight).toBe(40);
+    expect(mermaidWidget.estimatedHeight).toBe(160);
+    expect((requiredElement(view, ".cm-md-image-preview img") as HTMLImageElement).width).toBe(320);
+    expect((requiredElement(view, ".cm-md-image-preview img") as HTMLImageElement).height).toBe(
+      180,
+    );
+
+    analysis.renderCache.measuredHeights.set(tableWidget.heightKey, 132);
+    analysis.renderCache.measuredHeights.set(mermaidWidget.heightKey, 224);
+
+    expect(tableWidget.estimatedHeight).toBe(132);
+    expect(mermaidWidget.estimatedHeight).toBe(224);
+    view.destroy();
+  });
+
+  it("passes measured render-cache heights through the legacy projection path", async () => {
+    let doc = "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\nTail";
+    let view = await markdownLegacyAnalysisView(doc, "Tail");
+    let analysis = __testLiveMdAnalysis(view);
+    expect(analysis.semantic).toBeNull();
+
+    let tableWidget = onlyWidget(view.state, analysis.decorations, "TablePreviewWidget");
+    expect(tableWidget.estimatedHeight).toBe(56);
+
+    analysis.renderCache.measuredHeights.set(tableWidget.heightKey, 96);
+    expect(tableWidget.estimatedHeight).toBe(96);
+    view.destroy();
+  });
+
   it("reuses render cache on the legacy fallback full-query projection path", async () => {
     let doc = renderCacheFullQueryDoc();
     let tracked = await trackedHtmlCodeFenceLanguages();
@@ -4572,6 +4631,15 @@ function widgetInstancesFromSet(state: EditorState, decorations: DecorationSet, 
     }
   });
   return widgets;
+}
+
+function onlyWidget(state: EditorState, decorations: DecorationSet, name: string) {
+  let widgets = widgetInstancesFromSet(state, decorations, name) as Array<{
+    estimatedHeight: number;
+    heightKey: string;
+  }>;
+  expect(widgets).toHaveLength(1);
+  return widgets[0]!;
 }
 
 function requiredElement(view: EditorView, selector: string) {
