@@ -2,6 +2,7 @@
 
 import { StateField, Transaction } from "@codemirror/state";
 import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
+import { loroSyncAnnotation } from "loro-codemirror/sync";
 import { EphemeralStore, LoroDoc, UndoManager } from "loro-crdt";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
@@ -153,6 +154,46 @@ describe("liveMdLoroCollaboration", () => {
     await flushMicrotasks();
     expect(editor.value).toBe("base remote");
     expect(remoteFlags).toContain(true);
+    await editor.ready;
+    editor.destroy();
+  });
+
+  it("marks direct Loro sync annotations as remote without constructor names", async () => {
+    let doc = new LoroDoc();
+    let text = doc.getText("markdown");
+    text.insert(0, "base");
+    doc.commit();
+
+    let remoteFlags: boolean[] = [];
+    let remoteRecorder = StateField.define<null>({
+      create: () => null,
+      update(value, transaction) {
+        if (transaction.docChanged) {
+          remoteFlags.push(transaction.annotation(Transaction.remote) === true);
+        }
+        return value;
+      },
+    });
+    class e {}
+
+    let parent = document.createElement("div");
+    document.body.append(parent);
+    let editor = createLiveMdEditor({
+      defaultValue: "base",
+      extensions: [liveMdLoroCollaboration({ doc }), remoteRecorder],
+      parent,
+    });
+
+    await flushMicrotasks();
+    remoteFlags = [];
+
+    editor.view.dispatch({
+      annotations: [loroSyncAnnotation.of(new e())],
+      changes: { from: "base".length, insert: " remote" },
+    });
+
+    expect(editor.value).toBe("base remote");
+    expect(remoteFlags).toEqual([true]);
     await editor.ready;
     editor.destroy();
   });

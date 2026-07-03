@@ -12,12 +12,13 @@ export default defineConfig({
       "@codemirror-treesitter/live-md",
       "@codemirror-treesitter/live-md-theme",
       "@codemirror-treesitter/theme-gruvbox",
+      "loro-codemirror/sync",
       "loro-codemirror",
     ]),
   },
   pack: {
     deps: {
-      alwaysBundle: [/^loro-codemirror$/],
+      alwaysBundle: [/^loro-codemirror(?:\/sync)?$/],
       onlyBundle: false,
     },
     dts: {

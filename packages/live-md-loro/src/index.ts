@@ -2,6 +2,7 @@ import { EditorState, StateEffect, Transaction, type Extension } from "@codemirr
 import { ViewPlugin, type EditorView } from "@codemirror/view";
 import type { LiveMdPlugin } from "@codemirror-treesitter/live-md";
 import { LoroExtensions, redo as loroRedo, undo as loroUndo } from "loro-codemirror";
+import { loroSyncAnnotation } from "loro-codemirror/sync";
 import type { EphemeralStore, LoroDoc, LoroText, UndoManager, Value } from "loro-crdt";
 
 export type LiveMdLoroTextSource = string | ((doc: LoroDoc) => LoroText);
@@ -66,20 +67,7 @@ function markLoroSyncTransactionsRemote(): Extension {
 }
 
 function transactionHasLoroSyncAnnotation(transaction: Transaction) {
-  return (
-    transaction as Transaction & {
-      annotations?: readonly { value: unknown }[];
-    }
-  ).annotations?.some((annotation) => isLoroSyncAnnotationValue(annotation.value));
-}
-
-function isLoroSyncAnnotationValue(value: unknown) {
-  if (value == "undo") return true;
-  return (
-    typeof value == "object" &&
-    value != null &&
-    (value as { constructor?: { name?: string } }).constructor?.name == "LoroSyncPluginValue"
-  );
+  return transaction.annotation(loroSyncAnnotation) != null;
 }
 
 function drainMatchingInitialLoroDispatch(

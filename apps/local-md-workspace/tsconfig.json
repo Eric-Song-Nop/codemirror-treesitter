@@ -33,6 +33,7 @@
       "@codemirror-treesitter/theme-catppuccin": ["../../packages/theme-catppuccin/src/index.ts"],
       "@codemirror-treesitter/theme-github": ["../../packages/theme-github/src/index.ts"],
       "@codemirror-treesitter/theme-gruvbox": ["../../packages/theme-gruvbox/src/index.ts"],
+      "loro-codemirror/sync": ["../../node_modules/loro-codemirror/src/sync.ts"],
       "loro-codemirror": ["./src/loro-codemirror.d.ts"],
       "@/*": ["./src/*"]
     }

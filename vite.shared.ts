@@ -67,6 +67,8 @@ export const workspaceAliases = {
     "packages/live-md-loro/src/index.ts",
     import.meta.url,
   ).pathname,
+  "loro-codemirror/sync": new URL("node_modules/loro-codemirror/src/sync.ts", import.meta.url)
+    .pathname,
   "loro-codemirror": new URL("node_modules/loro-codemirror/src/index.ts", import.meta.url).pathname,
 };
 
