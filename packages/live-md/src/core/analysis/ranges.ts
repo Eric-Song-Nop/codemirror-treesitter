@@ -111,12 +111,16 @@ export function countLines(doc: Text, ranges: readonly DocRange[]) {
   return lineCount;
 }
 
-export function hashString(value: string) {
+export function hashStringValue(value: string) {
   let hash = 5381;
   for (let index = 0; index < value.length; index++) {
     hash = ((hash << 5) + hash + value.charCodeAt(index)) | 0;
   }
-  return (hash >>> 0).toString(36);
+  return hash >>> 0;
+}
+
+export function hashString(value: string) {
+  return hashStringValue(value).toString(36);
 }
 
 export function hashDocRange(doc: Text, range: DocRange) {
