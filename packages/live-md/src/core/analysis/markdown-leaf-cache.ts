@@ -629,7 +629,7 @@ function cacheRecordCount(cache: LeafAnalysisCache) {
   return cache.recordCount;
 }
 
-function patchLeafAnalysisCache(
+export function patchLeafAnalysisCache(
   oldCache: LeafAnalysisCache,
   changes: ChangeDesc,
   dirtyRanges: readonly DocRange[],

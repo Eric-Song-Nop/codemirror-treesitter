@@ -185,7 +185,10 @@ describe("LiveMD links", () => {
     let editor = await mountEditor(doc);
 
     let editFrom = doc.indexOf("tail");
-    editor.view.dispatch({ changes: { from: editFrom, insert: "new " } });
+    editor.view.dispatch({
+      changes: { from: editFrom, insert: "new " },
+      selection: { anchor: editFrom + "new ".length },
+    });
 
     expect(__testLiveMdAnalysis(editor.view).pending).toBeTruthy();
     expect(editor.view.dom.querySelector(".cm-md-strong")).toBeTruthy();
@@ -254,7 +257,7 @@ describe("LiveMD links", () => {
     expect(firstStyledLink(editor.view).hasAttribute("data-live-md-href")).toBe(false);
   });
 
-  it("tracks the pending edit surface in interactive safety ranges", async () => {
+  it("tracks dirty link ranges in interactive safety ranges", async () => {
     let doc = "[one](https://one.example) and [two](https://two.example) tail";
     let state = EditorState.create({
       doc,
@@ -278,7 +281,7 @@ describe("LiveMD links", () => {
       analysis.pending?.interactiveSafetyRanges.map((range) =>
         pendingState.sliceDoc(range.from, range.to),
       ),
-    ).toEqual(["[one](javascript:alert) and [two](https://two.example) tail"]);
+    ).toEqual(["one"]);
   });
 });
 

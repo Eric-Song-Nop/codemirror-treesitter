@@ -5,10 +5,10 @@ import {
   RangeSetBuilder,
   StateEffect,
   StateField,
+  Transaction,
   type Extension,
   type Range,
   type RangeValue,
-  type Transaction,
 } from "@codemirror/state";
 import {
   mergeDocRanges,
@@ -70,6 +70,7 @@ import {
   mapInclusiveRange,
   mapRange,
   rangesEqual,
+  rangesTouchInclusive,
   rangesTouchPoint,
   subtractRanges,
   textChangeContextRanges,
@@ -115,6 +116,7 @@ import {
   type LiveMdSurfaceProjectionState,
 } from "./types.js";
 import { liveMdCompositeEpoch, liveMdValueEpoch } from "./epochs.js";
+import { taskToggleFastPath } from "./fast-paths.js";
 import { createLiveMdRenderCache, type LiveMdRenderCache } from "./render-cache.js";
 
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
@@ -161,6 +163,28 @@ const liveMdAnalysisField = StateField.define<LiveMdRuntimeState>({
     }
 
     if (transaction.docChanged) {
+      if (transaction.isUserEvent("input.task") && value.semantic && !value.pending) {
+        let trace = pendingInputTrace(transaction);
+        let activeLines = getActiveLines(transaction.state);
+        let activeSourceRanges = activeMarkdownSourceRanges(
+          transaction.state,
+          value.sourceIslandLeaves,
+        );
+        let tree = syntaxTree(transaction.state);
+        let fast = taskToggleFastPath({
+          activeLines,
+          activeSourceRanges,
+          compileInput: projectionCompileInput(transaction.state, activeLines, activeSourceRanges, {
+            renderCache: value.renderCache,
+            sourceIslandMode: true,
+            trace,
+          }),
+          transaction,
+          tree,
+          value,
+        });
+        if (fast) return fast;
+      }
       return pendingSourceAnalysis(value, transaction);
     }
 
@@ -360,18 +384,32 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       }
       let runtimeChanged = this.runtime != analysis;
       let semanticRevision = surfaceSemanticRevision(analysis);
+      let surfaceInvalidationRanges =
+        runtimeChanged && analysis.surfaceInvalidationRanges.length
+          ? analysis.surfaceInvalidationRanges
+          : [];
+      let partialSurfaceInvalidation =
+        surfaceInvalidationRanges.length > 0 &&
+        this.runtime != null &&
+        this.surfaceState.semanticRevision >= 0;
       if (runtimeChanged || this.surfaceState.semanticRevision != semanticRevision) {
-        this.surfaceState = surfaceProjectionStateFromProjection(
-          analysis.legacySurface ?? emptySurfaceProjection(),
-          semanticRevision,
-        );
-        this.surfaceTrace = emptyLiveMdLeafAnalysisTrace();
+        if (partialSurfaceInvalidation) {
+          this.surfaceState = invalidateSurfaceProjectionState(
+            this.surfaceState,
+            surfaceInvalidationRanges,
+            semanticRevision,
+          );
+        } else {
+          this.surfaceState = surfaceProjectionStateFromProjection(
+            analysis.legacySurface ?? emptySurfaceProjection(),
+            semanticRevision,
+          );
+          this.surfaceTrace = emptyLiveMdLeafAnalysisTrace();
+        }
       }
 
       if (analysis.semantic) {
-        let compileRanges = runtimeChanged
-          ? visibleRanges
-          : subtractRanges(visibleRanges, this.surfaceState.compiledRanges);
+        let compileRanges = subtractRanges(visibleRanges, this.surfaceState.compiledRanges);
         if (compileRanges.length) {
           let surfaceTrace = emptyLiveMdLeafAnalysisTrace();
           let compiledSurface = compileRuntimeVisibleSurfaceProjection(
@@ -404,6 +442,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       let pending = analysis.pending;
       if (!pending) return;
       let editSurfaceRanges = pending.editSurface.ranges;
+      let interactiveSafetyRanges = pending.interactiveSafetyRanges;
       this.surfaceState = {
         atoms: clearRangeSetRanges(this.surfaceState.atoms.map(update.changes), editSurfaceRanges),
         compiledRanges: subtractRanges(
@@ -416,7 +455,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
         ),
         interactive: clearDecorationRanges(
           this.surfaceState.interactive.map(update.changes),
-          editSurfaceRanges,
+          interactiveSafetyRanges,
         ),
         semanticRevision: this.surfaceState.semanticRevision,
         sourceSafe: this.surfaceState.sourceSafe.map(update.changes),
@@ -527,6 +566,21 @@ function patchSurfaceProjectionState(
       ranges,
       collectRangeSetRanges(surface.sourceSafeDecorations, ranges),
     ),
+  };
+}
+
+function invalidateSurfaceProjectionState(
+  current: LiveMdSurfaceProjectionState,
+  ranges: readonly DocRange[],
+  semanticRevision: number,
+): LiveMdSurfaceProjectionState {
+  return {
+    atoms: clearRangeSetRanges(current.atoms, ranges),
+    compiledRanges: subtractRanges(current.compiledRanges, ranges),
+    destructive: clearDecorationRanges(current.destructive, ranges),
+    interactive: clearDecorationRanges(current.interactive, ranges),
+    semanticRevision,
+    sourceSafe: clearDecorationRanges(current.sourceSafe, ranges),
   };
 }
 
@@ -692,6 +746,7 @@ function pendingSourceAnalysis(
     revision,
     semantic: baseAnalysis.semantic,
     semanticTrace: baseAnalysis.semantic ? emptyLeafAnalysisCacheTrace() : null,
+    surfaceInvalidationRanges: [],
     sourceIslandLeaves,
     trace,
     tree: value.tree,
@@ -751,6 +806,7 @@ function pendingSelectionAnalysis(
       directSourceSafeDecorations: value.directSourceSafeDecorations,
     }),
     directDestructiveDecorations,
+    surfaceInvalidationRanges: [],
     trace: pending ? value.trace : emptyLiveMdLeafAnalysisTrace(),
   };
 }
@@ -763,24 +819,37 @@ function pendingEditSurface(
   syntaxChangedRanges: readonly DocRange[],
 ): LiveMdPendingEditSurface {
   let state = transaction.state;
-  let changedLineRanges = changedPhysicalLineRanges(state, transaction.changes);
+  let changedRanges = changedRangePairs(state, transaction.changes);
   let textContextRanges = textChangeContextRanges(
     transaction.startState.doc,
     state.doc,
     transaction.changes,
   );
+  let revealChangedRanges = transactionRevealsSource(transaction)
+    ? changedRanges.filter((range) => changeIsSelectionLocal(state, range.newRange))
+    : [];
+  let revealChangedLineRanges = mergeDocRanges(
+    revealChangedRanges.map((range) => range.newLineRange),
+  );
+  let revealOldChangedRanges = revealChangedRanges.map((range) => range.oldRange);
   let selectionLineRanges = selectionPhysicalLineRanges(state).filter((range) =>
-    changedLineRanges.some((changed) => rangesTouchPoint(range, changed)),
+    revealChangedLineRanges.some((changed) => rangesTouchPoint(range, changed)),
   );
   let previousRanges =
     previousPending?.editSurface.ranges.map((range) => mapRange(range, transaction.changes)) ?? [];
-  let touchedRevealRanges = touchedRecordRevealRanges(baseAnalysis, state, changes);
+  let touchedRevealRanges = touchedRecordRevealRanges(
+    baseAnalysis,
+    state,
+    changes,
+    revealOldChangedRanges,
+  );
   let syntaxLineRanges = syntaxChangedRanges
     .filter((range) => !isBroadContainerSyntaxRange(range, textContextRanges, state.doc.length))
-    .map((range) => lineRangeFor(state.doc, range.from, range.to));
+    .map((range) => lineRangeFor(state.doc, range.from, range.to))
+    .filter((range) => revealChangedLineRanges.some((changed) => rangesTouchPoint(range, changed)));
   let ranges = mergeDocRanges(
     [
-      ...changedLineRanges,
+      ...revealChangedLineRanges,
       ...selectionLineRanges,
       ...previousRanges,
       ...touchedRevealRanges,
@@ -800,9 +869,9 @@ function touchedRecordRevealRanges(
   baseAnalysis: LiveMdRuntimeState,
   state: EditorState,
   changes: ChangeDesc,
+  oldChangedRanges = changedOldRanges(changes),
 ): readonly DocRange[] {
   let ranges: DocRange[] = [];
-  let oldChangedRanges = changedOldRanges(changes);
 
   if (baseAnalysis.semantic) {
     for (let record of findLeafAnalysisRecordsTouchingRanges(
@@ -872,12 +941,36 @@ function changedOldRanges(changes: ChangeDesc): DocRange[] {
   return ranges;
 }
 
-function changedPhysicalLineRanges(state: EditorState, changes: ChangeDesc): DocRange[] {
-  let ranges: DocRange[] = [];
+function changedRangePairs(
+  state: EditorState,
+  changes: ChangeDesc,
+): {
+  newRange: DocRange;
+  newLineRange: DocRange;
+  oldRange: DocRange;
+}[] {
+  let ranges: { newRange: DocRange; newLineRange: DocRange; oldRange: DocRange }[] = [];
   changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
-    ranges.push(lineRangeFor(state.doc, fromB, toB));
+    ranges.push({
+      newRange: { from: fromB, to: toB },
+      newLineRange: lineRangeFor(state.doc, fromB, toB),
+      oldRange: { from: _fromA, to: _toA },
+    });
   }, true);
   return ranges;
+}
+
+function transactionRevealsSource(transaction: Transaction) {
+  return (
+    transaction.annotation(Transaction.remote) !== true &&
+    transaction.annotation(Transaction.addToHistory) !== false
+  );
+}
+
+function changeIsSelectionLocal(state: EditorState, changedRange: DocRange) {
+  return state.selection.ranges.some((range) =>
+    rangesTouchInclusive({ from: range.from, to: range.to }, changedRange),
+  );
 }
 
 function clearDecorationRanges(decorations: DecorationSet, ranges: readonly DocRange[]) {
@@ -1217,6 +1310,7 @@ function buildLiveMdAnalysis(
         activeSourceRanges: semanticAnalysis.activeSourceRanges,
         pending: null,
         semanticTrace: semanticAnalysis.trace,
+        surfaceInvalidationRanges: [],
         sourceIslandLeaves: semanticAnalysis.sourceIslandLeaves,
         trace: semanticAnalysis.trace,
         tree,
@@ -1276,6 +1370,7 @@ function buildLiveMdAnalysis(
       revision: options.revision ?? options.previous?.revision ?? 0,
       semantic: semanticAnalysis.semantic,
       semanticTrace: trace,
+      surfaceInvalidationRanges: [],
       sourceIslandLeaves: semanticAnalysis.sourceIslandLeaves,
       trace,
       tree,
@@ -1307,6 +1402,7 @@ function buildLiveMdAnalysis(
     revision: options.revision ?? options.previous?.revision ?? 0,
     semantic: null,
     semanticTrace: null,
+    surfaceInvalidationRanges: [],
     sourceIslandLeaves: [],
     trace: build.trace,
     tree,
@@ -2048,6 +2144,7 @@ function buildCanonicalLiveMdAnalysis(
     semantic: null,
     semanticTrace: null,
     sourceSafeDecorations: projection.sourceSafeDecorations,
+    surfaceInvalidationRanges: [],
     sourceIslandLeaves: markdownAnalysis?.leaves ?? [],
     surfaceAtomicRanges: projection.surface.atomicRanges,
     surfaceDecorations: projection.surface.decorations,
