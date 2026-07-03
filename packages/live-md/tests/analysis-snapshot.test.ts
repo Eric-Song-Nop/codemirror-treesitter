@@ -3378,7 +3378,7 @@ describe("LiveMD analysis snapshot", () => {
 
     let analysis = __testBuildLiveMdAnalysis(state);
 
-    expect(created).toBe(1);
+    expect(created).toBe(2);
     expect(deleted).toBe(created);
     expect(createdTrees).toBeGreaterThan(0);
     expect(deletedTrees).toBe(createdTrees);

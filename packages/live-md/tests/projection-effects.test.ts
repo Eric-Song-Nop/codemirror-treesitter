@@ -107,6 +107,32 @@ describe("LiveMD projection effects", () => {
         }),
       ),
     ).toBe(false);
+
+    let richTable: MarkdownTable = {
+      alignments: ["left"],
+      header: ["**Alpha**"],
+      headerCells: [
+        {
+          inline: [{ children: [{ kind: "text", text: "Alpha" }], kind: "strong" }],
+          text: "**Alpha**",
+        },
+      ],
+      rows: [],
+      rowCells: [],
+    };
+    expect(
+      new TablePreviewWidget(richTable).eq(
+        new TablePreviewWidget({
+          ...richTable,
+          headerCells: [
+            {
+              inline: [{ children: [{ kind: "text", text: "Alpha" }], kind: "emphasis" }],
+              text: "**Alpha**",
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("materializes effects in stable document order", () => {

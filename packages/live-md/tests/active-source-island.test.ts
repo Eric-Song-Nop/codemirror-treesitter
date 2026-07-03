@@ -175,11 +175,42 @@ describe("LiveMD active source islands", () => {
     let classes = decorationClasses(view.state, analysis);
 
     expect(view.dom.querySelector(".cm-md-table-preview")).toBeTruthy();
-    expect(view.dom.querySelector(".cm-md-strong")).toBeNull();
-    expect(view.dom.querySelector(".cm-md-link")).toBeNull();
     expect(classes.has("cm-md-strong")).toBe(false);
     expect(classes.has("cm-md-link")).toBe(false);
     view.destroy();
+  });
+
+  it("renders inactive table cell inline Markdown inside the preview DOM", async () => {
+    let doc =
+      "| Feature | Status |\n" +
+      "| --- | --- |\n" +
+      "| **bold** and _em_ | [docs](https://docs.example) and `code` |\n" +
+      "| ~~old~~ | <https://example.com> |\n\n" +
+      "next";
+    let editor = await mountEditor(doc, { selection: doc.indexOf("next") });
+    let preview = editor.view.dom.querySelector<HTMLElement>(".cm-md-table-preview");
+    let strong = preview?.querySelector<HTMLElement>("td strong.cm-md-strong");
+    let emphasis = preview?.querySelector<HTMLElement>("td em.cm-md-emphasis");
+    let link = preview?.querySelector<HTMLElement>("td a.cm-md-link[data-live-md-href]");
+    let code = preview?.querySelector<HTMLElement>("td code.cm-md-inline-code");
+    let strike = preview?.querySelector<HTMLElement>("td del.cm-md-strike");
+
+    expect(preview).toBeTruthy();
+    expect(preview?.textContent).not.toContain("**bold**");
+    expect(strong?.textContent).toBe("bold");
+    expect(emphasis?.textContent).toBe("em");
+    expect(link?.textContent).toBe("docs");
+    expect(link?.dataset.liveMdHref).toBe("https://docs.example");
+    expect(code?.textContent).toBe("code");
+    expect(strike?.textContent).toBe("old");
+    expect(
+      Array.from(preview?.querySelectorAll<HTMLElement>("td a.cm-md-link") ?? []).some(
+        (item) =>
+          item.textContent == "https://example.com" &&
+          item.dataset.liveMdHref == "https://example.com",
+      ),
+    ).toBe(true);
+    editor.destroy();
   });
 
   it("expands only the active leaf inside list and quote containers", async () => {
