@@ -645,6 +645,75 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("resumes scheduled fresh rebuilds after parser service changes while pending", async () => {
+    let originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+    let originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    let originalRequestIdleCallback = globalThis.requestIdleCallback;
+    let originalCancelIdleCallback = globalThis.cancelIdleCallback;
+    let idleAttempts = 0;
+    let parserCompartment = new Compartment();
+    let service = await loadMarkdownParserService();
+    let parserCreations = 0;
+    let inlineParser = Object.create(service.inlineParser) as typeof service.inlineParser;
+    inlineParser.createParser = () => {
+      parserCreations++;
+      return service.inlineParser.createParser();
+    };
+    let trackedService = { ...service, inlineParser };
+
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) =>
+      setTimeout(
+        () => callback(performance.now()),
+        0,
+      ) as unknown as number) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((id: number) => {
+      clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
+    }) as typeof globalThis.cancelAnimationFrame;
+    globalThis.requestIdleCallback = ((callback: IdleRequestCallback) => {
+      let attempt = idleAttempts++;
+      let reads = 0;
+      return setTimeout(() => {
+        callback({
+          didTimeout: false,
+          timeRemaining() {
+            if (attempt > 0) return 50;
+            return reads++ < 5 ? 50 : 0;
+          },
+        });
+      }, 0) as unknown as number;
+    }) as typeof globalThis.requestIdleCallback;
+    globalThis.cancelIdleCallback = ((id: number) => {
+      clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
+    }) as typeof globalThis.cancelIdleCallback;
+
+    let view = await markdownAnalysisView(emphasisParagraphDoc(96, "old"), "paragraph 0", [
+      parserCompartment.of(liveMdMarkdownParserServiceFacet.of(service)),
+    ]);
+    try {
+      view.dispatch({ changes: { from: 0, insert: "new " } });
+      expect(__testLiveMdAnalysis(view).pending).toBeTruthy();
+
+      view.dispatch({
+        effects: parserCompartment.reconfigure(liveMdMarkdownParserServiceFacet.of(trackedService)),
+      });
+
+      await __testFlushLiveMdAnalysis(view);
+
+      let analysis = __testLiveMdAnalysis(view);
+      expect(analysis.pending).toBeNull();
+      expect(idleAttempts).toBeGreaterThanOrEqual(2);
+      expect(parserCreations).toBe(1);
+      expect(analysis.trace.inlineParserSessions).toBe(1);
+      expect(analysis.trace.inlineParserSessionDisposals).toBe(1);
+    } finally {
+      view.destroy();
+      globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+      globalThis.requestIdleCallback = originalRequestIdleCallback;
+      globalThis.cancelIdleCallback = originalCancelIdleCallback;
+    }
+  });
+
   it("does not start scheduled analysis before the first animation frame", async () => {
     let originalRequestAnimationFrame = globalThis.requestAnimationFrame;
     let originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
@@ -719,6 +788,53 @@ describe("LiveMD analysis snapshot", () => {
       expect(__testLiveMdAnalysis(view).pending).toBeNull();
     } finally {
       view.destroy();
+      globalThis.requestIdleCallback = originalRequestIdleCallback;
+      globalThis.cancelIdleCallback = originalCancelIdleCallback;
+    }
+  });
+
+  it("commits completed scheduled analysis without a post-build idle retry", async () => {
+    let originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+    let originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    let originalRequestIdleCallback = globalThis.requestIdleCallback;
+    let originalCancelIdleCallback = globalThis.cancelIdleCallback;
+    let idleAttempts = 0;
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) =>
+      setTimeout(
+        () => callback(performance.now()),
+        0,
+      ) as unknown as number) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((id: number) => {
+      clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
+    }) as typeof globalThis.cancelAnimationFrame;
+    globalThis.requestIdleCallback = ((callback: IdleRequestCallback) => {
+      let attempt = idleAttempts++;
+      let reads = 0;
+      return setTimeout(() => {
+        callback({
+          didTimeout: false,
+          timeRemaining() {
+            if (attempt > 0) return 50;
+            return reads++ < 8 ? 50 : 0;
+          },
+        });
+      }, 0) as unknown as number;
+    }) as typeof globalThis.requestIdleCallback;
+    globalThis.cancelIdleCallback = ((id: number) => {
+      clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
+    }) as typeof globalThis.cancelIdleCallback;
+
+    let view = await markdownAnalysisView("alpha\n\nbeta", "alpha");
+    try {
+      view.dispatch({ changes: { from: 0, insert: "new " } });
+      await __testFlushLiveMdAnalysis(view);
+
+      expect(__testLiveMdAnalysis(view).pending).toBeNull();
+      expect(idleAttempts).toBe(1);
+    } finally {
+      view.destroy();
+      globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
       globalThis.requestIdleCallback = originalRequestIdleCallback;
       globalThis.cancelIdleCallback = originalCancelIdleCallback;
     }
