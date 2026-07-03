@@ -3855,6 +3855,40 @@ describe("LiveMD analysis snapshot", () => {
     expect(decorationClasses(view.state).has("cm-md-feature-second")).toBe(true);
     view.destroy();
   });
+
+  it("invalidates untouched feature records when features change during pending input", async () => {
+    let featureCompartment = new Compartment();
+    let doc = "# First\n\nbody\n\n# Second\n";
+    let view = await markdownAnalysisView(doc, "body", [
+      featureCompartment.of(markHeadingFeature("cm-md-feature-first")),
+    ]);
+
+    expect(
+      decorationRangesForClassFromSet(
+        view.state,
+        __testLiveMdAnalysis(view).decorations,
+        "cm-md-feature-first",
+      ),
+    ).toHaveLength(2);
+
+    view.dispatch({ changes: { from: doc.indexOf("body"), insert: "edited " } });
+    expect(__testLiveMdAnalysis(view).pending).toBeTruthy();
+
+    view.dispatch({
+      effects: featureCompartment.reconfigure(markHeadingFeature("cm-md-feature-second")),
+    });
+    await __testFlushLiveMdAnalysis(view);
+
+    let analysis = __testLiveMdAnalysis(view);
+    expect(analysis.pending).toBeNull();
+    expect(
+      decorationRangesForClassFromSet(view.state, analysis.decorations, "cm-md-feature-first"),
+    ).toEqual([]);
+    expect(
+      decorationRangesForClassFromSet(view.state, analysis.decorations, "cm-md-feature-second"),
+    ).toHaveLength(2);
+    view.destroy();
+  });
 });
 
 async function markdownAnalysisState(doc: string, selectionText = "", extensions: Extension = []) {

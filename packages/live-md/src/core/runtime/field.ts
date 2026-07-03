@@ -1030,6 +1030,20 @@ function runtimeEpochsChanged(left: LiveMdRuntimeEpochs, right: LiveMdRuntimeEpo
   );
 }
 
+function semanticAnalysisEpochsMatchState(pending: LiveMdPendingAnalysis, state: EditorState) {
+  let current = runtimeEpochs(state);
+  return (
+    pending.epochs.markdownParserService == current.markdownParserService &&
+    sameArrayItems(pending.epochs.markdownFeatures, current.markdownFeatures)
+  );
+}
+
+function semanticAnalysisInputsStable(startState: EditorState, state: EditorState) {
+  return (
+    !markdownParserServiceChanged(startState, state) && !markdownFeaturesChanged(startState, state)
+  );
+}
+
 function renderKeyContextForState(state: EditorState): LiveMdRenderKeyContext {
   let codeFenceLanguages = state.field(codeFenceLanguagesField, false) ?? null;
   let resolver = state.facet(liveMdImageSourceResolver);
@@ -1542,7 +1556,7 @@ function buildLiveMdSemanticAnalysis(input: {
   if (
     previousSemantic &&
     transitionBase &&
-    transitionBase.epochs.markdownParserService == input.service
+    semanticAnalysisEpochsMatchState(transitionBase, input.state)
   ) {
     let transition = transitionLeafAnalysisCacheLocal({
       analysisInput: {
@@ -1677,8 +1691,7 @@ function canReuseSemanticState(input: {
     input.transaction &&
     input.tree == input.previous.tree &&
     !input.transaction.docChanged &&
-    !markdownFeaturesChanged(input.transaction.startState, input.state) &&
-    !markdownParserServiceChanged(input.transaction.startState, input.state),
+    semanticAnalysisInputsStable(input.transaction.startState, input.state),
   );
 }
 
