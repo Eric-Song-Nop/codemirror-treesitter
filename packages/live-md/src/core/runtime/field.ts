@@ -515,6 +515,10 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
 
     private pendingSurfaceBaseState(pending: LiveMdPendingAnalysis) {
       if (this.pendingSurfaceBase?.runtime != pending.baseAnalysis) {
+        // PR-7 will collapse this direct/surface duplication into one
+        // projection-state restore path. Until then, surface restore uses the
+        // plugin's compiled snapshot and may inherit active-source holes that
+        // are cosmetic and commit-healed.
         this.pendingSurfaceBase = {
           runtime: pending.baseAnalysis,
           state: this.surfaceState,

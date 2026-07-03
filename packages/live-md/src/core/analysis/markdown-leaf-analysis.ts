@@ -714,6 +714,10 @@ function revealDescriptorRanges(
     case "listMarker":
     case "syntax":
     case "taskMarker":
+      // Single-line concealment is already revealed by the changed line while
+      // editing. Only cross-line ranges expand a record's reveal range, so
+      // nested containers don't inflate back to ancestor-sized pending
+      // surfaces.
       return liveMdDescriptorRanges(descriptor)
         .map((range) => offsetRangeForReveal(range, sourceRange))
         .filter((range) => rangeCrossesLine(doc, range));
