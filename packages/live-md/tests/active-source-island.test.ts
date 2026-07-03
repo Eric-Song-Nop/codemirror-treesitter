@@ -185,7 +185,8 @@ describe("LiveMD active source islands", () => {
       "| Feature | Status |\n" +
       "| --- | --- |\n" +
       "| **bold** and _em_ | [docs](https://docs.example) and `code` |\n" +
-      "| ~~old~~ | <https://example.com> |\n\n" +
+      "| ~~old~~ | <https://example.com> |\n" +
+      "| A &amp; B | &#x3c;tag&#x3e; |\n\n" +
       "next";
     let editor = await mountEditor(doc, { selection: doc.indexOf("next") });
     let preview = editor.view.dom.querySelector<HTMLElement>(".cm-md-table-preview");
@@ -203,6 +204,9 @@ describe("LiveMD active source islands", () => {
     expect(link?.dataset.liveMdHref).toBe("https://docs.example");
     expect(code?.textContent).toBe("code");
     expect(strike?.textContent).toBe("old");
+    expect(preview?.textContent).toContain("A & B");
+    expect(preview?.textContent).toContain("<tag>");
+    expect(preview?.textContent).not.toContain("&amp;");
     expect(
       Array.from(preview?.querySelectorAll<HTMLElement>("td a.cm-md-link") ?? []).some(
         (item) =>

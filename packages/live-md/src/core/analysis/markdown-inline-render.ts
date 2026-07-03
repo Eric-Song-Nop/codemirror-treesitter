@@ -102,7 +102,9 @@ function renderInlineNode(context: InlineRenderContext, node: SyntaxNode): LiveM
       return [{ kind: "text", text: context.source.slice(node.from + 1, node.to) }];
     case "entity_reference":
     case "numeric_character_reference":
-      return [{ kind: "text", text: context.source.slice(node.from, node.to) }];
+      return [
+        { kind: "text", text: decodeCharacterReference(context.source.slice(node.from, node.to)) },
+      ];
     case "html_tag":
       return [{ kind: "text", text: context.source.slice(node.from, node.to) }];
     case "latex_block":
@@ -226,7 +228,7 @@ function plainInlineNode(context: InlineRenderContext, node: SyntaxNode): string
       return context.source.slice(node.from + 1, node.to);
     case "entity_reference":
     case "numeric_character_reference":
-      return context.source.slice(node.from, node.to);
+      return decodeCharacterReference(context.source.slice(node.from, node.to));
     case "block_continuation":
     case "code_span_delimiter":
     case "emphasis_delimiter":
@@ -272,6 +274,58 @@ function normalizeMarkdownTitle(source: string) {
 
 function unescapeMarkdownPunctuation(value: string) {
   return value.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "$1");
+}
+
+const namedCharacterReferences: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: "\u00a0",
+  quot: '"',
+};
+
+let characterReferenceDecoder: HTMLTextAreaElement | null | undefined;
+
+function decodeCharacterReference(source: string) {
+  let numeric = /^&#(?:x([0-9a-fA-F]+)|([0-9]+));?$/.exec(source);
+  if (numeric) {
+    let codePoint = Number.parseInt(numeric[1] ?? numeric[2]!, numeric[1] ? 16 : 10);
+    if (isValidCharacterReferenceCodePoint(codePoint)) {
+      return String.fromCodePoint(codePoint);
+    }
+    return "\ufffd";
+  }
+
+  let named = /^&([0-9A-Za-z]+);?$/.exec(source)?.[1];
+  if (!named) return source;
+
+  let known = namedCharacterReferences[named];
+  if (known != null) return known;
+
+  let decoder = getCharacterReferenceDecoder();
+  if (!decoder) return source;
+  decoder.innerHTML = source;
+  return decoder.value || source;
+}
+
+function getCharacterReferenceDecoder() {
+  if (characterReferenceDecoder !== undefined) return characterReferenceDecoder;
+  if (typeof document == "undefined") {
+    characterReferenceDecoder = null;
+  } else {
+    characterReferenceDecoder = document.createElement("textarea");
+  }
+  return characterReferenceDecoder;
+}
+
+function isValidCharacterReferenceCodePoint(codePoint: number) {
+  return (
+    Number.isInteger(codePoint) &&
+    codePoint > 0 &&
+    codePoint <= 0x10ffff &&
+    !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+  );
 }
 
 function firstNamedChild(node: SyntaxNode | null, name: string) {
