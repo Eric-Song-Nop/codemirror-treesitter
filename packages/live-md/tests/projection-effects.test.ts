@@ -22,6 +22,10 @@ import {
 } from "../src/core/projection/emit.js";
 import { projectLeaf, projectLeafRecords } from "../src/core/projection/project-leaf.js";
 import { type LiveMdBuild, type LiveMdRenderStatus } from "../src/core/projection/types.js";
+import {
+  joinProjectionSets,
+  projectionSetsFromLayer,
+} from "../src/core/runtime/projection-state.js";
 
 class TestWidget extends WidgetType {
   constructor(private readonly label: string) {
@@ -108,11 +112,17 @@ describe("LiveMD projection effects", () => {
       { className: undefined, from: 8, to: 15, widget: "TestWidget" },
       { className: undefined, from: 16, to: 19, widget: "TestWidget" },
     ]);
+    expect(decorationRanges(build, projection.direct.decorations)).toEqual(
+      decorationRanges(build, joinProjectionSets(projectionSetsFromLayer(projection.direct))),
+    );
     expect(decorationRanges(build, projection.surface.decorations)).toEqual([
       { className: "surface-mark", from: 0, to: 3, widget: undefined },
       { className: undefined, from: 4, to: 7, widget: "TestWidget" },
       { className: "cm-md-syntax cm-md-syntax-hidden", from: 20, to: 23, widget: undefined },
     ]);
+    expect(decorationRanges(build, projection.surface.decorations)).toEqual(
+      decorationRanges(build, joinProjectionSets(projectionSetsFromLayer(projection.surface))),
+    );
     expect(decorationRanges(build, mergedDecorations)).toEqual(decorationRanges(build));
     expect(atomicRanges(build, projection.direct.atomicRanges)).toEqual([
       { from: 8, to: 15 },

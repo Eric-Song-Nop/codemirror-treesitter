@@ -2,17 +2,13 @@ import {
   type ChangeDesc,
   EditorState,
   RangeSet,
-  RangeSetBuilder,
   StateEffect,
   StateField,
   Transaction,
   type Extension,
-  type Range,
-  type RangeValue,
 } from "@codemirror/state";
 import {
   mergeDocRanges,
-  patchRangeSet,
   syntaxHighlighters,
   syntaxTree,
   syntaxTreeApplyTrace,
@@ -117,6 +113,19 @@ import {
 } from "./types.js";
 import { liveMdCompositeEpoch, liveMdValueEpoch } from "./epochs.js";
 import { taskToggleFastPath } from "./fast-paths.js";
+import {
+  clearInteractiveProjectionSets,
+  emptyProjectionSets,
+  filterProjectionSetsToRanges,
+  joinProjectionSets as joinProjectionSetDecorations,
+  mapProjectionSets,
+  mergeProjectionSets,
+  projectionLayerFromSets,
+  projectionSetsFromLayer,
+  replaceProjectionSets,
+  restoreProjectionSets,
+  revealProjectionSets,
+} from "./projection-state.js";
 import { createLiveMdRenderCache, type LiveMdRenderCache } from "./render-cache.js";
 
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
@@ -236,9 +245,11 @@ const liveMdAnalysisField = StateField.define<LiveMdRuntimeState>({
   },
   provide(field) {
     return [
-      EditorView.decorations.from(field, (analysis) => analysis.directDecorations),
+      EditorView.decorations.from(field, (analysis) =>
+        joinProjectionSetDecorations(analysis.direct),
+      ),
       EditorView.atomicRanges.of(
-        (view) => view.state.field(field, false)?.directAtomicRanges ?? RangeSet.empty,
+        (view) => view.state.field(field, false)?.direct.atomicRanges ?? RangeSet.empty,
       ),
     ];
   },
@@ -477,35 +488,18 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       let interactiveSafetyRanges = pending.interactiveSafetyRanges;
       let restoreRanges = pending.editSurface.restoreRanges;
       let baseSurfaceState = this.pendingSurfaceBaseState(pending);
-      let baseAtoms = baseSurfaceState.atoms.map(pending.changes);
-      let baseDestructive = baseSurfaceState.destructive.map(pending.changes);
+      let mappedBase = mapProjectionSets(baseSurfaceState, pending.changes, []);
+      let mappedCurrent = mapProjectionSets(this.surfaceState, update.changes, []);
+      let restored = restoreProjectionSets(mappedCurrent, mappedBase, restoreRanges);
+      let revealed = revealProjectionSets(restored, editSurfaceRanges);
+      let sets = clearInteractiveProjectionSets(revealed, interactiveSafetyRanges);
       this.surfaceState = {
-        atoms: clearRangeSetRanges(
-          restoreRangeSetRanges(
-            this.surfaceState.atoms.map(update.changes),
-            baseAtoms,
-            restoreRanges,
-          ),
-          editSurfaceRanges,
-        ),
+        ...sets,
         compiledRanges: subtractRanges(
           mapDocRanges(this.surfaceState.compiledRanges, update.changes),
           editSurfaceRanges,
         ),
-        destructive: clearDecorationRanges(
-          restoreRangeSetRanges(
-            this.surfaceState.destructive.map(update.changes),
-            baseDestructive,
-            restoreRanges,
-          ),
-          editSurfaceRanges,
-        ),
-        interactive: clearDecorationRanges(
-          this.surfaceState.interactive.map(update.changes),
-          interactiveSafetyRanges,
-        ),
         semanticRevision: this.surfaceState.semanticRevision,
-        sourceSafe: this.surfaceState.sourceSafe.map(update.changes),
       };
       this.runtime = analysis;
       this.surfaceTrace = emptyLiveMdLeafAnalysisTrace();
@@ -533,12 +527,14 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
         ? newlyActiveSourceRanges(previous.activeSourceRanges, analysis.activeSourceRanges)
         : [];
       if (revealRanges.length) {
+        let sets = clearInteractiveProjectionSets(
+          revealProjectionSets(this.surfaceState, revealRanges),
+          revealRanges,
+        );
         this.surfaceState = {
           ...this.surfaceState,
-          atoms: clearRangeSetRanges(this.surfaceState.atoms, revealRanges),
+          ...sets,
           compiledRanges: subtractRanges(this.surfaceState.compiledRanges, revealRanges),
-          destructive: clearDecorationRanges(this.surfaceState.destructive, revealRanges),
-          interactive: clearDecorationRanges(this.surfaceState.interactive, revealRanges),
         };
       }
       this.runtime = analysis;
@@ -576,12 +572,9 @@ export const liveMdAnalysis: Extension = [
 
 function emptySurfaceProjectionState(semanticRevision = -1): LiveMdSurfaceProjectionState {
   return {
-    atoms: RangeSet.empty,
+    ...emptyProjectionSets(),
     compiledRanges: [],
-    destructive: Decoration.none,
-    interactive: Decoration.none,
     semanticRevision,
-    sourceSafe: Decoration.none,
   };
 }
 
@@ -590,12 +583,9 @@ function surfaceProjectionStateFromProjection(
   semanticRevision: number,
 ): LiveMdSurfaceProjectionState {
   return {
-    atoms: surface.atomicRanges,
+    ...projectionSetsFromLayer(surface),
     compiledRanges: [],
-    destructive: surface.destructiveDecorations,
-    interactive: surface.interactiveDecorations,
     semanticRevision,
-    sourceSafe: surface.sourceSafeDecorations,
   };
 }
 
@@ -604,29 +594,11 @@ function patchSurfaceProjectionState(
   surface: SurfaceProjection,
   ranges: readonly DocRange[],
 ): LiveMdSurfaceProjectionState {
+  let patched = replaceProjectionSets(current, ranges, projectionSetsFromLayer(surface));
   return {
-    atoms: patchRangeSet(
-      current.atoms,
-      ranges,
-      collectRangeSetRanges(surface.atomicRanges, ranges),
-    ),
+    ...patched,
     compiledRanges: current.compiledRanges,
-    destructive: patchRangeSet(
-      current.destructive,
-      ranges,
-      collectRangeSetRanges(surface.destructiveDecorations, ranges),
-    ),
-    interactive: patchRangeSet(
-      current.interactive,
-      ranges,
-      collectRangeSetRanges(surface.interactiveDecorations, ranges),
-    ),
     semanticRevision: current.semanticRevision,
-    sourceSafe: patchRangeSet(
-      current.sourceSafe,
-      ranges,
-      collectRangeSetRanges(surface.sourceSafeDecorations, ranges),
-    ),
   };
 }
 
@@ -635,69 +607,25 @@ function invalidateSurfaceProjectionState(
   ranges: readonly DocRange[],
   semanticRevision: number,
 ): LiveMdSurfaceProjectionState {
+  let cleared = replaceProjectionSets(current, ranges, emptyProjectionSets());
   return {
-    atoms: clearRangeSetRanges(current.atoms, ranges),
+    ...cleared,
     compiledRanges: subtractRanges(current.compiledRanges, ranges),
-    destructive: clearDecorationRanges(current.destructive, ranges),
-    interactive: clearDecorationRanges(current.interactive, ranges),
     semanticRevision,
-    sourceSafe: clearDecorationRanges(current.sourceSafe, ranges),
   };
 }
 
 function surfaceProjectionFromState(state: LiveMdSurfaceProjectionState): SurfaceProjection {
-  return surfaceProjectionFromSets({
-    atomicRanges: state.atoms,
-    destructiveDecorations: state.destructive,
-    interactiveDecorations: state.interactive,
-    sourceSafeDecorations: state.sourceSafe,
-  });
-}
-
-function surfaceProjectionFromSets(input: {
-  atomicRanges: RangeSet<RangeValue>;
-  destructiveDecorations: DecorationSet;
-  interactiveDecorations: DecorationSet;
-  sourceSafeDecorations: DecorationSet;
-}): SurfaceProjection {
-  return {
-    atomicRanges: input.atomicRanges,
-    decorations: RangeSet.join([
-      input.sourceSafeDecorations,
-      input.interactiveDecorations,
-      input.destructiveDecorations,
-    ]),
-    destructiveDecorations: input.destructiveDecorations,
-    interactiveDecorations: input.interactiveDecorations,
-    sourceSafeDecorations: input.sourceSafeDecorations,
-  };
+  return projectionLayerFromSets(state);
 }
 
 function filterSurfaceProjectionToRanges(
   surface: LiveMdSurfaceProjection,
   ranges: readonly DocRange[],
 ): SurfaceProjection {
-  return {
-    atomicRanges: filterRangeSetToRanges(surface.atomicRanges, ranges),
-    decorations: filterRangeSetToRanges(surface.decorations, ranges),
-    destructiveDecorations: filterRangeSetToRanges(surface.destructiveDecorations, ranges),
-    interactiveDecorations: filterRangeSetToRanges(surface.interactiveDecorations, ranges),
-    sourceSafeDecorations: filterRangeSetToRanges(surface.sourceSafeDecorations, ranges),
-  };
-}
-
-function collectRangeSetRanges<T extends RangeValue>(
-  rangeSet: RangeSet<T>,
-  ranges: readonly DocRange[],
-): Range<T>[] {
-  let collected: Range<T>[] = [];
-  if (!ranges.length) return collected;
-  for (let range of ranges) {
-    rangeSet.between(range.from, range.to, (from, to, value) => {
-      collected.push(value.range(from, to));
-    });
-  }
-  return collected;
+  return projectionLayerFromSets(
+    filterProjectionSetsToRanges(projectionSetsFromLayer(surface), ranges),
+  );
 }
 
 function surfaceSemanticRevision(analysis: LiveMdRuntimeState) {
@@ -784,38 +712,21 @@ function pendingSourceAnalysis(
     sourceIslandLeaves,
     changes,
   );
-  let baseDirectDestructiveDecorations = baseAnalysis.directDestructiveDecorations.map(changes);
-  let baseDirectAtomicRanges = baseAnalysis.directAtomicRanges.map(changes);
-  let directSourceSafeDecorations = value.directSourceSafeDecorations.map(transaction.changes);
-  let directDestructiveDecorations = clearDecorationRanges(
-    restoreRangeSetRanges(
-      value.directDestructiveDecorations.map(transaction.changes),
-      baseDirectDestructiveDecorations,
-      editSurface.restoreRanges,
-    ),
-    editSurface.ranges,
+  let mappedBaseDirect = mapProjectionSets(baseAnalysis.direct, changes, []);
+  let mappedDirect = mapProjectionSets(value.direct, transaction.changes, []);
+  let restoredDirect = restoreProjectionSets(
+    mappedDirect,
+    mappedBaseDirect,
+    editSurface.restoreRanges,
   );
-  let directAtomicRanges = clearRangeSetRanges(
-    restoreRangeSetRanges(
-      value.directAtomicRanges.map(transaction.changes),
-      baseDirectAtomicRanges,
-      editSurface.restoreRanges,
-    ),
-    editSurface.ranges,
-  );
+  let direct = revealProjectionSets(restoredDirect, editSurface.ranges);
   let trace = pendingInputTrace(transaction);
   trace.editSurfaceRanges = editSurface.ranges;
   trace.editSurfaceLines = countLines(transaction.state.doc, editSurface.ranges);
   return {
     activeLines,
     activeSourceRanges,
-    directAtomicRanges,
-    directDecorations: joinDirectProjectionSets({
-      directDestructiveDecorations,
-      directSourceSafeDecorations,
-    }),
-    directDestructiveDecorations,
-    directSourceSafeDecorations,
+    direct,
     legacySurface: baseAnalysis.legacySurface,
     pending,
     renderCache: value.renderCache,
@@ -868,21 +779,12 @@ function pendingSelectionAnalysis(
   ) {
     return value;
   }
-  let directDestructiveDecorations = clearDecorationRanges(
-    value.directDestructiveDecorations,
-    revealRanges,
-  );
-  let directAtomicRanges = clearRangeSetRanges(value.directAtomicRanges, revealRanges);
+  let direct = revealProjectionSets(value.direct, revealRanges);
   return {
     ...value,
     activeLines,
     activeSourceRanges,
-    directAtomicRanges,
-    directDecorations: joinDirectProjectionSets({
-      directDestructiveDecorations,
-      directSourceSafeDecorations: value.directSourceSafeDecorations,
-    }),
-    directDestructiveDecorations,
+    direct,
     surfaceInvalidationRanges: [],
     trace: pending ? value.trace : emptyLiveMdLeafAnalysisTrace(),
   };
@@ -1065,83 +967,6 @@ function changeIsSelectionLocal(state: EditorState, changedRange: DocRange) {
   );
 }
 
-function clearDecorationRanges(decorations: DecorationSet, ranges: readonly DocRange[]) {
-  return clearRangeSetRanges(decorations, ranges);
-}
-
-type ProjectionSetInputs = {
-  directAtomicRanges: RangeSet<RangeValue>;
-  directDestructiveDecorations: DecorationSet;
-  directSourceSafeDecorations: DecorationSet;
-  surfaceAtomicRanges: RangeSet<RangeValue>;
-  surfaceDestructiveDecorations: DecorationSet;
-  surfaceInteractiveDecorations: DecorationSet;
-  surfaceSourceSafeDecorations: DecorationSet;
-};
-
-type DirectProjectionSetInputs = Pick<
-  ProjectionSetInputs,
-  "directDestructiveDecorations" | "directSourceSafeDecorations"
->;
-
-function joinDirectProjectionSets(input: DirectProjectionSetInputs) {
-  return RangeSet.join([input.directSourceSafeDecorations, input.directDestructiveDecorations]);
-}
-
-function joinProjectionSets(input: ProjectionSetInputs) {
-  let directDecorations = RangeSet.join([
-    input.directSourceSafeDecorations,
-    input.directDestructiveDecorations,
-  ]);
-  let surfaceDecorations = RangeSet.join([
-    input.surfaceSourceSafeDecorations,
-    input.surfaceInteractiveDecorations,
-    input.surfaceDestructiveDecorations,
-  ]);
-  let sourceSafeDecorations = RangeSet.join([
-    input.directSourceSafeDecorations,
-    input.surfaceSourceSafeDecorations,
-  ]);
-  let destructiveDecorations = RangeSet.join([
-    input.directDestructiveDecorations,
-    input.surfaceDestructiveDecorations,
-  ]);
-  return {
-    atomicRanges: RangeSet.join([input.directAtomicRanges, input.surfaceAtomicRanges]),
-    decorations: RangeSet.join([directDecorations, surfaceDecorations]),
-    destructiveDecorations,
-    directDecorations,
-    interactiveDecorations: input.surfaceInteractiveDecorations,
-    sourceSafeDecorations,
-    surfaceDecorations,
-  };
-}
-
-function filterRangeSetToRanges<T extends RangeValue>(
-  rangeSet: RangeSet<T>,
-  ranges: readonly DocRange[],
-): RangeSet<T> {
-  if (!ranges.length) return RangeSet.empty;
-  let collected: Array<{ from: number; to: number; value: T }> = [];
-  let builder = new RangeSetBuilder<T>();
-  for (let range of ranges) {
-    rangeSet.between(range.from, range.to, (from, to, value) => {
-      collected.push({ from, to, value });
-    });
-  }
-  collected.sort(
-    (left, right) =>
-      left.from - right.from ||
-      left.value.startSide - right.value.startSide ||
-      left.to - right.to ||
-      left.value.endSide - right.value.endSide,
-  );
-  for (let range of collected) {
-    builder.add(range.from, range.to, range.value);
-  }
-  return builder.finish();
-}
-
 function newlyActiveSourceRanges(
   previous: readonly DocRange[],
   current: readonly DocRange[],
@@ -1172,23 +997,6 @@ function activePendingSourceRanges(
     active.push(sourceRange);
   }
   return active;
-}
-
-function clearRangeSetRanges<T extends RangeValue>(
-  rangeSet: RangeSet<T>,
-  ranges: readonly DocRange[],
-) {
-  return ranges.length ? patchRangeSet(rangeSet, ranges, []) : rangeSet;
-}
-
-function restoreRangeSetRanges<T extends RangeValue>(
-  rangeSet: RangeSet<T>,
-  base: RangeSet<T>,
-  ranges: readonly DocRange[],
-) {
-  return ranges.length
-    ? patchRangeSet(rangeSet, ranges, collectRangeSetRanges(base, ranges))
-    : rangeSet;
 }
 
 function scheduledAnalysisFromEffects(transaction: Transaction): LiveMdScheduledAnalysis | null {
@@ -1479,10 +1287,7 @@ function buildLiveMdAnalysis(
     let analysis: LiveMdRuntimeState = {
       activeLines,
       activeSourceRanges: semanticAnalysis.activeSourceRanges,
-      directAtomicRanges: direct.atomicRanges,
-      directDecorations: direct.decorations,
-      directDestructiveDecorations: direct.destructiveDecorations,
-      directSourceSafeDecorations: direct.sourceSafeDecorations,
+      direct: projectionSetsFromLayer(direct),
       legacySurface,
       pending: null,
       renderCache,
@@ -1511,10 +1316,7 @@ function buildLiveMdAnalysis(
   return {
     activeLines,
     activeSourceRanges: [],
-    directAtomicRanges: projection.direct.atomicRanges,
-    directDecorations: projection.direct.decorations,
-    directDestructiveDecorations: projection.direct.destructiveDecorations,
-    directSourceSafeDecorations: projection.direct.sourceSafeDecorations,
+    direct: projectionSetsFromLayer(projection.direct),
     legacySurface: projection.surface,
     pending: null,
     renderCache: build.renderCache,
@@ -1578,11 +1380,7 @@ function compileRuntimeDirectLayoutProjection(
   if (patch && options.previous) {
     return compileIncrementalDirectLayoutProjection(input, semanticAnalysis.semantic.cache, {
       changes: patch.changes,
-      previous: {
-        atomicRanges: options.previous.directAtomicRanges,
-        destructiveDecorations: options.previous.directDestructiveDecorations,
-        sourceSafeDecorations: options.previous.directSourceSafeDecorations,
-      },
+      previous: options.previous.direct,
       ranges: patch.ranges,
       records: patch.records,
       removeRecordIds: patch.removeRecordIds,
@@ -1745,33 +1543,13 @@ function directProjectionInputsChanged(startState: EditorState, state: EditorSta
   );
 }
 
-function mergeProjectionLayers(
-  primary: LiveMdProjectionLayer,
-  secondary: LiveMdProjectionLayer,
-): LiveMdProjectionLayer {
-  return {
-    atomicRanges: RangeSet.join([primary.atomicRanges, secondary.atomicRanges]),
-    decorations: RangeSet.join([primary.decorations, secondary.decorations]),
-    destructiveDecorations: RangeSet.join([
-      primary.destructiveDecorations,
-      secondary.destructiveDecorations,
-    ]),
-    interactiveDecorations: RangeSet.join([
-      primary.interactiveDecorations,
-      secondary.interactiveDecorations,
-    ]),
-    sourceSafeDecorations: RangeSet.join([
-      primary.sourceSafeDecorations,
-      secondary.sourceSafeDecorations,
-    ]),
-  };
-}
-
 function mergeSurfaceProjections(
   primary: SurfaceProjection,
   secondary: SurfaceProjection,
 ): SurfaceProjection {
-  return mergeProjectionLayers(primary, secondary);
+  return projectionLayerFromSets(
+    mergeProjectionSets(projectionSetsFromLayer(primary), projectionSetsFromLayer(secondary)),
+  );
 }
 
 function compileRuntimeVisibleSurfaceProjection(
@@ -1800,31 +1578,13 @@ function visibleLegacySurface(
   visibleRanges: readonly DocRange[],
 ): SurfaceProjection {
   if (!analysis.legacySurface || !visibleRanges.length) return emptySurfaceProjection();
-  return surfaceProjectionFromSets({
-    atomicRanges: filterRangeSetToRanges(analysis.legacySurface.atomicRanges, visibleRanges),
-    destructiveDecorations: filterRangeSetToRanges(
-      analysis.legacySurface.destructiveDecorations,
-      visibleRanges,
-    ),
-    interactiveDecorations: filterRangeSetToRanges(
-      analysis.legacySurface.interactiveDecorations,
-      visibleRanges,
-    ),
-    sourceSafeDecorations: filterRangeSetToRanges(
-      analysis.legacySurface.sourceSafeDecorations,
-      visibleRanges,
-    ),
-  });
+  return projectionLayerFromSets(
+    filterProjectionSetsToRanges(projectionSetsFromLayer(analysis.legacySurface), visibleRanges),
+  );
 }
 
 function emptySurfaceProjection(): SurfaceProjection {
-  return {
-    atomicRanges: RangeSet.empty,
-    decorations: Decoration.none,
-    destructiveDecorations: Decoration.none,
-    interactiveDecorations: Decoration.none,
-    sourceSafeDecorations: Decoration.none,
-  };
+  return projectionLayerFromSets(emptyProjectionSets());
 }
 
 function buildLiveMdSemanticAnalysis(input: {
@@ -2071,22 +1831,28 @@ function liveMdAnalysisSnapshot(
   }
   surfaceSnapshot ??= compileRuntimeSurfaceSnapshot(state, runtime);
   let surface = surfaceSnapshot.projection;
-  let projection = joinProjectionSets({
-    directAtomicRanges: runtime.directAtomicRanges,
-    directDestructiveDecorations: runtime.directDestructiveDecorations,
-    directSourceSafeDecorations: runtime.directSourceSafeDecorations,
-    surfaceAtomicRanges: surface.atomicRanges,
-    surfaceDestructiveDecorations: surface.destructiveDecorations,
-    surfaceInteractiveDecorations: surface.interactiveDecorations,
-    surfaceSourceSafeDecorations: surface.sourceSafeDecorations,
-  });
+  let surfaceSets = projectionSetsFromLayer(surface);
+  let directDecorations = joinProjectionSetDecorations(runtime.direct);
+  let surfaceDecorations = joinProjectionSetDecorations(surfaceSets);
+  let sourceSafeDecorations = RangeSet.join([
+    runtime.direct.sourceSafeDecorations,
+    surface.sourceSafeDecorations,
+  ]);
+  let destructiveDecorations = RangeSet.join([
+    runtime.direct.destructiveDecorations,
+    surface.destructiveDecorations,
+  ]);
   let snapshot: LiveMdAnalysis = {
     ...runtime,
-    atomicRanges: projection.atomicRanges,
-    decorations: projection.decorations,
-    destructiveDecorations: projection.destructiveDecorations,
-    interactiveDecorations: projection.interactiveDecorations,
-    sourceSafeDecorations: projection.sourceSafeDecorations,
+    atomicRanges: RangeSet.join([runtime.direct.atomicRanges, surface.atomicRanges]),
+    decorations: RangeSet.join([directDecorations, surfaceDecorations]),
+    destructiveDecorations,
+    directAtomicRanges: runtime.direct.atomicRanges,
+    directDecorations,
+    directDestructiveDecorations: runtime.direct.destructiveDecorations,
+    directSourceSafeDecorations: runtime.direct.sourceSafeDecorations,
+    interactiveDecorations: surface.interactiveDecorations,
+    sourceSafeDecorations,
     surfaceAtomicRanges: surface.atomicRanges,
     surfaceDecorations: surface.decorations,
     surfaceDestructiveDecorations: surface.destructiveDecorations,
@@ -2250,6 +2016,7 @@ function buildCanonicalLiveMdAnalysis(
     activeSourceRanges: markdownAnalysis?.activeSourceRanges ?? [],
     atomicRanges: projection.atomicRanges,
     decorations: projection.decorations,
+    direct: projectionSetsFromLayer(projection.direct),
     destructiveDecorations: projection.destructiveDecorations,
     directAtomicRanges: projection.direct.atomicRanges,
     directDecorations: projection.direct.decorations,

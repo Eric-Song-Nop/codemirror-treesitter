@@ -9,6 +9,7 @@ import { type LiveMdMarkdownFeature } from "../features.js";
 import { type LiveMdImageSourceResolver } from "../images.js";
 import { type CodeFenceLanguageMap, type LiveMdMarkdownParserService } from "../languages.js";
 import { type LiveMdLinkBaseUrl } from "../links.js";
+import { type ProjectionSets } from "./projection-state.js";
 import { type LiveMdRenderCache } from "./render-cache.js";
 
 export type LiveMdSemanticTrace = LiveMdLeafAnalysisTrace;
@@ -42,10 +43,7 @@ export type LiveMdPendingAnalysis = {
 export type LiveMdRuntimeState = {
   activeLines: ReadonlySet<number>;
   activeSourceRanges: readonly DocRange[];
-  directAtomicRanges: RangeSet<RangeValue>;
-  directDecorations: DecorationSet;
-  directDestructiveDecorations: DecorationSet;
-  directSourceSafeDecorations: DecorationSet;
+  direct: ProjectionSets;
   legacySurface: LiveMdSurfaceProjection | null;
   pending: LiveMdPendingAnalysis | null;
   renderCache: LiveMdRenderCache;
@@ -68,17 +66,21 @@ export type LiveMdSurfaceProjection = {
 };
 
 export type LiveMdSurfaceProjectionState = {
-  atoms: RangeSet<RangeValue>;
+  atomicRanges: RangeSet<RangeValue>;
   compiledRanges: readonly DocRange[];
-  destructive: DecorationSet;
-  interactive: DecorationSet;
+  destructiveDecorations: DecorationSet;
+  interactiveDecorations: DecorationSet;
   semanticRevision: number;
-  sourceSafe: DecorationSet;
+  sourceSafeDecorations: DecorationSet;
 };
 
 export type LiveMdAnalysis = LiveMdRuntimeState & {
   atomicRanges: RangeSet<RangeValue>;
   decorations: DecorationSet;
+  directAtomicRanges: RangeSet<RangeValue>;
+  directDecorations: DecorationSet;
+  directDestructiveDecorations: DecorationSet;
+  directSourceSafeDecorations: DecorationSet;
   destructiveDecorations: DecorationSet;
   interactiveDecorations: DecorationSet;
   sourceSafeDecorations: DecorationSet;
