@@ -24,6 +24,7 @@ export type LiveMdRuntimeEpochs = {
 
 export type LiveMdPendingEditSurface = {
   ranges: readonly DocRange[];
+  restoreRanges: readonly DocRange[];
 };
 
 export type LiveMdPendingAnalysis = {

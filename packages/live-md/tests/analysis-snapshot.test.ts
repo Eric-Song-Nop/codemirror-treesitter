@@ -518,6 +518,100 @@ describe("LiveMD analysis snapshot", () => {
     }
   });
 
+  it("commits sustained typing after capped input-pending yields", async () => {
+    let originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+    let originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    let originalRequestIdleCallback = globalThis.requestIdleCallback;
+    let originalCancelIdleCallback = globalThis.cancelIdleCallback;
+    let schedulingHost = navigator as Navigator & {
+      scheduling?: { isInputPending?: () => boolean };
+    };
+    let originalScheduling = Object.getOwnPropertyDescriptor(schedulingHost, "scheduling");
+    let idleAttempts = 0;
+    let inputChecks = 0;
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) =>
+      setTimeout(
+        () => callback(performance.now()),
+        0,
+      ) as unknown as number) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((id: number) => {
+      clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
+    }) as typeof globalThis.cancelAnimationFrame;
+    globalThis.requestIdleCallback = ((callback: IdleRequestCallback) => {
+      idleAttempts++;
+      return setTimeout(() => {
+        callback({ didTimeout: false, timeRemaining: () => 50 });
+      }, 0) as unknown as number;
+    }) as typeof globalThis.requestIdleCallback;
+    globalThis.cancelIdleCallback = ((id: number) => {
+      clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
+    }) as typeof globalThis.cancelIdleCallback;
+    Object.defineProperty(schedulingHost, "scheduling", {
+      configurable: true,
+      value: {
+        isInputPending() {
+          inputChecks++;
+          return true;
+        },
+      },
+    });
+
+    let view = await markdownAnalysisView(numberedPlainParagraphDoc(3), "paragraph 0");
+    try {
+      let baseState = view.state;
+      let base = __testLiveMdAnalysis(view);
+      if (!base.semantic) throw new Error("sustained input: expected semantic cache");
+
+      for (let index = 0; index < 40; index++) {
+        let paragraph = index < 14 ? 0 : index < 27 ? 1 : 2;
+        let token = `paragraph ${paragraph}`;
+        let from = view.state.doc.toString().indexOf(token) + token.length;
+        view.dispatch({
+          changes: { from, insert: "x" },
+          selection: { anchor: from + 1 },
+          userEvent: "input.type",
+        });
+        let pending = __testLiveMdAnalysis(view);
+        expect(pending.pending, `burst edit ${index}: pending analysis`).toBeTruthy();
+        expect(
+          pending.trace.editSurfaceLines,
+          `burst edit ${index}: bounded reveal`,
+        ).toBeLessThanOrEqual(4);
+      }
+
+      let pending = __testLiveMdAnalysis(view);
+      if (!pending.pending) throw new Error("sustained input: expected coalesced pending state");
+      let changes = pending.pending.changes;
+
+      await __testFlushLiveMdAnalysis(view);
+
+      let after = __testLiveMdAnalysis(view);
+      expect(after.pending).toBeNull();
+      expect(idleAttempts).toBeGreaterThan(0);
+      expect(inputChecks).toBeGreaterThan(5);
+      expectSemanticTransitionEquivalence(
+        after,
+        base.semantic.cache,
+        baseState,
+        changes,
+        view.state,
+        "sustained input-pending burst",
+        "full",
+      );
+    } finally {
+      view.destroy();
+      globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+      globalThis.requestIdleCallback = originalRequestIdleCallback;
+      globalThis.cancelIdleCallback = originalCancelIdleCallback;
+      if (originalScheduling) {
+        Object.defineProperty(schedulingHost, "scheduling", originalScheduling);
+      } else {
+        Reflect.deleteProperty(schedulingHost, "scheduling");
+      }
+    }
+  }, 60_000);
+
   it("coalesces rapid docChanged updates to the latest runtime revision", async () => {
     let view = await markdownAnalysisView("alpha\n\nbeta\n\ngamma", "alpha");
 
@@ -1072,6 +1166,51 @@ describe("LiveMD analysis snapshot", () => {
             containsDocRange(range, mappedRevealRange),
           ),
         ).toBe(true);
+      } finally {
+        view.destroy();
+      }
+    }, 60_000);
+
+    it("re-conceals stale table reveal ranges while a pending edit moves elsewhere", async () => {
+      let doc =
+        "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n\nFirst paragraph\n\nSecond paragraph";
+      let tableTarget = doc.indexOf("alpha") + "alpha".length;
+      let view = await markdownAnalysisView(doc, "Second paragraph");
+
+      try {
+        let before = __testLiveMdAnalysis(view);
+        if (!before.semantic)
+          throw new Error("table stale reveal restore: expected semantic cache");
+        expect(tablePreviewTables(view.state, before)).toHaveLength(1);
+
+        view.dispatch({
+          changes: { from: tableTarget, insert: "!" },
+          selection: { anchor: tableTarget + 1 },
+          userEvent: "input.type",
+        });
+        let tablePending = __testLiveMdAnalysis(view);
+        expect(tablePending.pending, "table edit should be pending").toBeTruthy();
+        expect(tablePreviewTables(view.state, tablePending)).toHaveLength(0);
+
+        let paragraphTarget =
+          view.state.doc.toString().indexOf("First paragraph") + "First paragraph".length;
+        view.dispatch({
+          changes: { from: paragraphTarget, insert: "!" },
+          selection: { anchor: paragraphTarget + 1 },
+          userEvent: "input.type",
+        });
+        let paragraphPending = __testLiveMdAnalysis(view);
+        expect(
+          paragraphPending.pending,
+          "paragraph edit should keep pending analysis",
+        ).toBeTruthy();
+        expect(tablePreviewTables(view.state, paragraphPending)).toHaveLength(1);
+        expect(paragraphPending.trace.editSurfaceLines).toBeLessThanOrEqual(2);
+
+        await __testFlushLiveMdAnalysis(view);
+        let after = __testLiveMdAnalysis(view);
+        expect(after.pending).toBeNull();
+        expect(tablePreviewTables(view.state, after)[0]?.rows[0]?.[0]).toBe("alpha!");
       } finally {
         view.destroy();
       }

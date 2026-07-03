@@ -122,6 +122,7 @@ import { createLiveMdRenderCache, type LiveMdRenderCache } from "./render-cache.
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
 const liveMdSchedulerQuietDelay = 24;
 const liveMdSchedulerMaxDeadlineYields = 2;
+const liveMdSchedulerMaxInputYields = 5;
 
 type BuildLiveMdAnalysisOptions = {
   activeSourceRanges?: readonly DocRange[] | null;
@@ -145,6 +146,11 @@ type SurfaceProjection = LiveMdProjectionLayer;
 type SurfaceProjectionSnapshot = {
   projection: SurfaceProjection;
   trace: LiveMdLeafAnalysisTrace;
+};
+
+type LiveMdPendingSurfaceBase = {
+  runtime: LiveMdRuntimeState;
+  state: LiveMdSurfaceProjectionState;
 };
 
 const commitLiveMdScheduledAnalysis = StateEffect.define<LiveMdScheduledAnalysis>();
@@ -241,15 +247,18 @@ const liveMdAnalysisField = StateField.define<LiveMdRuntimeState>({
 const liveMdSchedulerPlugin = ViewPlugin.fromClass(
   class LiveMdSchedulerPlugin {
     private destroyed = false;
+    private lastCommitWasCheap = false;
     private scheduled: LiveMdScheduledWork | null = null;
     private yieldedRevision = -1;
-    private yieldCount = 0;
+    private deadlineYieldCount = 0;
+    private inputYieldCount = 0;
 
     constructor(readonly view: EditorView) {
       this.scheduleIfPending();
     }
 
     update(update: ViewUpdate) {
+      this.noteCommittedAnalysis(update);
       if (
         update.docChanged ||
         update.transactions.some((transaction) => transaction.effects.length)
@@ -279,11 +288,14 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
       if (this.yieldedRevision != pending.revision) this.resetYieldCount(pending.revision);
       if (this.scheduled?.revision == pending.revision) return;
       this.scheduled?.cancel();
-      let allowDeadlineYield = this.yieldCount < liveMdSchedulerMaxDeadlineYields;
       this.scheduled = scheduleLiveMdWork(
         pending.revision,
         (deadline) => this.runScheduled(pending.revision, deadline),
-        allowDeadlineYield,
+        {
+          allowDeadlineYield: this.deadlineYieldCount < liveMdSchedulerMaxDeadlineYields,
+          quietDelay: this.lastCommitWasCheap ? 0 : liveMdSchedulerQuietDelay,
+          shouldYieldForInput: () => this.shouldYieldForInput(pending.revision),
+        },
       );
     }
 
@@ -300,7 +312,8 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
 
       let yieldCheck = scheduledYieldCheck(
         deadline,
-        this.yieldCount < liveMdSchedulerMaxDeadlineYields,
+        this.deadlineYieldCount < liveMdSchedulerMaxDeadlineYields,
+        () => this.shouldYieldForInput(revision),
       );
       let analysis: LiveMdRuntimeState;
       try {
@@ -315,7 +328,7 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
         yieldCheck();
       } catch (error) {
         if (error instanceof LiveMdScheduledYield) {
-          if (error.reason == "deadline") this.yieldCount++;
+          if (error.reason == "deadline") this.deadlineYieldCount++;
           this.scheduleIfPending();
           return;
         }
@@ -334,7 +347,23 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
 
     private resetYieldCount(revision = -1) {
       this.yieldedRevision = revision;
-      this.yieldCount = 0;
+      this.deadlineYieldCount = 0;
+      this.inputYieldCount = 0;
+    }
+
+    private shouldYieldForInput(revision: number) {
+      if (this.yieldedRevision != revision) this.resetYieldCount(revision);
+      if (this.inputYieldCount >= liveMdSchedulerMaxInputYields) return false;
+      this.inputYieldCount++;
+      return true;
+    }
+
+    private noteCommittedAnalysis(update: ViewUpdate) {
+      let previous = update.startState.field(liveMdAnalysisField, false);
+      let current = update.state.field(liveMdAnalysisField, false);
+      if (previous == current || !previous?.pending || !current || current.pending) return;
+      if (current.revision != previous.pending.revision) return;
+      this.lastCommitWasCheap = liveMdCommitWasCheap(current);
     }
   },
 );
@@ -345,6 +374,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
     decorations: DecorationSet = Decoration.none;
     surface = emptySurfaceProjection();
     surfaceTrace = emptyLiveMdLeafAnalysisTrace();
+    private pendingSurfaceBase: LiveMdPendingSurfaceBase | null = null;
     private runtime: LiveMdRuntimeState | null = null;
     private surfaceState = emptySurfaceProjectionState();
 
@@ -378,6 +408,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
         this.decorations = Decoration.none;
         this.surface = emptySurfaceProjection();
         this.surfaceTrace = emptyLiveMdLeafAnalysisTrace();
+        this.pendingSurfaceBase = null;
         this.runtime = null;
         this.surfaceState = emptySurfaceProjectionState();
         return;
@@ -435,6 +466,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       }
 
       this.runtime = analysis;
+      this.pendingSurfaceBase = null;
       this.publishSurface();
     }
 
@@ -443,14 +475,29 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       if (!pending) return;
       let editSurfaceRanges = pending.editSurface.ranges;
       let interactiveSafetyRanges = pending.interactiveSafetyRanges;
+      let restoreRanges = pending.editSurface.restoreRanges;
+      let baseSurfaceState = this.pendingSurfaceBaseState(pending);
+      let baseAtoms = baseSurfaceState.atoms.map(pending.changes);
+      let baseDestructive = baseSurfaceState.destructive.map(pending.changes);
       this.surfaceState = {
-        atoms: clearRangeSetRanges(this.surfaceState.atoms.map(update.changes), editSurfaceRanges),
+        atoms: clearRangeSetRanges(
+          restoreRangeSetRanges(
+            this.surfaceState.atoms.map(update.changes),
+            baseAtoms,
+            restoreRanges,
+          ),
+          editSurfaceRanges,
+        ),
         compiledRanges: subtractRanges(
           mapDocRanges(this.surfaceState.compiledRanges, update.changes),
           editSurfaceRanges,
         ),
         destructive: clearDecorationRanges(
-          this.surfaceState.destructive.map(update.changes),
+          restoreRangeSetRanges(
+            this.surfaceState.destructive.map(update.changes),
+            baseDestructive,
+            restoreRanges,
+          ),
           editSurfaceRanges,
         ),
         interactive: clearDecorationRanges(
@@ -464,6 +511,16 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       this.surfaceTrace = emptyLiveMdLeafAnalysisTrace();
       this.surfaceTrace.surfaceMapOnlyUpdates++;
       this.publishSurface();
+    }
+
+    private pendingSurfaceBaseState(pending: LiveMdPendingAnalysis) {
+      if (this.pendingSurfaceBase?.runtime != pending.baseAnalysis) {
+        this.pendingSurfaceBase = {
+          runtime: pending.baseAnalysis,
+          state: this.surfaceState,
+        };
+      }
+      return this.pendingSurfaceBase.state;
     }
 
     private clearPendingActiveSurface(analysis: LiveMdRuntimeState) {
@@ -666,6 +723,12 @@ type LiveMdScheduledWork = {
   revision: number;
 };
 
+type LiveMdScheduleWorkOptions = {
+  allowDeadlineYield?: boolean;
+  quietDelay?: number;
+  shouldYieldForInput?: () => boolean;
+};
+
 class LiveMdScheduledYield extends Error {
   constructor(readonly reason: "deadline" | "input") {
     super(reason);
@@ -717,13 +780,23 @@ function pendingSourceAnalysis(
     sourceIslandLeaves,
     changes,
   );
+  let baseDirectDestructiveDecorations = baseAnalysis.directDestructiveDecorations.map(changes);
+  let baseDirectAtomicRanges = baseAnalysis.directAtomicRanges.map(changes);
   let directSourceSafeDecorations = value.directSourceSafeDecorations.map(transaction.changes);
   let directDestructiveDecorations = clearDecorationRanges(
-    value.directDestructiveDecorations.map(transaction.changes),
+    restoreRangeSetRanges(
+      value.directDestructiveDecorations.map(transaction.changes),
+      baseDirectDestructiveDecorations,
+      editSurface.restoreRanges,
+    ),
     editSurface.ranges,
   );
   let directAtomicRanges = clearRangeSetRanges(
-    value.directAtomicRanges.map(transaction.changes),
+    restoreRangeSetRanges(
+      value.directAtomicRanges.map(transaction.changes),
+      baseDirectAtomicRanges,
+      editSurface.restoreRanges,
+    ),
     editSurface.ranges,
   );
   let trace = pendingInputTrace(transaction);
@@ -825,6 +898,7 @@ function pendingEditSurface(
     state.doc,
     transaction.changes,
   );
+  let changedLineRanges = mergeDocRanges(changedRanges.map((range) => range.newLineRange));
   let revealChangedRanges = transactionRevealsSource(transaction)
     ? changedRanges.filter((range) => changeIsSelectionLocal(state, range.newRange))
     : [];
@@ -832,11 +906,22 @@ function pendingEditSurface(
     revealChangedRanges.map((range) => range.newLineRange),
   );
   let revealOldChangedRanges = revealChangedRanges.map((range) => range.oldRange);
-  let selectionLineRanges = selectionPhysicalLineRanges(state).filter((range) =>
+  let currentSelectionLineRanges = selectionPhysicalLineRanges(state);
+  let selectionLineRanges = currentSelectionLineRanges.filter((range) =>
     revealChangedLineRanges.some((changed) => rangesTouchPoint(range, changed)),
   );
   let previousRanges =
     previousPending?.editSurface.ranges.map((range) => mapRange(range, transaction.changes)) ?? [];
+  let restoreRanges = mergeDocRanges(
+    previousRanges
+      .filter(
+        (range) =>
+          !changedLineRanges.some((changed) => rangesTouchPoint(range, changed)) &&
+          !currentSelectionLineRanges.some((line) => rangesTouchPoint(range, line)),
+      )
+      .map((range) => clampRangeToDoc(range, state.doc.length)),
+  );
+  let retainedPreviousRanges = subtractRanges(previousRanges, restoreRanges);
   let touchedRevealRanges = touchedRecordRevealRanges(
     baseAnalysis,
     state,
@@ -851,12 +936,15 @@ function pendingEditSurface(
     [
       ...revealChangedLineRanges,
       ...selectionLineRanges,
-      ...previousRanges,
+      ...retainedPreviousRanges,
       ...touchedRevealRanges,
       ...syntaxLineRanges,
     ].map((range) => clampRangeToDoc(range, state.doc.length)),
   );
-  return { ranges };
+  return {
+    ranges,
+    restoreRanges,
+  };
 }
 
 function selectionPhysicalLineRanges(state: EditorState): readonly DocRange[] {
@@ -1089,6 +1177,16 @@ function clearRangeSetRanges<T extends RangeValue>(
   return ranges.length ? patchRangeSet(rangeSet, ranges, []) : rangeSet;
 }
 
+function restoreRangeSetRanges<T extends RangeValue>(
+  rangeSet: RangeSet<T>,
+  base: RangeSet<T>,
+  ranges: readonly DocRange[],
+) {
+  return ranges.length
+    ? patchRangeSet(rangeSet, ranges, collectRangeSetRanges(base, ranges))
+    : rangeSet;
+}
+
 function scheduledAnalysisFromEffects(transaction: Transaction): LiveMdScheduledAnalysis | null {
   for (let effect of transaction.effects) {
     if (effect.is(commitLiveMdScheduledAnalysis)) return effect.value;
@@ -1110,6 +1208,11 @@ function canCommitScheduledAnalysis(
     !result.analysis.pending &&
     analysisRangesInDoc(result.analysis, state.doc.length),
   );
+}
+
+function liveMdCommitWasCheap(analysis: LiveMdRuntimeState) {
+  let trace = analysis.semanticTrace ?? analysis.trace;
+  return trace.recordsAnalyzed <= 8 && trace.fallbackCount == 0;
 }
 
 function withStaleResultDrop(value: LiveMdRuntimeState): LiveMdRuntimeState {
@@ -1177,8 +1280,10 @@ function renderKeyContextForState(state: EditorState): LiveMdRenderKeyContext {
 function scheduleLiveMdWork(
   revision: number,
   run: (deadline?: IdleDeadline) => void,
-  allowDeadlineYield = true,
+  options: LiveMdScheduleWorkOptions = {},
 ): LiveMdScheduledWork {
+  let allowDeadlineYield = options.allowDeadlineYield ?? true;
+  let quietDelay = options.quietDelay ?? liveMdSchedulerQuietDelay;
   let cancelled = false;
   let frame: number | null = null;
   let quietTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1188,13 +1293,13 @@ function scheduleLiveMdWork(
   let scheduleQuietTask = () => {
     frame = null;
     if (cancelled) return;
-    quietTimer = setTimeout(scheduleIdleTask, liveMdSchedulerQuietDelay);
+    quietTimer = setTimeout(scheduleIdleTask, quietDelay);
   };
 
   let scheduleIdleTask = () => {
     quietTimer = null;
     if (cancelled) return;
-    if (isInputPending()) {
+    if (shouldYieldForPendingInput(options)) {
       scheduleQuietTask();
       return;
     }
@@ -1203,7 +1308,10 @@ function scheduleLiveMdWork(
       idle = requestIdle((deadline) => {
         idle = null;
         if (cancelled) return;
-        if (isInputPending() || (allowDeadlineYield && idleDeadlineExhausted(deadline))) {
+        if (
+          shouldYieldForPendingInput(options) ||
+          (allowDeadlineYield && idleDeadlineExhausted(deadline))
+        ) {
           scheduleQuietTask();
           return;
         }
@@ -1213,7 +1321,7 @@ function scheduleLiveMdWork(
       timer = setTimeout(() => {
         timer = null;
         if (cancelled) return;
-        if (isInputPending()) {
+        if (shouldYieldForPendingInput(options)) {
           scheduleQuietTask();
           return;
         }
@@ -1255,13 +1363,21 @@ function isInputPending() {
   );
 }
 
+function shouldYieldForPendingInput(options: LiveMdScheduleWorkOptions) {
+  return isInputPending() && (options.shouldYieldForInput?.() ?? true);
+}
+
 function idleDeadlineExhausted(deadline: IdleDeadline | undefined) {
   return Boolean(deadline && !deadline.didTimeout && deadline.timeRemaining() <= 0);
 }
 
-function scheduledYieldCheck(deadline: IdleDeadline | undefined, allowDeadlineYield: boolean) {
+function scheduledYieldCheck(
+  deadline: IdleDeadline | undefined,
+  allowDeadlineYield: boolean,
+  shouldYieldForInput: () => boolean,
+) {
   return () => {
-    if (isInputPending()) throw new LiveMdScheduledYield("input");
+    if (isInputPending() && shouldYieldForInput()) throw new LiveMdScheduledYield("input");
     if (allowDeadlineYield && idleDeadlineExhausted(deadline)) {
       throw new LiveMdScheduledYield("deadline");
     }
