@@ -859,6 +859,7 @@ describe("LiveMD analysis snapshot", () => {
       try {
         let before = __testLiveMdAnalysis(view);
         let tableRecord = recordByKind(before, "table");
+        expect(tableRecord.revealRange).toBeTruthy();
         expect(tablePreviewTables(view.state, before)).toHaveLength(1);
 
         let { pending, transaction } = await dispatchScheduledLocalEdit(
@@ -870,9 +871,37 @@ describe("LiveMD analysis snapshot", () => {
           "pending table reveal locality",
           { oracle: "semantic" },
         );
-        let mappedRevealRange = mapRangeForTest(tableRecord.revealRange, transaction.changes);
+        let mappedRevealRange = mapRangeForTest(tableRecord.revealRange!, transaction.changes);
 
         expect(tablePreviewTables(view.state, pending)).toHaveLength(0);
+        expect(
+          pending.pending?.editSurface.ranges.some((range) =>
+            containsDocRange(range, mappedRevealRange),
+          ),
+        ).toBe(true);
+      } finally {
+        view.destroy();
+      }
+    }, 60_000);
+
+    it("reveals cross-line inline concealment when the edited record spans lines", async () => {
+      let doc = "intro\n\n**bold\nmiddle\nend** tail\n\nTail";
+      let target = doc.indexOf("**bold") + 2;
+      let view = await markdownAnalysisView(doc, "Tail");
+
+      try {
+        let before = __testLiveMdAnalysis(view);
+        let paragraph = recordBySourceContaining(view.state, before, "**bold\nmiddle\nend**");
+        expect(paragraph.revealRange).toBeTruthy();
+
+        let { pending, transaction } = await dispatchScheduledLocalEdit(
+          view,
+          { changes: { from: target, insert: "x" }, selection: { anchor: target + 1 } },
+          "pending cross-line inline reveal",
+          { oracle: "semantic" },
+        );
+        let mappedRevealRange = mapRangeForTest(paragraph.revealRange!, transaction.changes);
+
         expect(
           pending.pending?.editSurface.ranges.some((range) =>
             containsDocRange(range, mappedRevealRange),
@@ -4100,6 +4129,20 @@ function recordBySource(
   return record;
 }
 
+function recordBySourceContaining(
+  state: EditorState,
+  analysis: ReturnType<typeof __testLiveMdAnalysis>,
+  source: string,
+) {
+  let record = analysis.semantic
+    ? materializeLeafAnalysisCacheRecords(analysis.semantic.cache).find((candidate) =>
+        state.sliceDoc(candidate.sourceRange.from, candidate.sourceRange.to).includes(source),
+      )
+    : undefined;
+  if (!record) throw new Error(`Missing semantic record containing source: ${source}`);
+  return record;
+}
+
 function recordByKind(
   analysis: ReturnType<typeof __testLiveMdAnalysis>,
   kind: LeafAnalysisRecord["kind"],
@@ -4607,8 +4650,8 @@ function compareCanonicalSemanticRecord(
     left.sourceRange.to - right.sourceRange.to ||
     left.effectRange.from - right.effectRange.from ||
     left.effectRange.to - right.effectRange.to ||
-    left.revealRange.from - right.revealRange.from ||
-    left.revealRange.to - right.revealRange.to ||
+    (left.revealRange?.from ?? -1) - (right.revealRange?.from ?? -1) ||
+    (left.revealRange?.to ?? -1) - (right.revealRange?.to ?? -1) ||
     left.kind.localeCompare(right.kind) ||
     left.contextKey.localeCompare(right.contextKey) ||
     left.source.localeCompare(right.source) ||
@@ -4652,7 +4695,7 @@ type CanonicalSemanticRecord = {
   effectRange: DocRange;
   kind: string;
   range: DocRange;
-  revealRange: DocRange;
+  revealRange: DocRange | null;
   source: string;
   sourceHash: string;
   sourceRange: DocRange;

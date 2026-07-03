@@ -23,10 +23,7 @@ export type LiveMdRuntimeEpochs = {
 };
 
 export type LiveMdPendingEditSurface = {
-  changedLineRanges: readonly DocRange[];
   ranges: readonly DocRange[];
-  syntaxChangedRanges: readonly DocRange[];
-  touchedRevealRanges: readonly DocRange[];
 };
 
 export type LiveMdPendingAnalysis = {
