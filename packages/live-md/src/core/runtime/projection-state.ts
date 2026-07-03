@@ -15,6 +15,7 @@ export type ProjectionSets = {
   destructiveDecorations: DecorationSet;
   interactiveDecorations: DecorationSet;
   sourceSafeDecorations: DecorationSet;
+  structuralLineDecorations: DecorationSet;
 };
 
 export function emptyProjectionSets(): ProjectionSets {
@@ -23,6 +24,7 @@ export function emptyProjectionSets(): ProjectionSets {
     destructiveDecorations: Decoration.none,
     interactiveDecorations: Decoration.none,
     sourceSafeDecorations: Decoration.none,
+    structuralLineDecorations: Decoration.none,
   };
 }
 
@@ -32,6 +34,7 @@ export function projectionSetsFromLayer(layer: LiveMdProjectionLayer): Projectio
     destructiveDecorations: layer.destructiveDecorations,
     interactiveDecorations: layer.interactiveDecorations,
     sourceSafeDecorations: layer.sourceSafeDecorations,
+    structuralLineDecorations: layer.structuralLineDecorations,
   };
 }
 
@@ -45,6 +48,7 @@ export function projectionLayerFromSets(sets: ProjectionSets): LiveMdProjectionL
 export function joinProjectionSets(sets: ProjectionSets): DecorationSet {
   return RangeSet.join([
     sets.sourceSafeDecorations,
+    sets.structuralLineDecorations,
     sets.interactiveDecorations,
     sets.destructiveDecorations,
   ]);
@@ -68,6 +72,10 @@ export function mergeProjectionSets(
       primary.sourceSafeDecorations,
       secondary.sourceSafeDecorations,
     ]),
+    structuralLineDecorations: RangeSet.join([
+      primary.structuralLineDecorations,
+      secondary.structuralLineDecorations,
+    ]),
   };
 }
 
@@ -82,6 +90,7 @@ export function mapProjectionSets(
       destructiveDecorations: sets.destructiveDecorations.map(changes),
       interactiveDecorations: sets.interactiveDecorations.map(changes),
       sourceSafeDecorations: sets.sourceSafeDecorations.map(changes),
+      structuralLineDecorations: sets.structuralLineDecorations.map(changes),
     },
     revealRanges,
   );
@@ -90,12 +99,16 @@ export function mapProjectionSets(
 export function revealProjectionSets(
   sets: ProjectionSets,
   ranges: readonly DocRange[],
+  options: { clearStructuralLineDecorations?: boolean } = {},
 ): ProjectionSets {
   if (!ranges.length) return sets;
   return {
     ...sets,
     atomicRanges: clearRangeSetRanges(sets.atomicRanges, ranges),
     destructiveDecorations: clearRangeSetRanges(sets.destructiveDecorations, ranges),
+    structuralLineDecorations: options.clearStructuralLineDecorations
+      ? clearRangeSetRanges(sets.structuralLineDecorations, ranges)
+      : sets.structuralLineDecorations,
   };
 }
 
@@ -115,6 +128,7 @@ export function patchProjectionSets(
   ranges: readonly DocRange[],
   additions: ProjectionSets,
   removeOwnerKeys: ReadonlySet<string>,
+  options: { patchStructuralLineDecorations?: boolean } = {},
 ): ProjectionSets {
   return {
     atomicRanges: patchOwnedRangeSet(
@@ -147,6 +161,16 @@ export function patchProjectionSets(
       ]),
       removeOwnerKeys,
     ),
+    structuralLineDecorations:
+      options.patchStructuralLineDecorations === false
+        ? sets.structuralLineDecorations
+        : patchRangeSet(
+            sets.structuralLineDecorations,
+            ranges,
+            collectRangeSetRanges(additions.structuralLineDecorations, [
+              { from: 0, to: Number.MAX_SAFE_INTEGER },
+            ]),
+          ),
   };
 }
 
@@ -176,6 +200,11 @@ export function replaceProjectionSets(
       ranges,
       collectRangeSetRanges(additions.sourceSafeDecorations, ranges),
     ),
+    structuralLineDecorations: patchRangeSet(
+      sets.structuralLineDecorations,
+      ranges,
+      collectRangeSetRanges(additions.structuralLineDecorations, ranges),
+    ),
   };
 }
 
@@ -197,6 +226,11 @@ export function restoreProjectionSets(
       ranges,
       collectRangeSetRanges(base.destructiveDecorations, ranges),
     ),
+    structuralLineDecorations: patchRangeSet(
+      sets.structuralLineDecorations,
+      ranges,
+      collectRangeSetRanges(base.structuralLineDecorations, ranges),
+    ),
   };
 }
 
@@ -209,6 +243,7 @@ export function filterProjectionSetsToRanges(
     destructiveDecorations: filterRangeSetToRanges(sets.destructiveDecorations, ranges),
     interactiveDecorations: filterRangeSetToRanges(sets.interactiveDecorations, ranges),
     sourceSafeDecorations: filterRangeSetToRanges(sets.sourceSafeDecorations, ranges),
+    structuralLineDecorations: filterRangeSetToRanges(sets.structuralLineDecorations, ranges),
   };
 }
 

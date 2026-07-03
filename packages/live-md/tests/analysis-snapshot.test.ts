@@ -4733,6 +4733,9 @@ function expectDirectProjectionMatchesFullOracle(
   expect(canonicalDecorationsFromSet(state, analysis.directSourceSafeDecorations)).toEqual(
     canonicalDecorationsFromSet(state, direct.sourceSafeDecorations),
   );
+  expect(canonicalDecorationsFromSet(state, analysis.directStructuralLineDecorations)).toEqual(
+    canonicalDecorationsFromSet(state, direct.structuralLineDecorations),
+  );
   expect(canonicalDecorationsFromSet(state, analysis.directDestructiveDecorations)).toEqual(
     canonicalDecorationsFromSet(state, direct.destructiveDecorations),
   );
