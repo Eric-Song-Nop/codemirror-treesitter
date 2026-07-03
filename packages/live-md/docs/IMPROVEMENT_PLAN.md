@@ -51,7 +51,7 @@ vp run @codemirror-treesitter/live-md#build
   yields, schedules cheap follow-up commits without the fixed quiet delay, and
   restores stale pending reveal ranges from mapped base projection sets so
   sustained typing does not grow the raw-source window unboundedly.
-- **Phase 1 / PR-6:** implemented on 2026-07-03
+- **Phase 1 / PR-6:** implemented on 2026-07-03 in draft PR #93
   (`codex/live-md-pr6-widget-sizes`). The code adds measured block-widget
   height caching, stable estimated heights for table, Mermaid, image, and
   block-LaTeX widgets, resolver-provided image dimensions, and tests for

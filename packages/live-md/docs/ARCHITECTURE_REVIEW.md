@@ -11,10 +11,10 @@ section on render stability ("no unrelated blinking while editing"). A
 companion document, [IMPROVEMENT_PLAN.md](./IMPROVEMENT_PLAN.md), turns every
 problem recorded here into a concrete, PR-sized work plan.
 
-Status update: Phase 1 of the improvement plan is complete as of 2026-07-03.
-PR-0 through PR-6 now cover reveal locality, range semantics, pending edit
-surface deflation, origin-sensitive reveal policy, bounded pending windows, and
-block-widget geometry stability with tests.
+Status update: Phase 1 of the improvement plan is complete as of 2026-07-03
+with draft PR #93. PR-0 through PR-6 now cover reveal locality, range
+semantics, pending edit surface deflation, origin-sensitive reveal policy,
+bounded pending windows, and block-widget geometry stability with tests.
 
 ---
 
