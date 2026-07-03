@@ -1,4 +1,4 @@
-import { type ChangeDesc, type Range, RangeSet, type RangeValue } from "@codemirror/state";
+import { type ChangeDesc, RangeSet } from "@codemirror/state";
 import { Decoration } from "@codemirror/view";
 import { type LeafAnalysisCache, type LeafAnalysisRecord } from "../analysis/descriptors.js";
 import { rangesOverlap } from "../analysis/ranges.js";
@@ -6,7 +6,6 @@ import { type DocRange, type LiveMdLeafAnalysisTrace } from "../analysis/types.j
 import {
   createLiveMdBuild,
   finishProjectionLayers,
-  liveMdProjectionValueOwnerKeys,
   type LiveMdProjectionLayer,
   type LiveMdProjectionLayers,
 } from "./emit.js";
@@ -21,6 +20,13 @@ import {
   type LiveMdEffectSpecMapper,
 } from "./project-leaf.js";
 import { type LiveMdBuild, type LiveMdBuildConfig, type LiveMdEffectSpec } from "./types.js";
+import {
+  mapProjectionSets,
+  patchProjectionSets,
+  projectionLayerFromSets,
+  projectionSetsFromLayer,
+  type ProjectionSets,
+} from "../runtime/projection-state.js";
 
 export type LiveMdProjectionCompileInput = Omit<LiveMdBuildConfig, "trace"> & {
   trace: LiveMdLeafAnalysisTrace;
@@ -32,10 +38,7 @@ export type LiveMdVisibleSurfaceProjectionOptions = {
 
 export type LiveMdDirectProjectionPatchInput = {
   changes?: ChangeDesc;
-  previous: Pick<
-    LiveMdProjectionLayer,
-    "atomicRanges" | "destructiveDecorations" | "sourceSafeDecorations"
-  >;
+  previous: ProjectionSets;
   ranges: readonly DocRange[];
   records: readonly LeafAnalysisRecord[];
   removeRecordIds: readonly number[];
@@ -68,8 +71,10 @@ export function compileIncrementalDirectLayoutProjection(
   patch: LiveMdDirectProjectionPatchInput,
 ): LiveMdProjectionLayer {
   let ranges = mergeCompileRanges(patch.ranges);
-  let previous = mapDirectProjectionLayer(patch.previous, patch.changes);
-  if (!ranges.length) return directProjectionFromSets(previous);
+  let previous = patch.changes
+    ? mapProjectionSets(patch.previous, patch.changes, [])
+    : patch.previous;
+  if (!ranges.length) return projectionLayerFromSets(previous);
 
   input.trace.directProjectionWindows = mergeCompileRanges([
     ...input.trace.directProjectionWindows,
@@ -84,30 +89,10 @@ export function compileIncrementalDirectLayoutProjection(
     liveMdRecordMayProduceDirectLayout,
   );
   input.trace.directProjectionRecords += projected;
-  let compiled = finishProjectionLayers(build).direct;
+  let compiled = projectionSetsFromLayer(finishProjectionLayers(build).direct);
   let removeOwnerKeys = new Set(patch.removeRecordIds.map(liveMdRecordOwnerKey));
-  let allCompiledRanges = [{ from: 0, to: input.state.doc.length }];
 
-  return directProjectionFromSets({
-    atomicRanges: patchOwnedRangeSet(
-      previous.atomicRanges,
-      ranges,
-      collectRangeSetRanges(compiled.atomicRanges, allCompiledRanges),
-      removeOwnerKeys,
-    ),
-    destructiveDecorations: patchOwnedRangeSet(
-      previous.destructiveDecorations,
-      ranges,
-      collectRangeSetRanges(compiled.destructiveDecorations, allCompiledRanges),
-      removeOwnerKeys,
-    ),
-    sourceSafeDecorations: patchOwnedRangeSet(
-      previous.sourceSafeDecorations,
-      ranges,
-      collectRangeSetRanges(compiled.sourceSafeDecorations, allCompiledRanges),
-      removeOwnerKeys,
-    ),
-  });
+  return projectionLayerFromSets(patchProjectionSets(previous, ranges, compiled, removeOwnerKeys));
 }
 
 export function compileFullSurfaceProjection(
@@ -183,70 +168,6 @@ export function compileProjectionLayersFromCache(
 
 function createCompileBuild(input: LiveMdProjectionCompileInput): LiveMdBuild {
   return createLiveMdBuild(input);
-}
-
-function mapDirectProjectionLayer(
-  previous: LiveMdDirectProjectionPatchInput["previous"],
-  changes: ChangeDesc | undefined,
-) {
-  if (!changes) return previous;
-  return {
-    atomicRanges: previous.atomicRanges.map(changes),
-    destructiveDecorations: previous.destructiveDecorations.map(changes),
-    sourceSafeDecorations: previous.sourceSafeDecorations.map(changes),
-  };
-}
-
-function directProjectionFromSets(
-  input: LiveMdDirectProjectionPatchInput["previous"],
-): LiveMdProjectionLayer {
-  return {
-    atomicRanges: input.atomicRanges,
-    decorations: RangeSet.join([input.sourceSafeDecorations, input.destructiveDecorations]),
-    destructiveDecorations: input.destructiveDecorations,
-    interactiveDecorations: Decoration.none,
-    sourceSafeDecorations: input.sourceSafeDecorations,
-  };
-}
-
-function patchOwnedRangeSet<T extends RangeValue>(
-  current: RangeSet<T>,
-  dirtyRanges: readonly DocRange[],
-  additions: readonly Range<T>[],
-  removeOwnerKeys: ReadonlySet<string>,
-) {
-  let next = current;
-  let removalKeys = new Set(removeOwnerKeys);
-  for (let addition of additions) {
-    for (let ownerKey of liveMdProjectionValueOwnerKeys(addition.value)) {
-      removalKeys.add(ownerKey);
-    }
-  }
-  for (let range of dirtyRanges) {
-    next = next.update({
-      filter: (_from, _to, value) => {
-        let ownerKeys = liveMdProjectionValueOwnerKeys(value);
-        return !ownerKeys.some((ownerKey) => removalKeys.has(ownerKey));
-      },
-      filterFrom: range.from,
-      filterTo: range.to,
-    });
-  }
-  return additions.length ? next.update({ add: additions, sort: true }) : next;
-}
-
-function collectRangeSetRanges<T extends RangeValue>(
-  rangeSet: RangeSet<T>,
-  ranges: readonly DocRange[],
-): Range<T>[] {
-  let collected: Range<T>[] = [];
-  if (!ranges.length) return collected;
-  for (let range of ranges) {
-    rangeSet.between(range.from, range.to, (from, to, value) => {
-      collected.push(value.range(from, to));
-    });
-  }
-  return collected;
 }
 
 function recordSurfaceCompile(input: LiveMdProjectionCompileInput, ranges: readonly DocRange[]) {

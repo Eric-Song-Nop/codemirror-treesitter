@@ -18,6 +18,7 @@ import {
   compileIncrementalDirectLayoutProjection,
   type LiveMdProjectionCompileInput,
 } from "../projection/compilers.js";
+import { projectionSetsFromLayer } from "./projection-state.js";
 import { type LiveMdRuntimeState } from "./types.js";
 
 export function taskToggleFastPath(input: {
@@ -98,11 +99,7 @@ export function taskToggleFastPath(input: {
   input.compileInput.trace.recordsAnalyzed += newRecords.length;
   let direct = compileIncrementalDirectLayoutProjection(input.compileInput, cache, {
     changes: input.transaction.changes,
-    previous: {
-      atomicRanges: input.value.directAtomicRanges,
-      destructiveDecorations: input.value.directDestructiveDecorations,
-      sourceSafeDecorations: input.value.directSourceSafeDecorations,
-    },
+    previous: input.value.direct,
     ranges: patchRanges,
     records: newRecords,
     removeRecordIds: oldRecords.map((record) => record.cacheId),
@@ -113,10 +110,7 @@ export function taskToggleFastPath(input: {
   return {
     activeLines: input.activeLines,
     activeSourceRanges: input.activeSourceRanges,
-    directAtomicRanges: direct.atomicRanges,
-    directDecorations: direct.decorations,
-    directDestructiveDecorations: direct.destructiveDecorations,
-    directSourceSafeDecorations: direct.sourceSafeDecorations,
+    direct: projectionSetsFromLayer(direct),
     legacySurface: null,
     pending: null,
     renderCache: input.value.renderCache,
