@@ -64,8 +64,8 @@ vp run @codemirror-treesitter/live-md#build
   projection layers to `ProjectionSets`, centralizes pending map, restore,
   reveal, patch, filter, and join behavior, and adds explicit layer-join
   invariant coverage.
-- **Phase 2 / PR-8:** implemented on 2026-07-03 in
-  `codex/live-md-pr8-feature-api`. The code adds the per-leaf Markdown feature
+- **Phase 2 / PR-8:** implemented on 2026-07-03 in draft PR #95
+  (`codex/live-md-pr8-feature-api`). The code adds the per-leaf Markdown feature
   `analyze` API, projects feature descriptors through the semantic cache and
   shared projection layers, migrates in-repo feature examples and tests, removes
   the legacy full-document query/decorate projection path, and moves the
