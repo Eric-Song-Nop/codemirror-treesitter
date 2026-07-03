@@ -2019,6 +2019,23 @@ export function __testLiveMdAnalysis(view: EditorView | { state: EditorState }):
   return liveMdAnalysisSnapshot(view.state, view.state.field(liveMdAnalysisField), surfaceSnapshot);
 }
 
+export type LiveMdAnalysisTraceSnapshot = Pick<
+  LiveMdLeafAnalysisTrace,
+  "fallbackCount" | "fixedPointRounds" | "recordsAnalyzed"
+>;
+
+export function unstableLiveMdAnalysisTrace(
+  view: EditorView | { state: EditorState },
+): LiveMdAnalysisTraceSnapshot {
+  let analysis = __testLiveMdAnalysis(view);
+  let trace = analysis.semanticTrace ?? analysis.trace;
+  return {
+    fallbackCount: trace.fallbackCount,
+    fixedPointRounds: trace.fixedPointRounds,
+    recordsAnalyzed: trace.recordsAnalyzed,
+  };
+}
+
 export function __testRefreshLiveMdSurface(view: EditorView) {
   view.plugin(liveMdSurfacePlugin)?.refreshForTest();
 }

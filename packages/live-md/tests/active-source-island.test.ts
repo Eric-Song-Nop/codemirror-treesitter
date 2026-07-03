@@ -246,6 +246,48 @@ describe("LiveMD active source islands", () => {
     blankLine.destroy();
   });
 
+  it("indexes marker-only source islands by physical line", async () => {
+    let cases = [
+      { doc: "- \n- item", leaf: "- item", marker: "- " },
+      { doc: "> - [ ] \n> - item", leaf: "> - item", marker: "> - [ ] " },
+    ];
+
+    for (let testCase of cases) {
+      let state = await markdownState(testCase.doc);
+      let analysis = analyzeLiveMdSourceIslands({ state, tree: syntaxTree(state) });
+      let texts = analysis.leaves
+        .toArray()
+        .map((leaf) => state.sliceDoc(leaf.sourceRange.from, leaf.sourceRange.to));
+      let leafFrom = testCase.doc.indexOf(testCase.leaf);
+      let leafCursor = leafFrom + testCase.leaf.indexOf("item");
+
+      expect(texts, testCase.doc).toEqual([testCase.marker, testCase.leaf]);
+      expect(
+        activeTexts(state, EditorSelection.cursor(testCase.marker.length)),
+        testCase.doc,
+      ).toEqual([testCase.marker]);
+      expect(activeTexts(state, EditorSelection.cursor(leafCursor)), testCase.doc).toEqual([
+        testCase.leaf,
+      ]);
+    }
+  });
+
+  it("does not split marker source islands from leaf lines", async () => {
+    let cases = ["- item", "- [ ] item", "> - [ ] item"];
+
+    for (let doc of cases) {
+      let state = await markdownState(doc);
+      let analysis = analyzeLiveMdSourceIslands({ state, tree: syntaxTree(state) });
+
+      expect(
+        analysis.leaves
+          .toArray()
+          .map((leaf) => state.sliceDoc(leaf.sourceRange.from, leaf.sourceRange.to)),
+        doc,
+      ).toEqual([doc]);
+    }
+  });
+
   it("keeps marker-only source islands reachable after edit commands", async () => {
     let entered = await mountEditor("- item", { selection: "- item".length });
     pressKey(entered.view, "Enter");

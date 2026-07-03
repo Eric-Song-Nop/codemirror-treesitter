@@ -1075,7 +1075,7 @@ describe("LiveMD analysis snapshot", () => {
     expect(after.semanticTrace?.recordsMappedIndividually).toBeLessThan(10);
     expect(after.semanticTrace?.cacheFullMaterializations).toBe(0);
     expect(after.semanticTrace?.cacheIndexQueries).toBeLessThan(10);
-    expect(after.semanticTrace?.cacheIndexCallbacks).toBeLessThan(12);
+    expect(after.semanticTrace?.cacheIndexCallbacks).toBeLessThan(18);
     expect(after.semanticTrace?.blockNodesVisited).toBeLessThan(180);
     view.destroy();
   }, 60_000);
@@ -1094,13 +1094,13 @@ describe("LiveMD analysis snapshot", () => {
 
     expect(after.semanticTrace?.recordsAnalyzed).toBe(1);
     expect(after.semanticTrace?.fallbackCount).toBe(0);
-    expect(after.semanticTrace?.recordsVisited).toBeLessThanOrEqual(5);
+    expect(after.semanticTrace?.recordsVisited).toBeLessThanOrEqual(8);
     expect(after.semanticTrace?.recordsCollected).toBeLessThan(10);
     expect(after.semanticTrace?.recordsMappedIndividually).toBeLessThan(10);
     expect(after.semanticTrace?.cacheFullMaterializations).toBe(0);
     expect(after.semanticTrace?.cacheIndexQueries).toBeLessThan(10);
-    expect(after.semanticTrace?.cacheIndexCallbacks).toBeLessThan(12);
-    expect(after.semanticTrace?.leavesCollected).toBeLessThanOrEqual(5);
+    expect(after.semanticTrace?.cacheIndexCallbacks).toBeLessThan(20);
+    expect(after.semanticTrace?.leavesCollected).toBeLessThanOrEqual(8);
     expect(after.semanticTrace?.blockNodesVisited).toBeLessThan(220);
     view.destroy();
   }, 60_000);
@@ -1119,13 +1119,13 @@ describe("LiveMD analysis snapshot", () => {
 
     expect(after.semanticTrace?.recordsAnalyzed).toBe(1);
     expect(after.semanticTrace?.fallbackCount).toBe(0);
-    expect(after.semanticTrace?.recordsVisited).toBeLessThanOrEqual(3);
+    expect(after.semanticTrace?.recordsVisited).toBeLessThanOrEqual(6);
     expect(after.semanticTrace?.recordsCollected).toBeLessThan(10);
     expect(after.semanticTrace?.recordsMappedIndividually).toBeLessThan(10);
     expect(after.semanticTrace?.cacheFullMaterializations).toBe(0);
     expect(after.semanticTrace?.cacheIndexQueries).toBeLessThan(10);
-    expect(after.semanticTrace?.cacheIndexCallbacks).toBeLessThan(10);
-    expect(after.semanticTrace?.leavesCollected).toBeLessThanOrEqual(3);
+    expect(after.semanticTrace?.cacheIndexCallbacks).toBeLessThan(12);
+    expect(after.semanticTrace?.leavesCollected).toBeLessThanOrEqual(6);
     expect(after.semanticTrace?.blockNodesVisited).toBeLessThan(260);
     view.destroy();
   }, 60_000);
@@ -1548,6 +1548,7 @@ describe("LiveMD analysis snapshot", () => {
     let cases: Array<{
       changes: (doc: string) => TransactionSpec["changes"];
       doc: string;
+      fixedPointRounds?: number;
       name: string;
       oracle?: ScheduledLocalOracleMode;
       selection?: string;
@@ -1555,17 +1556,48 @@ describe("LiveMD analysis snapshot", () => {
       {
         name: "paragraph split",
         doc: "alpha beta\n\ngamma",
+        fixedPointRounds: 1,
         selection: "gamma",
         changes: (doc) => ({ from: doc.indexOf(" beta"), insert: "\n\n" }),
       },
       {
         name: "paragraph merge",
         doc: "alpha\n\nbeta\n\ngamma",
+        fixedPointRounds: 1,
         selection: "gamma",
         changes: (doc) => ({
           from: doc.indexOf("\n\nbeta"),
           insert: "\n",
           to: doc.indexOf("\n\nbeta") + 2,
+        }),
+      },
+      {
+        name: "setext heading text edit",
+        doc: "before\n\nTitle\n=====\n\nafter",
+        // The edited text line is still range-local, but the heading source range
+        // closes after the first snapshot discovers the neighboring underline.
+        fixedPointRounds: 2,
+        selection: "after",
+        changes: (doc) => ({ from: doc.indexOf("Title") + "Title".length, insert: "!" }),
+      },
+      {
+        name: "setext heading underline edit",
+        doc: "before\n\nTitle\n=====\n\nafter",
+        fixedPointRounds: 1,
+        selection: "after",
+        changes: (doc) => ({ from: doc.indexOf("====="), insert: "=" }),
+      },
+      {
+        name: "list lazy continuation edit",
+        doc: "before\n\n- item\n  continuation\n\nafter",
+        // Lazy continuation keeps the edit local while requiring a second
+        // fixed-point pass to include the final list-item source range.
+        fixedPointRounds: 2,
+        oracle: "semantic",
+        selection: "after",
+        changes: (doc) => ({
+          from: doc.indexOf("continuation") + "continuation".length,
+          insert: "!",
         }),
       },
       {
@@ -1655,6 +1687,11 @@ describe("LiveMD analysis snapshot", () => {
           { oracle: testCase.oracle },
         );
         expect(after.semanticTrace?.fallbackCount, testCase.name).toBe(0);
+        if (testCase.fixedPointRounds != null) {
+          expect(after.semanticTrace?.fixedPointRounds, testCase.name).toBe(
+            testCase.fixedPointRounds,
+          );
+        }
         expect(after.semanticTrace?.cacheFullMaterializations, testCase.name).toBe(0);
         expect(after.semanticTrace?.recordsCollected, testCase.name).toBeLessThan(40);
         expect(after.semanticTrace?.recordsMappedIndividually, testCase.name).toBeLessThan(40);

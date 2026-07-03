@@ -4,6 +4,7 @@ import { ensureSyntaxTree } from "@codemirror-treesitter/language";
 import {
   defineLiveMdEditor,
   prepareLiveMd,
+  unstableLiveMdAnalysisTrace,
   type LiveMdEditorElement,
 } from "@codemirror-treesitter/live-md";
 import { createInitialMarkdown } from "@codemirror-treesitter/live-md/fixtures";
@@ -61,6 +62,13 @@ type BenchmarkCase = {
 type BenchmarkSession = {
   editor: LiveMdEditorElement;
   host: HTMLElement;
+};
+
+type BenchmarkTraceStats = {
+  fallbackCount: number;
+  maxFixedPointRounds: number;
+  maxRecordsAnalyzed: number;
+  samples: number;
 };
 
 type LiveMdBenchmarkApi = {
@@ -279,11 +287,12 @@ async function runBenchmarkCase(benchmarkCase: BenchmarkCase): Promise<LiveMdBen
   let session = await createBenchmarkSession(benchmarkCase.doc);
   let view = benchmarkView(session);
   let metrics: LiveMdBenchmarkMetric[] = [];
+  let traceStats = emptyTraceStats();
 
   try {
-    metrics.push(await measureColdRender(session, benchmarkCase.label));
+    metrics.push(await measureColdRender(session, benchmarkCase.label, traceStats));
     for (let step of benchmarkCase.steps) {
-      metrics.push(await measureStep(view, step));
+      metrics.push(await measureStep(view, step, traceStats));
     }
     return {
       bytes: new Blob([view.state.doc.toString()]).size,
@@ -292,7 +301,7 @@ async function runBenchmarkCase(benchmarkCase: BenchmarkCase): Promise<LiveMdBen
       label: benchmarkCase.label,
       lines: view.state.doc.lines,
       metrics,
-      stats: collectEditorStats(view),
+      stats: collectEditorStats(view, traceStats),
     };
   } finally {
     session.host.remove();
@@ -311,14 +320,20 @@ async function createBenchmarkSession(doc: string): Promise<BenchmarkSession> {
   return { editor, host };
 }
 
-async function measureColdRender(session: BenchmarkSession, label: string) {
+async function measureColdRender(
+  session: BenchmarkSession,
+  label: string,
+  traceStats: BenchmarkTraceStats,
+) {
   let start = performance.now();
   await session.editor.ready;
   let view = benchmarkView(session);
   forceFullParse(view);
   await nextFrame();
   readLayout(view);
-  return metric(`${label}: load, parse, and layout`, [performance.now() - start]);
+  let duration = performance.now() - start;
+  collectTraceStats(view, traceStats);
+  return metric(`${label}: load, parse, and layout`, [duration]);
 }
 
 function benchmarkView(session: BenchmarkSession) {
@@ -327,7 +342,7 @@ function benchmarkView(session: BenchmarkSession) {
   return view;
 }
 
-async function measureStep(view: EditorView, step: BenchmarkStep) {
+async function measureStep(view: EditorView, step: BenchmarkStep, traceStats: BenchmarkTraceStats) {
   let samples: number[] = [];
   for (let iteration = 0; iteration < step.iterations; iteration++) {
     let start = performance.now();
@@ -335,7 +350,9 @@ async function measureStep(view: EditorView, step: BenchmarkStep) {
     forceFullParse(view);
     await nextFrame();
     readLayout(view);
-    samples.push(performance.now() - start);
+    let duration = performance.now() - start;
+    collectTraceStats(view, traceStats);
+    samples.push(duration);
   }
   return metric(step.label, samples);
 }
@@ -349,8 +366,29 @@ function readLayout(view: EditorView) {
   layoutProbe += rect.height + rect.width + view.contentDOM.querySelectorAll(".cm-line").length;
 }
 
-function collectEditorStats(view: EditorView) {
+function emptyTraceStats(): BenchmarkTraceStats {
   return {
+    fallbackCount: 0,
+    maxFixedPointRounds: 0,
+    maxRecordsAnalyzed: 0,
+    samples: 0,
+  };
+}
+
+function collectTraceStats(view: EditorView, stats: BenchmarkTraceStats) {
+  let trace = unstableLiveMdAnalysisTrace(view);
+  stats.fallbackCount += trace.fallbackCount;
+  stats.maxFixedPointRounds = Math.max(stats.maxFixedPointRounds, trace.fixedPointRounds);
+  stats.maxRecordsAnalyzed = Math.max(stats.maxRecordsAnalyzed, trace.recordsAnalyzed);
+  stats.samples++;
+}
+
+function collectEditorStats(view: EditorView, traceStats: BenchmarkTraceStats) {
+  return {
+    analysisFallbacks: traceStats.fallbackCount,
+    analysisMaxFixedPointRounds: traceStats.maxFixedPointRounds,
+    analysisMaxRecordsAnalyzed: traceStats.maxRecordsAnalyzed,
+    analysisTraceSamples: traceStats.samples,
     codeLines: view.dom.querySelectorAll(".cm-md-code-line").length,
     hiddenSyntax: view.dom.querySelectorAll(".cm-md-syntax-hidden").length,
     layoutProbe,

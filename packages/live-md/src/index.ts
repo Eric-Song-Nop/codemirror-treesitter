@@ -49,6 +49,10 @@ export {
   type PrepareLiveMdOptions,
 } from "./core/languages.js";
 export {
+  unstableLiveMdAnalysisTrace,
+  type LiveMdAnalysisTraceSnapshot,
+} from "./core/decorations.js";
+export {
   liveMdMarkdownDocumentClass,
   liveMdMarkdownDocumentCss,
   liveMdMarkdownDocumentCssVariables,

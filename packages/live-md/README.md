@@ -76,6 +76,10 @@ import "@codemirror-treesitter/live-md/style.css";
 The package also exports `@codemirror-treesitter/live-md/fixtures` for example
 and benchmark content.
 
+`unstableLiveMdAnalysisTrace(view)` is available for benchmark and diagnostic
+instrumentation that needs aggregate analysis counters. It is intentionally
+unstable and should not be used as a rendering or extension API.
+
 ## Programmatic API
 
 ```ts
