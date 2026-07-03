@@ -76,8 +76,8 @@ vp run @codemirror-treesitter/live-md#build
   units and inline parser sessions across scheduler yields, disposes resumes on
   commit, cancel, stale revisions, epoch changes, and plugin destroy, and adds
   full/local resume plus cancelled-session regression coverage.
-- **Phase 2 / PR-11:** implemented on 2026-07-03 in
-  `codex/live-md-pr11-source-island-index`. The code replaces the
+- **Phase 2 / PR-11:** implemented on 2026-07-03 in draft PR #97
+  (`codex/live-md-pr11-source-island-index`). The code replaces the
   segmented-leaves Proxy with an explicit `SourceIslandIndex`, keeps local
   transition lookups lazy behind `at`/`find`, makes `toArray()` materialization
   explicit at call sites, and updates the laziness tests to spy on `toArray()`.
