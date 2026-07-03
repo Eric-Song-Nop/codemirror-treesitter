@@ -319,10 +319,10 @@ export class ImagePreviewWidget extends WidgetType {
     this.alt = alt;
     this.block = block;
     this.height = typeof image == "string" ? undefined : image.height;
-    this.heightKey = typeof image == "string" ? imageHeightKey(image) : imageHeightKey(image.src);
     this.heights = heights;
     this.resultKey = typeof image == "string" ? hashString(image) : image.resultKey;
     this.src = typeof image == "string" ? image : image.src;
+    this.heightKey = imageHeightKey(this.src, this.alt);
     this.width = typeof image == "string" ? undefined : image.width;
   }
 
@@ -550,7 +550,7 @@ function applyMermaidResult(
     element.replaceChildren(mermaidMessage("Unable to render Mermaid diagram"));
     if (result.message) element.title = result.message;
   }
-  rememberMeasuredElementHeight(heights, result.resultKey, element, fallbackHeightKey);
+  rememberMermaidElementHeight(element, heights, result.resultKey, fallbackHeightKey);
 }
 
 async function renderMermaidSvg(source: string): Promise<MermaidRenderResult> {
@@ -629,8 +629,8 @@ function ephemeralMermaidRenderHandle(source: string): LiveMdMermaidRenderHandle
   };
 }
 
-function imageHeightKey(src: string) {
-  return `image:${src}`;
+function imageHeightKey(src: string, alt: string) {
+  return `image:${hashString(src)}:${alt ? hashString(alt) : ""}`;
 }
 
 function measuredHeight(heights: LiveMdMeasuredHeights | null, key: string | null) {
@@ -638,24 +638,39 @@ function measuredHeight(heights: LiveMdMeasuredHeights | null, key: string | nul
   return normalizedHeight(heights.get(key));
 }
 
-function rememberMeasuredElementHeight(
+function rememberMermaidElementHeight(
+  element: HTMLElement,
   heights: LiveMdMeasuredHeights | null,
   key: string,
-  element: HTMLElement,
-  fallbackKey?: string,
+  fallbackKey: string,
 ) {
-  let height = measuredElementHeight(element);
-  if (rememberMeasuredHeight(heights, key, height)) {
-    if (fallbackKey) rememberMeasuredHeight(heights, fallbackKey, height);
-    return;
-  }
+  if (measureAndApplyMermaidHeight(element, heights, key, fallbackKey)) return;
 
   requestMeasureFrame(() => {
-    let deferredHeight = measuredElementHeight(element);
-    if (rememberMeasuredHeight(heights, key, deferredHeight) && fallbackKey) {
-      rememberMeasuredHeight(heights, fallbackKey, deferredHeight);
-    }
+    measureAndApplyMermaidHeight(element, heights, key, fallbackKey);
   });
+}
+
+function measureAndApplyMermaidHeight(
+  element: HTMLElement,
+  heights: LiveMdMeasuredHeights | null,
+  key: string,
+  fallbackKey: string,
+) {
+  let height = measuredMermaidIntrinsicHeight(element);
+  if (height == null) return false;
+  rememberMeasuredHeight(heights, key, height);
+  rememberMeasuredHeight(heights, fallbackKey, height);
+  element.style.minHeight = `${height}px`;
+  return true;
+}
+
+function measuredMermaidIntrinsicHeight(element: HTMLElement) {
+  let previousMinHeight = element.style.minHeight;
+  element.style.minHeight = "";
+  let height = measuredElementHeight(element);
+  element.style.minHeight = previousMinHeight;
+  return height;
 }
 
 function measuredElementHeight(element: HTMLElement) {
