@@ -399,11 +399,13 @@ inside structural Markdown contexts, where `Enter` keeps list, task-list, and
 blockquote continuation while `Shift+Enter` inserts a raw newline.
 `extensions` remains the direct CodeMirror escape hatch and is applied after
 plugin extensions. `imageSource` and `linkBaseUrl` remain available for simple
-hosts, but package-style integrations should prefer `config.plugins`. Link
-jumps open in a new browsing context by default; use `liveMdLinkOpen(handler)`
-through `extensions` for custom navigation or `liveMdLinkBehavior(...)` through
-`config.plugins` for plugin-style link base configuration. Fenced code token
-colors reuse the active CodeMirror syntax highlighters from `extensions`.
+hosts, but package-style integrations should prefer `config.plugins`.
+`imageSource` may return a URL string or `{ src, width, height }` when a host
+knows preview image dimensions. Link jumps open in a new browsing context by
+default; use `liveMdLinkOpen(handler)` through `extensions` for custom
+navigation or `liveMdLinkBehavior(...)` through `config.plugins` for
+plugin-style link base configuration. Fenced code token colors reuse the active
+CodeMirror syntax highlighters from `extensions`.
 `liveMdCodeFenceHighlighting(...)` remains available for hosts that need an
 explicit fenced-code override.
 

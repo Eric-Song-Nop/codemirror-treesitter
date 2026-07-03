@@ -51,6 +51,13 @@ vp run @codemirror-treesitter/live-md#build
   yields, schedules cheap follow-up commits without the fixed quiet delay, and
   restores stale pending reveal ranges from mapped base projection sets so
   sustained typing does not grow the raw-source window unboundedly.
+- **Phase 1 / PR-6:** implemented on 2026-07-03
+  (`codex/live-md-pr6-widget-sizes`). The code adds measured block-widget
+  height caching, stable estimated heights for table, Mermaid, image, and
+  block-LaTeX widgets, resolver-provided image dimensions, and tests for
+  direct, legacy, and async Mermaid render-size stability.
+- **Phase 1:** completed on 2026-07-03 after PR-6. The render-stability
+  acceptance criteria below are now covered by tests.
 
 ---
 
@@ -533,7 +540,7 @@ plugin must mirror for surface-layer destructive sets; do it through the
 shared state machine if PR-7 has landed first, otherwise implement in both
 places and note the duplication for PR-7 to collapse.
 
-### PR-6: Widget size stability _(fixes R5a, R5b, R5c)_
+### PR-6: Widget size stability _(implemented; fixes R5a, R5b, R5c)_
 
 **Goal.** Block widgets never cause scroll hops when entering/leaving or
 finishing async renders.

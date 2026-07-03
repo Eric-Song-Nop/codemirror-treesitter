@@ -26,7 +26,9 @@ export { liveMarkdown, type LiveMarkdownOptions } from "./core/extension.js";
 export {
   liveMdImageSource,
   normalizeMarkdownImageSource,
+  type LiveMdImageSourceResolverResult,
   type LiveMdImageSourceResolver,
+  type LiveMdResolvedImageSource,
 } from "./core/images.js";
 export { liveMdLinkOpen, type LiveMdLinkOpenHandler } from "./core/links.js";
 export {

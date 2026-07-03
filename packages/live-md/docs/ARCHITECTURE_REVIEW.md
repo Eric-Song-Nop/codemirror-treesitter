@@ -11,11 +11,10 @@ section on render stability ("no unrelated blinking while editing"). A
 companion document, [IMPROVEMENT_PLAN.md](./IMPROVEMENT_PLAN.md), turns every
 problem recorded here into a concrete, PR-sized work plan.
 
-Status update: Phase 0 of the improvement plan has landed the R6 measurement
-work in draft PR #86. The runtime now records pending edit-surface ranges and
-line counts in `LiveMdLeafAnalysisTrace`, and the test suite includes both a
-passing paragraph-locality assertion and a current-behavior nested-list
-inflation baseline.
+Status update: Phase 1 of the improvement plan is complete as of 2026-07-03.
+PR-0 through PR-6 now cover reveal locality, range semantics, pending edit
+surface deflation, origin-sensitive reveal policy, bounded pending windows, and
+block-widget geometry stability with tests.
 
 ---
 

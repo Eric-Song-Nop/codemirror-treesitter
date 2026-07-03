@@ -59,6 +59,46 @@ beforeEach(() => {
 });
 
 describe("Mermaid render cache", () => {
+  it("reserves the Mermaid placeholder height from the widget estimate", async () => {
+    let cache = createLiveMdRenderCache();
+    let trace = emptyLiveMdLeafAnalysisTrace();
+    let handle = cachedLiveMdMermaidRequest(cache, trace, "record-height", "flowchart TD\nA");
+    let widget = new MermaidWidget(handle, cache.measuredHeights);
+    let element = widget.toDOM(inertView);
+    document.body.append(element);
+
+    expect(widget.estimatedHeight).toBe(160);
+    expect(element.style.minHeight).toBe("160px");
+
+    await waitForMermaidSvg(element);
+
+    cache.measuredHeights.set(handle.resultKey, 212);
+    let measuredWidget = new MermaidWidget(handle, cache.measuredHeights);
+    let measuredElement = measuredWidget.toDOM(inertView);
+    document.body.append(measuredElement);
+
+    expect(measuredWidget.estimatedHeight).toBe(212);
+    expect(measuredElement.style.minHeight).toBe("212px");
+  });
+
+  it("stores measured Mermaid height after async render completion", async () => {
+    let cache = createLiveMdRenderCache();
+    let trace = emptyLiveMdLeafAnalysisTrace();
+    let handle = cachedLiveMdMermaidRequest(cache, trace, "record-measured", "flowchart TD\nA");
+    let element = new MermaidWidget(handle, cache.measuredHeights).toDOM(inertView);
+    Object.defineProperty(element, "getBoundingClientRect", {
+      value: () => ({ height: 224 }),
+    });
+    document.body.append(element);
+
+    await waitForMermaidSvg(element);
+
+    expect(handle.result?.ok).toBe(true);
+    expect(cache.measuredHeights.get(handle.result!.resultKey)).toBe(224);
+    expect(cache.measuredHeights.get(handle.resultKey)).toBe(224);
+    expect(new MermaidWidget(handle, cache.measuredHeights).estimatedHeight).toBe(224);
+  });
+
   it("reuses the pending render promise and applies settled success synchronously", async () => {
     let cache = createLiveMdRenderCache();
     let trace = emptyLiveMdLeafAnalysisTrace();

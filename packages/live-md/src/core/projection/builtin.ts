@@ -259,8 +259,10 @@ function applyImage(build: LiveMdBuild, match: TreeSitterQueryMatch): false | vo
     src,
     build.imageSourceResolver,
   );
-  let widget = new ImagePreviewWidget(alt, image.src);
-  if (!active && isOnlyVisibleContentOnLine(build.state, line.from, line.to, node.from, node.to)) {
+  let block =
+    !active && isOnlyVisibleContentOnLine(build.state, line.from, line.to, node.from, node.to);
+  let widget = new ImagePreviewWidget(alt, image, build.renderCache.measuredHeights, block);
+  if (block) {
     addReplace(build, line.from, line.to, widget, true);
     return false;
   }
@@ -301,6 +303,7 @@ function applyLatex(build: LiveMdBuild, match: TreeSitterQueryMatch): false | vo
         liveMdFullQueryRenderKey,
         cachedFormula,
       ),
+      build.renderCache.measuredHeights,
     ),
     range.block,
   );
@@ -323,14 +326,17 @@ function applyTable(
   let captured = tables.get(nodeKey(node));
   let table = captured ? readTableFromCaptures(build.state, captured) : null;
   if (table && !tableTouchesActiveLine(build, node.from, node.to, table)) {
+    let result = cachedLiveMdTableResult(
+      build.renderCache,
+      build.trace,
+      liveMdFullQueryRenderKey,
+      table,
+    );
     addReplace(
       build,
       node.from,
       node.to,
-      new TablePreviewWidget(
-        cachedLiveMdTableResult(build.renderCache, build.trace, liveMdFullQueryRenderKey, table)
-          .table,
-      ),
+      new TablePreviewWidget(result.table, build.renderCache.measuredHeights, result.resultKey),
       true,
     );
     return false;

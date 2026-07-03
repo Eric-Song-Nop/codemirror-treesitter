@@ -1,6 +1,23 @@
 import { Facet, type Extension } from "@codemirror/state";
 
-export type LiveMdImageSourceResolver = (source: string) => null | string | URL | undefined;
+export type LiveMdResolvedImageSource = {
+  height?: number;
+  src: string;
+  width?: number;
+};
+
+export type LiveMdImageSourceResolverResult =
+  | string
+  | URL
+  | {
+      height?: number;
+      src: string | URL;
+      width?: number;
+    };
+
+export type LiveMdImageSourceResolver = (
+  source: string,
+) => LiveMdImageSourceResolverResult | null | undefined;
 
 export const liveMdImageSourceResolver = Facet.define<
   LiveMdImageSourceResolver,
@@ -20,13 +37,21 @@ export function liveMdImageSource(
 export function resolveLiveMdImageSource(
   source: string,
   resolver: LiveMdImageSourceResolver | null,
-) {
+): LiveMdResolvedImageSource {
   let normalized = normalizeMarkdownImageSource(source);
-  if (!normalized) return "";
+  if (!normalized) return { src: "" };
 
   let resolved = resolver?.(normalized);
-  if (resolved == null) return normalized;
-  return resolved instanceof URL ? resolved.href : String(resolved).trim();
+  if (resolved == null) return { src: normalized };
+  if (resolved instanceof URL) return { src: resolved.href };
+  if (typeof resolved == "object") {
+    return {
+      height: normalizeImageDimension(resolved.height),
+      src: resolved.src instanceof URL ? resolved.src.href : String(resolved.src).trim(),
+      width: normalizeImageDimension(resolved.width),
+    };
+  }
+  return { src: String(resolved).trim() };
 }
 
 export function normalizeMarkdownImageSource(source: string) {
@@ -57,4 +82,9 @@ function unescapeMarkdownPunctuation(value: string) {
     }
   }
   return result;
+}
+
+function normalizeImageDimension(value: number | undefined) {
+  if (typeof value != "number" || !Number.isFinite(value) || value <= 0) return undefined;
+  return Math.round(value);
 }
