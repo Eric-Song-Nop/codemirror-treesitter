@@ -40,9 +40,11 @@ anomaly and falls back to a full walk.
 
 After collecting the first local block snapshot, discovery expands the seed with
 the collected leaf `sourceRange`s and marker physical lines. Simple line-local
-edits are already closed and report `fixedPointRounds == 1`; broader structural
-edits may need another round but remain range-local unless the retry limit is
-hit.
+edits are already closed and report `fixedPointRounds == 1`. Broader structural
+edits, such as text edits whose final leaf identity is determined by a
+neighboring setext underline or lazy list continuation, may need one more
+collection after the first snapshot exposes the leaf `sourceRange`, but remain
+range-local unless the retry limit is hit.
 
 The retry loop remains a safety check. If collected leaves or markers keep
 expanding the seed for all retry rounds, `fallbackCount` is set and the caller

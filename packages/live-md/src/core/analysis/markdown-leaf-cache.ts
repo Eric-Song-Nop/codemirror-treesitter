@@ -1126,10 +1126,11 @@ function patchRangeSet<T extends RangeValue>(
  *   structural reparses that are smaller than the whole-container fallback
  *   threshold.
  *
- * The fixed-point loop remains as a safety net. In normal edits these seeds
- * make the first collection closed, so `fixedPointRounds` should be 1; reaching
- * the retry limit is traced as `fallbackCount` and handled by the caller's
- * full-walk path.
+ * The fixed-point loop remains as a safety net. Simple line-local edits should
+ * close after the first collection; broader structural edits may need one more
+ * range-local collection after the first snapshot exposes the final leaf source
+ * ranges. Reaching the retry limit is traced as `fallbackCount` and handled by
+ * the caller's full-walk path.
  */
 function collectLocalMarkdownSnapshot(input: LeafAnalysisCacheLocalTransitionInput) {
   let doc = input.analysisInput.state.doc;

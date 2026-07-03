@@ -1574,6 +1574,8 @@ describe("LiveMD analysis snapshot", () => {
       {
         name: "setext heading text edit",
         doc: "before\n\nTitle\n=====\n\nafter",
+        // The edited text line is still range-local, but the heading source range
+        // closes after the first snapshot discovers the neighboring underline.
         fixedPointRounds: 2,
         selection: "after",
         changes: (doc) => ({ from: doc.indexOf("Title") + "Title".length, insert: "!" }),
@@ -1588,6 +1590,8 @@ describe("LiveMD analysis snapshot", () => {
       {
         name: "list lazy continuation edit",
         doc: "before\n\n- item\n  continuation\n\nafter",
+        // Lazy continuation keeps the edit local while requiring a second
+        // fixed-point pass to include the final list-item source range.
         fixedPointRounds: 2,
         oracle: "semantic",
         selection: "after",
