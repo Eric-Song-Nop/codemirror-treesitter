@@ -6,6 +6,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   type LeafAnalysisRecord,
   type LiveMdDescriptor,
+  liveMdDescriptorKey,
 } from "../src/core/analysis/descriptors.js";
 import { type DocRange } from "../src/core/analysis/types.js";
 import { liveMdLinkMark } from "../src/core/links.js";
@@ -26,6 +27,7 @@ import {
   joinProjectionSets,
   projectionSetsFromLayer,
 } from "../src/core/runtime/projection-state.js";
+import { type MarkdownTable, TablePreviewWidget } from "../src/core/widgets.js";
 
 class TestWidget extends WidgetType {
   constructor(private readonly label: string) {
@@ -44,6 +46,69 @@ class TestWidget extends WidgetType {
 }
 
 describe("LiveMD projection effects", () => {
+  it("uses stable descriptor and table widget keys", () => {
+    let tableDescriptor: Extract<LiveMdDescriptor, { kind: "table" }> = {
+      delimiterRowRange: { from: 5, to: 10 },
+      kind: "table",
+      pipeRanges: [
+        { from: 1, to: 2 },
+        { from: 7, to: 8 },
+      ],
+      range: { from: 0, to: 20 },
+      table: {
+        alignments: ["left"],
+        header: ["Alpha"],
+        rows: [["One"]],
+      },
+    };
+    let sameShapeDescriptor: Extract<LiveMdDescriptor, { kind: "table" }> = {
+      ...tableDescriptor,
+      table: {
+        alignments: ["left"],
+        header: ["Beta"],
+        rows: [["Two"]],
+      },
+    };
+    let differentShapeDescriptor: Extract<LiveMdDescriptor, { kind: "table" }> = {
+      ...tableDescriptor,
+      table: {
+        alignments: ["left"],
+        header: ["Alpha"],
+        rows: [["One"], ["Two"]],
+      },
+    };
+    expect(liveMdDescriptorKey(sameShapeDescriptor)).toBe(liveMdDescriptorKey(tableDescriptor));
+    expect(liveMdDescriptorKey(differentShapeDescriptor)).not.toBe(
+      liveMdDescriptorKey(tableDescriptor),
+    );
+
+    let nullLink: Extract<LiveMdDescriptor, { kind: "linkMark" }> = {
+      destination: null,
+      kind: "linkMark",
+      range: { from: 0, to: 4 },
+      sourceRange: { from: 0, to: 4 },
+    };
+    expect(liveMdDescriptorKey({ ...nullLink, destination: "" })).not.toBe(
+      liveMdDescriptorKey(nullLink),
+    );
+
+    let table: MarkdownTable = {
+      alignments: ["left"],
+      header: ["Alpha"],
+      rows: [["One"]],
+    };
+    expect(new TablePreviewWidget(table).eq(new TablePreviewWidget({ ...table }))).toBe(true);
+    expect(
+      new TablePreviewWidget(table).eq(
+        new TablePreviewWidget({
+          alignments: ["left"],
+          header: ["Beta"],
+          rows: [["Two"]],
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("materializes effects in stable document order", () => {
     let build = testBuild("one\ntwo\nthree");
     addMark(build, 8, 13, Decoration.mark({ class: "late" }));
