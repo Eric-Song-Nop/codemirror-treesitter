@@ -7,6 +7,7 @@ import {
   type LiveMdMermaidRenderHandle,
   type LiveMdMermaidRenderResult,
 } from "./runtime/render-cache.js";
+import { liveMdTableContentKey } from "./analysis/descriptors.js";
 import { hashString } from "./analysis/ranges.js";
 import { isAsciiDigit } from "./util.js";
 
@@ -404,7 +405,7 @@ export class TablePreviewWidget extends WidgetType {
     this.heightKey = heightKey;
     this.heights = heights;
     this.table = table;
-    this.tableKey = JSON.stringify(table);
+    this.tableKey = liveMdTableContentKey(table);
   }
 
   eq(other: TablePreviewWidget) {

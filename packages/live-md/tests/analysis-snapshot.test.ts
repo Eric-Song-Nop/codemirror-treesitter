@@ -30,6 +30,7 @@ import {
   __testFlushLiveMdAnalysis,
   __testLiveMdAnalysis,
   __testRefreshLiveMdSurface,
+  __testRefreshLiveMdSurfacePreservingState,
   liveMdAnalysis,
 } from "../src/core/decorations.js";
 import { emptyLiveMdLeafAnalysisTrace } from "../src/core/analysis/types.js";
@@ -3338,6 +3339,41 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("reads ahead in the scroll direction and evicts distant surface projections", async () => {
+    let doc = Array.from(
+      { length: 320 },
+      (_value, index) => `paragraph ${index} [link ${index}](https://example.com/${index})`,
+    ).join("\n\n");
+    let view = await markdownAnalysisView(doc, "paragraph 0");
+    let firstUrl = "https://example.com/20";
+    let secondUrl = "https://example.com/260";
+    let firstLine = view.state.doc.lineAt(doc.indexOf("paragraph 20"));
+    let secondLine = view.state.doc.lineAt(doc.indexOf("paragraph 260"));
+    let viewport = { from: firstLine.from, to: firstLine.to };
+    let restoreViewport = overrideViewportForTest(view, () => viewport);
+
+    try {
+      __testRefreshLiveMdSurface(view);
+      expect(
+        linkHrefsFromSet(view.state, __testLiveMdAnalysis(view).surfaceInteractiveDecorations),
+      ).toContain(firstUrl);
+
+      viewport = { from: secondLine.from, to: secondLine.to };
+      __testRefreshLiveMdSurfacePreservingState(view);
+
+      let refreshed = __testLiveMdAnalysis(view);
+      let hrefs = linkHrefsFromSet(view.state, refreshed.surfaceInteractiveDecorations);
+      expect(refreshed.trace.surfaceCompileRanges.some((range) => range.to > viewport.to)).toBe(
+        true,
+      );
+      expect(hrefs).toContain(secondUrl);
+      expect(hrefs).not.toContain(firstUrl);
+    } finally {
+      restoreViewport();
+      view.destroy();
+    }
+  });
+
   it("keeps analyze features off the pending input surface path", async () => {
     let analyzedHeadings: string[] = [];
     let doc = "# First\n\nbody\n\n# Second\n";
@@ -3902,6 +3938,68 @@ describe("LiveMD analysis snapshot", () => {
     expect(secondKeywordRanges.length).toBeGreaterThan(0);
     expect(secondKeywordRanges.every((range) => rangesOverlap(range, secondRange))).toBe(true);
     expect(secondKeywordRanges.some((range) => rangesOverlap(range, firstRange))).toBe(false);
+  });
+
+  it("verifies large code fence highlight cache hits against the source text", async () => {
+    let source = Array.from(
+      { length: 1200 },
+      (_value, index) => `let value${index} = ${index};`,
+    ).join("\n");
+    let doc = `\`\`\`ts\n${source}\n\`\`\`\n`;
+    let parseCalls = 0;
+    let languages = new Map(await loadCodeFenceLanguages());
+    let tsParser = languages.get("ts");
+    if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
+    let trackedParser = Object.create(tsParser) as typeof tsParser;
+    trackedParser.parseWith = (...args: Parameters<typeof tsParser.parseWith>) => {
+      parseCalls++;
+      return tsParser.parseWith(...args);
+    };
+    languages.set("ts", trackedParser);
+
+    let state = await markdownAnalysisState(doc, "", [
+      liveMdCodeFenceHighlighting(testLightCodeFenceHighlightStyle),
+    ]);
+    state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
+    let analysis = __testLiveMdAnalysis({ state } as EditorView);
+    if (!analysis.semantic) throw new Error("Expected semantic cache for code fence cache test");
+    analysis.renderCache.codeFenceHighlights.clear();
+    parseCalls = 0;
+    let contentRange = { from: doc.indexOf(source), to: doc.indexOf(source) + source.length };
+
+    let firstTrace = emptyLiveMdLeafAnalysisTrace();
+    compileVisibleSurfaceProjection(
+      projectionCompileInputForTest(state, analysis, {
+        codeFenceHighlighters: [testLightCodeFenceHighlightStyle],
+        trace: firstTrace,
+      }),
+      analysis.semantic.cache,
+      [contentRange],
+      { codeFenceHighlights: true },
+    );
+    expect(parseCalls).toBe(1);
+    expect(firstTrace.heavyRenderStarts).toBe(1);
+
+    let cacheEntries = [...analysis.renderCache.codeFenceHighlights.entries()];
+    expect(cacheEntries).toHaveLength(1);
+    let [cacheKey, cached] = cacheEntries[0]!;
+    analysis.renderCache.codeFenceHighlights.set(cacheKey, {
+      ...cached,
+      source: `${cached.source}\n// stale`,
+    });
+
+    let secondTrace = emptyLiveMdLeafAnalysisTrace();
+    compileVisibleSurfaceProjection(
+      projectionCompileInputForTest(state, analysis, {
+        codeFenceHighlighters: [testLightCodeFenceHighlightStyle],
+        trace: secondTrace,
+      }),
+      analysis.semantic.cache,
+      [contentRange],
+      { codeFenceHighlights: true },
+    );
+    expect(parseCalls).toBe(2);
+    expect(secondTrace.heavyRenderStarts).toBe(1);
   });
 
   it("rebuilds runtime code fence highlights when the syntax highlighter changes", async () => {
@@ -5480,6 +5578,31 @@ function compareCanonicalRange(
 
 function rangesOverlap(left: DocRange, right: DocRange) {
   return left.from < right.to && right.from < left.to;
+}
+
+function overrideViewportForTest(view: EditorView, viewport: () => DocRange) {
+  let viewportDescriptor = Object.getOwnPropertyDescriptor(view, "viewport");
+  let visibleRangesDescriptor = Object.getOwnPropertyDescriptor(view, "visibleRanges");
+  Object.defineProperty(view, "viewport", {
+    configurable: true,
+    get: viewport,
+  });
+  Object.defineProperty(view, "visibleRanges", {
+    configurable: true,
+    get: () => [viewport()],
+  });
+  return () => {
+    if (viewportDescriptor) {
+      Object.defineProperty(view, "viewport", viewportDescriptor);
+    } else {
+      delete (view as unknown as { viewport?: DocRange }).viewport;
+    }
+    if (visibleRangesDescriptor) {
+      Object.defineProperty(view, "visibleRanges", visibleRangesDescriptor);
+    } else {
+      delete (view as unknown as { visibleRanges?: readonly DocRange[] }).visibleRanges;
+    }
+  };
 }
 
 function containsDocRange(outer: DocRange, inner: DocRange) {

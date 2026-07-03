@@ -4,8 +4,8 @@ import {
   type LeafAnalysisCache,
   type LeafAnalysisRecord,
   type LiveMdDescriptor,
-  type LiveMdTableModel,
-  liveMdFeatureDescriptorKey,
+  liveMdDescriptorKey,
+  liveMdTableShapeKey,
   offsetLiveMdDescriptors,
 } from "../analysis/descriptors.js";
 import {
@@ -747,68 +747,6 @@ export function liveMdEffectOwnerKeys(
   ];
 }
 
-function liveMdDescriptorKey(descriptor: LiveMdDescriptor) {
-  switch (descriptor.kind) {
-    case "lineClass":
-      return keyParts("lineClass", rangeKey(descriptor.range), descriptor.className);
-    case "syntax":
-      return keyParts("syntax", rangeKey(descriptor.range), descriptor.className);
-    case "textMark":
-      return keyParts("textMark", rangeKey(descriptor.range), descriptor.mark);
-    case "linkMark":
-      return keyParts(
-        "linkMark",
-        rangeKey(descriptor.range),
-        rangeKey(descriptor.sourceRange),
-        descriptor.destination,
-      );
-    case "listMarker":
-      return keyParts("listMarker", rangeKey(descriptor.range), descriptor.marker);
-    case "taskMarker":
-      return keyParts("taskMarker", rangeKey(descriptor.range), descriptor.checked ? 1 : 0);
-    case "image":
-      return keyParts(
-        "image",
-        rangeKey(descriptor.range),
-        rangeKey(descriptor.lineRange),
-        optionalRangeKey(descriptor.descriptionRange),
-        optionalRangeKey(descriptor.destinationRange),
-        descriptor.source,
-        descriptor.alt,
-      );
-    case "latex":
-      return keyParts(
-        "latex",
-        rangeKey(descriptor.range),
-        rangeKey(descriptor.formula.replacementRange),
-        descriptor.formula.replacementRange.block ? 1 : 0,
-        descriptor.formula.displayMode ? 1 : 0,
-        descriptor.formula.source,
-        descriptor.formula.tex,
-      );
-    case "table":
-      return keyParts(
-        "table",
-        rangeKey(descriptor.range),
-        optionalRangeKey(descriptor.delimiterRowRange),
-        descriptor.pipeRanges.map(rangeKey).join(","),
-        tableShapeKey(descriptor.table),
-      );
-    case "codeFence":
-      return keyParts(
-        "codeFence",
-        rangeKey(descriptor.range),
-        rangeKey(descriptor.openingDelimiterRange),
-        optionalRangeKey(descriptor.closingDelimiterRange),
-        optionalRangeKey(descriptor.contentRange),
-        descriptor.language,
-        descriptor.mermaidSource,
-      );
-    case "feature":
-      return keyParts("feature", descriptor.feature, liveMdFeatureDescriptorKey(descriptor.effect));
-  }
-}
-
 function liveMdEffectSpecKey(spec: LiveMdEffectSpec) {
   switch (spec.kind) {
     case "atomic":
@@ -897,7 +835,7 @@ function widgetSpecKey(widget: LiveMdWidgetSpec) {
     case "mermaid":
       return keyParts("mermaid", widget.source);
     case "tablePreview":
-      return keyParts("tablePreview", tableShapeKey(widget.table));
+      return keyParts("tablePreview", liveMdTableShapeKey(widget.table));
     case "taskMarker":
       return keyParts("taskMarker", widget.checked ? 1 : 0);
     case "feature":
@@ -916,26 +854,12 @@ function featureDescriptorMayProduceDirectLayout(descriptor: LiveMdFeatureDescri
   }
 }
 
-function tableShapeKey(table: LiveMdTableModel | null) {
-  if (!table) return "";
-  return keyParts(
-    table.header.length,
-    table.alignments.join(","),
-    table.rows.length,
-    table.rows.map((row) => row.length).join(","),
-  );
-}
-
 function rangeKey(range: DocRange) {
   return `${range.from}-${range.to}`;
 }
 
 function relativeRangeKey(range: DocRange, offset: number) {
   return `${range.from - offset}-${range.to - offset}`;
-}
-
-function optionalRangeKey(range: DocRange | null) {
-  return range ? rangeKey(range) : "";
 }
 
 function keyParts(...parts: readonly (boolean | number | string | null | undefined)[]) {

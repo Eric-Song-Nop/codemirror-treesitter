@@ -249,35 +249,140 @@ export function liveMdDescriptorRanges(descriptor: LiveMdDescriptor): DocRange[]
 }
 
 export function liveMdDescriptorKey(descriptor: LiveMdDescriptor) {
-  if (descriptor.kind != "feature") return JSON.stringify(descriptor);
-  return JSON.stringify([
-    "feature",
-    descriptor.feature,
-    liveMdFeatureDescriptorKey(descriptor.effect),
-  ]);
+  switch (descriptor.kind) {
+    case "lineClass":
+      return liveMdStableKeyParts("lineClass", rangeKey(descriptor.range), descriptor.className);
+    case "syntax":
+      return liveMdStableKeyParts("syntax", rangeKey(descriptor.range), descriptor.className);
+    case "textMark":
+      return liveMdStableKeyParts("textMark", rangeKey(descriptor.range), descriptor.mark);
+    case "linkMark":
+      return liveMdStableKeyParts(
+        "linkMark",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.sourceRange),
+        descriptor.destination,
+      );
+    case "listMarker":
+      return liveMdStableKeyParts("listMarker", rangeKey(descriptor.range), descriptor.marker);
+    case "taskMarker":
+      return liveMdStableKeyParts("taskMarker", rangeKey(descriptor.range), descriptor.checked);
+    case "image":
+      return liveMdStableKeyParts(
+        "image",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.lineRange),
+        optionalRangeKey(descriptor.descriptionRange),
+        optionalRangeKey(descriptor.destinationRange),
+        descriptor.source,
+        descriptor.alt,
+      );
+    case "latex":
+      return liveMdStableKeyParts(
+        "latex",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.formula.replacementRange),
+        descriptor.formula.replacementRange.block,
+        descriptor.formula.displayMode,
+        descriptor.formula.source,
+        descriptor.formula.tex,
+      );
+    case "table":
+      return liveMdStableKeyParts(
+        "table",
+        rangeKey(descriptor.range),
+        optionalRangeKey(descriptor.delimiterRowRange),
+        descriptorsRangeKey(descriptor.pipeRanges),
+        liveMdTableShapeKey(descriptor.table),
+      );
+    case "codeFence":
+      return liveMdStableKeyParts(
+        "codeFence",
+        rangeKey(descriptor.range),
+        rangeKey(descriptor.openingDelimiterRange),
+        optionalRangeKey(descriptor.closingDelimiterRange),
+        optionalRangeKey(descriptor.contentRange),
+        descriptor.language,
+        descriptor.mermaidSource,
+      );
+    case "feature":
+      return liveMdStableKeyParts(
+        "feature",
+        descriptor.feature,
+        liveMdFeatureDescriptorKey(descriptor.effect),
+      );
+  }
 }
 
 export function liveMdDescriptorsKey(descriptors: readonly LiveMdDescriptor[]) {
-  return JSON.stringify(descriptors.map(liveMdDescriptorKey));
+  return liveMdStableKeyParts(...descriptors.map(liveMdDescriptorKey));
 }
 
 export function liveMdFeatureDescriptorKey(descriptor: LiveMdFeatureDescriptor) {
   switch (descriptor.kind) {
     case "lineClass":
-      return JSON.stringify(["lineClass", descriptor.range, descriptor.className]);
+      return liveMdStableKeyParts("lineClass", rangeKey(descriptor.range), descriptor.className);
     case "mark":
-      return JSON.stringify(["mark", descriptor.range, descriptor.className]);
+      return liveMdStableKeyParts("mark", rangeKey(descriptor.range), descriptor.className);
     case "syntax":
-      return JSON.stringify(["syntax", descriptor.range, descriptor.className ?? null]);
+      return liveMdStableKeyParts("syntax", rangeKey(descriptor.range), descriptor.className);
     case "replace":
-      return JSON.stringify([
+      return liveMdStableKeyParts(
         "replace",
-        descriptor.range,
+        rangeKey(descriptor.range),
         descriptor.block ?? false,
         descriptor.atomic ?? false,
         descriptor.widget.key,
-      ]);
+      );
   }
+}
+
+export function liveMdTableShapeKey(table: LiveMdTableModel | null | undefined) {
+  if (!table) return "";
+  return liveMdStableKeyParts(
+    table.header.length,
+    table.alignments.join(","),
+    table.rows.length,
+    table.rows.map((row) => row.length).join(","),
+  );
+}
+
+export function liveMdTableContentKey(table: LiveMdTableModel) {
+  return liveMdStableKeyParts(
+    "table",
+    table.alignments.length,
+    ...table.alignments,
+    table.header.length,
+    ...table.header,
+    table.rows.length,
+    ...table.rows.map((row) => liveMdStableKeyParts(row.length, ...row)),
+  );
+}
+
+export function liveMdStableKeyParts(
+  ...parts: readonly (boolean | number | string | null | undefined)[]
+) {
+  return parts
+    .map((part) => {
+      if (part === null) return "n:";
+      if (part === undefined) return "u:";
+      if (typeof part == "boolean") return `b:${part ? "1" : "0"}`;
+      let text = String(part);
+      return `${typeof part}:${text.length}:${text}`;
+    })
+    .join("|");
+}
+
+function descriptorsRangeKey(ranges: readonly DocRange[]) {
+  return liveMdStableKeyParts(...ranges.map(rangeKey));
+}
+
+function rangeKey(range: DocRange) {
+  return `${range.from}-${range.to}`;
+}
+
+function optionalRangeKey(range: DocRange | null) {
+  return range ? rangeKey(range) : "";
 }
 
 function offsetLiveMdFeatureDescriptor(

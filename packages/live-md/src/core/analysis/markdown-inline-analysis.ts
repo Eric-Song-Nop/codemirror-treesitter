@@ -6,7 +6,11 @@ import {
   type TreeSitterQueryMatch,
 } from "@codemirror-treesitter/language";
 import { deleteLiveMdTree, type LiveMdMarkdownParserService } from "../languages.js";
-import { type LiveMdDescriptor, liveMdDescriptorRanges } from "./descriptors.js";
+import {
+  type LiveMdDescriptor,
+  liveMdDescriptorKey,
+  liveMdDescriptorRanges,
+} from "./descriptors.js";
 import {
   capture,
   captureKey,
@@ -373,7 +377,7 @@ function dedupeDescriptors(descriptors: readonly LiveMdDescriptor[]) {
   let deduped: LiveMdDescriptor[] = [];
   let seen = new Set<string>();
   for (let descriptor of descriptors) {
-    let key = JSON.stringify(descriptor);
+    let key = liveMdDescriptorKey(descriptor);
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(descriptor);

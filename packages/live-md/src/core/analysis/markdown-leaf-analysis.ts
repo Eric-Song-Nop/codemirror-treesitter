@@ -25,6 +25,7 @@ import {
   liveMdDescriptorKey,
   liveMdDescriptorRanges,
   liveMdDescriptorsKey,
+  liveMdStableKeyParts,
   offsetLiveMdDescriptors,
 } from "./descriptors.js";
 import { analyzeMarkdownFenceDescriptor } from "./markdown-fence-analysis.js";
@@ -639,11 +640,12 @@ function markerDescriptors(
 }
 
 function markerCacheStructuralKey(marker: MarkdownMarkerRecord, sourceSafeOnly: boolean) {
-  return JSON.stringify({
-    checked: marker.kind == "taskMarker" ? markerChecked(marker) : null,
-    kind: marker.kind,
+  return liveMdStableKeyParts(
+    "marker",
+    marker.kind,
+    marker.kind == "taskMarker" ? markerChecked(marker) : null,
     sourceSafeOnly,
-  });
+  );
 }
 
 function markerChecked(marker: MarkdownMarkerRecord) {
@@ -680,13 +682,13 @@ function stableAnalysisKey(
   descriptors: readonly LiveMdDescriptor[],
 ) {
   return hashString(
-    JSON.stringify([
+    liveMdStableKeyParts(
       "live-md-semantic-v1",
       kind,
       structuralKey,
       liveMdDescriptorsKey(structuralEffects),
       liveMdDescriptorsKey(descriptors),
-    ]),
+    ),
   );
 }
 

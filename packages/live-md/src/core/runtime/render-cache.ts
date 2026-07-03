@@ -40,6 +40,7 @@ export type LiveMdCodeFenceHighlightSpan = {
 export type LiveMdCodeFenceHighlightResult = {
   resultKey: string;
   spans: readonly LiveMdCodeFenceHighlightSpan[];
+  source: string;
 };
 
 export type LiveMdImageRenderResult = {
@@ -82,6 +83,7 @@ const tableRendererVersion = "table-dom-v1";
 const imageRendererVersion = "image-resolver-v1";
 const mermaidRendererVersion = "mermaid-request-result-v1";
 const codeFenceRendererVersion = "code-fence-highlight-v1";
+const codeFenceExactSourceKeyLimit = 16 * 1024;
 
 export const liveMdFullQueryRenderKey = "live-md-full-query";
 
@@ -204,20 +206,23 @@ export function cachedLiveMdCodeFenceHighlightResult(
   language: string,
 ): LiveMdCodeFenceHighlightResult {
   let parser = languages.get(language);
-  if (!parser || !source) return { resultKey: hashString(""), spans: [] };
+  if (!parser || !source) return { resultKey: hashString(""), source, spans: [] };
+  let sourceKey =
+    source.length <= codeFenceExactSourceKeyLimit
+      ? source
+      : keyParts(hashString(source), source.length);
 
   let key = keyParts(
     renderCacheVersion,
     codeFenceRendererVersion,
     recordRenderKey,
     language,
-    hashString(source),
-    source.length,
+    sourceKey,
     liveMdObjectEpoch(parser),
     highlighters.map(liveMdObjectEpoch).join(","),
   );
   let cached = cache.codeFenceHighlights.get(key);
-  if (cached) return cached;
+  if (cached && cached.source == source) return cached;
 
   trace.heavyRenderStarts++;
   let result = parseCodeFenceHighlightSpans(trace, source, parser, highlighters);
@@ -241,9 +246,9 @@ function parseCodeFenceHighlightSpans(
   try {
     trace.codeFenceParses++;
     parsed = parser.parseWith(nativeParser, sourceText);
-    if (!parsed) return { resultKey: hashString(""), spans };
+    if (!parsed) return { resultKey: hashString(""), source, spans };
     tree = parser.wrapTree(parsed, sourceText, null, undefined, nestedParsers);
-    if (!tree) return { resultKey: hashString(""), spans };
+    if (!tree) return { resultKey: hashString(""), source, spans };
     highlightTree(
       tree,
       highlighters,
@@ -255,6 +260,7 @@ function parseCodeFenceHighlightSpans(
     );
     return {
       resultKey: hashString(JSON.stringify(spans)),
+      source,
       spans,
     };
   } finally {

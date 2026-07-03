@@ -410,6 +410,8 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
     surfaceTrace = emptyLiveMdLeafAnalysisTrace();
     private pendingSurfaceBase: LiveMdPendingSurfaceBase | null = null;
     private runtime: LiveMdRuntimeState | null = null;
+    private lastScrollDirection: -1 | 0 | 1 = 0;
+    private lastViewportFrom: number | null = null;
     private surfaceState = emptySurfaceProjectionState();
 
     constructor(readonly view: EditorView) {
@@ -436,7 +438,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
 
     private refresh() {
       let analysis = this.view.state.field(liveMdAnalysisField, false);
-      let visibleRanges = liveMdSurfaceVisibleRanges(this.view);
+      let visibleRanges = liveMdSurfaceVisibleRanges(this.view, this.surfaceReadAheadDirection());
       if (!analysis) {
         this.atomicRanges = RangeSet.empty;
         this.decorations = Decoration.none;
@@ -493,9 +495,19 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
         }
       }
 
+      this.surfaceState = evictSurfaceOutside(this.surfaceState, surfaceKeepWindow(this.view));
       this.runtime = analysis;
       this.pendingSurfaceBase = null;
       this.publishSurface();
+    }
+
+    private surfaceReadAheadDirection() {
+      let viewportFrom = this.view.viewport.from;
+      if (this.lastViewportFrom != null && this.lastViewportFrom != viewportFrom) {
+        this.lastScrollDirection = this.lastViewportFrom < viewportFrom ? 1 : -1;
+      }
+      this.lastViewportFrom = viewportFrom;
+      return this.lastScrollDirection;
     }
 
     private mapPendingSurface(update: ViewUpdate, analysis: LiveMdRuntimeState) {
@@ -561,7 +573,12 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
     }
 
     refreshForTest() {
-      this.surfaceState = { ...this.surfaceState, compiledRanges: [] };
+      this.surfaceState = emptySurfaceProjectionState(this.surfaceState.semanticRevision);
+      this.surfaceTrace = emptyLiveMdLeafAnalysisTrace();
+      this.refresh();
+    }
+
+    refreshPreservingStateForTest() {
       this.surfaceTrace = emptyLiveMdLeafAnalysisTrace();
       this.refresh();
     }
@@ -621,6 +638,20 @@ function invalidateSurfaceProjectionState(
   };
 }
 
+function evictSurfaceOutside(
+  current: LiveMdSurfaceProjectionState,
+  keepWindow: DocRange,
+): LiveMdSurfaceProjectionState {
+  let evictedRanges = subtractRanges(current.compiledRanges, [keepWindow]);
+  if (!evictedRanges.length) return current;
+  let cleared = replaceProjectionSets(current, evictedRanges, emptyProjectionSets());
+  return {
+    ...cleared,
+    compiledRanges: subtractRanges(current.compiledRanges, evictedRanges),
+    semanticRevision: current.semanticRevision,
+  };
+}
+
 function surfaceProjectionFromState(state: LiveMdSurfaceProjectionState): SurfaceProjection {
   return projectionLayerFromSets(state);
 }
@@ -633,12 +664,51 @@ function mapDocRanges(ranges: readonly DocRange[], changes: ChangeDesc): readonl
   return mergeDocRanges(ranges.map((range) => mapRange(range, changes)));
 }
 
-function liveMdSurfaceVisibleRanges(view: EditorView): readonly DocRange[] {
+function liveMdSurfaceVisibleRanges(
+  view: EditorView,
+  readAheadDirection: -1 | 0 | 1 = 0,
+): readonly DocRange[] {
   let viewport = view.viewport;
   let ranges = view.visibleRanges
     .map((range) => intersectDocRanges(range, viewport))
     .filter((range): range is DocRange => Boolean(range));
-  return ranges.length ? ranges : [viewport];
+  let visibleRanges = ranges.length ? ranges : [viewport];
+  let readAhead = surfaceReadAheadRange(view, readAheadDirection);
+  return readAhead ? mergeDocRanges([...visibleRanges, readAhead]) : visibleRanges;
+}
+
+function surfaceKeepWindow(view: EditorView): DocRange {
+  let viewport = view.viewport;
+  let viewportSpan = Math.max(1, viewport.to - viewport.from);
+  return clampRangeToDoc(
+    {
+      from: viewport.from - 2 * viewportSpan,
+      to: viewport.to + 2 * viewportSpan,
+    },
+    view.state.doc.length,
+  );
+}
+
+function surfaceReadAheadRange(view: EditorView, readAheadDirection: -1 | 0 | 1): DocRange | null {
+  if (!readAheadDirection) return null;
+  let viewport = view.viewport;
+  let readAhead = Math.max(1, Math.ceil((viewport.to - viewport.from) / 2));
+  let range: DocRange;
+  if (readAheadDirection > 0) {
+    range = clampRangeToDoc(
+      { from: viewport.to, to: viewport.to + readAhead },
+      view.state.doc.length,
+    );
+  } else {
+    range = clampRangeToDoc(
+      {
+        from: viewport.from - readAhead,
+        to: viewport.from,
+      },
+      view.state.doc.length,
+    );
+  }
+  return range.from < range.to ? range : null;
 }
 
 function intersectDocRanges(left: DocRange, right: DocRange): DocRange | null {
@@ -1951,6 +2021,10 @@ export function __testLiveMdAnalysis(view: EditorView | { state: EditorState }):
 
 export function __testRefreshLiveMdSurface(view: EditorView) {
   view.plugin(liveMdSurfacePlugin)?.refreshForTest();
+}
+
+export function __testRefreshLiveMdSurfacePreservingState(view: EditorView) {
+  view.plugin(liveMdSurfacePlugin)?.refreshPreservingStateForTest();
 }
 
 export async function __testFlushLiveMdAnalysis(view: EditorView) {

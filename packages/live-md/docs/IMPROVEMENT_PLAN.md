@@ -81,6 +81,12 @@ vp run @codemirror-treesitter/live-md#build
   segmented-leaves Proxy with an explicit `SourceIslandIndex`, keeps local
   transition lookups lazy behind `at`/`find`, makes `toArray()` materialization
   explicit at call sites, and updates the laziness tests to spy on `toArray()`.
+- **Phase 2 / PR-12:** implemented on 2026-07-03 in draft PR #98
+  (`codex/live-md-pr12-small-batch`). The code hardens code-fence highlight
+  cache hits with exact source verification, centralizes descriptor/table key
+  writers, evicts distant surface projection ranges, adds scroll-direction
+  read-ahead for visible surface compilation, and covers the batch with focused
+  regression tests.
 
 ---
 
@@ -919,7 +925,17 @@ transitions plus selection-only reprojection do not call `toArray()`.
 **Files.** `analysis/markdown-source-islands.ts`, `runtime/field.ts`,
 tests. **Size.** ~200 lines, net negative. **Risk.** Low.
 
-### PR-12: Small correctness/perf batch _(fixes A6c, A6d, A6e, R5e)_
+### PR-12: Small correctness/perf batch _(implemented; fixes A6c, A6d, A6e, R5e)_
+
+**Implemented.** `render-cache.ts` now keys typical code-fence highlight
+entries by exact source text and verifies stored source text on every cache hit.
+Descriptor, feature-descriptor, marker, stable-analysis, and table-widget keys
+now use typed stable writers from `descriptors.ts` instead of ad hoc
+`JSON.stringify` on closed-union objects. The surface plugin extends visible
+compile ranges by half a viewport in the last scroll direction and evicts
+compiled surface ranges beyond a two-viewport keep window. Regression coverage
+asserts descriptor/table key behavior, source-verified large-fence cache hits,
+and surface read-ahead plus distant eviction.
 
 1. **Fence highlight cache key (A6d)** — `render-cache.ts`: include the
    source text in the key for sources ≤ 16 KiB (typical fences), keep
