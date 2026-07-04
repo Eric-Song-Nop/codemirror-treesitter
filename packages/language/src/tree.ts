@@ -3,7 +3,7 @@ import type {
   Point,
   Tree as TSTree,
   TreeCursor as TSTreeCursor,
-} from "web-tree-sitter";
+} from "@codemirror-treesitter/web-tree-sitter";
 import type { Tag } from "./tags.js";
 
 type PropMatcher<T> = (type: NodeType) => T | undefined;

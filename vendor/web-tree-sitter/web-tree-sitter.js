@@ -1709,6 +1709,7 @@ async function Module2(moduleArg = {}) {
     if (Module["locateFile"]) {
       return locateFile("web-tree-sitter.wasm");
     }
+    if (ENVIRONMENT_IS_NODE) return scriptDirectory + "web-tree-sitter.wasm";
     return new URL("web-tree-sitter.wasm", import.meta.url).href;
   }
   __name(findWasmBinary, "findWasmBinary");

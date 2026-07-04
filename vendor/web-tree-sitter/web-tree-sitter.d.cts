@@ -1022,4 +1022,8 @@ declare module 'web-tree-sitter' {
 	export {};
 }
 
+declare module '@codemirror-treesitter/web-tree-sitter' {
+	export * from 'web-tree-sitter';
+}
+
 //# sourceMappingURL=web-tree-sitter.d.cts.map

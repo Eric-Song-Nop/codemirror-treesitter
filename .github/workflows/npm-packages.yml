@@ -1,0 +1,98 @@
+name: NPM Package Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/npm-packages.yml"
+      - "AGENTS.md"
+      - "README.md"
+      - "bun.lock"
+      - "package.json"
+      - "packages/**"
+      - "tools/audit.mjs"
+      - "tools/package-validate.mjs"
+      - "tools/verify-web-tree-sitter-cursor-range.mjs"
+      - "tsconfig*.json"
+      - "vendor/web-tree-sitter/**"
+      - "vite.config.ts"
+      - "vite.shared.ts"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/npm-packages.yml"
+      - "AGENTS.md"
+      - "README.md"
+      - "bun.lock"
+      - "package.json"
+      - "packages/**"
+      - "tools/audit.mjs"
+      - "tools/package-validate.mjs"
+      - "tools/verify-web-tree-sitter-cursor-range.mjs"
+      - "tsconfig*.json"
+      - "vendor/web-tree-sitter/**"
+      - "vite.config.ts"
+      - "vite.shared.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-packages-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    name: Validate npm packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          cache: true
+          node-version: "26"
+
+      - name: Install dependencies
+        run: vp install
+
+      - name: Check
+        run: vp check
+
+      - name: Verify patched web-tree-sitter runtime
+        run: vp run verify:web-tree-sitter
+
+      - name: Test packages
+        run: vp run -r test
+
+      - name: Build publishable packages
+        run: |
+          set -euo pipefail
+          while IFS= read -r task; do
+            [ -n "$task" ] || continue
+            vp run "$task"
+          done < <(node - <<'NODE'
+          const { readdirSync, existsSync, readFileSync } = require("node:fs");
+          const path = require("node:path");
+
+          for (const dirName of readdirSync("packages").sort()) {
+            const file = path.join("packages", dirName, "package.json");
+            if (!existsSync(file)) continue;
+            const pkg = JSON.parse(readFileSync(file, "utf8"));
+            if (!pkg.private && pkg.scripts?.build) {
+              console.log(`${pkg.name}#build`);
+            }
+          }
+          NODE
+          )
+
+      - name: Audit
+        run: vp run audit
+
+      - name: Validate package manifests and tarballs
+        run: vp run package:validate

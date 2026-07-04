@@ -20,7 +20,7 @@ import { SyntaxNode, TreeCursor } from "../src/tree.js";
 import declarationMatchQuerySource from "./queries/declaration-match.scm?raw";
 import type { Tree } from "../src/index.js";
 import type { NodeIterator } from "../src/tree.js";
-import type { Node as TSNode, Point } from "web-tree-sitter";
+import type { Node as TSNode, Point } from "@codemirror-treesitter/web-tree-sitter";
 
 const javascriptWasm = new URL(
   "../../../node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm",

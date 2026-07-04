@@ -20,7 +20,7 @@ import {
   type Range as TSRange,
   Tree as TSTree,
   type Point,
-} from "web-tree-sitter";
+} from "@codemirror-treesitter/web-tree-sitter";
 import {
   type DocRange,
   type NestedTree,
