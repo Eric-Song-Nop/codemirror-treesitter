@@ -200,6 +200,7 @@ const exactMessageKeys: Readonly<Record<string, TranslationKey>> = {
   "Browser storage is required to host a shared file.": "errors.browserStorageRequired",
   "Could not allocate an image file name.": "errors.couldNotAllocateImageFileName",
   "Could not copy the link.": "errors.cannotCopyLink",
+  "Grove could not import the shared Markdown file.": "errors.sharedMarkdownImportFailed",
   "Dropbox access token expired. Reconnect Dropbox workspace to continue.":
     "errors.dropboxAccessTokenExpired",
   "Dropbox app folder or workspace path is no longer available. Check the Dropbox app folder setting, then reconnect Dropbox workspace.":
@@ -283,6 +284,8 @@ const exactMessageKeys: Readonly<Record<string, TranslationKey>> = {
   "Relay returned the wrong share.": "errors.relayWrongShare",
   "Shared file metadata is not available in this browser.": "errors.sharedMetadataUnavailable",
   "Shared file relay is not configured.": "errors.relayNotConfigured",
+  "Share a Markdown file to import it into Grove.": "errors.sharedMarkdownUnsupported",
+  "The shared Markdown draft is no longer available.": "errors.sharedMarkdownDraftUnavailable",
   "This browser cannot rotate the link without the host key.": "errors.cannotRotateWithoutHostKey",
   "This browser cannot stop sharing without the host key.": "errors.cannotStopWithoutHostKey",
   "This file is no longer shared.": "errors.fileNoLongerShared",

@@ -2,6 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { completeDropboxRedirectOAuthIfPresent } from "@/lib/dropbox-oauth";
 import { takeDropboxRedirectDraft, type DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
 import { createLocalWorkspaceBackend, queryReadWritePermission } from "@/lib/file-system";
+import {
+  clearSharedMarkdownDraftLaunchParams,
+  readSharedMarkdownDraftLaunch,
+  sharedMarkdownDraftLaunchErrorMessage,
+} from "@/lib/share-target";
 import { defaultSidebarOpen } from "@/lib/workspace/constants";
 import { isDropboxRedirectCallbackWindow } from "@/lib/workspace/dropbox-config";
 import { errorToMessage } from "@/lib/workspace/errors";
@@ -20,6 +25,7 @@ type MutableRef<T> = {
 };
 
 type OpenSingleFileDraft = (options?: {
+  draftId?: string;
   reuseLast?: boolean;
   saveCurrent?: boolean;
   shouldContinue?: () => boolean;
@@ -84,6 +90,10 @@ export function useWorkspaceStartup({
 }: UseWorkspaceStartupOptions) {
   let dropboxAutoRestoreAttemptedRef = useRef(false);
   let dropboxRedirectPendingRef = useRef(isDropboxRedirectCallbackWindow());
+  let sharedDraftLaunchRef = useRef(readSharedMarkdownDraftLaunch());
+  let [sharedDraftLaunchChecked, setSharedDraftLaunchChecked] = useState(
+    () => sharedDraftLaunchRef.current == null,
+  );
   let [localRestoreChecked, setLocalRestoreChecked] = useState(false);
   let [dropboxAutoRestoreChecked, setDropboxAutoRestoreChecked] = useState(false);
 
@@ -142,6 +152,47 @@ export function useWorkspaceStartup({
   ]);
 
   useEffect(() => {
+    let launch = sharedDraftLaunchRef.current;
+    if (!launch || sharedDraftLaunchChecked || dropboxRedirectPendingRef.current) return;
+
+    if ("error" in launch) {
+      setErrorMessage(sharedMarkdownDraftLaunchErrorMessage(launch.error));
+      setRetryLoadPath(null);
+      clearSharedMarkdownDraftLaunchParams();
+      setSharedDraftLaunchChecked(true);
+      return;
+    }
+
+    let canceled = false;
+    void (async () => {
+      try {
+        await openSingleFileDraft({
+          draftId: launch.draftId,
+          saveCurrent: false,
+          shouldContinue: () => !selectedFileRef.current,
+        });
+        if (!canceled) clearSharedMarkdownDraftLaunchParams();
+      } finally {
+        if (!canceled) setSharedDraftLaunchChecked(true);
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [
+    openSingleFileDraft,
+    selectedFileRef,
+    setErrorMessage,
+    setRetryLoadPath,
+    sharedDraftLaunchChecked,
+  ]);
+
+  useEffect(() => {
+    if (sharedDraftLaunchRef.current) {
+      setLocalRestoreChecked(true);
+      return;
+    }
     if (dropboxRedirectPendingRef.current) {
       setLocalRestoreChecked(true);
       return;
@@ -211,6 +262,10 @@ export function useWorkspaceStartup({
       return;
     }
     if (dropboxAutoRestoreAttemptedRef.current) return;
+    if (sharedDraftLaunchRef.current) {
+      setDropboxAutoRestoreChecked(true);
+      return;
+    }
     if (
       workspaceBackend ||
       !storedDropboxConfig ||
@@ -249,6 +304,7 @@ export function useWorkspaceStartup({
     ) {
       return;
     }
+    if (sharedDraftLaunchRef.current) return;
 
     void openSingleFileDraft({
       reuseLast: true,

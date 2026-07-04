@@ -9,6 +9,20 @@
   "background_color": "#282828",
   "theme_color": "#1d2021",
   "categories": ["productivity", "utilities"],
+  "share_target": {
+    "action": "/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": {
+        "name": "files",
+        "accept": ["text/markdown", "text/plain", ".md", ".markdown"]
+      }
+    }
+  },
   "icons": [
     {
       "src": "/icon-192.png",

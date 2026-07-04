@@ -21,8 +21,10 @@ import {
   createSingleFileDraft,
   deleteSingleFileDraft,
   loadLastSingleFileDraft,
+  loadSingleFileDraft,
   rememberLastSingleFileDraft,
 } from "@/lib/single-file-draft-store";
+import { sharedMarkdownDraftUnavailableMessage } from "@/lib/share-target";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { createDocumentSession, type DocumentSession } from "@/lib/workspace/document-session";
 import { createSingleFileDraftBackend, singleFileMarkdownNode } from "@/lib/workspace/single-file";
@@ -309,6 +311,7 @@ export function useWorkspaceDocumentActions({
   let openSingleFileDraft = useCallback(
     async (
       options: {
+        draftId?: string;
         reuseLast?: boolean;
         saveCurrent?: boolean;
         shouldContinue?: () => boolean;
@@ -322,8 +325,12 @@ export function useWorkspaceDocumentActions({
       setErrorMessage("");
       setRetryLoadPath(null);
       try {
-        let draft =
-          options.reuseLast === true ? await loadLastSingleFileDraft().catch(() => null) : null;
+        let draft = options.draftId
+          ? await loadSingleFileDraft(options.draftId).catch(() => null)
+          : options.reuseLast === true
+            ? await loadLastSingleFileDraft().catch(() => null)
+            : null;
+        if (!draft && options.draftId) throw new Error(sharedMarkdownDraftUnavailableMessage);
         draft ??= await createSingleFileDraft({ name: "Untitled.md" });
         await rememberLastSingleFileDraft(draft.id).catch(() => {});
         if (options.shouldContinue && !options.shouldContinue()) return;

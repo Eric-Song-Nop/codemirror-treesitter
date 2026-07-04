@@ -1,6 +1,14 @@
 const CACHE_PREFIX = "grove-local-md-workspace";
-const SHELL_CACHE = `${CACHE_PREFIX}-shell-2026-06-09`;
+const SHELL_CACHE = `${CACHE_PREFIX}-shell-2026-07-04`;
 const RUNTIME_CACHE = `${CACHE_PREFIX}-runtime`;
+const SHARE_TARGET_PATH = "/share";
+const SHARED_DRAFT_SEARCH_PARAM = "shared-draft";
+const SHARED_DRAFT_ERROR_SEARCH_PARAM = "shared-draft-error";
+const DB_NAME = "local-md-workspace";
+const DB_VERSION = 1;
+const DB_STORE_NAME = "workspace";
+const DRAFT_KEY_PREFIX = "single-file-draft:";
+const LAST_DRAFT_KEY = "single-file-draft:last";
 
 const APP_SHELL_URLS = [
   "/",
@@ -48,9 +56,19 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   let request = event.request;
+  let url = new URL(request.url);
+
+  if (
+    request.method == "POST" &&
+    url.origin == self.location.origin &&
+    url.pathname == SHARE_TARGET_PATH
+  ) {
+    event.respondWith(importSharedMarkdownDraft(request));
+    return;
+  }
+
   if (request.method != "GET") return;
 
-  let url = new URL(request.url);
   if (url.origin != self.location.origin || isRelayOrDebugRequest(url)) return;
 
   if (isNavigationRequest(request)) {
@@ -144,4 +162,150 @@ function isRelayOrDebugRequest(url) {
 
 function isCacheableResponse(response) {
   return response.ok && (response.type == "basic" || response.type == "default");
+}
+
+async function importSharedMarkdownDraft(request) {
+  let draft;
+  try {
+    draft = await sharedMarkdownDraftFromRequest(request);
+  } catch {
+    return redirectToApp({ error: "unsupported" });
+  }
+
+  try {
+    await saveSingleFileDraft(draft);
+    return redirectToApp({ draftId: draft.id });
+  } catch {
+    return redirectToApp({ error: "failed" });
+  }
+}
+
+async function sharedMarkdownDraftFromRequest(request) {
+  let formData = await request.formData();
+  let file = formData.getAll("files").find(isMarkdownFile);
+
+  if (file) {
+    let now = Date.now();
+    return {
+      createdAt: now,
+      id: createDraftId(),
+      name: markdownFileName(file.name),
+      updatedAt: now,
+      value: await file.text(),
+    };
+  }
+
+  let text = stringFormValue(formData.get("text"));
+  let url = stringFormValue(formData.get("url"));
+  let title = stringFormValue(formData.get("title")) || "Shared.md";
+  let value = [text, url].filter(Boolean).join("\n\n");
+  if (!value.trim()) throw new Error("No Markdown content was shared.");
+
+  let now = Date.now();
+  return {
+    createdAt: now,
+    id: createDraftId(),
+    name: markdownFileName(title),
+    updatedAt: now,
+    value,
+  };
+}
+
+function redirectToApp(result) {
+  let url = new URL("/", self.location.origin);
+  if (result.draftId) url.searchParams.set(SHARED_DRAFT_SEARCH_PARAM, result.draftId);
+  if (result.error) url.searchParams.set(SHARED_DRAFT_ERROR_SEARCH_PARAM, result.error);
+  return Response.redirect(url.href, 303);
+}
+
+function isMarkdownFile(value) {
+  if (!isFileLike(value)) return false;
+  let name = value.name.toLowerCase();
+  let type = String(value.type || "").toLowerCase();
+  return (
+    name.endsWith(".md") ||
+    name.endsWith(".markdown") ||
+    type == "text/markdown" ||
+    type == "text/plain"
+  );
+}
+
+function isFileLike(value) {
+  return (
+    value &&
+    typeof value == "object" &&
+    typeof value.name == "string" &&
+    typeof value.text == "function"
+  );
+}
+
+function markdownFileName(name) {
+  let fileName = String(name || "")
+    .split(/[\\/]/)
+    .at(-1)
+    ?.trim();
+  fileName ||= "Shared.md";
+  if (/\.md$/i.test(fileName) || /\.markdown$/i.test(fileName)) return fileName;
+  let withoutExtension = fileName.replace(/\.[^.]*$/, "").trim();
+  return `${withoutExtension || "Shared"}.md`;
+}
+
+function stringFormValue(value) {
+  return typeof value == "string" ? value.trim() : "";
+}
+
+function createDraftId() {
+  return typeof globalThis.crypto?.randomUUID == "function"
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function saveSingleFileDraft(draft) {
+  let db = await openDatabase();
+  try {
+    let transaction = db.transaction(DB_STORE_NAME, "readwrite");
+    let store = transaction.objectStore(DB_STORE_NAME);
+    let done = transactionComplete(transaction);
+    await Promise.all([
+      requestResult(store.put(draft, `${DRAFT_KEY_PREFIX}${draft.id}`)),
+      requestResult(store.put(draft.id, LAST_DRAFT_KEY)),
+      done,
+    ]);
+  } finally {
+    db.close();
+  }
+}
+
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    let request = indexedDB.open(DB_NAME, DB_VERSION);
+
+    request.onupgradeneeded = () => {
+      let db = request.result;
+      if (!db.objectStoreNames.contains(DB_STORE_NAME)) {
+        db.createObjectStore(DB_STORE_NAME);
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("IndexedDB open failed."));
+    request.onblocked = () => reject(new Error("IndexedDB open was blocked."));
+  });
+}
+
+function requestResult(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed."));
+  });
+}
+
+function transactionComplete(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () =>
+      reject(transaction.error ?? new Error("IndexedDB transaction failed."));
+    transaction.onabort = () =>
+      reject(transaction.error ?? new Error("IndexedDB transaction aborted."));
+  });
 }
