@@ -41,6 +41,24 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     expect(html).toContain('<a href="https://example.com">link</a>');
   });
 
+  it("renders table cell contents through the inline parser", async () => {
+    let html = await renderMarkdownToHtml(
+      [
+        "| Feature | Status |",
+        "| --- | --- |",
+        "| **bold** and _em_ | [docs](https://docs.example) and `code` |",
+        "| ~~old~~ | <https://example.com> |",
+      ].join("\n"),
+    );
+
+    expect(html).toContain("<td><strong>bold</strong> and <em>em</em></td>");
+    expect(html).toContain(
+      '<td><a href="https://docs.example">docs</a> and <code>code</code></td>',
+    );
+    expect(html).toContain("<td><del>old</del></td>");
+    expect(html).toContain('<td><a href="https://example.com">https://example.com</a></td>');
+  });
+
   it("resolves image sources without rendering raw Markdown syntax", async () => {
     let resolveImageSource = vi.fn(() => "data:image/png;base64,AQID");
     let html = await renderMarkdownToHtml('![**Chart**](assets/chart.png "Draft")', {

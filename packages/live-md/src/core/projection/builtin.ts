@@ -273,7 +273,13 @@ function applyTable(
       build,
       node.from,
       node.to,
-      new TablePreviewWidget(result.table, build.renderCache.measuredHeights, result.resultKey),
+      new TablePreviewWidget(
+        result.table,
+        build.renderCache.measuredHeights,
+        result.resultKey,
+        build.linkBaseUrl,
+        build.imageSourceResolver,
+      ),
       true,
     );
     return false;

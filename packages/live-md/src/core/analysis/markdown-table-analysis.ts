@@ -8,8 +8,10 @@ import {
 import {
   type LiveMdDescriptor,
   type LiveMdTableAlignment,
+  type LiveMdTableCellModel,
   type LiveMdTableModel,
 } from "./descriptors.js";
+import { type MarkdownInlineRenderSession } from "./markdown-inline-render.js";
 import { rangesOverlap } from "./ranges.js";
 import {
   capture,
@@ -51,6 +53,7 @@ export function analyzeMarkdownTableAnalysis(
   doc: Text,
   tree: Tree,
   range: DocRange,
+  inlineRenderSession?: MarkdownInlineRenderSession | null,
 ): MarkdownTableAnalysis {
   let tables = new Map<string, CapturedLeafTable>();
   for (let match of queryTreeMatches(tree, liveMdMarkdownBlockQuerySource, {
@@ -64,7 +67,7 @@ export function analyzeMarkdownTableAnalysis(
   let table = Array.from(tables.values()).find((candidate) =>
     rangesOverlap(nodeRange(candidate.node), range),
   );
-  if (!table) return tableAnalysisFromSource(doc, range);
+  if (!table) return tableAnalysisFromSource(doc, range, inlineRenderSession);
 
   return {
     descriptor: {
@@ -72,7 +75,9 @@ export function analyzeMarkdownTableAnalysis(
       kind: "table",
       pipeRanges: sortedNodes(table.pipes.values()).map(nodeRange),
       range: nodeRange(table.node),
-      table: readTableFromCaptures(doc, table) ?? readTableFromSource(doc, nodeRange(table.node)),
+      table:
+        readTableFromCaptures(doc, table, inlineRenderSession) ??
+        readTableFromSource(doc, nodeRange(table.node), inlineRenderSession),
     },
     inlineRanges: tableInlineRanges(doc, table),
   };
@@ -86,8 +91,12 @@ export function analyzeMarkdownTableDescriptor(
   return analyzeMarkdownTableAnalysis(doc, tree, range).descriptor;
 }
 
-function tableAnalysisFromSource(doc: Text, range: DocRange): MarkdownTableAnalysis {
-  let table = readTableFromSource(doc, range);
+function tableAnalysisFromSource(
+  doc: Text,
+  range: DocRange,
+  inlineRenderSession?: MarkdownInlineRenderSession | null,
+): MarkdownTableAnalysis {
+  let table = readTableFromSource(doc, range, inlineRenderSession);
   if (!table) return { descriptor: null, inlineRanges: [] };
   let lineRanges = tableLineRanges(doc, range);
   return {
@@ -160,26 +169,37 @@ function capturedTableRow(table: CapturedLeafTable, node: SyntaxNode) {
   return row;
 }
 
-function readTableFromCaptures(doc: Text, table: CapturedLeafTable): LiveMdTableModel | null {
-  let header = sortedNodes(table.headerCells.values()).map((cell) => tableCellText(doc, cell));
+function readTableFromCaptures(
+  doc: Text,
+  table: CapturedLeafTable,
+  inlineRenderSession?: MarkdownInlineRenderSession | null,
+): LiveMdTableModel | null {
+  let headerCells = sortedNodes(table.headerCells.values()).map((cell) =>
+    tableCellModel(tableCellText(doc, cell), inlineRenderSession),
+  );
   let alignments = Array.from(table.delimiterCells.values())
     .sort((left, right) => compareNodes(left.node, right.node))
     .map(tableAlignment);
-  if (header.length < 2 || alignments.length < 2) return null;
+  if (headerCells.length < 2 || alignments.length < 2) return null;
 
-  let columnCount = Math.max(header.length, alignments.length);
-  return {
-    alignments: normalizeTableAlignments(alignments, columnCount),
-    header: normalizeTableCells(header, columnCount),
-    rows: Array.from(table.rows.values())
-      .sort((left, right) => compareNodes(left.node, right.node))
-      .map((row) =>
-        normalizeTableCells(
-          sortedNodes(row.cells.values()).map((cell) => tableCellText(doc, cell)),
-          columnCount,
+  let columnCount = Math.max(headerCells.length, alignments.length);
+  let rowCells = Array.from(table.rows.values())
+    .sort((left, right) => compareNodes(left.node, right.node))
+    .map((row) =>
+      normalizeTableCellModels(
+        sortedNodes(row.cells.values()).map((cell) =>
+          tableCellModel(tableCellText(doc, cell), inlineRenderSession),
         ),
+        columnCount,
+        inlineRenderSession,
       ),
-  };
+    );
+  return tableModelFromCells(
+    normalizeTableAlignments(alignments, columnCount),
+    normalizeTableCellModels(headerCells, columnCount, inlineRenderSession),
+    rowCells,
+    !!inlineRenderSession,
+  );
 }
 
 function tableInlineRanges(doc: Text, table: CapturedLeafTable) {
@@ -201,17 +221,45 @@ function tableCellText(doc: Text, node: SyntaxNode) {
   return doc.sliceString(node.from, node.to).trim();
 }
 
+function tableCellModel(
+  text: string,
+  inlineRenderSession?: MarkdownInlineRenderSession | null,
+): LiveMdTableCellModel {
+  return inlineRenderSession ? inlineRenderSession.renderCell(text) : { inline: [], text };
+}
+
+function normalizeTableCellModels(
+  cells: LiveMdTableCellModel[],
+  columnCount: number,
+  inlineRenderSession?: MarkdownInlineRenderSession | null,
+) {
+  let normalized = cells.slice(0, columnCount);
+  while (normalized.length < columnCount) {
+    normalized.push(tableCellModel("", inlineRenderSession));
+  }
+  return normalized;
+}
+
+function tableModelFromCells(
+  alignments: readonly LiveMdTableAlignment[],
+  headerCells: readonly LiveMdTableCellModel[],
+  rowCells: readonly (readonly LiveMdTableCellModel[])[],
+  includeRichCells: boolean,
+): LiveMdTableModel {
+  return {
+    alignments,
+    header: headerCells.map((cell) => cell.text),
+    ...(includeRichCells ? { headerCells } : {}),
+    rows: rowCells.map((row) => row.map((cell) => cell.text)),
+    ...(includeRichCells ? { rowCells } : {}),
+  };
+}
+
 function tableAlignment(cell: CapturedLeafTableDelimiterCell): LiveMdTableAlignment {
   if (cell.left && cell.right) return "center";
   if (cell.right) return "right";
   if (cell.left) return "left";
   return "default";
-}
-
-function normalizeTableCells(cells: string[], columnCount: number) {
-  let normalized = cells.slice(0, columnCount);
-  while (normalized.length < columnCount) normalized.push("");
-  return normalized;
 }
 
 function normalizeTableAlignments(alignments: LiveMdTableAlignment[], columnCount: number) {
@@ -220,28 +268,33 @@ function normalizeTableAlignments(alignments: LiveMdTableAlignment[], columnCoun
   return normalized;
 }
 
-function readTableFromSource(doc: Text, range: DocRange): LiveMdTableModel | null {
+function readTableFromSource(
+  doc: Text,
+  range: DocRange,
+  inlineRenderSession?: MarkdownInlineRenderSession | null,
+): LiveMdTableModel | null {
   let lines = tableLines(doc, range);
   if (lines.length < 2) return null;
 
-  let header = splitTableLine(lines[0]!);
+  let headerCells = splitTableLine(lines[0]!).map((cell) =>
+    tableCellModel(cell.trim(), inlineRenderSession),
+  );
   let alignments = splitTableLine(lines[1]!).map(sourceTableAlignment);
-  if (header.length < 2 || alignments.length < 2) return null;
+  if (headerCells.length < 2 || alignments.length < 2) return null;
 
-  let columnCount = Math.max(header.length, alignments.length);
-  return {
-    alignments: normalizeTableAlignments(alignments, columnCount),
-    header: normalizeTableCells(
-      header.map((cell) => cell.trim()),
-      columnCount,
-    ),
-    rows: lines.slice(2).map((line) =>
-      normalizeTableCells(
-        splitTableLine(line).map((cell) => cell.trim()),
+  let columnCount = Math.max(headerCells.length, alignments.length);
+  return tableModelFromCells(
+    normalizeTableAlignments(alignments, columnCount),
+    normalizeTableCellModels(headerCells, columnCount, inlineRenderSession),
+    lines.slice(2).map((line) =>
+      normalizeTableCellModels(
+        splitTableLine(line).map((cell) => tableCellModel(cell.trim(), inlineRenderSession)),
         columnCount,
+        inlineRenderSession,
       ),
     ),
-  };
+    !!inlineRenderSession,
+  );
 }
 
 function tableLines(doc: Text, range: DocRange) {

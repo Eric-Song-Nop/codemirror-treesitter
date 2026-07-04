@@ -1004,6 +1004,8 @@ function widgetFromSpec(
         result.table,
         build.renderCache.measuredHeights,
         result.resultKey,
+        build.linkBaseUrl,
+        build.imageSourceResolver,
       );
     }
     case "taskMarker":

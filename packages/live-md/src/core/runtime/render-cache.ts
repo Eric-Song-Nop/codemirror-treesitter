@@ -168,7 +168,7 @@ export function cachedLiveMdTableResult(
   trace.heavyRenderStarts++;
   let rendered = markdownTable(table);
   let result = {
-    resultKey: hashString(JSON.stringify(rendered)),
+    resultKey: hashString(key),
     table: rendered,
   };
   cache.tables.set(key, result);
@@ -284,7 +284,25 @@ function markdownTable(table: LiveMdTableModel): MarkdownTable {
   return {
     alignments: [...table.alignments],
     header: [...table.header],
+    ...(table.headerCells
+      ? {
+          headerCells: table.headerCells.map((cell) => ({
+            inline: cell.inline,
+            text: cell.text,
+          })),
+        }
+      : {}),
     rows: table.rows.map((row) => [...row]),
+    ...(table.rowCells
+      ? {
+          rowCells: table.rowCells.map((row) =>
+            row.map((cell) => ({
+              inline: cell.inline,
+              text: cell.text,
+            })),
+          ),
+        }
+      : {}),
   };
 }
 
