@@ -105,6 +105,12 @@ to test installability and offline app-shell loading.
 The service worker caches same-origin GET navigations and static assets. Cloud
 storage requests, relay API mutations, and relay WebSockets remain network-only.
 
+On Android browsers that support the Web Share Target API for installed PWAs,
+Grove registers as a share target for Markdown files. Shared `.md` and
+`.markdown` files are imported as single-file drafts stored in browser storage.
+They do not retain write access to the original file or its containing folder;
+use Save As, Save As Dropbox, or Download copy after editing.
+
 ## Commands
 
 Run from the workspace root:
