@@ -97,6 +97,12 @@ export function useWorkspaceStartup({
   let [localRestoreChecked, setLocalRestoreChecked] = useState(false);
   let [dropboxAutoRestoreChecked, setDropboxAutoRestoreChecked] = useState(false);
 
+  let releaseSharedDraftLaunchFallbacks = () => {
+    sharedDraftLaunchRef.current = null;
+    setLocalRestoreChecked(false);
+    setDropboxAutoRestoreChecked(false);
+  };
+
   useEffect(() => {
     if (!dropboxRedirectPendingRef.current) return;
 
@@ -159,6 +165,7 @@ export function useWorkspaceStartup({
       setErrorMessage(sharedMarkdownDraftLaunchErrorMessage(launch.error));
       setRetryLoadPath(null);
       clearSharedMarkdownDraftLaunchParams();
+      releaseSharedDraftLaunchFallbacks();
       setSharedDraftLaunchChecked(true);
       return;
     }
@@ -171,6 +178,7 @@ export function useWorkspaceStartup({
           saveCurrent: false,
           shouldContinue: () => !selectedFileRef.current,
         });
+        if (!selectedFileRef.current) releaseSharedDraftLaunchFallbacks();
         if (!canceled) clearSharedMarkdownDraftLaunchParams();
       } finally {
         if (!canceled) setSharedDraftLaunchChecked(true);
@@ -254,6 +262,7 @@ export function useWorkspaceStartup({
     setWorkspaceBackend,
     storedDropboxConfig,
     storedWorkspaceKind,
+    sharedDraftLaunchChecked,
     workspaceBackend,
   ]);
 
