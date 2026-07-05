@@ -141,6 +141,27 @@ describe("Markdown HTML export", () => {
     expect(result.html).toContain("  --live-md-text: #ebdbb2;");
   });
 
+  it("includes LiveMD rich preview export CSS and theme variables", async () => {
+    let result = await createStandaloneMarkdownHtml({
+      documentPath: "notes/today.md",
+      markdown: "$x^2$",
+      theme: {
+        variables: {
+          "--live-md-mermaid-accent": "#38bdf8",
+          "--live-md-table-bg": "#111827",
+        },
+      },
+    });
+
+    expect(result.html).toContain(".katex .katex-mathml");
+    expect(result.html).toContain(".live-md-document .cm-md-latex-inline .katex");
+    expect(result.html).toContain(".live-md-document .cm-md-mermaid");
+    expect(result.html).toContain(".live-md-document .cm-md-table-preview");
+    expect(result.html).toContain("  --live-md-mermaid-accent: #38bdf8;");
+    expect(result.html).toContain("  --live-md-table-bg: #111827;");
+    expect(result.html).toContain('<span class="cm-md-latex cm-md-latex-inline"');
+  });
+
   it("snapshots export theme variables from the current LiveMD element", () => {
     let originalGetComputedStyle = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
     Object.defineProperty(globalThis, "getComputedStyle", {

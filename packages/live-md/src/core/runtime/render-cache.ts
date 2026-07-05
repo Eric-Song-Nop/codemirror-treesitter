@@ -11,13 +11,9 @@ import {
   resolveLiveMdImageSource,
   type LiveMdImageSourceResolver,
 } from "../images.js";
+import { renderLatexFormula, type LatexFormula, type LatexRenderResult } from "../latex.js";
 import { deleteLiveMdTree, type CodeFenceLanguageMap } from "../languages.js";
-import {
-  renderLatexFormula,
-  type LatexFormula,
-  type LatexRenderResult,
-  type MarkdownTable,
-} from "../widgets.js";
+import { type MarkdownTable } from "../widgets.js";
 import { type LiveMdTableModel } from "../analysis/descriptors.js";
 import { hashString } from "../analysis/ranges.js";
 import { liveMdObjectEpoch } from "./epochs.js";

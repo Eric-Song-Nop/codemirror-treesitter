@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { languages } from "@codemirror-treesitter/language-data";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { Window } from "happy-dom";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import {
   liveMdMarkdownFeature,
   liveMdMarkdownDocumentClass,
@@ -10,7 +11,66 @@ import {
   type LiveMdMarkdownFeature,
 } from "../src/index.js";
 
+vi.mock("beautiful-mermaid", () => ({
+  renderMermaidSVG(source: string) {
+    if (source.includes("BROKEN")) throw new Error("beautiful-mermaid failed");
+    if (source.includes("NOT_SVG")) return "<p>not svg</p>";
+    if (source.includes("UNSAFE")) {
+      return [
+        '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">',
+        "<script>alert(1)</script>",
+        "<foreignObject><div>bad</div></foreignObject>",
+        '<a href="jav&#x61;script:alert(1)"><text>bad link</text></a>',
+        '<use xlink:href="javascript:alert(1)" xmlns:xlink="http://www.w3.org/1999/xlink"></use>',
+        '<style>@import url("https://example.com/bad.css"); .node { fill: url(javascript:alert(1)); }</style>',
+        '<text style="fill: url(javascript:alert(1)); stroke: var(--live-md-text)" onclick="alert(1)">safe</text>',
+        "</svg>",
+      ].join("");
+    }
+    return [
+      '<svg xmlns="http://www.w3.org/2000/svg" style="--bg: var(--live-md-bg)">',
+      "<style>text { font-family: var(--live-md-mermaid-font, var(--live-md-font-ui)); }</style>",
+      `<text fill="var(--live-md-mermaid-text)">${source}</text>`,
+      "</svg>",
+    ].join("");
+  },
+}));
+
+vi.mock("mermaid", () => ({
+  default: {
+    initialize() {},
+    async render(_id: string, source: string) {
+      if (source.includes("BROKEN")) throw new Error("mermaid failed");
+      return {
+        svg: `<svg xmlns="http://www.w3.org/2000/svg"><text>${source}</text></svg>`,
+      };
+    },
+  },
+}));
+
 describe("Tree-sitter Markdown HTML rendering", () => {
+  let originalDomParser: typeof DOMParser | undefined;
+  let originalElement: typeof Element | undefined;
+  let originalXmlSerializer: typeof XMLSerializer | undefined;
+
+  beforeAll(() => {
+    let window = new Window();
+    originalDomParser = globalThis.DOMParser;
+    originalElement = globalThis.Element;
+    originalXmlSerializer = globalThis.XMLSerializer;
+    Object.assign(globalThis, {
+      DOMParser: window.DOMParser,
+      Element: window.Element,
+      XMLSerializer: window.XMLSerializer,
+    });
+  });
+
+  afterAll(() => {
+    restoreGlobal("DOMParser", originalDomParser);
+    restoreGlobal("Element", originalElement);
+    restoreGlobal("XMLSerializer", originalXmlSerializer);
+  });
+
   it("renders common Markdown blocks and inline marks", async () => {
     let html = await renderMarkdownToHtml(
       [
@@ -32,6 +92,7 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     expect(html).toContain('<input checked="" disabled="" type="checkbox"> Ship export');
     expect(html).toContain('<li class="live-md-task-item">');
     expect(html).toContain('<input disabled="" type="checkbox"> Add PDF later');
+    expect(html).toContain('<div class="cm-md-table-preview">');
     expect(html).toContain("<table>");
     expect(html).toContain('<th style="text-align: left">Format</th>');
     expect(html).toContain('<td style="text-align: right">Ready</td>');
@@ -57,6 +118,85 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     );
     expect(html).toContain("<td><del>old</del></td>");
     expect(html).toContain('<td><a href="https://example.com">https://example.com</a></td>');
+  });
+
+  it("renders LaTeX spans and display blocks with KaTeX HTML", async () => {
+    let html = await renderMarkdownToHtml(
+      ["Inline $x^2 + y^2$ formula.", "", "$$x^2$$", "", "$$", "a^2 + b^2 = c^2", "$$"].join("\n"),
+    );
+
+    expect(html).toContain(
+      '<span class="cm-md-latex cm-md-latex-inline" data-source="$x^2 + y^2$">',
+    );
+    expect(html).toContain('<span class="katex">');
+    expect(html).toContain('<div class="cm-md-latex cm-md-latex-display" data-source="$$x^2$$">');
+    expect(html).toContain(
+      '<div class="cm-md-latex cm-md-latex-display" data-source="$$\na^2 + b^2 = c^2\n$$">',
+    );
+    expect(html).toContain('<span class="katex-display">');
+    expect(html).not.toContain("latex_span_delimiter");
+  });
+
+  it("renders LaTeX errors as themed fallback elements", async () => {
+    let html = await renderMarkdownToHtml(
+      ["Inline $\\sqrt{$ failure.", "", "$$", "\\frac{", "$$"].join("\n"),
+    );
+
+    expect(html).toContain(
+      '<span class="cm-md-latex cm-md-latex-inline is-error" data-source="$\\sqrt{$"',
+    );
+    expect(html).toContain(
+      '<div class="cm-md-latex cm-md-latex-display is-error" data-source="$$\n\\frac{\n$$"',
+    );
+    expect(html).toContain("KaTeX parse error");
+    expect(html).not.toContain("katex-error");
+  });
+
+  it("renders Mermaid fences as themed preview containers", async () => {
+    let html = await renderMarkdownToHtml(
+      ["```mermaid", "flowchart TD", "  A --> B", "```"].join("\n"),
+    );
+
+    expect(html).toContain('<div class="cm-md-mermaid" data-source="flowchart TD\n  A --&gt; B">');
+    expect(html).toContain('<div class="cm-md-mermaid-render"><svg');
+    expect(html).toContain("A --&gt; B");
+    expect(html).toContain("font-family: var(--live-md-mermaid-font");
+    expect(html).toContain('style="--bg: var(--live-md-bg)"');
+    expect(html).not.toContain('<pre><code class="language-mermaid">');
+  });
+
+  it("renders Mermaid errors as themed error previews", async () => {
+    let html = await renderMarkdownToHtml(["```mmd", "BROKEN", "```"].join("\n"));
+
+    expect(html).toContain('<div class="cm-md-mermaid is-error" data-source="BROKEN"');
+    expect(html).toContain('title="mermaid failed"');
+    expect(html).toContain(
+      '<span class="cm-md-mermaid-message">Unable to render Mermaid diagram</span>',
+    );
+    expect(html).not.toContain('<pre><code class="language-mmd">');
+  });
+
+  it("sanitizes rendered Mermaid SVG before inlining it in exports", async () => {
+    let html = await renderMarkdownToHtml(["```mermaid", "UNSAFE", "```"].join("\n"));
+
+    expect(html).toContain('<div class="cm-md-mermaid-render"><svg');
+    expect(html).toContain('<text style="stroke: var(--live-md-text)">safe</text>');
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("<foreignObject");
+    expect(html).not.toContain("xlink:href");
+    expect(html).not.toContain("onload=");
+    expect(html).not.toContain("onclick=");
+    expect(html).not.toContain("javascript:");
+    expect(html).not.toContain("@import");
+    expect(html).not.toContain("bad.css");
+  });
+
+  it("renders an error preview when Mermaid SVG cannot be safely parsed", async () => {
+    let html = await renderMarkdownToHtml(["```mermaid", "NOT_SVG", "```"].join("\n"));
+
+    expect(html).toContain('<div class="cm-md-mermaid is-error" data-source="NOT_SVG"');
+    expect(html).toContain('title="Mermaid renderer returned non-SVG output"');
+    expect(html).not.toContain("<p>not svg</p>");
   });
 
   it("resolves image sources without rendering raw Markdown syntax", async () => {
@@ -233,6 +373,13 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     expect(liveMdMarkdownDocumentCssVariables).toContain("--live-md-list-marker");
     expect(css).toContain(".live-md-document h1");
     expect(css).toContain(".live-md-document .live-md-task-item.is-checked");
+    expect(css).toContain(".katex .katex-mathml");
+    expect(css).toContain(".live-md-document .cm-md-latex-inline .katex");
+    expect(css).toContain(".live-md-document .cm-md-latex.is-error");
+    expect(css).toContain(".live-md-document .cm-md-mermaid");
+    expect(css).toContain(".live-md-document .cm-md-table-preview");
+    expect(css).toContain("object-fit: contain");
+    expect(css).toContain("--live-md-mermaid-accent");
     expect(css).toContain("var(--live-md-bg, #fffdfa)");
     expect(css).toContain("var(--live-md-list-marker, #0f766e)");
     expect(css).not.toMatch(/(^|\n)h1\s*\{/);
@@ -251,6 +398,18 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     expect(liveMdMarkdownDocumentCssVariables).toEqual(publicVariables);
   });
 });
+
+function restoreGlobal(name: "DOMParser" | "Element" | "XMLSerializer", value: unknown) {
+  if (value) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      value,
+      writable: true,
+    });
+  } else {
+    delete (globalThis as Record<string, unknown>)[name];
+  }
+}
 
 function htmlHeadingFeature(name: string, priority: number): LiveMdMarkdownFeature {
   return liveMdMarkdownFeature({

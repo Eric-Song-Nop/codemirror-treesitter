@@ -18,6 +18,7 @@ import {
   cachedLiveMdTableResult,
   liveMdFullQueryRenderKey,
 } from "../runtime/render-cache.js";
+import { type LatexFormula } from "../latex.js";
 import { isWhitespaceOnly } from "../util.js";
 import {
   ImagePreviewWidget,
@@ -25,7 +26,6 @@ import {
   ListMarkerWidget,
   TablePreviewWidget,
   TaskCheckboxWidget,
-  type LatexFormula,
 } from "../widgets.js";
 import { applyCodeFence } from "./code-fence.js";
 import {
