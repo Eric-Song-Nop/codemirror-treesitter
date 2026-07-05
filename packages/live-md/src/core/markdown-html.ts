@@ -867,12 +867,26 @@ async function renderMermaidFence(source: string) {
   let rendered = await renderLiveMdMermaidResult(diagramSource);
   if (!rendered.ok) return renderMermaidErrorHtml(diagramSource, rendered.message);
 
-  return `<div class="cm-md-mermaid" data-source="${escapeAttribute(diagramSource)}">\n<div class="cm-md-mermaid-render">${rendered.svg}</div>\n</div>`;
+  return `<div class="cm-md-mermaid" data-source="${escapeAttribute(diagramSource)}">\n<div class="cm-md-mermaid-render">${sanitizeMermaidSvg(rendered.svg)}</div>\n</div>`;
 }
 
 function renderMermaidErrorHtml(source: string, message: string | null) {
   let titleAttribute = message ? ` title="${escapeAttribute(message)}"` : "";
   return `<div class="cm-md-mermaid is-error" data-source="${escapeAttribute(source)}"${titleAttribute}><span class="cm-md-mermaid-message">Unable to render Mermaid diagram</span></div>`;
+}
+
+function sanitizeMermaidSvg(svg: string) {
+  return svg
+    .replace(
+      /<\s*(?:script|foreignObject|iframe|object|embed|link|meta)\b[^>]*>[\s\S]*?<\s*\/\s*(?:script|foreignObject|iframe|object|embed|link|meta)\s*>/giu,
+      "",
+    )
+    .replace(/<\s*(?:script|foreignObject|iframe|object|embed|link|meta)\b[^>]*\/?>/giu, "")
+    .replace(/\s+on[a-z][\w:-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/giu, "")
+    .replace(/\s+(?:href|xlink:href)\s*=\s*(["'])\s*javascript:[\s\S]*?\1/giu, "")
+    .replace(/\s+(?:href|xlink:href)\s*=\s*javascript:[^\s>]+/giu, "")
+    .replace(/@import[^;]+;?/giu, "")
+    .replace(/url\(\s*(['"]?)\s*javascript:[^)]+\)/giu, "none");
 }
 
 function readFenceLanguage(context: MarkdownHtmlRenderContext, node: SyntaxNode) {

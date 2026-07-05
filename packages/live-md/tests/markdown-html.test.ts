@@ -13,6 +13,17 @@ import {
 vi.mock("beautiful-mermaid", () => ({
   renderMermaidSVG(source: string) {
     if (source.includes("BROKEN")) throw new Error("beautiful-mermaid failed");
+    if (source.includes("UNSAFE")) {
+      return [
+        '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">',
+        "<script>alert(1)</script>",
+        "<foreignObject><div>bad</div></foreignObject>",
+        '<a href="javascript:alert(1)"><text>bad link</text></a>',
+        '<style>@import url("https://example.com/bad.css"); .node { fill: url(javascript:alert(1)); }</style>',
+        '<text onclick="alert(1)">safe</text>',
+        "</svg>",
+      ].join("");
+    }
     return `<svg xmlns="http://www.w3.org/2000/svg"><text>${source}</text></svg>`;
   },
 }));
@@ -131,6 +142,19 @@ describe("Tree-sitter Markdown HTML rendering", () => {
       '<span class="cm-md-mermaid-message">Unable to render Mermaid diagram</span>',
     );
     expect(html).not.toContain('<pre><code class="language-mmd">');
+  });
+
+  it("sanitizes rendered Mermaid SVG before inlining it in exports", async () => {
+    let html = await renderMarkdownToHtml(["```mermaid", "UNSAFE", "```"].join("\n"));
+
+    expect(html).toContain('<div class="cm-md-mermaid-render"><svg');
+    expect(html).toContain("<text>safe</text>");
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("<foreignObject");
+    expect(html).not.toContain("onload=");
+    expect(html).not.toContain("onclick=");
+    expect(html).not.toContain("javascript:");
+    expect(html).not.toContain("@import");
   });
 
   it("resolves image sources without rendering raw Markdown syntax", async () => {
