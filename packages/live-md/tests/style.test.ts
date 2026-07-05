@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { build } from "vite-plus";
 import { describe, expect, it } from "vite-plus/test";
+import { liveMdMarkdownDocumentCss } from "../src/core/markdown-html.js";
 import { liveMdRawCssPlugin } from "../vite-plugin.ts";
 
 const workspaceRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -16,6 +17,18 @@ describe("public LiveMD stylesheet", () => {
     expect(css).not.toMatch(/\.cm-md-code-block-end\s*\{[^}]*margin-bottom/u);
     expect(css).toContain("padding-top: calc(8px + 0.45em)");
     expect(css).toContain("padding-bottom: calc(8px + 0.55em)");
+  });
+
+  it("exports rich Markdown preview CSS for standalone HTML", () => {
+    let css = liveMdMarkdownDocumentCss();
+
+    expect(css).toContain(".katex .katex-mathml");
+    expect(css).toContain(".live-md-document .cm-md-latex-display .katex-display");
+    expect(css).toContain(".live-md-document .cm-md-mermaid-render");
+    expect(css).toContain(".live-md-document .cm-md-table-preview");
+    expect(css).toContain("min-width: 520px");
+    expect(css).toContain("object-fit: contain");
+    expect(css).not.toContain("object-fit: cover");
   });
 
   it("bundles KaTeX rules and fonts for programmatic editors", async () => {

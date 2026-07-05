@@ -662,7 +662,9 @@ function cachedMermaidRenderResult(handle: LiveMdMermaidRenderHandle) {
   return handle.promise;
 }
 
-async function renderLiveMdMermaidResult(source: string): Promise<LiveMdMermaidRenderResult> {
+export async function renderLiveMdMermaidResult(
+  source: string,
+): Promise<LiveMdMermaidRenderResult> {
   try {
     let { svg, bindFunctions } = await renderMermaidSvg(source);
     return {
