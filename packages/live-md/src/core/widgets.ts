@@ -1,7 +1,4 @@
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
-import type { RenderOptions as BeautifulMermaidRenderOptions } from "beautiful-mermaid";
-import katex, { type KatexOptions } from "katex";
-import type { Mermaid } from "mermaid";
 import {
   type LiveMdImageRenderResult,
   type LiveMdMermaidRenderHandle,
@@ -14,39 +11,13 @@ import {
   liveMdTableContentKey,
 } from "./analysis/descriptors.js";
 import { resolveLiveMdImageSource, type LiveMdImageSourceResolver } from "./images.js";
+import { renderLatexFormula, type LatexFormula, type LatexRenderResult } from "./latex.js";
 import { resolveLiveMdLinkHref } from "./links.js";
+import { renderLiveMdMermaidResult } from "./mermaid.js";
 import { hashString } from "./analysis/ranges.js";
 import { isAsciiDigit } from "./util.js";
 
 export type MarkdownTable = LiveMdTableModel;
-
-const latexOptions: KatexOptions = {
-  maxExpand: 1000,
-  maxSize: 12,
-  output: "htmlAndMathml",
-  strict: "warn",
-  throwOnError: false,
-  trust: false,
-};
-
-export type LatexFormula = {
-  block: boolean;
-  displayMode: boolean;
-  source: string;
-  tex: string;
-};
-
-export type LatexRenderResult =
-  | {
-      html: string;
-      ok: true;
-      resultKey: string;
-    }
-  | {
-      message: string | null;
-      ok: false;
-      resultKey: string;
-    };
 
 export type MermaidDiagram = {
   source: string;
@@ -59,6 +30,7 @@ const defaultMermaidHeight = 160;
 const tableRowHeight = 28;
 
 const latexWidgetResults = new WeakMap<LatexWidget, LatexRenderResult>();
+let mermaidRenderSequence = 0;
 
 export class TaskCheckboxWidget extends WidgetType {
   private checked: boolean;
@@ -173,49 +145,6 @@ export class LatexWidget extends WidgetType {
     return false;
   }
 }
-
-export function renderLatexFormula(formula: LatexFormula): LatexRenderResult {
-  try {
-    let html = katex.renderToString(formula.tex, {
-      ...latexOptions,
-      displayMode: formula.displayMode,
-    });
-    return {
-      html,
-      ok: true,
-      resultKey: hashString(html),
-    };
-  } catch (error) {
-    let message = error instanceof Error ? error.message : null;
-    return {
-      message,
-      ok: false,
-      resultKey: hashString(`${formula.source}\0${message ?? ""}`),
-    };
-  }
-}
-
-type BeautifulMermaidModule = typeof import("beautiful-mermaid");
-
-type MermaidRenderResult = {
-  bindFunctions?: (element: Element) => void;
-  svg: string;
-};
-
-const beautifulMermaidThemeOptions: BeautifulMermaidRenderOptions = {
-  accent: "var(--live-md-mermaid-accent, var(--live-md-accent, #0f766e))",
-  bg: "var(--live-md-mermaid-bg, var(--live-md-bg, #fffdfa))",
-  border: "var(--live-md-mermaid-border, var(--live-md-border, #d5dcd8))",
-  fg: "var(--live-md-mermaid-text, var(--live-md-text, #202523))",
-  line: "var(--live-md-mermaid-line, var(--live-md-muted, #66706c))",
-  muted: "var(--live-md-mermaid-muted, var(--live-md-muted, #66706c))",
-  surface: "var(--live-md-mermaid-surface, var(--live-md-bg, #fffdfa))",
-  transparent: true,
-};
-
-let beautifulMermaidPromise: Promise<BeautifulMermaidModule> | null = null;
-let mermaidPromise: Promise<Mermaid> | null = null;
-let mermaidRenderSequence = 0;
 
 export class MermaidWidget extends WidgetType {
   private heightKey: string;
@@ -613,23 +542,6 @@ function eventTargetLiveMdLink(target: EventTarget | null) {
     : null;
 }
 
-function loadMermaid() {
-  mermaidPromise ??= import("mermaid").then((module) => {
-    let mermaid = module.default;
-    mermaid.initialize({
-      securityLevel: "strict",
-      startOnLoad: false,
-    });
-    return mermaid;
-  });
-  return mermaidPromise;
-}
-
-function loadBeautifulMermaid() {
-  beautifulMermaidPromise ??= import("beautiful-mermaid");
-  return beautifulMermaidPromise;
-}
-
 function renderMermaidInto(
   element: HTMLElement,
   handle: LiveMdMermaidRenderHandle,
@@ -662,27 +574,6 @@ function cachedMermaidRenderResult(handle: LiveMdMermaidRenderHandle) {
   return handle.promise;
 }
 
-export async function renderLiveMdMermaidResult(
-  source: string,
-): Promise<LiveMdMermaidRenderResult> {
-  try {
-    let { svg, bindFunctions } = await renderMermaidSvg(source);
-    return {
-      bindFunctions,
-      ok: true,
-      resultKey: hashString(svg),
-      svg,
-    };
-  } catch (error) {
-    let message = error instanceof Error ? error.message : null;
-    return {
-      message,
-      ok: false,
-      resultKey: hashString(`${source}\0${message ?? ""}`),
-    };
-  }
-}
-
 function applyMermaidResult(
   element: HTMLElement,
   result: LiveMdMermaidRenderResult,
@@ -701,39 +592,6 @@ function applyMermaidResult(
     if (result.message) element.title = result.message;
   }
   rememberMermaidElementHeight(element, heights, result.resultKey, fallbackHeightKey);
-}
-
-async function renderMermaidSvg(source: string): Promise<MermaidRenderResult> {
-  try {
-    let { renderMermaidSVG } = await loadBeautifulMermaid();
-    let svg = prepareBeautifulMermaidSvg(renderMermaidSVG(source, beautifulMermaidThemeOptions));
-    if (!svg.trim()) throw new Error("beautiful-mermaid returned an empty SVG");
-    return { svg };
-  } catch {
-    return renderMermaidSvgWithOfficialRenderer(source);
-  }
-}
-
-async function renderMermaidSvgWithOfficialRenderer(source: string): Promise<MermaidRenderResult> {
-  let mermaid = await loadMermaid();
-  let id = `cm-md-mermaid-${++mermaidRenderSequence}`;
-  return mermaid.render(id, source);
-}
-
-function prepareBeautifulMermaidSvg(svg: string) {
-  return stripCssImports(svg)
-    .replace(
-      /text\s*\{\s*font-family:\s*'[^']+',\s*system-ui,\s*sans-serif;\s*\}/,
-      "text { font-family: var(--live-md-mermaid-font, var(--live-md-font-ui)); }",
-    )
-    .replace(
-      /\.mono\s*\{\s*font-family:\s*'JetBrains Mono',\s*'SF Mono',\s*'Fira Code',\s*ui-monospace,\s*monospace;\s*\}/,
-      ".mono { font-family: var(--live-md-mermaid-mono-font, var(--live-md-font-code)); }",
-    );
-}
-
-function stripCssImports(svg: string) {
-  return svg.replace(/^\s*@import\s+url\(['"][^'"]+['"]\);\s*/gm, "");
 }
 
 function appendSvg(parent: HTMLElement, svg: string) {

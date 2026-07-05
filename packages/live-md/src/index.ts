@@ -57,6 +57,7 @@ export {
   liveMdMarkdownDocumentCss,
   liveMdMarkdownDocumentCssVariables,
   renderMarkdownToHtml,
+  type LiveMdMarkdownDocumentCssOptions,
   type MarkdownHtmlImage,
   type MarkdownHtmlImageSourceResolver,
   type MarkdownHtmlRenderOptions,
