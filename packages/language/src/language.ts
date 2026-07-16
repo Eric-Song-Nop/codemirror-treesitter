@@ -683,6 +683,7 @@ class NestedTreeBuild {
     private readonly doc: Text,
     oldTree: Tree | null,
     nativeParsers?: Map<TreeSitterParser, TSParser>,
+    private readonly changedRanges: ChangedRangeIndex | null = null,
   ) {
     this.ownsNativeParsers = !nativeParsers;
     this.nativeParsers = nativeParsers ?? new Map();
@@ -751,10 +752,20 @@ class NestedTreeBuild {
             parser.skipNestedRanges(ranges);
             continue;
           }
+          let oldMatch = frame.oldMatcher.match(parser, ranges);
+          if (
+            oldMatch?.exact &&
+            oldMatch.tree.tree.tree &&
+            this.changedRanges &&
+            !this.changedRanges.touches(ranges)
+          ) {
+            frame.nested.push(oldMatch.tree);
+            continue;
+          }
           frame.task = {
             parser,
             ranges,
-            oldNested: frame.oldMatcher.take(parser, ranges),
+            oldNested: oldMatch?.tree ?? null,
           };
           continue;
         }
@@ -816,6 +827,48 @@ function disposeParsers(parsers: Map<TreeSitterParser, TSParser>) {
 function disposeTrees(trees: Set<TSTree>) {
   for (let tree of trees) tree.delete();
   trees.clear();
+}
+
+class ChangedRangeIndex {
+  static readonly empty = new ChangedRangeIndex([]);
+
+  private constructor(private readonly ranges: readonly DocRange[]) {}
+
+  static fromChanges(changes: ChangeDesc) {
+    let ranges: DocRange[] = [];
+    changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+      ranges.push({ from: fromB, to: toB });
+    });
+    return ranges.length ? new ChangedRangeIndex(ranges) : ChangedRangeIndex.empty;
+  }
+
+  touches(ranges: readonly DocRange[]) {
+    return ranges.some((range) => this.touchesRange(range));
+  }
+
+  private touchesRange(range: DocRange) {
+    let low = 0;
+    let high = this.ranges.length;
+    while (low < high) {
+      let middle = (low + high) >> 1;
+      if (this.ranges[middle]!.to < range.from) low = middle + 1;
+      else high = middle;
+    }
+    for (let index = low; index < this.ranges.length; index++) {
+      let changed = this.ranges[index]!;
+      if (changed.from > range.to) break;
+      if (changed.from == changed.to) {
+        if (changed.from >= range.from && changed.from <= range.to) return true;
+      } else if (changed.from < range.to && changed.to > range.from) {
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+export function __testChangedRangesTouch(changes: ChangeDesc, ranges: readonly DocRange[]) {
+  return ChangedRangeIndex.fromChanges(changes).touches(ranges);
 }
 
 function editRange(changes: ChangeDesc, range: DocRange): DocRange {
@@ -1077,6 +1130,7 @@ class ParseContext {
   private oldTree: Tree | null = null;
   private pendingTree: TSTree | null = null;
   private treeBuild: NestedTreeBuild | null = null;
+  private changedRanges: ChangedRangeIndex | null = null;
   private skipped: { from: number; to: number }[] = [];
   scheduleOn: Promise<unknown> | null = null;
 
@@ -1126,6 +1180,7 @@ class ParseContext {
             this.state.doc,
             this.oldTree,
             this.nestedTSParsers,
+            this.changedRanges,
           );
           tree = this.treeBuild.work(shouldStop);
         } else {
@@ -1165,6 +1220,7 @@ class ParseContext {
       to: changes.mapPos(this.viewport.to, 1),
     });
     cx.oldTree = oldTree;
+    cx.changedRanges = ChangedRangeIndex.fromChanges(changes);
     cx.scheduleOn = this.scheduleOn;
     cx.skipped = this.skipped
       .map((range) => ({
@@ -1192,6 +1248,7 @@ class ParseContext {
     this.treeBuild?.cancel();
     this.treeBuild = null;
     this.skipped = [];
+    this.changedRanges = null;
     if (this.tree.tree) {
       this.oldTree = this.tree;
       this.pendingTree = this.tree.tree;

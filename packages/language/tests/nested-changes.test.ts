@@ -1,5 +1,10 @@
+import { ChangeSet } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
-import { __testCollectChangedRanges, TreeSitterParser } from "../src/language.js";
+import {
+  __testChangedRangesTouch,
+  __testCollectChangedRanges,
+  TreeSitterParser,
+} from "../src/language.js";
 import { Tree, type DocRange, type NestedTree } from "../src/tree.js";
 import type { Range as TSRange, Tree as TSTree } from "web-tree-sitter";
 
@@ -180,5 +185,31 @@ describe("nested changed-range pairing", () => {
     expect(
       matchStats.indexedGroups + matchStats.indexedRanges + matchStats.exactLookups,
     ).toBeLessThanOrEqual(count * 3);
+  });
+});
+
+describe("nested text change overlap", () => {
+  it("uses half-open boundaries for inserted and replacement text", () => {
+    let insertion = ChangeSet.of({ from: 5, insert: "xx" }, 10).desc;
+    let replacement = ChangeSet.of({ from: 5, to: 7, insert: "yy" }, 10).desc;
+
+    for (let changes of [insertion, replacement]) {
+      expect(__testChangedRangesTouch(changes, [{ from: 0, to: 5 }])).toBe(false);
+      expect(__testChangedRangesTouch(changes, [{ from: 7, to: 10 }])).toBe(false);
+      expect(__testChangedRangesTouch(changes, [{ from: 6, to: 8 }])).toBe(true);
+    }
+  });
+
+  it("keeps zero-width deletions and does not fill multi-range holes", () => {
+    let deletion = ChangeSet.of({ from: 5, to: 7, insert: "" }, 10).desc;
+
+    expect(__testChangedRangesTouch(deletion, [{ from: 0, to: 5 }])).toBe(true);
+    expect(__testChangedRangesTouch(deletion, [{ from: 5, to: 8 }])).toBe(true);
+    expect(
+      __testChangedRangesTouch(deletion, [
+        { from: 0, to: 4 },
+        { from: 6, to: 8 },
+      ]),
+    ).toBe(false);
   });
 });

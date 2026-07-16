@@ -121,6 +121,49 @@ function rangeGroupKey(ranges: readonly DocRange[] | undefined) {
   return ranges ? ranges.map((range) => `${range.from}:${range.to}`).join(",") : "root";
 }
 
+function keepNestedOnEqualLengthEdit(parser: TreeSitterParser) {
+  let editCount = 0;
+  parser.editWrappedTree = ((tree: Tree, _changes: unknown, oldDoc: Text, newDoc: Text) => {
+    if (oldDoc.length != newDoc.length) throw new Error("fake edit must preserve document length");
+    return new Tree(fakeTree(`edited-root-${++editCount}`), parser, newDoc.length, tree.nested);
+  }) as TreeSitterParser["editWrappedTree"];
+}
+
+function directReuseFixture(doc: string, groups: readonly (readonly DocRange[])[]) {
+  let nestedCalls: string[] = [];
+  let nested = fakeParser(({ ranges }) => {
+    let key = rangeGroupKey(ranges);
+    nestedCalls.push(key);
+    return fakeTree(`nested-${nestedCalls.length}-${key}`);
+  });
+  let sourceCalls = 0;
+  let root = fakeParser(
+    () => fakeTree("root"),
+    [
+      {
+        parser: nested,
+        ranges() {
+          sourceCalls++;
+          return groups;
+        },
+      },
+    ],
+  );
+  keepNestedOnEqualLengthEdit(root);
+  let state = EditorState.create({ doc });
+  let context = ParseContext.create(root, state);
+  expect(context.work(() => false)).toBe(true);
+  return { context, state, nestedCalls, sourceCalls: () => sourceCalls };
+}
+
+function changedContext(context: ParseContext, state: EditorState, from: number, insert: string) {
+  let transaction = state.update({ changes: { from, to: from + insert.length, insert } });
+  return {
+    context: context.changes(transaction.changes, state, transaction.state),
+    state: transaction.state,
+  };
+}
+
 describe("resumable nested parse sessions", () => {
   it("checks the budget between tiny groups and resumes without replay before publishing", () => {
     let nestedCalls: string[] = [];
@@ -273,5 +316,132 @@ describe("resumable nested parse sessions", () => {
     expect(created[0]!.resetCalls).toBe(1);
     expect(created[0]!.deleteCalls).toBe(1);
     expect(completedTree.deleteCalls).toBe(1);
+  });
+});
+
+describe("incremental nested direct reuse", () => {
+  it("reuses untouched exact groups in FIFO order without calling nested parseWith", () => {
+    let fixture = directReuseFixture("abcdefghij", [
+      [{ from: 0, to: 1 }],
+      [{ from: 2, to: 3 }],
+      [{ from: 4, to: 5 }],
+    ]);
+    let firstGeneration = Array.from(fixture.context.tree.nested);
+    fixture.nestedCalls.length = 0;
+
+    let next = changedContext(fixture.context, fixture.state, 8, "Z");
+    expect(next.context.work(() => false)).toBe(true);
+
+    expect(fixture.nestedCalls).toEqual([]);
+    expect(fixture.sourceCalls()).toBe(2);
+    expect(next.context.tree.nested).toHaveLength(firstGeneration.length);
+    for (let index = 0; index < firstGeneration.length; index++) {
+      expect(next.context.tree.nested[index]).toBe(firstGeneration[index]);
+    }
+  });
+
+  it("reparses only the exact group touched by an edit", () => {
+    let fixture = directReuseFixture("abcdefghij", [
+      [{ from: 0, to: 1 }],
+      [{ from: 2, to: 3 }],
+      [{ from: 4, to: 5 }],
+    ]);
+    let firstGeneration = Array.from(fixture.context.tree.nested);
+    fixture.nestedCalls.length = 0;
+
+    let next = changedContext(fixture.context, fixture.state, 2, "Z");
+    expect(next.context.work(() => false)).toBe(true);
+
+    expect(fixture.nestedCalls).toEqual(["2:3"]);
+    expect(next.context.tree.nested[0]).toBe(firstGeneration[0]);
+    expect(next.context.tree.nested[1]).not.toBe(firstGeneration[1]);
+    expect(next.context.tree.nested[2]).toBe(firstGeneration[2]);
+  });
+
+  it("does not directly reuse groups across an externally invalidated reset", () => {
+    let fixture = directReuseFixture("abcdef", [
+      [{ from: 0, to: 1 }],
+      [{ from: 2, to: 3 }],
+      [{ from: 4, to: 5 }],
+    ]);
+    fixture.nestedCalls.length = 0;
+
+    fixture.context.reset();
+    expect(fixture.context.work(() => false)).toBe(true);
+
+    expect(fixture.nestedCalls).toEqual(["0:1", "2:3", "4:5"]);
+    expect(fixture.sourceCalls()).toBe(2);
+  });
+
+  it("preserves pending changed ranges when an incomplete generation is reset", () => {
+    let fixture = directReuseFixture("abcdefghij", [
+      [{ from: 0, to: 1 }],
+      [{ from: 2, to: 3 }],
+      [{ from: 4, to: 5 }],
+    ]);
+    fixture.nestedCalls.length = 0;
+    let next = changedContext(fixture.context, fixture.state, 2, "Z");
+
+    expect(next.context.work(() => true)).toBe(false);
+    next.context.reset();
+    expect(next.context.work(() => false)).toBe(true);
+
+    expect(fixture.nestedCalls).toEqual(["0:1", "2:3", "4:5"]);
+  });
+
+  it("rebuilds a missing second-level nested parser after reset", () => {
+    let leafCalls: string[] = [];
+    let leaf = fakeParser(({ ranges }) => {
+      leafCalls.push(rangeGroupKey(ranges));
+      return fakeTree("leaf");
+    });
+    let skipping = TreeSitterParser.getSkippingParser();
+    let loaded = false;
+    let parent = fakeParser(
+      () => fakeTree("parent"),
+      [
+        {
+          parser: () => (loaded ? leaf : skipping),
+          ranges: () => [[{ from: 2, to: 3 }]],
+        },
+      ],
+    );
+    let root = fakeParser(
+      () => fakeTree("root"),
+      [{ parser: parent, ranges: () => [[{ from: 0, to: 5 }]] }],
+    );
+    let context = ParseContext.create(root, EditorState.create({ doc: "abcdef" }));
+
+    expect(context.work(() => false)).toBe(true);
+    expect(context.tree.nested[0]!.tree.nested).toHaveLength(0);
+    expect(leafCalls).toEqual([]);
+
+    loaded = true;
+    context.reset();
+    expect(context.work(() => false)).toBe(true);
+
+    expect(leafCalls).toEqual(["2:3"]);
+    expect(context.tree.nested[0]!.tree.nested).toHaveLength(1);
+  });
+
+  it("directly reuses 10,000 untouched groups without wall-clock assertions", () => {
+    let count = 10_000;
+    let groups = Array.from({ length: count }, (_, index) => [
+      { from: index * 2, to: index * 2 + 1 },
+    ]);
+    let fixture = directReuseFixture("x".repeat(count * 2 + 2), groups);
+    let firstGeneration = Array.from(fixture.context.tree.nested);
+    fixture.nestedCalls.length = 0;
+    let sourceCallsBefore = fixture.sourceCalls();
+
+    let next = changedContext(fixture.context, fixture.state, count * 2, "Z");
+    expect(next.context.work(() => false)).toBe(true);
+
+    expect(fixture.nestedCalls).toHaveLength(0);
+    expect(fixture.sourceCalls() - sourceCallsBefore).toBe(1);
+    expect(next.context.tree.nested).toHaveLength(count);
+    for (let index = 0; index < count; index++) {
+      expect(next.context.tree.nested[index]).toBe(firstGeneration[index]);
+    }
   });
 });

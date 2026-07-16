@@ -9,6 +9,11 @@ export interface NestedTreeMatcherStats {
   rangeComparisons: number;
 }
 
+export interface NestedTreeMatch {
+  readonly tree: NestedTree;
+  readonly exact: boolean;
+}
+
 interface ExactQueue {
   readonly entries: readonly MatchEntry[];
   next: number;
@@ -91,15 +96,19 @@ export class NestedTreeMatcher {
   }
 
   take(parser: TreeConfig, ranges: readonly DocRange[]): NestedTree | null {
+    return this.match(parser, ranges)?.tree ?? null;
+  }
+
+  match(parser: TreeConfig, ranges: readonly DocRange[]): NestedTreeMatch | null {
     let exact = this.takeExactEntry(parser, ranges);
-    if (exact.known) return exact.entry?.tree ?? null;
+    if (exact.known) return exact.entry ? { tree: exact.entry.tree, exact: true } : null;
 
     let index = this.indexes.get(parser);
     if (!index) return null;
     for (let range of ranges) {
       this.stats.intervalQueries++;
       let found = this.findOverlap(index.intervals, range);
-      if (found) return found.entry.tree;
+      if (found) return { tree: found.entry.tree, exact: false };
     }
     return null;
   }
