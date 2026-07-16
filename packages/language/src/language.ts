@@ -32,6 +32,7 @@ import {
   type TreeConfig,
   pointAfterText,
 } from "./tree.js";
+import { NestedTreeMatcher } from "./nested-tree-matcher.js";
 import { Tag, tagsForCapture } from "./tags.js";
 
 export {
@@ -609,6 +610,10 @@ export function __testResolveWasmPath(wasm: string | Uint8Array) {
   if (wasm.startsWith("/node_modules/") || wasm.startsWith("/src/")) return cwd + wasm;
   if (wasm.startsWith("/packages/") || wasm.startsWith("/apps/")) return workspaceRoot(cwd) + wasm;
   return wasm;
+}
+
+export function __testCreateNestedTreeMatcher(nested: readonly NestedTree[]) {
+  return new NestedTreeMatcher(nested);
 }
 
 function isBrowserLike() {
