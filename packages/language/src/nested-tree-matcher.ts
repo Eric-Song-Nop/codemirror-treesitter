@@ -15,7 +15,7 @@ export interface NestedTreeMatch {
 }
 
 interface ExactQueue {
-  readonly entries: readonly MatchEntry[];
+  readonly entries: MatchEntry[];
   next: number;
 }
 
@@ -28,28 +28,36 @@ interface IndexedRange {
   readonly from: number;
   readonly to: number;
   readonly entry: MatchEntry;
+  readonly order: number;
 }
 
 interface IntervalNode {
   readonly range: IndexedRange;
-  readonly left: IntervalNode | null;
-  readonly right: IntervalNode | null;
-  readonly maxTo: number;
+  left: IntervalNode | null;
+  right: IntervalNode | null;
+  height: number;
+  maxTo: number;
 }
 
 interface ParserIndex {
   readonly exact: Map<string, ExactQueue>;
-  readonly intervals: IntervalNode | null;
+  intervals: IntervalNode | null;
 }
 
 export class NestedTreeMatcher {
   readonly stats: NestedTreeMatcherStats;
 
   private readonly indexes = new Map<TreeConfig, ParserIndex>();
-  private readonly entries: readonly MatchEntry[];
+  private readonly entries: MatchEntry[] = [];
+  private nestedIndex = 0;
+  private rangeIndex = 0;
+  private rangeOrder = 0;
+  private activeEntry: MatchEntry | null = null;
+  private activeKey = "";
+  private ready = false;
 
   constructor(
-    nested: readonly NestedTree[],
+    private readonly nested: readonly NestedTree[],
     stats: NestedTreeMatcherStats = {
       indexedGroups: 0,
       indexedRanges: 0,
@@ -58,41 +66,53 @@ export class NestedTreeMatcher {
       intervalNodeVisits: 0,
       rangeComparisons: 0,
     },
+    deferred = false,
   ) {
     this.stats = stats;
-    this.entries = nested.map((tree) => ({ tree, taken: false }));
-    let exact = new Map<TreeConfig, Map<string, MatchEntry[]>>();
-    let intervals = new Map<TreeConfig, IndexedRange[]>();
+    if (!deferred) this.work();
+  }
 
-    for (let entry of this.entries) {
-      let { tree } = entry;
-      this.stats.indexedGroups++;
-      this.stats.indexedRanges += tree.ranges.length;
-
-      let parserExact = exact.get(tree.parser);
-      if (!parserExact) exact.set(tree.parser, (parserExact = new Map()));
-      let key = rangeKey(tree.ranges);
-      let queue = parserExact.get(key);
-      if (queue) queue.push(entry);
-      else parserExact.set(key, [entry]);
-
-      let parserIntervals = intervals.get(tree.parser);
-      if (!parserIntervals) intervals.set(tree.parser, (parserIntervals = []));
-      for (let range of tree.ranges) {
-        parserIntervals.push({ from: range.from, to: range.to, entry });
+  work(shouldStop?: () => boolean): boolean {
+    if (this.ready) return true;
+    while (this.nestedIndex < this.nested.length) {
+      if (shouldStop?.()) return false;
+      let entry = this.activeEntry;
+      if (!entry) {
+        entry = { tree: this.nested[this.nestedIndex]!, taken: false };
+        this.activeEntry = entry;
+        this.entries.push(entry);
+        this.stats.indexedGroups++;
       }
-    }
 
-    for (let [parser, parserExact] of exact) {
-      let parserIntervals = intervals.get(parser) ?? [];
-      parserIntervals.sort((a, b) => a.from - b.from || a.to - b.to);
-      this.indexes.set(parser, {
-        exact: new Map(
-          Array.from(parserExact, ([key, entries]) => [key, { entries, next: 0 }] as const),
-        ),
-        intervals: buildIntervalTree(parserIntervals, 0, parserIntervals.length),
-      });
+      let { tree } = entry;
+      let parserIndex = this.indexes.get(tree.parser);
+      if (!parserIndex) {
+        parserIndex = { exact: new Map(), intervals: null };
+        this.indexes.set(tree.parser, parserIndex);
+      }
+      while (this.rangeIndex < tree.ranges.length) {
+        if (shouldStop?.()) return false;
+        let range = tree.ranges[this.rangeIndex++]!;
+        this.activeKey += `${range.from}:${range.to};`;
+        parserIndex.intervals = insertInterval(parserIndex.intervals, {
+          from: range.from,
+          to: range.to,
+          entry,
+          order: this.rangeOrder++,
+        });
+        this.stats.indexedRanges++;
+      }
+
+      let exact = parserIndex.exact.get(this.activeKey);
+      if (exact) exact.entries.push(entry);
+      else parserIndex.exact.set(this.activeKey, { entries: [entry], next: 0 });
+      this.nestedIndex++;
+      this.rangeIndex = 0;
+      this.activeEntry = null;
+      this.activeKey = "";
     }
+    this.ready = true;
+    return true;
   }
 
   take(parser: TreeConfig, ranges: readonly DocRange[]): NestedTree | null {
@@ -100,6 +120,7 @@ export class NestedTreeMatcher {
   }
 
   match(parser: TreeConfig, ranges: readonly DocRange[]): NestedTreeMatch | null {
+    this.ensureReady();
     let exact = this.takeExactEntry(parser, ranges);
     if (exact.known) return exact.entry ? { tree: exact.entry.tree, exact: true } : null;
 
@@ -114,11 +135,17 @@ export class NestedTreeMatcher {
   }
 
   takeExact(parser: TreeConfig, ranges: readonly DocRange[]): NestedTree | null {
+    this.ensureReady();
     return this.takeExactEntry(parser, ranges).entry?.tree ?? null;
   }
 
   remaining(): NestedTree[] {
+    this.ensureReady();
     return this.entries.filter((entry) => !entry.taken).map((entry) => entry.tree);
+  }
+
+  private ensureReady() {
+    if (!this.ready) throw new Error("Nested tree matcher index is incomplete");
   }
 
   private takeExactEntry(
@@ -156,20 +183,60 @@ function rangeKey(ranges: readonly DocRange[]) {
   return key;
 }
 
-function buildIntervalTree(
-  ranges: readonly IndexedRange[],
-  from: number,
-  to: number,
-): IntervalNode | null {
-  if (from == to) return null;
-  let middle = (from + to) >> 1;
-  let left = buildIntervalTree(ranges, from, middle);
-  let right = buildIntervalTree(ranges, middle + 1, to);
-  let range = ranges[middle]!;
-  return {
-    range,
-    left,
-    right,
-    maxTo: Math.max(range.to, left?.maxTo ?? -Infinity, right?.maxTo ?? -Infinity),
-  };
+function insertInterval(node: IntervalNode | null, range: IndexedRange): IntervalNode {
+  if (!node) {
+    return { range, left: null, right: null, height: 1, maxTo: range.to };
+  }
+  if (compareIndexedRanges(range, node.range) < 0) node.left = insertInterval(node.left, range);
+  else node.right = insertInterval(node.right, range);
+  refreshIntervalNode(node);
+
+  let balance = intervalHeight(node.left) - intervalHeight(node.right);
+  if (balance > 1) {
+    if (compareIndexedRanges(range, node.left!.range) > 0)
+      node.left = rotateIntervalLeft(node.left!);
+    return rotateIntervalRight(node);
+  }
+  if (balance < -1) {
+    if (compareIndexedRanges(range, node.right!.range) < 0) {
+      node.right = rotateIntervalRight(node.right!);
+    }
+    return rotateIntervalLeft(node);
+  }
+  return node;
+}
+
+function compareIndexedRanges(left: IndexedRange, right: IndexedRange) {
+  return left.from - right.from || left.to - right.to || left.order - right.order;
+}
+
+function intervalHeight(node: IntervalNode | null) {
+  return node?.height ?? 0;
+}
+
+function refreshIntervalNode(node: IntervalNode) {
+  node.height = Math.max(intervalHeight(node.left), intervalHeight(node.right)) + 1;
+  node.maxTo = Math.max(
+    node.range.to,
+    node.left?.maxTo ?? -Infinity,
+    node.right?.maxTo ?? -Infinity,
+  );
+}
+
+function rotateIntervalLeft(node: IntervalNode) {
+  let right = node.right!;
+  node.right = right.left;
+  right.left = node;
+  refreshIntervalNode(node);
+  refreshIntervalNode(right);
+  return right;
+}
+
+function rotateIntervalRight(node: IntervalNode) {
+  let left = node.left!;
+  node.left = left.right;
+  left.right = node;
+  refreshIntervalNode(node);
+  refreshIntervalNode(left);
+  return left;
 }

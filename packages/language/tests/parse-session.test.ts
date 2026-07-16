@@ -633,6 +633,38 @@ describe("resumable nested parse sessions", () => {
 });
 
 describe("incremental nested direct reuse", () => {
+  it("checks the budget before indexing old nested groups and resumes without replay", () => {
+    let count = 10_000;
+    let nested = fakeParser(() => fakeTree("unexpected nested parse"));
+    let root = fakeParser(() => fakeTree("root"), [{ parser: nested, ranges: () => [] }]);
+    keepNestedOnEqualLengthEdit(root);
+    let reads = 0;
+    let oldNested = new Proxy(
+      Array.from({ length: count }, (_, index) => ({
+        parser: nested,
+        ranges: [{ from: index * 2, to: index * 2 + 1 }],
+        tree: new Tree(fakeTree(`old-${index}`), nested, count * 2),
+      })),
+      {
+        get(target, property, receiver) {
+          if (typeof property == "string" && /^\d+$/.test(property)) reads++;
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    let state = EditorState.create({ doc: "x" });
+    let context = ParseContext.create(root, state);
+    context.tree = new Tree(fakeTree("old-root"), root, state.doc.length, oldNested);
+    let transaction = state.update({ changes: { from: 0, to: 1, insert: "y" } });
+    let next = context.changes(transaction.changes, state, transaction.state);
+
+    expect(next.work(() => true)).toBe(false);
+    expect(reads).toBe(0);
+
+    expect(next.work(() => false)).toBe(true);
+    expect(reads).toBe(count);
+  });
+
   it("reuses untouched exact groups in FIFO order without calling nested parseWith", () => {
     let fixture = directReuseFixture("abcdefghij", [
       [{ from: 0, to: 1 }],
