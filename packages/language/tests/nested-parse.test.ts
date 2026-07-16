@@ -17,7 +17,9 @@ describe("nested tree matching", () => {
     let nestedParser = TreeSitterParser.getSkippingParser();
     Object.defineProperties(nestedParser, {
       isSkippingParser: { value: false },
-      createParser: { value: () => ({}) as TSParser },
+      createParser: {
+        value: () => ({ delete() {}, reset() {} }) as TSParser,
+      },
       parseWith: { value: () => ({}) as TSTree },
     });
     let ranges = [{ from: 0, to: 1 }];

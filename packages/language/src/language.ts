@@ -234,11 +234,11 @@ export class TreeSitterParser implements TreeConfig {
     return this.nestedParsers.length > 0;
   }
 
-  private get isSkippingParser() {
+  get isSkippingParser() {
     return this.language == null;
   }
 
-  private skipNestedRanges(ranges: readonly DocRange[]) {
+  skipNestedRanges(ranges: readonly DocRange[]) {
     let cx = currentContext;
     if (!cx) return;
     for (let range of ranges) cx.skipUntilInView(range.from, range.to);
@@ -314,38 +314,10 @@ export class TreeSitterParser implements TreeConfig {
     shouldStop?: () => boolean,
     nestedParsers?: Map<TreeSitterParser, TSParser>,
   ): Tree | null {
-    let outer = new Tree(tree, this, doc.length);
-    if (!this.nestedParsers.length) return outer;
-    let nested: NestedTree[] = [];
-    let oldMatcher = new NestedTreeMatcher(oldTree?.nested ?? []);
-    for (let source of this.nestedParsers) {
-      for (let ranges of normalizeRangeGroups(source.ranges(outer))) {
-        let parser = resolveNestedParser(source.parser, outer, ranges);
-        if (!parser) continue;
-        if (parser.isSkippingParser) {
-          parser.skipNestedRanges(ranges);
-          continue;
-        }
-        let oldNested = oldMatcher.take(parser, ranges);
-        let tsParser = nestedParsers?.get(parser);
-        if (!tsParser) {
-          tsParser = parser.createParser();
-          nestedParsers?.set(parser, tsParser);
-        }
-        let parsed = parser.parseWith(
-          tsParser,
-          doc,
-          oldNested?.tree.tree ?? null,
-          shouldStop,
-          ranges,
-        );
-        if (!parsed) return null;
-        let tree = parser.wrapTree(parsed, doc, oldNested?.tree ?? null, shouldStop, nestedParsers);
-        if (!tree) return null;
-        nested.push({ parser, tree, ranges });
-      }
-    }
-    return new Tree(tree, this, doc.length, nested);
+    let build = new NestedTreeBuild(this, tree, doc, oldTree, nestedParsers);
+    let result = build.work(shouldStop);
+    if (!result) build.cancel();
+    return result;
   }
 
   editTree(tree: TSTree, changes: ChangeDesc, oldDoc: Text, newDoc: Text): TSTree {
@@ -658,15 +630,17 @@ function normalizeRanges(ranges: readonly DocRange[]): DocRange[] {
   return result;
 }
 
-function normalizeRangeGroups(ranges: NestedParserRanges): DocRange[][] {
+function* normalizeRangeGroups(ranges: NestedParserRanges): Generator<DocRange[]> {
   if (!ranges.length) return [];
   if (Array.isArray(ranges[0])) {
-    return (ranges as readonly (readonly DocRange[])[])
-      .map((group) => normalizeRanges(group))
-      .filter((group) => group.length);
+    for (let rangesInGroup of ranges as readonly (readonly DocRange[])[]) {
+      let group = normalizeRanges(rangesInGroup);
+      if (group.length) yield group;
+    }
+    return;
   }
   let group = normalizeRanges(ranges as readonly DocRange[]);
-  return group.length ? [group] : [];
+  if (group.length) yield group;
 }
 
 function resolveNestedParser(
@@ -675,6 +649,173 @@ function resolveNestedParser(
   ranges: readonly DocRange[],
 ): TreeSitterParser | null {
   return typeof parser == "function" ? parser(tree, ranges) : parser;
+}
+
+interface NestedBuildTask {
+  readonly parser: TreeSitterParser;
+  readonly ranges: readonly DocRange[];
+  readonly oldNested: NestedTree | null;
+}
+
+interface NestedBuildFrame {
+  readonly parser: TreeSitterParser;
+  readonly nativeTree: TSTree;
+  readonly outer: Tree;
+  readonly oldMatcher: NestedTreeMatcher;
+  readonly nested: NestedTree[];
+  sourceIndex: number;
+  source: NestedParserSource | null;
+  groups: Generator<DocRange[]> | null;
+  task: NestedBuildTask | null;
+}
+
+class NestedTreeBuild {
+  private readonly frames: NestedBuildFrame[];
+  private readonly nativeParsers: Map<TreeSitterParser, TSParser>;
+  private readonly ownsNativeParsers: boolean;
+  private readonly ownedTrees = new Set<TSTree>();
+  private result: Tree | null = null;
+  private cancelled = false;
+
+  constructor(
+    parser: TreeSitterParser,
+    nativeTree: TSTree,
+    private readonly doc: Text,
+    oldTree: Tree | null,
+    nativeParsers?: Map<TreeSitterParser, TSParser>,
+  ) {
+    this.ownsNativeParsers = !nativeParsers;
+    this.nativeParsers = nativeParsers ?? new Map();
+    this.frames = [this.createFrame(parser, nativeTree, oldTree)];
+  }
+
+  work(shouldStop?: () => boolean): Tree | null {
+    if (this.result || this.cancelled) return this.result;
+    try {
+      while (this.frames.length) {
+        let frame = this.frames[this.frames.length - 1]!;
+
+        if (
+          !frame.task &&
+          !frame.groups &&
+          frame.sourceIndex >= frame.parser.nestedParsers.length
+        ) {
+          let completed = new Tree(frame.nativeTree, frame.parser, this.doc.length, frame.nested);
+          this.frames.pop();
+          let parent = this.frames[this.frames.length - 1];
+          if (!parent) {
+            this.result = completed;
+            this.ownedTrees.clear();
+            if (this.ownsNativeParsers) disposeParsers(this.nativeParsers);
+            return completed;
+          }
+          let task = parent.task!;
+          parent.nested.push({ parser: task.parser, tree: completed, ranges: task.ranges });
+          parent.task = null;
+          continue;
+        }
+
+        if (shouldStop?.()) return null;
+
+        if (frame.task) {
+          let task = frame.task;
+          let nativeParser = this.nativeParsers.get(task.parser);
+          if (!nativeParser) {
+            nativeParser = task.parser.createParser();
+            this.nativeParsers.set(task.parser, nativeParser);
+          }
+          let parsed = task.parser.parseWith(
+            nativeParser,
+            this.doc,
+            task.oldNested?.tree.tree ?? null,
+            shouldStop,
+            task.ranges,
+          );
+          if (!parsed) return null;
+          this.ownedTrees.add(parsed);
+          this.frames.push(this.createFrame(task.parser, parsed, task.oldNested?.tree ?? null));
+          continue;
+        }
+
+        if (frame.groups) {
+          let next = frame.groups.next();
+          if (next.done) {
+            frame.groups = null;
+            frame.source = null;
+            continue;
+          }
+          let ranges = next.value;
+          let parser = resolveNestedParser(frame.source!.parser, frame.outer, ranges);
+          if (!parser) continue;
+          if (parser.isSkippingParser) {
+            parser.skipNestedRanges(ranges);
+            continue;
+          }
+          frame.task = {
+            parser,
+            ranges,
+            oldNested: frame.oldMatcher.take(parser, ranges),
+          };
+          continue;
+        }
+
+        if (frame.sourceIndex < frame.parser.nestedParsers.length) {
+          let source = frame.parser.nestedParsers[frame.sourceIndex++]!;
+          frame.source = source;
+          frame.groups = normalizeRangeGroups(source.ranges(frame.outer));
+          continue;
+        }
+      }
+    } catch (error) {
+      this.cancel();
+      throw error;
+    }
+    return this.result;
+  }
+
+  cancel() {
+    if (this.cancelled || this.result) return;
+    this.cancelled = true;
+    for (let frame of this.frames) frame.groups?.return(undefined);
+    let active = this.frames[this.frames.length - 1]?.task;
+    if (active) {
+      let parser = this.nativeParsers.get(active.parser) as
+        | (TSParser & { reset?: () => void })
+        | undefined;
+      parser?.reset?.();
+    }
+    this.frames.length = 0;
+    disposeTrees(this.ownedTrees);
+    if (this.ownsNativeParsers) disposeParsers(this.nativeParsers);
+  }
+
+  private createFrame(
+    parser: TreeSitterParser,
+    nativeTree: TSTree,
+    oldTree: Tree | null,
+  ): NestedBuildFrame {
+    return {
+      parser,
+      nativeTree,
+      outer: new Tree(nativeTree, parser, this.doc.length),
+      oldMatcher: new NestedTreeMatcher(oldTree?.nested ?? []),
+      nested: [],
+      sourceIndex: 0,
+      source: null,
+      groups: null,
+      task: null,
+    };
+  }
+}
+
+function disposeParsers(parsers: Map<TreeSitterParser, TSParser>) {
+  for (let parser of parsers.values()) parser.delete();
+  parsers.clear();
+}
+
+function disposeTrees(trees: Set<TSTree>) {
+  for (let tree of trees) tree.delete();
+  trees.clear();
 }
 
 function editRange(changes: ChangeDesc, range: DocRange): DocRange {
@@ -935,6 +1076,7 @@ class ParseContext {
   private readonly nestedTSParsers = new Map<TreeSitterParser, TSParser>();
   private oldTree: Tree | null = null;
   private pendingTree: TSTree | null = null;
+  private treeBuild: NestedTreeBuild | null = null;
   private skipped: { from: number; to: number }[] = [];
   scheduleOn: Promise<unknown> | null = null;
 
@@ -963,32 +1105,50 @@ class ParseContext {
         : timeout == null
           ? undefined
           : () => Date.now() >= endTime;
-    return withParseContext(this, () => {
-      this.skipped = [];
-      let parsed =
-        this.pendingTree ??
-        this.parser.parseWith(
-          this.tsParser,
-          this.state.doc,
-          this.oldTree?.tree ?? null,
-          shouldStop,
-        );
-      if (!parsed) return false;
-      this.pendingTree = parsed;
-      let tree = this.parser.wrapTree(
-        parsed,
-        this.state.doc,
-        this.oldTree,
-        shouldStop,
-        this.nestedTSParsers,
-      );
-      if (!tree) return false;
-      this.tree = tree;
-      this.pendingTree = null;
-      this.oldTree = null;
-      this.nestedTSParsers.clear();
-      return true;
-    });
+    try {
+      return withParseContext(this, () => {
+        if (!this.pendingTree && !this.treeBuild) this.skipped = [];
+        let parsed =
+          this.pendingTree ??
+          this.parser.parseWith(
+            this.tsParser,
+            this.state.doc,
+            this.oldTree?.tree ?? null,
+            shouldStop,
+          );
+        if (!parsed) return false;
+        this.pendingTree = parsed;
+        let tree: Tree | null;
+        if (this.parser instanceof TreeSitterParser) {
+          this.treeBuild ??= new NestedTreeBuild(
+            this.parser,
+            parsed,
+            this.state.doc,
+            this.oldTree,
+            this.nestedTSParsers,
+          );
+          tree = this.treeBuild.work(shouldStop);
+        } else {
+          tree = (
+            this.parser as unknown as {
+              wrapTree(tree: TSTree, doc: Text): Tree | null;
+            }
+          ).wrapTree(parsed, this.state.doc);
+        }
+        if (!tree) return false;
+        this.tree = tree;
+        this.pendingTree = null;
+        this.treeBuild = null;
+        this.oldTree = null;
+        disposeParsers(this.nestedTSParsers);
+        return true;
+      });
+    } catch (error) {
+      this.treeBuild?.cancel();
+      this.treeBuild = null;
+      disposeParsers(this.nestedTSParsers);
+      throw error;
+    }
   }
 
   takeTree() {
@@ -1029,12 +1189,15 @@ class ParseContext {
   }
 
   reset() {
+    this.treeBuild?.cancel();
+    this.treeBuild = null;
+    this.skipped = [];
     if (this.tree.tree) {
       this.oldTree = this.tree;
       this.pendingTree = this.tree.tree;
       this.tree = Tree.empty;
     }
-    this.nestedTSParsers.clear();
+    disposeParsers(this.nestedTSParsers);
   }
 
   skipUntilInView(from: number, to: number) {
