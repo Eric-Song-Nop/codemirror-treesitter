@@ -1,6 +1,13 @@
-import { EditorState, type Text } from "@codemirror/state";
+import { Compartment, EditorState, type Text } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
-import { ParseContext, Tree, TreeSitterParser, type DocRange } from "../src/index.js";
+import {
+  defineLanguageFacet,
+  Language,
+  ParseContext,
+  Tree,
+  TreeSitterParser,
+  type DocRange,
+} from "../src/index.js";
 import type { NestedParserSource } from "../src/language.js";
 import type { Parser as NativeParser, Tree as NativeTree } from "web-tree-sitter";
 
@@ -286,6 +293,180 @@ describe("resumable nested parse sessions", () => {
     expect(created).toHaveLength(1);
     expect(created[0]!.resetCalls).toBe(1);
     expect(created[0]!.deleteCalls).toBe(1);
+    expect(completedTree.deleteCalls).toBe(1);
+  });
+
+  it("releases an incomplete nested session when changes supersede its context", () => {
+    let rootParsers: FakeNativeParser[] = [];
+    let nestedParsers: FakeNativeParser[] = [];
+    let rootTrees: FakeNativeTree[] = [];
+    let completedTree = fakeTree("completed-before-change");
+    let closed = 0;
+    let shouldPause = true;
+    function* rangeGroups() {
+      try {
+        yield [{ from: 0, to: 1 }];
+        yield [{ from: 2, to: 3 }];
+      } finally {
+        closed++;
+      }
+    }
+    let nested = fakeParser(
+      ({ ranges }) => {
+        if (!shouldPause) return fakeTree(`nested-after-change-${rangeGroupKey(ranges)}`);
+        return rangeGroupKey(ranges) == "0:1" ? completedTree : pause;
+      },
+      [],
+      nestedParsers,
+    );
+    let root = fakeParser(
+      () => {
+        let tree = fakeTree(`root-${rootTrees.length + 1}`);
+        rootTrees.push(tree);
+        return tree;
+      },
+      [{ parser: nested, ranges: rangeGroups }],
+      rootParsers,
+    );
+    let state = EditorState.create({ doc: "xxxx" });
+    let context = ParseContext.create(root, state);
+
+    expect(context.work(() => false)).toBe(false);
+    expect(closed).toBe(0);
+    expect(rootParsers).toHaveLength(1);
+    expect(nestedParsers).toHaveLength(1);
+
+    let transaction = state.update({ changes: { from: 0, to: 1, insert: "y" } });
+    context.changes(transaction.changes, state, transaction.state);
+
+    expect(closed).toBe(1);
+    expect(rootParsers[0]!.resetCalls).toBe(1);
+    expect(rootParsers[0]!.deleteCalls).toBe(0);
+    expect(nestedParsers[0]!.resetCalls).toBe(1);
+    expect(nestedParsers[0]!.deleteCalls).toBe(1);
+    expect(rootTrees[0]!.deleteCalls).toBe(1);
+    expect(completedTree.deleteCalls).toBe(1);
+
+    context.reset();
+    expect(closed).toBe(1);
+    expect(rootParsers[0]!.resetCalls).toBe(1);
+    expect(rootParsers[0]!.deleteCalls).toBe(0);
+    expect(nestedParsers[0]!.resetCalls).toBe(1);
+    expect(nestedParsers[0]!.deleteCalls).toBe(1);
+    expect(rootTrees[0]!.deleteCalls).toBe(1);
+    expect(completedTree.deleteCalls).toBe(1);
+
+    shouldPause = false;
+    expect(context.work(() => false)).toBe(true);
+    expect(rootTrees).toHaveLength(2);
+  });
+
+  it("does not delete a borrowed root when changes supersede a reset rebuild", () => {
+    let rootParsers: FakeNativeParser[] = [];
+    let nestedParsers: FakeNativeParser[] = [];
+    let rootTrees: FakeNativeTree[] = [];
+    let resetBuildTree: FakeNativeTree | null = null;
+    let closed = 0;
+    let rebuilding = false;
+    function* rangeGroups() {
+      try {
+        yield [{ from: 0, to: 1 }];
+        yield [{ from: 2, to: 3 }];
+      } finally {
+        closed++;
+      }
+    }
+    let nested = fakeParser(
+      ({ ranges }) => {
+        let key = rangeGroupKey(ranges);
+        if (rebuilding && key == "2:3") return pause;
+        let tree = fakeTree(`nested-${key}`);
+        if (rebuilding && key == "0:1") resetBuildTree = tree;
+        return tree;
+      },
+      [],
+      nestedParsers,
+    );
+    let root = fakeParser(
+      () => {
+        let tree = fakeTree(`root-${rootTrees.length + 1}`);
+        rootTrees.push(tree);
+        return tree;
+      },
+      [{ parser: nested, ranges: rangeGroups }],
+      rootParsers,
+    );
+    let state = EditorState.create({ doc: "xxxx" });
+    let context = ParseContext.create(root, state);
+
+    expect(context.work(() => false)).toBe(true);
+    let publishedRoot = rootTrees[0]!;
+    expect(closed).toBe(1);
+
+    context.reset();
+    rebuilding = true;
+    expect(context.work(() => false)).toBe(false);
+    expect(closed).toBe(1);
+    expect(resetBuildTree).not.toBeNull();
+
+    let transaction = state.update({ changes: { from: 0, to: 1, insert: "y" } });
+    context.changes(transaction.changes, state, transaction.state);
+
+    expect(closed).toBe(2);
+    expect(publishedRoot.deleteCalls).toBe(0);
+    expect(resetBuildTree!.deleteCalls).toBe(1);
+    expect(nestedParsers[1]!.resetCalls).toBe(1);
+    expect(nestedParsers[1]!.deleteCalls).toBe(1);
+
+    rebuilding = false;
+    expect(context.work(() => false)).toBe(true);
+    expect(rootTrees).toHaveLength(2);
+    expect(publishedRoot.deleteCalls).toBe(0);
+  });
+
+  it("releases an incomplete nested session when its language is reconfigured", () => {
+    let rootParsers: FakeNativeParser[] = [];
+    let nestedParsers: FakeNativeParser[] = [];
+    let pendingRootTree = fakeTree("pending-before-reconfigure");
+    let completedTree = fakeTree("completed-before-reconfigure");
+    let closed = 0;
+    function* rangeGroups() {
+      try {
+        yield [{ from: 0, to: 1 }];
+        yield [{ from: 2, to: 3 }];
+      } finally {
+        closed++;
+      }
+    }
+    let nested = fakeParser(
+      ({ ranges }) => (rangeGroupKey(ranges) == "0:1" ? completedTree : pause),
+      [],
+      nestedParsers,
+    );
+    let root = fakeParser(
+      () => pendingRootTree,
+      [{ parser: nested, ranges: rangeGroups }],
+      rootParsers,
+    );
+    let replacement = fakeParser(() => fakeTree("replacement-root"));
+    let currentLanguage = new Language(defineLanguageFacet(), root);
+    let replacementLanguage = new Language(defineLanguageFacet(), replacement);
+    let compartment = new Compartment();
+    let state = EditorState.create({
+      doc: "xxxx",
+      extensions: [compartment.of(currentLanguage.extension)],
+    });
+
+    expect(closed).toBe(0);
+    expect(
+      () => state.update({ effects: compartment.reconfigure(replacementLanguage.extension) }).state,
+    ).not.toThrow();
+
+    expect(closed).toBe(1);
+    expect(rootParsers[0]!.resetCalls).toBe(1);
+    expect(nestedParsers[0]!.resetCalls).toBe(1);
+    expect(nestedParsers[0]!.deleteCalls).toBe(1);
+    expect(pendingRootTree.deleteCalls).toBe(1);
     expect(completedTree.deleteCalls).toBe(1);
   });
 

@@ -87,6 +87,20 @@ describe("stream parser compatibility", () => {
     });
   });
 
+  it("reparses stream languages after document edits", () => {
+    let language = StreamLanguage.define(demoParser);
+    let state = EditorState.create({
+      doc: "let value = 1;\n",
+      extensions: [language.extension],
+    });
+    let transaction = state.update({
+      changes: { from: state.doc.toString().indexOf("1"), to: 13, insert: '"ok"' },
+    });
+    let tree = ensureSyntaxTree(transaction.state, transaction.state.doc.length)!;
+
+    expect(tree.resolveInner(transaction.state.doc.toString().indexOf('"ok"')).name).toBe("string");
+  });
+
   it("uses stream parser indentation and legacy support", () => {
     let support = legacy(demoParser);
     let doc = "{\nvalue\n}\n";

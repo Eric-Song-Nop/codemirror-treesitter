@@ -1131,6 +1131,7 @@ class ParseContext {
   private readonly nestedTSParsers = new Map<TreeSitterParser, TSParser>();
   private oldTree: Tree | null = null;
   private pendingTree: TSTree | null = null;
+  private pendingTreeOwned = false;
   private treeBuild: NestedTreeBuild | null = null;
   private changedRanges: ChangedRangeIndex | null = null;
   private skipped: { from: number; to: number }[] = [];
@@ -1173,6 +1174,7 @@ class ParseContext {
             shouldStop,
           );
         if (!parsed) return false;
+        if (!this.pendingTree) this.pendingTreeOwned = true;
         this.pendingTree = parsed;
         let tree: Tree | null;
         if (this.parser instanceof TreeSitterParser) {
@@ -1195,6 +1197,7 @@ class ParseContext {
         if (!tree) return false;
         this.tree = tree;
         this.pendingTree = null;
+        this.pendingTreeOwned = false;
         this.treeBuild = null;
         this.oldTree = null;
         disposeParsers(this.nestedTSParsers);
@@ -1217,19 +1220,26 @@ class ParseContext {
       this.tree.tree && !changes.empty
         ? this.parser.editWrappedTree(this.tree, changes, startState.doc, newState.doc)
         : this.tree;
-    let cx = new ParseContext(this.parser, newState, Tree.empty, {
+    let viewport = {
       from: changes.mapPos(this.viewport.from, -1),
       to: changes.mapPos(this.viewport.to, 1),
-    });
-    cx.oldTree = oldTree;
-    cx.changedRanges = ChangedRangeIndex.fromChanges(changes);
-    cx.scheduleOn = this.scheduleOn;
-    cx.skipped = this.skipped
+    };
+    let skipped = this.skipped
       .map((range) => ({
         from: changes.mapPos(range.from, 1),
         to: changes.mapPos(range.to, -1),
       }))
       .filter((range) => range.from < range.to);
+    let scheduleOn = this.scheduleOn;
+    this.cancelPendingWork();
+    let cx = new ParseContext(this.parser, newState, Tree.empty, {
+      from: viewport.from,
+      to: viewport.to,
+    });
+    cx.oldTree = oldTree;
+    cx.changedRanges = ChangedRangeIndex.fromChanges(changes);
+    cx.scheduleOn = scheduleOn;
+    cx.skipped = skipped;
     return cx;
   }
 
@@ -1254,9 +1264,23 @@ class ParseContext {
     if (this.tree.tree) {
       this.oldTree = this.tree;
       this.pendingTree = this.tree.tree;
+      this.pendingTreeOwned = false;
       this.tree = Tree.empty;
     }
     disposeParsers(this.nestedTSParsers);
+  }
+
+  /** @internal */
+  cancelPendingWork() {
+    this.treeBuild?.cancel();
+    this.treeBuild = null;
+    disposeParsers(this.nestedTSParsers);
+    if (this.parser instanceof TreeSitterParser) {
+      this.tsParser.reset();
+      if (this.pendingTreeOwned) this.pendingTree?.delete();
+    }
+    this.pendingTree = null;
+    this.pendingTreeOwned = false;
   }
 
   skipUntilInView(from: number, to: number) {
@@ -1325,8 +1349,10 @@ Language.state = StateField.define<LanguageState>({
   create: (state) => LanguageState.init(state),
   update(value, tr) {
     for (let effect of tr.effects) if (effect.is(Language.setState)) return effect.value;
-    if (tr.startState.facet(language) != tr.state.facet(language))
+    if (tr.startState.facet(language) != tr.state.facet(language)) {
+      value.context.cancelPendingWork();
       return LanguageState.init(tr.state);
+    }
     return value.apply(tr);
   },
 });
