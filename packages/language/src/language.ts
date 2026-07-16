@@ -700,6 +700,8 @@ class NestedTreeBuild {
       while (this.frames.length) {
         let frame = this.frames[this.frames.length - 1]!;
 
+        if (frame.parser.nestedParsers.length && !frame.oldMatcher.work(shouldStop)) return null;
+
         if (
           !frame.task &&
           !frame.groups &&
@@ -813,7 +815,7 @@ class NestedTreeBuild {
       parser,
       nativeTree,
       outer: new Tree(nativeTree, parser, this.doc.length),
-      oldMatcher: new NestedTreeMatcher(oldTree?.nested ?? []),
+      oldMatcher: new NestedTreeMatcher(oldTree?.nested ?? [], undefined, true),
       nested: [],
       sourceIndex: 0,
       source: null,
