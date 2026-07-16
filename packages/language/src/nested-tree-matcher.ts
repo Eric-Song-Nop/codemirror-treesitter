@@ -10,14 +10,19 @@ export interface NestedTreeMatcherStats {
 }
 
 interface ExactQueue {
-  readonly trees: readonly NestedTree[];
+  readonly entries: readonly MatchEntry[];
   next: number;
+}
+
+interface MatchEntry {
+  readonly tree: NestedTree;
+  taken: boolean;
 }
 
 interface IndexedRange {
   readonly from: number;
   readonly to: number;
-  readonly tree: NestedTree;
+  readonly entry: MatchEntry;
 }
 
 interface IntervalNode {
@@ -33,22 +38,29 @@ interface ParserIndex {
 }
 
 export class NestedTreeMatcher {
-  readonly stats: NestedTreeMatcherStats = {
-    indexedGroups: 0,
-    indexedRanges: 0,
-    exactLookups: 0,
-    intervalQueries: 0,
-    intervalNodeVisits: 0,
-    rangeComparisons: 0,
-  };
+  readonly stats: NestedTreeMatcherStats;
 
   private readonly indexes = new Map<TreeConfig, ParserIndex>();
+  private readonly entries: readonly MatchEntry[];
 
-  constructor(nested: readonly NestedTree[]) {
-    let exact = new Map<TreeConfig, Map<string, NestedTree[]>>();
+  constructor(
+    nested: readonly NestedTree[],
+    stats: NestedTreeMatcherStats = {
+      indexedGroups: 0,
+      indexedRanges: 0,
+      exactLookups: 0,
+      intervalQueries: 0,
+      intervalNodeVisits: 0,
+      rangeComparisons: 0,
+    },
+  ) {
+    this.stats = stats;
+    this.entries = nested.map((tree) => ({ tree, taken: false }));
+    let exact = new Map<TreeConfig, Map<string, MatchEntry[]>>();
     let intervals = new Map<TreeConfig, IndexedRange[]>();
 
-    for (let tree of nested) {
+    for (let entry of this.entries) {
+      let { tree } = entry;
       this.stats.indexedGroups++;
       this.stats.indexedRanges += tree.ranges.length;
 
@@ -56,13 +68,13 @@ export class NestedTreeMatcher {
       if (!parserExact) exact.set(tree.parser, (parserExact = new Map()));
       let key = rangeKey(tree.ranges);
       let queue = parserExact.get(key);
-      if (queue) queue.push(tree);
-      else parserExact.set(key, [tree]);
+      if (queue) queue.push(entry);
+      else parserExact.set(key, [entry]);
 
       let parserIntervals = intervals.get(tree.parser);
       if (!parserIntervals) intervals.set(tree.parser, (parserIntervals = []));
       for (let range of tree.ranges) {
-        parserIntervals.push({ from: range.from, to: range.to, tree });
+        parserIntervals.push({ from: range.from, to: range.to, entry });
       }
     }
 
@@ -71,7 +83,7 @@ export class NestedTreeMatcher {
       parserIntervals.sort((a, b) => a.from - b.from || a.to - b.to);
       this.indexes.set(parser, {
         exact: new Map(
-          Array.from(parserExact, ([key, trees]) => [key, { trees, next: 0 }] as const),
+          Array.from(parserExact, ([key, entries]) => [key, { entries, next: 0 }] as const),
         ),
         intervals: buildIntervalTree(parserIntervals, 0, parserIntervals.length),
       });
@@ -79,19 +91,37 @@ export class NestedTreeMatcher {
   }
 
   take(parser: TreeConfig, ranges: readonly DocRange[]): NestedTree | null {
-    this.stats.exactLookups++;
+    let exact = this.takeExactEntry(parser, ranges);
+    if (exact.known) return exact.entry?.tree ?? null;
+
     let index = this.indexes.get(parser);
     if (!index) return null;
-
-    let exact = index.exact.get(rangeKey(ranges));
-    if (exact) return exact.trees[exact.next++] ?? null;
-
     for (let range of ranges) {
       this.stats.intervalQueries++;
       let found = this.findOverlap(index.intervals, range);
-      if (found) return found.tree;
+      if (found) return found.entry.tree;
     }
     return null;
+  }
+
+  takeExact(parser: TreeConfig, ranges: readonly DocRange[]): NestedTree | null {
+    return this.takeExactEntry(parser, ranges).entry?.tree ?? null;
+  }
+
+  remaining(): NestedTree[] {
+    return this.entries.filter((entry) => !entry.taken).map((entry) => entry.tree);
+  }
+
+  private takeExactEntry(
+    parser: TreeConfig,
+    ranges: readonly DocRange[],
+  ): { known: boolean; entry: MatchEntry | null } {
+    this.stats.exactLookups++;
+    let exact = this.indexes.get(parser)?.exact.get(rangeKey(ranges));
+    if (!exact) return { known: false, entry: null };
+    let entry = exact.entries[exact.next++] ?? null;
+    if (entry) entry.taken = true;
+    return { known: true, entry };
   }
 
   private findOverlap(node: IntervalNode | null, query: DocRange): IndexedRange | null {

@@ -1,6 +1,8 @@
+import { Text } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
 import { __testCreateNestedTreeMatcher, TreeSitterParser } from "../src/language.js";
 import { Tree, type DocRange, type NestedTree } from "../src/tree.js";
+import type { Parser as TSParser, Tree as TSTree } from "web-tree-sitter";
 
 function nested(parser: TreeSitterParser, ranges: readonly DocRange[], marker: number): NestedTree {
   return {
@@ -11,6 +13,31 @@ function nested(parser: TreeSitterParser, ranges: readonly DocRange[], marker: n
 }
 
 describe("nested tree matching", () => {
+  it("uses the matcher in the production nested wrapping path", () => {
+    let nestedParser = TreeSitterParser.getSkippingParser();
+    Object.defineProperties(nestedParser, {
+      isSkippingParser: { value: false },
+      createParser: { value: () => ({}) as TSParser },
+      parseWith: { value: () => ({}) as TSTree },
+    });
+    let ranges = [{ from: 0, to: 1 }];
+    let outerParser = TreeSitterParser.getSkippingParser().configure({
+      nested: [{ parser: nestedParser, ranges: () => [ranges] }],
+    });
+    let oldNested = [nested(nestedParser, ranges, 1)];
+    Object.defineProperty(oldNested, "find", {
+      value: () => {
+        throw new Error("legacy linear Array.find path was used");
+      },
+    });
+    let oldTree = new Tree({} as TSTree, outerParser, 1, oldNested);
+
+    let result = outerParser.wrapTree({} as TSTree, Text.of(["x"]), oldTree);
+
+    expect(result?.nested).toHaveLength(1);
+    expect(result?.nested[0]?.ranges).toEqual(ranges);
+  });
+
   it("takes exact duplicate range groups in FIFO order", () => {
     let parser = TreeSitterParser.getSkippingParser();
     let ranges = [{ from: 10, to: 20 }];

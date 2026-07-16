@@ -32,7 +32,7 @@ import {
   type TreeConfig,
   pointAfterText,
 } from "./tree.js";
-import { NestedTreeMatcher } from "./nested-tree-matcher.js";
+import { NestedTreeMatcher, type NestedTreeMatcherStats } from "./nested-tree-matcher.js";
 import { Tag, tagsForCapture } from "./tags.js";
 
 export {
@@ -317,6 +317,7 @@ export class TreeSitterParser implements TreeConfig {
     let outer = new Tree(tree, this, doc.length);
     if (!this.nestedParsers.length) return outer;
     let nested: NestedTree[] = [];
+    let oldMatcher = new NestedTreeMatcher(oldTree?.nested ?? []);
     for (let source of this.nestedParsers) {
       for (let ranges of normalizeRangeGroups(source.ranges(outer))) {
         let parser = resolveNestedParser(source.parser, outer, ranges);
@@ -325,14 +326,7 @@ export class TreeSitterParser implements TreeConfig {
           parser.skipNestedRanges(ranges);
           continue;
         }
-        let oldNested =
-          oldTree?.nested.find(
-            (tree) =>
-              tree.parser == parser &&
-              tree.ranges.some((oldRange) =>
-                ranges.some((range) => oldRange.from <= range.to && oldRange.to >= range.from),
-              ),
-          ) ?? null;
+        let oldNested = oldMatcher.take(parser, ranges);
         let tsParser = nestedParsers?.get(parser);
         if (!tsParser) {
           tsParser = parser.createParser();
@@ -1248,34 +1242,37 @@ function idleTime(deadline?: IdleDeadline) {
   return deadline && !isInputPending ? Math.max(Work.MinSlice, deadline.timeRemaining() - 5) : 1e9;
 }
 
-function collectChangedRanges(oldTree: Tree, newTree: Tree): DocRange[] {
+function collectChangedRanges(
+  oldTree: Tree,
+  newTree: Tree,
+  matcherStats?: NestedTreeMatcherStats,
+): DocRange[] {
   let ranges: DocRange[] = oldTree.tree
     ? oldTree.tree
         .getChangedRanges(newTree.tree!)
         .map((range) => ({ from: range.startIndex, to: range.endIndex }))
     : [{ from: 0, to: newTree.length }];
 
-  let matchedOldNested = new Set<NestedTree>();
+  let matcher = new NestedTreeMatcher(oldTree.nested, matcherStats);
   for (let newNested of newTree.nested) {
-    let oldNested = oldTree.nested.find(
-      (candidate) =>
-        candidate.parser == newNested.parser &&
-        candidate.ranges.some((oldRange) =>
-          newNested.ranges.some((range) => oldRange.from <= range.to && oldRange.to >= range.from),
-        ),
-    );
+    let oldNested = matcher.takeExact(newNested.parser, newNested.ranges);
     if (oldNested) {
-      matchedOldNested.add(oldNested);
-      ranges.push(...collectChangedRanges(oldNested.tree, newNested.tree));
+      ranges.push(...collectChangedRanges(oldNested.tree, newNested.tree, matcherStats));
     } else {
       ranges.push(...newNested.ranges);
     }
   }
 
-  for (let oldNested of oldTree.nested) {
-    if (!matchedOldNested.has(oldNested)) ranges.push(...oldNested.ranges);
-  }
+  for (let oldNested of matcher.remaining()) ranges.push(...oldNested.ranges);
   return ranges;
+}
+
+export function __testCollectChangedRanges(
+  oldTree: Tree,
+  newTree: Tree,
+  matcherStats?: NestedTreeMatcherStats,
+) {
+  return collectChangedRanges(oldTree, newTree, matcherStats);
 }
 
 export const language = Facet.define<Language, Language | null>({
