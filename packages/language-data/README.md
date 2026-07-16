@@ -27,7 +27,9 @@ Tree-sitter grammars and highlight queries instead of Lezer language packages.
 - Attach language data such as comments, indentation, close brackets, and
   folding props through the local language package.
 - Wire mixed-language parsing for entries such as HTML, Vue, and Markdown
-  inline regions.
+  inline regions. Generic Markdown streams one inline range group at a time so
+  nested parsing can stop at its work budget without eagerly scanning every
+  block.
 - Expose an explicit Markdown parser service for LiveMD callers that need a
   block-only Markdown language plus a separate Markdown inline parser without
   using the generic nested Markdown language entry.
@@ -59,6 +61,8 @@ The root entry point is `src/index.ts`.
 
 - `src/index.ts`: language registry, metadata, loaders, language data, and
   mixed-language setup.
+- `src/markdown-inline-ranges.ts`: lazy Markdown inline range traversal and the
+  eager compatibility collector used by the explicit parser service.
 - `src/assets.d.ts`: Vite import declarations for WASM and raw query assets.
 - `src/wasm/*`: bundled Tree-sitter WASM grammars used when no suitable
   package URL import is available.

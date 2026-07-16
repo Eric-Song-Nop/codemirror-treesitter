@@ -10,19 +10,18 @@ import {
   foldNodeProp,
   indentNodeProp,
   queryTreeCaptures,
-  queryTreeMatches,
-  queryNodeCaptures,
   tags,
   type DocRange,
   type NestedParserSource,
   type NodePropSource,
-  type SyntaxNode,
   type Tag,
   type Tree,
   type TreeSitterQueryCapture,
 } from "@codemirror-treesitter/language";
-import markdownInlineInjectionExclusionQuerySource from "./queries/markdown-inline-injection-exclusions.scm?raw";
-import markdownInlineInjectionQuerySource from "./queries/markdown-inline-injections.scm?raw";
+import {
+  collectMarkdownInlineRangeGroups,
+  iterateMarkdownInlineRangeGroups,
+} from "./markdown-inline-ranges.js";
 import rawTextQuerySource from "./queries/raw-text.scm?raw";
 
 type AssetLoader = () => Promise<string>;
@@ -1432,133 +1431,6 @@ const rawTextCaptureByParent = new Map([
   ["style_element", "style.raw"],
 ]);
 
-function markdownInlineRangeGroups() {
-  return (tree: Tree, within?: DocRange): DocRange[][] => {
-    if (within) return boundedMarkdownInlineRangeGroups(tree, within);
-    let rangeOptions = {
-      includeNested: false,
-    };
-    let exclusions = queryTreeCaptures(tree, markdownInlineInjectionExclusionQuerySource, {
-      ...rangeOptions,
-    });
-    return queryTreeMatches(tree, markdownInlineInjectionQuerySource, rangeOptions)
-      .filter((match) => match.setProperties?.["injection.language"] == "markdown_inline")
-      .flatMap((match) =>
-        match.captures
-          .filter((capture) => capture.name == "injection.content")
-          .map((capture) => rangesExcludingCaptures(captureRange(capture), exclusions))
-          .filter((ranges) => ranges.length > 0),
-      );
-  };
-}
-
-const markdownInlineInjectionNodeNames = ["inline", "pipe_table_cell"] as const;
-const markdownInlineInjectionNodeNameSet = new Set<string>(markdownInlineInjectionNodeNames);
-const markdownInlineSearchBoundaryNodeNames = new Set([
-  ...markdownInlineInjectionNodeNames,
-  "atx_heading",
-  "block_quote",
-  "list_item",
-  "paragraph",
-  "pipe_table",
-  "pipe_table_row",
-  "setext_heading",
-]);
-
-type MarkdownInlineTreeCursor = NonNullable<ReturnType<SyntaxNode["cursor"]>>;
-
-function boundedMarkdownInlineRangeGroups(tree: Tree, within: DocRange): DocRange[][] {
-  let root = boundedMarkdownInlineSearchRoot(tree, within);
-  if (!root) return [];
-  let cursor = root.cursor();
-  if (!cursor) return [];
-  let nodes: SyntaxNode[] = [];
-  try {
-    collectBoundedMarkdownInlineNodes(cursor, within, nodes);
-  } finally {
-    cursor.delete();
-  }
-
-  let seen = new Set<string>();
-  let rangeGroups: DocRange[][] = [];
-  for (let node of nodes) {
-    let key = `${node.name}:${node.from}:${node.to}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    let exclusions =
-      node.name == "inline"
-        ? queryNodeCaptures(node, markdownInlineInjectionExclusionQuerySource).filter(
-            (capture) => capture.name == "injection.excluded",
-          )
-        : [];
-    let ranges = rangesExcludingCaptures(nodeRange(node), exclusions);
-    if (ranges.length > 0) rangeGroups.push(ranges);
-  }
-  return rangeGroups;
-}
-
-function boundedMarkdownInlineSearchRoot(tree: Tree, within: DocRange): SyntaxNode | null {
-  if (within.from >= within.to) return null;
-  let node =
-    tree.topNode.descendantForIndex(within.from, Math.max(within.from, within.to - 1)) ??
-    tree.topNode;
-  while (node.parent && !markdownInlineSearchBoundaryNodeNames.has(node.name)) {
-    node = node.parent;
-  }
-  return node;
-}
-
-function collectBoundedMarkdownInlineNodes(
-  cursor: MarkdownInlineTreeCursor,
-  within: DocRange,
-  nodes: SyntaxNode[],
-) {
-  if (!rangesOverlap(cursor, within)) return;
-  if (markdownInlineInjectionNodeNameSet.has(cursor.name)) {
-    nodes.push(cursor.node);
-    return;
-  }
-
-  let child = cursor.copy();
-  try {
-    if (!child.firstChildForIndex(within.from)) return;
-    do {
-      if (child.from >= within.to) break;
-      if (child.to > within.from) {
-        let branch = child.copy();
-        try {
-          collectBoundedMarkdownInlineNodes(branch, within, nodes);
-        } finally {
-          branch.delete();
-        }
-      }
-    } while (child.nextSibling());
-  } finally {
-    child.delete();
-  }
-}
-
-function rangesExcludingCaptures(range: DocRange, exclusions: readonly TreeSitterQueryCapture[]) {
-  let ranges: DocRange[] = [];
-  let from = range.from;
-  for (let exclusion of exclusions) {
-    if (exclusion.node.from < range.from || exclusion.node.to > range.to) continue;
-    if (from < exclusion.node.from) ranges.push({ from, to: exclusion.node.from });
-    from = Math.max(from, exclusion.node.to);
-  }
-  if (from < range.to) ranges.push({ from, to: range.to });
-  return ranges;
-}
-
-function nodeRange(node: SyntaxNode): DocRange {
-  return { from: node.from, to: node.to };
-}
-
-function rangesOverlap(left: DocRange, right: DocRange) {
-  return left.from < right.to && right.from < left.to;
-}
-
 function captureRange(capture: TreeSitterQueryCapture): DocRange {
   return { from: capture.node.from, to: capture.node.to };
 }
@@ -1607,7 +1479,7 @@ const markdownBlockSpec: LanguageSpec = {
 const markdownSpec: LanguageSpec = {
   ...markdownBlockSpec,
   nested: async () => [
-    { parser: await nestedParser(markdownInlineSpec), ranges: markdownInlineRangeGroups() },
+    { parser: await nestedParser(markdownInlineSpec), ranges: iterateMarkdownInlineRangeGroups },
   ],
 };
 
@@ -1630,7 +1502,7 @@ async function loadMarkdownParserServiceOnce(): Promise<MarkdownParserService> {
     blockLanguage,
     blockParser: blockLanguage.language.parser,
     inlineParser,
-    inlineRanges: markdownInlineRangeGroups(),
+    inlineRanges: collectMarkdownInlineRangeGroups,
   };
 }
 

@@ -780,7 +780,7 @@ describe("tree-sitter language data", () => {
     expect(ancestorNames(node)).toContain("emphasis");
   });
 
-  it("builds Markdown inline injections through query captures without tree iteration", async () => {
+  it("builds Markdown inline injections without the allocating Tree.iterate helper", async () => {
     let support = await languages.find((lang) => lang.name == "Markdown")!.load();
     let doc =
       "Text with *emphasis* and `code`.\n\n" + "| _cell text_ | next |\n" + "| --- | --- |\n";
@@ -788,7 +788,7 @@ describe("tree-sitter language data", () => {
     Object.defineProperty(Tree.prototype, "iterate", {
       configurable: true,
       value: () => {
-        throw new Error("Markdown injections should use tree-sitter queries");
+        throw new Error("Markdown injections should use the cursor range producer");
       },
     });
 
