@@ -317,6 +317,138 @@ describe("resumable nested parse sessions", () => {
     expect(created[0]!.deleteCalls).toBe(1);
     expect(completedTree.deleteCalls).toBe(1);
   });
+
+  it("resumes a grouped range iterable without rebuilding or replaying it", () => {
+    let sourceCalls = 0;
+    let pulled = 0;
+    let closed = 0;
+    let nestedCalls: string[] = [];
+    let stop = false;
+    let nested = fakeParser(({ ranges }) => {
+      nestedCalls.push(rangeGroupKey(ranges));
+      if (nestedCalls.length == 1) stop = true;
+      return fakeTree(`nested-${nestedCalls.length}`);
+    });
+    function* rangeGroups() {
+      try {
+        for (let index = 0; index < 3; index++) {
+          pulled++;
+          yield [{ from: index * 2, to: index * 2 + 1 }];
+        }
+      } finally {
+        closed++;
+      }
+    }
+    let root = fakeParser(
+      () => fakeTree("root"),
+      [
+        {
+          parser: nested,
+          ranges: () => {
+            sourceCalls++;
+            return rangeGroups();
+          },
+        },
+      ],
+    );
+    let context = ParseContext.create(root, EditorState.create({ doc: "abcdef" }));
+
+    expect(context.work(() => stop)).toBe(false);
+    expect(sourceCalls).toBe(1);
+    expect(pulled).toBe(1);
+    expect(closed).toBe(0);
+    expect(nestedCalls).toEqual(["0:1"]);
+    expect(context.tree).toBe(Tree.empty);
+
+    stop = false;
+    expect(context.work(() => false)).toBe(true);
+    expect(sourceCalls).toBe(1);
+    expect(pulled).toBe(3);
+    expect(closed).toBe(1);
+    expect(nestedCalls).toEqual(["0:1", "2:3", "4:5"]);
+  });
+
+  it("closes a suspended grouped range iterator exactly once when reset cancels it", () => {
+    let sourceCalls = 0;
+    let pulled = 0;
+    let closed = 0;
+    let stop = false;
+    let nested = fakeParser(() => {
+      stop = true;
+      return fakeTree("nested");
+    });
+    function* rangeGroups() {
+      try {
+        for (let index = 0; index < 3; index++) {
+          pulled++;
+          yield [{ from: index * 2, to: index * 2 + 1 }];
+        }
+      } finally {
+        closed++;
+      }
+    }
+    let root = fakeParser(
+      () => fakeTree("root"),
+      [
+        {
+          parser: nested,
+          ranges: () => {
+            sourceCalls++;
+            return rangeGroups();
+          },
+        },
+      ],
+    );
+    let context = ParseContext.create(root, EditorState.create({ doc: "abcdef" }));
+
+    expect(context.work(() => stop)).toBe(false);
+    expect(sourceCalls).toBe(1);
+    expect(pulled).toBe(1);
+    expect(closed).toBe(0);
+
+    context.reset();
+    context.reset();
+    expect(closed).toBe(1);
+  });
+
+  it("keeps flat ranges in one group while arrays and iterables produce multiple groups", () => {
+    function parsedGroups(ranges: NestedParserSource["ranges"]) {
+      let calls: string[] = [];
+      let nested = fakeParser(({ ranges }) => {
+        calls.push(rangeGroupKey(ranges));
+        return fakeTree(`nested-${calls.length}`);
+      });
+      let root = fakeParser(
+        () => fakeTree("root"),
+        [
+          {
+            parser: nested,
+            ranges,
+          },
+        ],
+      );
+      let context = ParseContext.create(root, EditorState.create({ doc: "abcdef" }));
+      expect(context.work(() => false)).toBe(true);
+      return calls;
+    }
+
+    expect(
+      parsedGroups(() => [
+        { from: 0, to: 1 },
+        { from: 3, to: 4 },
+      ]),
+    ).toEqual(["0:1,3:4"]);
+    expect(parsedGroups(() => [[{ from: 0, to: 1 }], [{ from: 3, to: 4 }]])).toEqual([
+      "0:1",
+      "3:4",
+    ]);
+    expect(
+      parsedGroups(function* () {
+        yield [{ from: 0, to: 1 }];
+        yield [{ from: 3, to: 4 }];
+      }),
+    ).toEqual(["0:1", "3:4"]);
+  });
 });
 
 describe("incremental nested direct reuse", () => {
@@ -373,7 +505,7 @@ describe("incremental nested direct reuse", () => {
     expect(fixture.sourceCalls()).toBe(2);
   });
 
-  it("preserves pending changed ranges when an incomplete generation is reset", () => {
+  it("invalidates pending reuse when an incomplete generation is reset", () => {
     let fixture = directReuseFixture("abcdefghij", [
       [{ from: 0, to: 1 }],
       [{ from: 2, to: 3 }],

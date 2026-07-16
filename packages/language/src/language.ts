@@ -84,7 +84,7 @@ export type NestedParser =
   | TreeSitterParser
   | ((tree: Tree, ranges: readonly DocRange[]) => TreeSitterParser | null);
 
-type NestedParserRanges = readonly DocRange[] | readonly (readonly DocRange[])[];
+export type NestedParserRanges = readonly DocRange[] | Iterable<readonly DocRange[]>;
 
 export type TreeSitterQuerySource =
   | string
@@ -631,16 +631,18 @@ function normalizeRanges(ranges: readonly DocRange[]): DocRange[] {
 }
 
 function* normalizeRangeGroups(ranges: NestedParserRanges): Generator<DocRange[]> {
-  if (!ranges.length) return [];
-  if (Array.isArray(ranges[0])) {
-    for (let rangesInGroup of ranges as readonly (readonly DocRange[])[]) {
-      let group = normalizeRanges(rangesInGroup);
+  if (Array.isArray(ranges)) {
+    if (!ranges.length) return;
+    if (!Array.isArray(ranges[0])) {
+      let group = normalizeRanges(ranges as readonly DocRange[]);
       if (group.length) yield group;
+      return;
     }
-    return;
   }
-  let group = normalizeRanges(ranges as readonly DocRange[]);
-  if (group.length) yield group;
+  for (let rangesInGroup of ranges as Iterable<readonly DocRange[]>) {
+    let group = normalizeRanges(rangesInGroup);
+    if (group.length) yield group;
+  }
 }
 
 function resolveNestedParser(
