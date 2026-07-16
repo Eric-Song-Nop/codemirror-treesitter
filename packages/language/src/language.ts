@@ -346,14 +346,16 @@ export class TreeSitterParser implements TreeConfig {
     let nested = tree.nested
       .map((nest): NestedTree | null => {
         if (!nest.tree.tree) return null;
-        let edited = (nest.parser as TreeSitterParser).editWrappedTree(
-          nest.tree,
-          changes,
-          oldDoc,
-          newDoc,
-        );
         let ranges = normalizeRanges(nest.ranges.map((range) => editRange(changes, range)));
-        return ranges.length ? { parser: nest.parser, tree: edited, ranges } : null;
+        if (!ranges.length) return null;
+        // Editing a native tree cannot remove an included-range component. Keep
+        // the mapped ranges for matching, but force a fresh nested parse when a
+        // component collapsed or merged during the edit.
+        let edited =
+          ranges.length == nest.ranges.length
+            ? (nest.parser as TreeSitterParser).editWrappedTree(nest.tree, changes, oldDoc, newDoc)
+            : Tree.empty;
+        return { parser: nest.parser, tree: edited, ranges };
       })
       .filter((value): value is NestedTree => value != null);
     return new Tree(this.editTree(tree.tree, changes, oldDoc, newDoc), this, newDoc.length, nested);

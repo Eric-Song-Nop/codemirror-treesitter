@@ -649,6 +649,22 @@ describe("tree-sitter language data", () => {
     ).toEqual({ open: "<!--", close: "-->" });
   });
 
+  it("reparses an HTML script group when one included range is deleted", async () => {
+    let support = await languages.find((lang) => lang.name == "HTML")!.load();
+    let doc =
+      "<script>let keep=1;</script>\n" + "<div>x</div>\n" + "<script>let gone=2;</script>\n";
+    let state = EditorState.create({ doc, extensions: [support.extension] });
+    expect(ensureSyntaxTree(state, state.doc.length, 5_000)).not.toBeNull();
+
+    let removeFrom = doc.lastIndexOf("<script>");
+    let transaction = state.update({ changes: { from: removeFrom, to: doc.length } });
+    let tree = ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
+    let scriptTree = tree?.nested.find((nested) => nested.tree.topNode.name == "program")?.tree;
+
+    expect(scriptTree).toBeDefined();
+    expect(scriptTree!.tree!.rootNode.toString().match(/lexical_declaration/g)).toHaveLength(1);
+  });
+
   it("marks HTML tag nodes as bidi isolates", async () => {
     let support = await languages.find((lang) => lang.name == "HTML")!.load();
     let doc = 'النص <span class="blue">الأزرق</span>\n';
