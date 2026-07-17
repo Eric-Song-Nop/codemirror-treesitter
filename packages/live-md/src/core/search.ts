@@ -3,6 +3,7 @@ import {
   RangeSet,
   RangeSetBuilder,
   RangeValue,
+  type ChangeDesc,
   type Extension,
   type StateEffect,
   type Transaction,
@@ -10,7 +11,14 @@ import {
 import { SearchQuery, search, searchKeymap, setSearchQuery } from "@codemirror/search";
 import { syntaxTree, type SyntaxNode, type Tree } from "@codemirror-treesitter/language";
 import { keymap } from "@codemirror/view";
-import { liveMdMarkdownParserServiceFacet, withLiveMdMarkdownInlineTrees } from "./languages.js";
+import { forEachLeafAnalysisCacheRecord } from "./analysis/markdown-leaf-cache.js";
+import { type LiveMdDescriptor } from "./analysis/descriptors.js";
+import {
+  liveMdMarkdownParserServiceFacet,
+  withLiveMdMarkdownInlineTrees,
+  withLiveMdMarkdownInlineTreesInRanges,
+} from "./languages.js";
+import { liveMdSearchSemanticSnapshot } from "./runtime/field.js";
 
 type SearchTest = NonNullable<SearchQuery["test"]>;
 
@@ -101,12 +109,105 @@ function buildLiveMdSearchVisibilityIndex(state: EditorState) {
   let service = state.facet(liveMdMarkdownParserServiceFacet);
   let ranges: Array<{ from: number; to: number }> = [];
   collectHiddenMarkdownSourceRanges(tree, ranges);
-  if (service) {
+  let semanticSnapshot = liveMdSearchSemanticSnapshot(state);
+  if (semanticSnapshot) {
+    let dirtyInlineRanges = [...semanticSnapshot.dirtyRanges];
+    forEachLeafAnalysisCacheRecord(semanticSnapshot.cache, (record) => {
+      let mappedSourceRange = mapSemanticRange(record.sourceRange, 0, semanticSnapshot.changes);
+      if (semanticSnapshot.dirtyRanges.some((range) => rangesTouch(mappedSourceRange, range))) {
+        dirtyInlineRanges.push(mappedSourceRange);
+        return;
+      }
+      let offset = record.sourceRange.from;
+      for (let descriptor of record.analysis.structuralEffects) {
+        collectHiddenSemanticDescriptor(descriptor, offset, semanticSnapshot.changes, ranges);
+      }
+      for (let descriptor of record.analysis.descriptors) {
+        collectHiddenSemanticDescriptor(descriptor, offset, semanticSnapshot.changes, ranges);
+      }
+    });
+    if (service && dirtyInlineRanges.length) {
+      withLiveMdMarkdownInlineTreesInRanges(
+        service,
+        state.doc,
+        tree,
+        normalizeRanges(dirtyInlineRanges),
+        (inlineTrees) => {
+          for (let inlineTree of inlineTrees) {
+            collectHiddenMarkdownSourceRanges(inlineTree, ranges);
+          }
+        },
+      );
+    }
+  } else if (semanticSnapshot === undefined && service) {
     withLiveMdMarkdownInlineTrees(service, state.doc, tree, (inlineTrees) => {
       for (let inlineTree of inlineTrees) collectHiddenMarkdownSourceRanges(inlineTree, ranges);
     });
   }
   return rangeSetFromRanges(ranges);
+}
+
+function collectHiddenSemanticDescriptor(
+  descriptor: LiveMdDescriptor,
+  offset: number,
+  changes: ChangeDesc | null,
+  ranges: Array<{ from: number; to: number }>,
+) {
+  let add = (range: { from: number; to: number }) => {
+    let mapped = mapSemanticRange(range, offset, changes);
+    addHiddenRange(ranges, mapped.from, mapped.to);
+  };
+  switch (descriptor.kind) {
+    case "syntax":
+    case "listMarker":
+    case "taskMarker":
+      add(descriptor.range);
+      return;
+    case "linkMark":
+      add({ from: descriptor.sourceRange.from, to: descriptor.range.from });
+      add({ from: descriptor.range.to, to: descriptor.sourceRange.to });
+      return;
+    case "image":
+      if (!descriptor.descriptionRange) {
+        add(descriptor.range);
+      } else {
+        add({ from: descriptor.range.from, to: descriptor.descriptionRange.from });
+        add({ from: descriptor.descriptionRange.to, to: descriptor.range.to });
+      }
+      return;
+    case "latex": {
+      let contentOffset = descriptor.formula.source.indexOf(descriptor.formula.tex);
+      if (contentOffset < 0) return;
+      add({ from: descriptor.range.from, to: descriptor.range.from + contentOffset });
+      add({
+        from: descriptor.range.from + contentOffset + descriptor.formula.tex.length,
+        to: descriptor.range.to,
+      });
+      return;
+    }
+    case "table":
+      for (let range of descriptor.pipeRanges) add(range);
+      return;
+    case "feature":
+      if (descriptor.effect.kind == "syntax") add(descriptor.effect.range);
+      return;
+  }
+}
+
+function mapSemanticRange(
+  range: { from: number; to: number },
+  offset: number,
+  changes: ChangeDesc | null,
+) {
+  let from = range.from + offset;
+  let to = range.to + offset;
+  if (!changes) return { from, to };
+  let mappedFrom = changes.mapPos(from, 1);
+  return { from: mappedFrom, to: Math.max(mappedFrom, changes.mapPos(to, -1)) };
+}
+
+function rangesTouch(left: { from: number; to: number }, right: { from: number; to: number }) {
+  return left.from <= right.to && right.from <= left.to;
 }
 
 function collectHiddenMarkdownSourceRanges(

@@ -253,6 +253,27 @@ const liveMdAnalysisField = StateField.define<LiveMdRuntimeState>({
   },
 });
 
+export function liveMdSearchSemanticSnapshot(state: EditorState) {
+  let analysis = state.field(liveMdAnalysisField, false);
+  if (!analysis) return undefined;
+  if (!analysis.pending) {
+    return analysis.semantic
+      ? { cache: analysis.semantic.cache, changes: null, dirtyRanges: [] as readonly DocRange[] }
+      : null;
+  }
+  let semantic = analysis.pending.baseAnalysis.semantic;
+  if (!semantic) return null;
+  let dirtyRanges: DocRange[] = [...analysis.pending.safetyRanges];
+  analysis.pending.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    dirtyRanges.push({ from: fromB, to: toB });
+  });
+  return {
+    cache: semantic.cache,
+    changes: analysis.pending.changes,
+    dirtyRanges: mergeDocRanges(dirtyRanges),
+  };
+}
+
 const liveMdSchedulerPlugin = ViewPlugin.fromClass(
   class LiveMdSchedulerPlugin {
     private destroyed = false;

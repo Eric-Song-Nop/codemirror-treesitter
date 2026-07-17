@@ -3,6 +3,7 @@ import {
   HighlightStyle,
   Tree,
   queryTreeMatches,
+  type DocRange,
   tags as t,
   type Highlighter,
   type TreeSitterParser,
@@ -207,11 +208,12 @@ function parseLiveMdMarkdownInlineTrees(
   service: LiveMdMarkdownParserService,
   doc: Text,
   blockTree: Tree,
+  within?: readonly DocRange[],
 ): Tree[] {
   let parser = service.inlineParser.createParser();
   let trees: Tree[] = [];
   try {
-    for (let ranges of service.inlineRanges(blockTree)) {
+    for (let ranges of markdownInlineRangeGroups(service, blockTree, within)) {
       let parsed = service.inlineParser.parseWith(parser, doc, null, undefined, ranges);
       if (!parsed) continue;
       let tree = service.inlineParser.wrapTree(parsed, doc);
@@ -226,6 +228,25 @@ function parseLiveMdMarkdownInlineTrees(
   }
 }
 
+function markdownInlineRangeGroups(
+  service: LiveMdMarkdownParserService,
+  blockTree: Tree,
+  within: readonly DocRange[] | undefined,
+) {
+  if (!within) return service.inlineRanges(blockTree);
+  let groups: DocRange[][] = [];
+  let seen = new Set<string>();
+  for (let range of within) {
+    for (let ranges of service.inlineRanges(blockTree, range)) {
+      let key = ranges.map((item) => `${item.from}:${item.to}`).join(",");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      groups.push(ranges);
+    }
+  }
+  return groups;
+}
+
 export function withLiveMdMarkdownInlineTrees<T>(
   service: LiveMdMarkdownParserService,
   doc: Text,
@@ -233,6 +254,21 @@ export function withLiveMdMarkdownInlineTrees<T>(
   useTrees: (trees: readonly Tree[]) => T,
 ): T {
   let trees = parseLiveMdMarkdownInlineTrees(service, doc, blockTree);
+  try {
+    return useTrees(trees);
+  } finally {
+    for (let tree of trees) deleteLiveMdTree(tree);
+  }
+}
+
+export function withLiveMdMarkdownInlineTreesInRanges<T>(
+  service: LiveMdMarkdownParserService,
+  doc: Text,
+  blockTree: Tree,
+  ranges: readonly DocRange[],
+  useTrees: (trees: readonly Tree[]) => T,
+): T {
+  let trees = parseLiveMdMarkdownInlineTrees(service, doc, blockTree, ranges);
   try {
     return useTrees(trees);
   } finally {
