@@ -12,10 +12,10 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   `@codemirror-treesitter/opendal-wasm-browser` for browser-side file
   operations.
 - Provide a reusable OpenDAL workspace backend for Dropbox, including cloud-save
-  serialization, token refresh retry, metadata tracking, and ETag-based
-  conditional writes when supported by the provider. OneDrive and Google Drive
-  adapter code exists in source, but those providers are not exposed in the
-  current Grove UI.
+  serialization, token refresh retry, same-response metadata tracking, atomic
+  no-clobber creates, Dropbox revision CAS, and ETag-based conditional writes
+  when supported by the provider. OneDrive and Google Drive adapter code exists
+  in source, but those providers are not exposed in the current Grove UI.
 - Build a Markdown file tree, create/rename/delete files and folders, autosave
   edits, and surface permission/storage errors.
 - Open a command palette with `Cmd/Ctrl+Shift+P` for file navigation and core

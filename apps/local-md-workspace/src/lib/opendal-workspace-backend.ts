@@ -117,10 +117,17 @@ export function createOpendalWorkspaceBackend(
   }
 
   async function readText(path: string) {
-    let revision = await readRevision(path);
-    let value = await withOpendalRetry((operator) => operator.readText(path));
-    if (revision) rememberRevision(path, revision, knownRevisions);
-    return value;
+    return withOpendalRetry(async (operator) => {
+      if (operator.readTextWithMetadata) {
+        let result = await operator.readTextWithMetadata(path);
+        rememberEntry(result.entry, knownRevisions);
+        return result.value;
+      }
+
+      let [entry, value] = await Promise.all([operator.stat(path), operator.readText(path)]);
+      rememberEntry(entry, knownRevisions);
+      return value;
+    });
   }
 
   async function readRevision(path: string) {
@@ -141,7 +148,7 @@ export function createOpendalWorkspaceBackend(
     await ensureParentDirectory(path);
     let baseRevision = writeOptions?.baseRevision ?? knownRevisions.get(path);
     let entry = await withOpendalRetry((operator) => {
-      let options = conditionalWriteOptions(operator, baseRevision);
+      let options = conditionalWriteOptions(operator, baseRevision, writeOptions?.ifNotExists);
       return operator.writeText(path, value, options);
     });
 
@@ -339,7 +346,7 @@ export function createOpendalWorkspaceBackend(
       }
 
       let nextPath = target.path;
-      await queueWrite(nextPath, starterMarkdown(nextPath));
+      await queueWrite(nextPath, starterMarkdown(nextPath), { ifNotExists: true });
       return nextPath;
     },
     createImageAsset,
@@ -452,9 +459,25 @@ export function sameOpendalWorkspaceIdentity(
 function conditionalWriteOptions(
   operator: OpendalBrowserOperator,
   revision: WorkspaceSourceRevision | undefined,
+  ifNotExists = false,
 ): OpendalBrowserWriteOptions | undefined {
-  if (!revision?.etag || !operator.capabilities().nativeWriteWithIfMatch) return undefined;
-  return { ifMatch: revision.etag };
+  let capabilities = operator.capabilities();
+  if (ifNotExists) {
+    if (!capabilities.nativeWriteWithIfNotExists) {
+      throw new Error("OpenDAL backend does not support atomic no-clobber writes.");
+    }
+    return { ifNotExists: true };
+  }
+  if (revision?.version && capabilities.nativeWriteWithVersion) {
+    return { ifVersion: revision.version };
+  }
+  if (revision?.etag && capabilities.nativeWriteWithIfMatch) {
+    return { ifMatch: revision.etag };
+  }
+  if (revision) {
+    throw new Error("OpenDAL backend does not support atomic revision writes.");
+  }
+  return undefined;
 }
 
 function rememberEntry(

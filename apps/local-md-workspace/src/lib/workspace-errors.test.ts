@@ -2,6 +2,22 @@ import { describe, expect, it } from "vite-plus/test";
 import { workspaceErrorMessage } from "./workspace-errors.ts";
 
 describe("workspace error messages", () => {
+  it("distinguishes Dropbox write conflicts from missing paths", () => {
+    expect(
+      workspaceErrorMessage(
+        new Error("Dropbox no-clobber conflict: 409 Conflict: path/conflict/file/already_exists"),
+      ),
+    ).toBe("A file already exists at that Dropbox path. Choose another name.");
+    expect(
+      workspaceErrorMessage(
+        new Error("Dropbox revision conflict: 409 Conflict: path/conflict/file/rev_mismatch"),
+      ),
+    ).toBe("This Dropbox file changed elsewhere. Reload it before saving again.");
+    expect(workspaceErrorMessage(new Error("Dropbox API error 409 Conflict: path/not_found"))).toBe(
+      "Dropbox app folder or workspace path is no longer available. Check the Dropbox app folder setting, then reconnect Dropbox workspace.",
+    );
+  });
+
   it("classifies Dropbox OAuth failures", () => {
     expect(workspaceErrorMessage(new Error("Dropbox authorization popup was blocked."))).toBe(
       "Dropbox authorization popup was blocked. Allow popups for this site and try again.",

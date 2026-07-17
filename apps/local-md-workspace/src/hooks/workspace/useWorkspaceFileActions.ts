@@ -33,6 +33,7 @@ import {
 import type { SingleFileSource } from "@/lib/workspace/types";
 import {
   normalizeMarkdownPath,
+  writeNewWorkspaceFile,
   type MarkdownFileNode,
   type WorkspaceBackend,
 } from "@/lib/workspace-backend";
@@ -335,7 +336,7 @@ export function useWorkspaceFileActions({
                 appKey,
                 root: storedDropboxConfig?.root ?? defaultDropboxRoot(),
               });
-        await backend.writeFile(path, value);
+        await writeNewWorkspaceFile(backend, path, value);
         setWorkspaceBackend(backend);
         await loadTree(backend, path, { saveBeforeSelect: false });
         discardMaterializedDraft(source);
