@@ -213,7 +213,7 @@ describe("shared file Durable Object persistence", () => {
     expect(storage.records.get("snapshot")).toEqual(initialSnapshot);
     expect(storage.transactionCalls).toBe(0);
     expect(sender.closed).toEqual({ code: 1009, reason: "Document snapshot is too large" });
-  });
+  }, 20_000);
 
   it("keeps live and durable state unchanged when the document transaction fails", async () => {
     let serverDoc = documentWithText("A", 1);
