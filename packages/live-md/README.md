@@ -230,7 +230,10 @@ customize block-level export output with `renderHtml(...)`. Inline query
 replacement during export is intentionally not part of this hook yet; use
 `renderInline(...)` from a block-level feature when custom output needs nested
 inline Markdown. `renderHtml(...)` always queries the block tree. The export
-hook is separate from editor-only `analyze(...)` descriptors:
+hook is separate from editor-only `analyze(...)` descriptors. Exported links
+reuse the editor's `http`, `https`, `mailto`, and `tel` protocol allowlist;
+relative links remain relative, while unsafe destinations render as plain link
+labels:
 
 ```ts
 const callouts = liveMdMarkdownFeature({

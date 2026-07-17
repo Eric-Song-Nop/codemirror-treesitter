@@ -19,6 +19,7 @@ import {
   type LiveMdMarkdownFeature,
 } from "./features.js";
 import { renderStrictLatexFormula, type LatexFormula } from "./latex.js";
+import { sanitizeLiveMdLinkDestination } from "./link-destination.js";
 import { renderLiveMdMermaidResult } from "./mermaid.js";
 
 export type MarkdownHtmlImage = {
@@ -1385,12 +1386,15 @@ async function renderInlineLink(context: InlineRenderContext, node: SyntaxNode) 
   let text = firstNamedChild(node, "link_text");
   let destination = firstNamedChild(node, "link_destination");
   let title = firstNamedChild(node, "link_title");
-  let href = destination
-    ? normalizeLinkDestination(context.source.slice(destination.from, destination.to))
-    : "";
+  let label = text ? await renderInlineChildren(context, text) : "";
+  let href = sanitizeLiveMdLinkDestination(
+    destination ? context.source.slice(destination.from, destination.to) : null,
+  );
+  if (!href) return label;
+
   let titleText = title ? normalizeLinkTitle(context.source.slice(title.from, title.to)) : null;
   let titleAttribute = titleText ? ` title="${escapeAttribute(titleText)}"` : "";
-  return `<a href="${escapeAttribute(href)}"${titleAttribute}>${text ? await renderInlineChildren(context, text) : ""}</a>`;
+  return `<a href="${escapeAttribute(href)}"${titleAttribute}>${label}</a>`;
 }
 
 async function renderImage(context: InlineRenderContext, node: SyntaxNode) {
@@ -1409,7 +1413,8 @@ async function renderImage(context: InlineRenderContext, node: SyntaxNode) {
 
 function renderAutolink(context: InlineRenderContext, node: SyntaxNode, email: boolean) {
   let value = context.source.slice(node.from + 1, node.to - 1);
-  let href = email ? `mailto:${value}` : value;
+  let href = sanitizeLiveMdLinkDestination(email ? `mailto:${value}` : value);
+  if (!href) return escapeHtml(value);
   return `<a href="${escapeAttribute(href)}">${escapeHtml(value)}</a>`;
 }
 

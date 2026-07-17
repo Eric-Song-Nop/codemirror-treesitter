@@ -79,6 +79,16 @@ describe("Markdown HTML export", () => {
     expect(result.html).not.toContain("<script>");
   });
 
+  it("does not export active links for unsafe Markdown destinations", async () => {
+    let result = await createStandaloneMarkdownHtml({
+      documentPath: "note.md",
+      markdown: "[Click me](javascript:alert(document.domain))",
+    });
+
+    expect(result.html).toContain("Click me");
+    expect(result.html).not.toContain("javascript:");
+  });
+
   it("uses the shared markdown feature config during export", async () => {
     let result = await createStandaloneMarkdownHtml({
       documentPath: "notes/today.md",
