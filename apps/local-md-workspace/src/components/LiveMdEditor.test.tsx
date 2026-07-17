@@ -4,6 +4,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { LiveMdConfig, LiveMdEditorElement } from "@codemirror-treesitter/live-md";
+import {
+  LiveMdPreloadErrorProvider,
+  useLiveMdPreload,
+  type LiveMdPreloadState,
+} from "@/lib/live-md-preload";
 import { ThemeProvider } from "@/theme";
 import { LiveMdEditor } from "./LiveMdEditor";
 
@@ -54,6 +59,7 @@ type ReactActGlobal = typeof globalThis & {
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
+let preloadState: LiveMdPreloadState | null = null;
 
 beforeAll(() => {
   (globalThis as ReactActGlobal).IS_REACT_ACT_ENVIRONMENT = true;
@@ -69,6 +75,7 @@ afterEach(() => {
   }
   container?.remove();
   container = null;
+  preloadState = null;
   vi.restoreAllMocks();
 });
 
@@ -125,6 +132,39 @@ describe("LiveMdEditor", () => {
     expect(onEditorReady).toHaveBeenLastCalledWith(null);
     expect(editor.config).toEqual({});
   });
+
+  it("rebinds editor input and ready callbacks after a successful preload retry", async () => {
+    let preload = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("temporary WASM failure"))
+      .mockResolvedValueOnce(undefined);
+    let onEditorReady = vi.fn();
+    let onInput = vi.fn();
+
+    await renderLiveMdEditorWithPreload({ onEditorReady, onInput, preload });
+    await waitFor(() => currentPreloadState().error.includes("temporary WASM failure"));
+    let firstEditor = testEditorElement();
+
+    await act(async () => {
+      await currentPreloadState().retry();
+    });
+
+    let secondEditor = testEditorElement();
+    expect(secondEditor).not.toBe(firstEditor);
+    expect(firstEditor.inputListenerRemoves).toBe(1);
+    expect(secondEditor.inputListenerAdds).toBe(1);
+    expect(onEditorReady.mock.calls.map(([editor]) => editor)).toEqual([
+      firstEditor,
+      null,
+      secondEditor,
+    ]);
+
+    secondEditor.value = "saved after retry";
+    act(() => {
+      secondEditor.dispatchEvent(new Event("input"));
+    });
+    expect(onInput).toHaveBeenCalledWith("saved after retry");
+  });
 });
 
 function renderLiveMdEditor({
@@ -163,4 +203,54 @@ function testEditorElement() {
     throw new Error("Test live-md-editor element was not mounted");
   }
   return editor;
+}
+
+async function renderLiveMdEditorWithPreload({
+  onEditorReady,
+  onInput,
+  preload,
+}: {
+  onEditorReady: (editor: LiveMdEditorElement | null) => void;
+  onInput: (value: string) => void;
+  preload: () => Promise<void>;
+}) {
+  container = document.body.appendChild(document.createElement("div"));
+  root = createRoot(container);
+  await act(async () => {
+    root?.render(
+      <LiveMdPreloadErrorProvider preload={preload}>
+        <PreloadStateCapture />
+        <ThemeProvider initialTheme="github-light">
+          <LiveMdEditor
+            config={{}}
+            documentKey="notes/today.md:1"
+            initialValue="# Today"
+            placeholder="Start writing"
+            onEditorReady={onEditorReady}
+            onInput={onInput}
+          />
+        </ThemeProvider>
+      </LiveMdPreloadErrorProvider>,
+    );
+  });
+}
+
+function PreloadStateCapture() {
+  preloadState = useLiveMdPreload();
+  return null;
+}
+
+function currentPreloadState() {
+  if (!preloadState) throw new Error("Preload state is unavailable");
+  return preloadState;
+}
+
+async function waitFor(predicate: () => boolean) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (predicate()) return;
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+  throw new Error("Timed out waiting for preload state");
 }

@@ -33,7 +33,12 @@ type LiveMdEditorProps = {
 const emptyLiveMdEditorConfig: LiveMdConfig = {};
 const emptyLiveMdEditorPlugins: NonNullable<LiveMdConfig["plugins"]> = [];
 
-export function LiveMdEditor({
+export function LiveMdEditor({ ...props }: LiveMdEditorProps) {
+  let { generation } = useLiveMdPreload();
+  return <LiveMdEditorGeneration key={generation} {...props} />;
+}
+
+function LiveMdEditorGeneration({
   documentKey,
   config = emptyLiveMdEditorConfig,
   initialValue,
@@ -42,7 +47,6 @@ export function LiveMdEditor({
   onInput,
 }: LiveMdEditorProps) {
   let { theme } = useTheme();
-  let { generation: liveMdPreloadGeneration } = useLiveMdPreload();
   let editorRef = useRef<LiveMdEditorElement | null>(null);
   let initialValueRef = useRef(initialValue);
   let onEditorReadyRef = useRef(onEditorReady);
@@ -102,7 +106,6 @@ export function LiveMdEditor({
 
   return (
     <live-md-editor
-      key={liveMdPreloadGeneration}
       ref={setEditorRef}
       className="local-md-live-editor block size-full min-h-0"
       data-theme={theme}
