@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createRelayShareSession } from "@/lib/collaboration/share-relay-client";
 import { workspaceQueryKeys } from "@/lib/workspace-query-keys";
@@ -52,6 +52,14 @@ export function useSharedFileSession({
     }
   }, [sharedSessionQuery.data]);
 
+  let refreshSession = useCallback(
+    (signal: AbortSignal) => {
+      let fetchWithAbort: typeof fetch = (input, init) => fetch(input, { ...init, signal });
+      return createRelayShareSession(relayOrigin, shareId, "guest", guestSecret, fetchWithAbort);
+    },
+    [guestSecret, relayOrigin, shareId],
+  );
+
   return {
     errorMessage,
     guestSecretToken,
@@ -59,6 +67,7 @@ export function useSharedFileSession({
     retry: () => {
       void sharedSessionQuery.refetch();
     },
+    refreshSession,
     session: sharedSessionQuery.data ?? null,
   };
 }

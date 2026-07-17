@@ -171,6 +171,22 @@ export function useOwnerShareHost({
               current?.shareId == status.shareId ? mergeOwnerShareStatus(current, status) : current,
             );
           },
+          refreshSessionToken: async (signal) => {
+            let fetchWithAbort: typeof fetch = (input, init) => fetch(input, { ...init, signal });
+            let refreshed = await createRelayShareSession(
+              configuredShareRelayOrigin(),
+              record.shareId,
+              "host",
+              hostSecret,
+              fetchWithAbort,
+            );
+            signal.throwIfAborted();
+            if (shareHostConnectionRef.current != connection) {
+              throw new DOMException("Owner share host changed.", "AbortError");
+            }
+            setShareError("");
+            return refreshed.sessionToken;
+          },
           relayOrigin: configuredShareRelayOrigin(),
           sessionToken: relaySession.sessionToken,
           shareId: record.shareId,

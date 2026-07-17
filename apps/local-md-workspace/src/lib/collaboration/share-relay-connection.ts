@@ -31,6 +31,7 @@ export type ShareRelayConnectionOptions = {
   onError?: (message: string) => void;
   onHostSaveAck?: (payload: Uint8Array) => void;
   onShareStatus?: (status: ShareRelayStatus) => void;
+  refreshSessionToken?: (signal: AbortSignal) => Promise<string>;
 };
 
 type QueuedRelayMessage = RelayWireMessage;
@@ -43,7 +44,8 @@ type SyncReadyControlMessage = {
 const clientCloseCodeMalformed = 4003;
 const clientCloseCodePolicy = 4008;
 const clientCloseCodeResyncRequired = 4009;
-const clientCloseCodeStale = 4001;
+const clientCloseCodeSessionRefreshRequired = 4001;
+const clientCloseCodeStale = 4002;
 export const maxQueuedRelayMessages = 512;
 export const maxQueuedRelayBytes = 1024 * 1024;
 export const maxSingleQueuedDocumentUpdateBytes = 256 * 1024;
@@ -51,6 +53,7 @@ export const maxRelayBatchMessages = 64;
 
 export class ShareRelayConnection {
   private activeGeneration = 0;
+  private closed = false;
   private flushTimer: number | null = null;
   private heartbeatTimer: number | null = null;
   private lastMessageAt = 0;
@@ -61,13 +64,22 @@ export class ShareRelayConnection {
   private reconnectAttempt = 0;
   private reconnectTimer: number | null = null;
   private receivedInitialSync = false;
+  private sessionRefreshController: AbortController | null = null;
+  private sessionRefreshPromise: Promise<void> | null = null;
+  private sessionRefreshRequired = false;
+  private sessionToken: string;
   private socket: WebSocket | null = null;
 
-  constructor(private readonly options: ShareRelayConnectionOptions) {}
+  constructor(private readonly options: ShareRelayConnectionOptions) {
+    this.sessionToken = options.sessionToken;
+  }
 
   close() {
     this.flushNow();
+    this.closed = true;
     this.activeGeneration++;
+    this.cancelSessionRefresh();
+    this.sessionRefreshRequired = false;
     this.clearReconnectTimer();
     this.stopHeartbeat();
     this.socket?.close(1000, "Page closed");
@@ -80,6 +92,7 @@ export class ShareRelayConnection {
   }
 
   connect() {
+    if (this.closed) return;
     if (this.queueRequiresResync) {
       this.options.onConnectionState?.("resync-required");
       return;
@@ -87,6 +100,10 @@ export class ShareRelayConnection {
 
     if (navigator.onLine === false) {
       this.pause();
+      return;
+    }
+    if (this.sessionRefreshRequired) {
+      this.startSessionRefresh();
       return;
     }
 
@@ -121,7 +138,7 @@ export class ShareRelayConnection {
       socket.send(
         JSON.stringify({
           clientId: this.options.clientId,
-          sessionToken: this.options.sessionToken,
+          sessionToken: this.sessionToken,
           type: "auth",
           versionVector: serializeDocVersionVector(this.options.doc),
         }),
@@ -139,6 +156,10 @@ export class ShareRelayConnection {
       if (!this.isActive(generation, socket)) return;
       this.socket = null;
       this.stopHeartbeat();
+      if (event.code == clientCloseCodeSessionRefreshRequired) {
+        this.requireSessionRefresh();
+        return;
+      }
       if (event.code == 1008 || event.code == clientCloseCodePolicy) {
         this.options.onError?.(policyCloseMessage(event.reason));
         this.options.onConnectionState?.("offline");
@@ -195,6 +216,7 @@ export class ShareRelayConnection {
 
   pause() {
     this.captureOfflineBaseVersion();
+    this.cancelSessionRefresh();
     this.clearReconnectTimer();
     this.stopHeartbeat();
     this.socket?.close(1000, "Offline");
@@ -326,6 +348,8 @@ export class ShareRelayConnection {
     }
     if (message.type == "sync-ready") {
       this.handleSyncReady(message as SyncReadyControlMessage);
+    } else if (message.type == "session-refresh-required") {
+      this.requireSessionRefresh();
     }
   }
 
@@ -431,6 +455,55 @@ export class ShareRelayConnection {
       this.reconnectTimer = null;
       this.connect();
     }, this.reconnectDelay());
+  }
+
+  private requireSessionRefresh() {
+    if (this.closed) return;
+    this.sessionRefreshRequired = true;
+    this.captureOfflineBaseVersion();
+    this.clearReconnectTimer();
+    this.stopHeartbeat();
+    this.options.onConnectionState?.("connecting");
+    this.startSessionRefresh();
+  }
+
+  private startSessionRefresh() {
+    if (this.closed || this.sessionRefreshPromise) return;
+    let refreshSessionToken = this.options.refreshSessionToken;
+    if (!refreshSessionToken) {
+      this.options.onError?.("Shared file access expired. Request a new session to reconnect.");
+      this.options.onConnectionState?.("offline");
+      return;
+    }
+
+    let controller = new AbortController();
+    this.sessionRefreshController = controller;
+    let task = Promise.resolve().then(async () => {
+      try {
+        let sessionToken = await refreshSessionToken(controller.signal);
+        if (controller.signal.aborted || this.closed || !this.sessionRefreshRequired) return;
+        this.sessionToken = sessionToken;
+        this.sessionRefreshRequired = false;
+        this.reconnectAttempt = 0;
+        this.connect();
+      } catch (error) {
+        if (controller.signal.aborted || this.closed) return;
+        this.options.onError?.(errorToMessage(error));
+        this.scheduleReconnect();
+      } finally {
+        if (this.sessionRefreshController == controller) {
+          this.sessionRefreshController = null;
+          this.sessionRefreshPromise = null;
+        }
+      }
+    });
+    this.sessionRefreshPromise = task;
+  }
+
+  private cancelSessionRefresh() {
+    this.sessionRefreshController?.abort();
+    this.sessionRefreshController = null;
+    this.sessionRefreshPromise = null;
   }
 
   private startHeartbeat(generation: number, socket: WebSocket) {

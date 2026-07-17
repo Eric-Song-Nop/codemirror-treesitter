@@ -13,6 +13,7 @@ type UseSharedFileConnectionOptions = {
   doc: LoroDoc;
   joining: boolean;
   relayOrigin: string;
+  refreshSession: (signal: AbortSignal) => Promise<RelayShareSession>;
   session: RelayShareSession | null;
   sessionErrorMessage: string;
   sessionKey: string;
@@ -27,6 +28,7 @@ export function useSharedFileConnection({
   doc,
   joining,
   relayOrigin,
+  refreshSession,
   session,
   sessionErrorMessage,
   sessionKey,
@@ -41,6 +43,8 @@ export function useSharedFileConnection({
   let [lastHostSavedAt, setLastHostSavedAt] = useState<number | null>(null);
   let [errorMessage, setErrorMessage] = useState("");
   let connectionRef = useRef<ShareRelayConnection | null>(null);
+  let refreshSessionRef = useRef(refreshSession);
+  refreshSessionRef.current = refreshSession;
 
   useEffect(
     () =>
@@ -117,6 +121,12 @@ export function useSharedFileConnection({
       onShareStatus: (status) => {
         setShareStatus(status);
         if (status.displayName) setDisplayName(status.displayName);
+      },
+      refreshSessionToken: async (signal) => {
+        let refreshed = await refreshSessionRef.current(signal);
+        signal.throwIfAborted();
+        setErrorMessage("");
+        return refreshed.sessionToken;
       },
       relayOrigin,
       sessionToken: session.sessionToken,

@@ -68,6 +68,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
     doc,
     joining: sharedSession.isJoining,
     relayOrigin,
+    refreshSession: sharedSession.refreshSession,
     session: sharedSession.session,
     sessionErrorMessage: sharedSession.errorMessage,
     sessionKey: sharedSession.guestSecretToken,
