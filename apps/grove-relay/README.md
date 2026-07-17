@@ -14,12 +14,42 @@ in `apps/local-md-workspace`.
   status messages over WebSockets.
 - Persist snapshots, pending host-save state, and bounded update logs in a
   Durable Object.
-- Enforce payload size, frame burst, per-minute update, role-specific session,
-  guest-peer, and sync-version-vector limits. Guest sessions cannot consume the
-  host's reserved session capacity.
+- Reserve new-share storage through one dedicated, low-throughput
+  `GroveCreateQuota` Durable Object before waking a share room.
+- Enforce payload size, per-socket binary message/byte buckets, document update
+  burst and per-minute limits, role-specific session, total/guest-peer, and
+  sync-version-vector limits. Guest sessions cannot consume the host's reserved
+  session capacity, and unused guest tokens are evicted instead of blocking new
+  guests.
 - Apply edge rate limits to share creation, session issuance, and WebSocket
-  upgrades before waking a share Durable Object. Each route has both a
-  per-caller key and an aggregate create/per-share capacity key.
+  upgrades before waking a share Durable Object. Create requests use caller and
+  aggregate keys; session and WebSocket requests use caller, per-share, and
+  aggregate keys.
+
+## Admission and Retention Budgets
+
+The `GROVE_CREATE_QUOTA` binding points every create request at one global
+Durable Object. Its transactional reservation is the exact storage-admission
+budget: at most 100 distinct share ids and 64 MiB of decoded initial snapshots
+per UTC day. A same-day retry with the same share id and decoded byte length is
+idempotent and does not consume the budget twice. Conflicting reservations,
+exhaustion, or quota RPC/storage failures fail closed before `GROVE_SHARE_ROOMS`
+is accessed.
+
+The exported retained-cost planning window is 37 days: the 30-day maximum share
+lifetime plus the 7-day post-end retention period. The exact daily byte budget
+therefore bounds initial snapshots admitted across that window to
+`37 * 64 MiB = 2,368 MiB` (2.3125 GiB). Because an admitted share can later grow
+to the 1 MiB snapshot limit, the separate hard snapshot-capacity envelope is
+`37 * 100 * 1 MiB = 3,700 MiB` (about 3.61 GiB). These are cost-planning
+envelopes, not a promise that storage is recovered at an exact age; Durable
+Object alarms enforce the share lifecycle and cleanup schedule.
+
+Cloudflare Rate Limit bindings are additional traffic smoothing. Their counters
+are local to Cloudflare locations and may be eventually consistent, so they do
+not replace the global Durable Object budget. `CREATE_SHARE_RATE_LIMITER`,
+`SHARE_SESSION_RATE_LIMITER`, and `SHARE_WEBSOCKET_RATE_LIMITER` should still be
+configured at every deployment edge.
 
 ## API Shape
 
@@ -29,15 +59,19 @@ in `apps/local-md-workspace`.
 - `POST /api/shares/:shareId/revoke`
 - `GET /api/shares/:shareId/ws` with WebSocket upgrade
 
-Share creation is idempotent for an exact replay with the same share id,
-metadata, and host/guest capability hashes. This lets the workspace safely
-retry when the relay committed a create but its response was lost.
+Share creation requires an `Idempotency-Key` equal to the share id and is
+idempotent only for an exact replay with the same metadata, host/guest
+capability hashes, and snapshot digest. This lets the workspace safely retry
+when the relay committed a create but its response was lost without accepting
+a different document under the same id.
+
 - `GET /__debug` for local readiness checks used by
   `apps/local-md-workspace/scripts/dev.mjs`
 
 ## Source Layout
 
-- `src/worker.ts`: Worker router and `GroveShareRoom` Durable Object.
+- `src/worker.ts`: Worker router plus the `GroveCreateQuota` and
+  `GroveShareRoom` Durable Objects.
 - `src/protocol.ts`: binary wire framing for relay messages and batches.
 - `src/share.ts`: share IDs, secrets, session records, request parsing,
   expiration, retention, and hashing helpers.

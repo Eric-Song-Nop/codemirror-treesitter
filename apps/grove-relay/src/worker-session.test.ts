@@ -1,4 +1,4 @@
-import { LoroDoc } from "loro-crdt";
+import { LoroDoc, VersionVector } from "loro-crdt";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   encodeBase64,
@@ -7,7 +7,12 @@ import {
   type ShareRecord,
   type ShareSessionRecord,
 } from "./share.ts";
-import { maxShareSessions, maxSyncVersionVectorEntries } from "./share-limits.ts";
+import {
+  maxShareGuestPeers,
+  maxSharePeers,
+  maxShareSessions,
+  maxSyncVersionVectorEntries,
+} from "./share-limits.ts";
 
 const validShareId = "AAAAAAAAAAAAAAAAAAAAAA";
 const hostSecret = "h".repeat(43);
@@ -43,7 +48,7 @@ describe("Grove share sessions", () => {
     expect(await rejected.json()).toEqual({ error: "Too many active host sessions" });
   });
 
-  it("keeps guest session issuance bounded when host capacity is reserved", async () => {
+  it("evicts unused guest tokens instead of letting them block new guests", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);
     let storage = await shareStorage(now);
@@ -55,8 +60,116 @@ describe("Grove share sessions", () => {
 
     let response = await createSession(room, "guest", guestSecret);
 
+    expect(response.status).toBe(201);
+    expect([...storage.records.keys()].filter((key) => key.startsWith("session:"))).toHaveLength(
+      maxShareSessions,
+    );
+  });
+
+  it("removes every guest token after rotating the guest capability", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = await shareStorage(now);
+    let oldGuestHash = await hashShareSecret(guestSecret);
+    let nextGuestSecret = "n".repeat(43);
+    let nextGuestHash = await hashShareSecret(nextGuestSecret);
+    storage.records.set("session:old-guest", sessionRecord("guest", oldGuestHash, now));
+    storage.records.set(
+      "session:host",
+      sessionRecord("host", await hashShareSecret(hostSecret), now),
+    );
+    storage.records.set("session:future-guest", sessionRecord("guest", nextGuestHash, now));
+    let room = await createTestRoom(storage);
+
+    let response = await rotateShare(room, nextGuestHash);
+
+    expect(response.status).toBe(200);
+    expect(storage.records.has("session:old-guest")).toBe(false);
+    expect(storage.records.has("session:host")).toBe(true);
+    expect(storage.records.has("session:future-guest")).toBe(false);
+  });
+
+  it("does not count stale-capability tokens against guest issuance", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = await shareStorage(now);
+    let staleHash = await hashShareSecret("z".repeat(43));
+    for (let index = 0; index < maxShareSessions; index++) {
+      storage.records.set(`session:stale-${index}`, sessionRecord("guest", staleHash, now));
+    }
+    let room = await createTestRoom(storage);
+
+    let response = await createSession(room, "guest", guestSecret);
+
+    expect(response.status).toBe(201);
+    expect(
+      [...storage.records.values()].filter(
+        (value) =>
+          typeof value == "object" &&
+          value != null &&
+          (value as ShareSessionRecord).role == "guest" &&
+          (value as ShareSessionRecord).secretHash == staleHash,
+      ),
+    ).toEqual([]);
+  });
+
+  it("limits live guest sockets while retaining the owner's reserved path", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = await shareStorage(now);
+    let guestHash = await hashShareSecret(guestSecret);
+    let room = await createTestRoom(storage);
+    for (let index = 0; index < maxShareGuestPeers; index++) {
+      room.sockets.add(
+        new TestWebSocket({
+          clientId: `guest-${String(index).padStart(8, "0")}`,
+          joinedAt: now,
+          role: "guest",
+          secretHash: guestHash,
+          sessionExpiresAt: now + shareSessionTtlMs,
+        }).asWebSocket(),
+      );
+    }
+
+    let guestResponse = await createSession(room, "guest", guestSecret);
+    let hostResponse = await createSession(room, "host", hostSecret);
+
+    expect(guestResponse.status).toBe(429);
+    expect(await guestResponse.json()).toEqual({ error: "Share is full" });
+    expect(hostResponse.status).toBe(201);
+  });
+
+  it("caps all live sockets even when another owner session is requested", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = await shareStorage(now);
+    let room = await createTestRoom(storage);
+    let guestHash = await hashShareSecret(guestSecret);
+    for (let index = 0; index < maxSharePeers - 1; index++) {
+      room.sockets.add(
+        new TestWebSocket({
+          clientId: `guest-${String(index).padStart(8, "0")}`,
+          joinedAt: now,
+          role: "guest",
+          secretHash: guestHash,
+          sessionExpiresAt: now + shareSessionTtlMs,
+        }).asWebSocket(),
+      );
+    }
+    room.sockets.add(
+      new TestWebSocket({
+        clientId: "owner-live",
+        joinedAt: now,
+        role: "host",
+        secretHash: await hashShareSecret(hostSecret),
+        sessionExpiresAt: now + shareSessionTtlMs,
+      }).asWebSocket(),
+    );
+
+    let response = await createSession(room, "host", hostSecret);
+
     expect(response.status).toBe(429);
-    expect(await response.json()).toEqual({ error: "Too many active guest sessions" });
+    expect(await response.json()).toEqual({ error: "Share is full" });
   });
 
   it("signals that an expired authentication token should be refreshed", async () => {
@@ -89,6 +202,28 @@ describe("Grove share sessions", () => {
       JSON.stringify({ reason: "expired", recoverable: true, type: "session-refresh-required" }),
     );
     expect(socket.closed).toEqual({ code: 4001, reason: "Share session expired" });
+  });
+
+  it("deletes a stale-capability token when authentication rejects it", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = await shareStorage(now);
+    let key = `session:${await hashShareSecret(sessionToken)}`;
+    storage.records.set(key, sessionRecord("guest", await hashShareSecret("z".repeat(43)), now));
+    let room = await createTestRoom(storage);
+    let socket = new TestWebSocket({
+      clientId: "pending-client",
+      joinedAt: now,
+      pendingShareAuth: true,
+    });
+
+    await room.webSocketMessage(
+      socket.asWebSocket(),
+      JSON.stringify({ clientId: "pending-client", sessionToken, type: "auth", versionVector: [] }),
+    );
+
+    expect(storage.records.has(key)).toBe(false);
+    expect(socket.closed).toEqual({ code: 4001, reason: "Share session is no longer valid" });
   });
 
   it("expires an authenticated socket on its next heartbeat", async () => {
@@ -172,19 +307,83 @@ describe("Grove share sessions", () => {
     expect(socket.closed).toEqual({ code: 1008, reason: "Invalid sync version" });
   });
 
+  it("frees the auth version vector when socket attachment serialization fails", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = await shareStorage(now);
+    let guestHash = await hashShareSecret(guestSecret);
+    storage.records.set(
+      `session:${await hashShareSecret(sessionToken)}`,
+      sessionRecord("guest", guestHash, now),
+    );
+    let room = await createTestRoom(storage);
+    let socket = new TestWebSocket({
+      clientId: "pending-client",
+      joinedAt: now,
+      pendingShareAuth: true,
+    });
+    socket.throwOnSerialize = true;
+    let free = vi.spyOn(VersionVector.prototype, "free");
+    free.mockClear();
+
+    await expect(
+      room.webSocketMessage(
+        socket.asWebSocket(),
+        JSON.stringify({
+          clientId: "pending-client",
+          sessionToken,
+          type: "auth",
+          versionVector: [],
+        }),
+      ),
+    ).rejects.toThrow("attachment serialization failed");
+
+    expect(free).toHaveBeenCalledTimes(1);
+  });
+
   it("returns the existing share for an idempotent create replay", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);
     let storage = await shareStorage(now);
     let room = await createTestRoom(storage);
 
-    let response = await createShare(room, storage.records.get("share") as ShareRecord);
+    let response = await createShare(
+      room,
+      storage.records.get("share") as ShareRecord,
+      storage.records.get("snapshot") as Uint8Array,
+    );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       displayName: "note.md",
       expiresAt: now + 24 * 60 * 60 * 1000,
       shareId: validShareId,
+    });
+  });
+
+  it("persists exact request and snapshot digests for new create replays", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = new MemoryDurableObjectStorage();
+    let room = await createTestRoom(storage);
+    room.initialized = false;
+    room.shareRecord = null;
+    let record = await testShareRecord(now);
+    let doc = new LoroDoc();
+    doc.getText("markdown").insert(0, "original");
+    doc.commit();
+    let snapshot = doc.export({ mode: "snapshot" });
+    doc.free();
+
+    let created = await createShare(room, record, snapshot);
+    let replayed = await createShare(room, record, snapshot);
+
+    expect(created.status).toBe(201);
+    expect(replayed.status).toBe(200);
+    expect(storage.records.get("share")).toMatchObject({
+      createRequestDigest: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+      idempotencyKey: validShareId,
+      snapshotDigest: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
     });
   });
 
@@ -195,10 +394,66 @@ describe("Grove share sessions", () => {
     let room = await createTestRoom(storage);
     let record = storage.records.get("share") as ShareRecord;
 
-    let response = await createShare(room, { ...record, hostSecretHash: "x".repeat(43) });
+    let response = await createShare(
+      room,
+      { ...record, hostSecretHash: "x".repeat(43) },
+      storage.records.get("snapshot") as Uint8Array,
+    );
 
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "Share already exists" });
+  });
+
+  it("rejects an idempotent replay whose snapshot differs", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = await shareStorage(now);
+    let room = await createTestRoom(storage);
+    let record = storage.records.get("share") as ShareRecord;
+    let different = new LoroDoc();
+    different.getText("markdown").insert(0, "different");
+    different.commit();
+    let differentSnapshot = different.export({ mode: "snapshot" });
+    different.free();
+
+    let response = await createShare(room, record, differentSnapshot);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Share already exists" });
+  });
+
+  it("validates the idempotency key on direct create requests", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = await shareStorage(now);
+    let room = await createTestRoom(storage);
+
+    let response = await createShare(
+      room,
+      storage.records.get("share") as ShareRecord,
+      storage.records.get("snapshot") as Uint8Array,
+      null,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid idempotency key" });
+  });
+
+  it("frees a temporary document when create snapshot validation fails", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = await shareStorage(now);
+    storage.records.clear();
+    let room = await createTestRoom(storage);
+    room.initialized = false;
+    let record = await testShareRecord(now);
+    let free = vi.spyOn(LoroDoc.prototype, "free");
+    free.mockClear();
+
+    let response = await createShare(room, record, new Uint8Array([1, 2, 3]));
+
+    expect(response.status).toBe(400);
+    expect(free).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -254,10 +509,24 @@ async function createSession(room: TestRoom, role: "guest" | "host", secret: str
   );
 }
 
-async function createShare(room: TestRoom, record: ShareRecord) {
-  let doc = new LoroDoc();
-  let snapshot = doc.export({ mode: "snapshot" });
-  doc.free();
+async function rotateShare(room: TestRoom, nextGuestSecretHash: string) {
+  return room.fetch(
+    new Request(`https://relay.example/api/shares/${validShareId}/rotate`, {
+      body: JSON.stringify({ hostSecret, nextGuestSecretHash }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+}
+
+async function createShare(
+  room: TestRoom,
+  record: ShareRecord,
+  snapshot: Uint8Array,
+  idempotencyKey: string | null = validShareId,
+) {
+  let headers = new Headers({ "Content-Type": "application/json" });
+  if (idempotencyKey != null) headers.set("Idempotency-Key", idempotencyKey);
   return room.fetch(
     new Request(`https://relay.example/api/shares/${validShareId}`, {
       body: JSON.stringify({
@@ -268,7 +537,7 @@ async function createShare(room: TestRoom, record: ShareRecord) {
         shareId: record.shareId,
         snapshot: encodeBase64(snapshot),
       }),
-      headers: { "Content-Type": "application/json" },
+      headers,
       method: "POST",
     }),
   );
@@ -276,7 +545,15 @@ async function createShare(room: TestRoom, record: ShareRecord) {
 
 async function shareStorage(now: number) {
   let storage = new MemoryDurableObjectStorage();
-  storage.records.set("share", {
+  storage.records.set("share", await testShareRecord(now));
+  let doc = new LoroDoc();
+  storage.records.set("snapshot", doc.export({ mode: "snapshot" }));
+  doc.free();
+  return storage;
+}
+
+async function testShareRecord(now: number) {
+  return {
     createdAt: now,
     displayName: "note.md",
     expiresAt: now + 24 * 60 * 60 * 1000,
@@ -284,8 +561,7 @@ async function shareStorage(now: number) {
     hostSecretHash: await hashShareSecret(hostSecret),
     schemaVersion: 1,
     shareId: validShareId,
-  } satisfies ShareRecord);
-  return storage;
+  } satisfies ShareRecord;
 }
 
 function sessionRecord(role: "guest" | "host", secretHash: string, now: number) {
@@ -301,6 +577,7 @@ class TestWebSocket {
   closed: { code: number; reason: string } | null = null;
   readyState = 1;
   sent: Array<string | Uint8Array> = [];
+  throwOnSerialize = false;
 
   constructor(public attachment: ConnectionAttachment) {}
 
@@ -328,12 +605,18 @@ class TestWebSocket {
   }
 
   serializeAttachment(value: ConnectionAttachment) {
+    if (this.throwOnSerialize) throw new Error("attachment serialization failed");
     this.attachment = value;
   }
 }
 
 class MemoryDurableObjectStorage {
+  alarmAt: number | null = null;
   records = new Map<string, unknown>();
+
+  async deleteAlarm() {
+    this.alarmAt = null;
+  }
 
   async delete(keys: string | string[]) {
     let deleted = 0;
@@ -353,6 +636,10 @@ class MemoryDurableObjectStorage {
 
   async put<T>(key: string, value: T) {
     this.records.set(key, structuredClone(value));
+  }
+
+  async setAlarm(value: number | Date) {
+    this.alarmAt = Number(value);
   }
 
   async transaction<T>(callback: (txn: MemoryDurableObjectStorage) => Promise<T>) {

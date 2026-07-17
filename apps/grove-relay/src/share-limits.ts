@@ -3,6 +3,8 @@ import { WireKind, type WireMessage } from "./protocol.ts";
 export const maxCreateShareBodyBytes = 2 * 1024 * 1024;
 export const maxShareControlBodyBytes = 64 * 1024;
 export const maxSnapshotBytes = 1024 * 1024;
+export const maxCreateQuotaSharesPerUtcDay = 100;
+export const maxCreateQuotaSnapshotBytesPerUtcDay = 64 * 1024 * 1024;
 export const maxDocumentUpdateBytes = 256 * 1024;
 export const maxPresencePayloadBytes = 32 * 1024;
 export const maxHostSaveAckPayloadBytes = 16 * 1024;
@@ -17,8 +19,19 @@ export const maxShareSessions = 64;
 export const maxShareHostSessions = 8;
 export const maxSyncVersionVectorEntries = 4096;
 export const maxShareTtlMs = 30 * 24 * 60 * 60 * 1000;
+export const shareRetentionMs = 7 * 24 * 60 * 60 * 1000;
+export const createQuotaRetentionWindowDays =
+  (maxShareTtlMs + shareRetentionMs) / (24 * 60 * 60 * 1000);
+export const maxCreateQuotaRetainedInitialSnapshotBytes =
+  createQuotaRetentionWindowDays * maxCreateQuotaSnapshotBytesPerUtcDay;
+export const maxCreateQuotaRetainedSnapshotBytes =
+  createQuotaRetentionWindowDays * maxCreateQuotaSharesPerUtcDay * maxSnapshotBytes;
 export const maxUpdateFrameBurst = 60;
 export const maxUpdateFramesPerMinute = 120;
+export const maxBinaryMessageBurst = 120;
+export const maxBinaryMessagesPerMinute = 240;
+export const maxBinaryByteBurst = maxUpdateFrameBurst * (maxDocumentUpdateBytes + 1);
+export const maxBinaryBytesPerMinute = maxUpdateFramesPerMinute * (maxDocumentUpdateBytes + 1);
 
 export type WireFrameLimitResult =
   | { ok: true }

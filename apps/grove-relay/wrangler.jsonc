@@ -14,6 +14,10 @@
   "durable_objects": {
     "bindings": [
       {
+        "name": "GROVE_CREATE_QUOTA",
+        "class_name": "GroveCreateQuota",
+      },
+      {
         "name": "GROVE_SHARE_ROOMS",
         "class_name": "GroveShareRoom",
       },
@@ -49,6 +53,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["GroveShareRoom"],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["GroveCreateQuota"],
     },
   ],
   "observability": {

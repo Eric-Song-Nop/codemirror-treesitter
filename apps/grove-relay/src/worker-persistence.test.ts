@@ -10,6 +10,7 @@ const validHash = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -87,6 +88,66 @@ describe("shared file Durable Object persistence", () => {
     expect(sender.attachment.updateTokens).toBe(1);
     expect(sender.closed).toEqual({ code: 1008, reason: "Document update rate limit exceeded" });
     expect(storage.transactionCalls).toBe(0);
+  });
+
+  it("rate-limits presence messages per socket before relaying them", async () => {
+    let doc = documentWithText("A", 1);
+    let storage = persistedShareStorage(doc.export({ mode: "snapshot" }));
+    let { peer, room, sender } = await createTestRoom(doc, storage, {
+      binaryByteTokens: 1024,
+      binaryMessageTokens: 1,
+      binaryTokensAt: Date.now(),
+    });
+    let presence = asArrayBuffer(encodeWireMessage(WireKind.Presence, new Uint8Array()));
+
+    await room.webSocketMessage(sender.asWebSocket(), presence);
+    await room.webSocketMessage(sender.asWebSocket(), presence);
+
+    expect(peer.sent).toHaveLength(1);
+    expect(sender.closed).toEqual({
+      code: 1008,
+      reason: "Collaboration traffic rate limit exceeded",
+    });
+  });
+
+  it("rate-limits aggregate binary bytes per socket", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let doc = documentWithText("A", 1);
+    let storage = persistedShareStorage(doc.export({ mode: "snapshot" }));
+    let { peer, room, sender } = await createTestRoom(doc, storage, {
+      binaryByteTokens: 1,
+      binaryMessageTokens: 60,
+      binaryTokensAt: now,
+    });
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(encodeWireMessage(WireKind.Presence, new Uint8Array([1]))),
+    );
+
+    expect(peer.sent).toEqual([]);
+    expect(sender.closed).toEqual({
+      code: 1008,
+      reason: "Collaboration traffic rate limit exceeded",
+    });
+  });
+
+  it("charges an empty binary batch as one frame", async () => {
+    let doc = documentWithText("A", 1);
+    let storage = persistedShareStorage(doc.export({ mode: "snapshot" }));
+    let { room, sender } = await createTestRoom(doc, storage, {
+      binaryByteTokens: 1024,
+      binaryMessageTokens: 0,
+      binaryTokensAt: Date.now(),
+    });
+
+    await room.webSocketMessage(sender.asWebSocket(), asArrayBuffer(encodeWireBatch([])));
+
+    expect(sender.closed).toEqual({
+      code: 1008,
+      reason: "Collaboration traffic rate limit exceeded",
+    });
   });
 
   it("commits a document update, pending-save flag, and relay only after one transaction", async () => {
@@ -254,17 +315,72 @@ describe("shared file Durable Object persistence", () => {
     expect(storage.transactionCalls).toBe(1);
   });
 
+  it("accepts host save acknowledgements from documents with 129 actors", async () => {
+    let doc = documentWithText("A", 1);
+    let storage = persistedShareStorage(doc.export({ mode: "snapshot" }));
+    let { peer, room, sender } = await createTestRoom(doc, storage, { role: "host" });
+    setPendingHostSave(room, storage, true);
+    let canonicalVersion = doc.oplogVersion();
+    let entries = [...canonicalVersion.toJSON()].map(([peer, counter]) => [String(peer), counter]);
+    canonicalVersion.free();
+    for (let peer = 2; entries.length < 129; peer++) entries.push([String(peer), 0]);
+    let payload = hostSaveAckEntriesPayload(entries);
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(encodeWireMessage(WireKind.HostSaveAck, payload)),
+    );
+
+    expect(sender.closed).toBeNull();
+    expect(room.pendingHostSave).toBe(false);
+    expect(storage.records.get("pendingHostSave")).toBe(false);
+    expect(peer.sent[0]).toEqual(encodeWireMessage(WireKind.HostSaveAck, payload));
+  });
+
+  it("rejects host save acknowledgements from guest sockets", async () => {
+    let doc = documentWithText("A", 1);
+    let storage = persistedShareStorage(doc.export({ mode: "snapshot" }));
+    let { peer, room, sender } = await createTestRoom(doc, storage, { role: "guest" });
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(
+        encodeWireMessage(WireKind.HostSaveAck, hostSaveAckPayload(doc.oplogVersion())),
+      ),
+    );
+
+    expect(peer.sent).toEqual([]);
+    expect(sender.closed).toEqual({ code: 1008, reason: "Host authorization required" });
+  });
+
+  it("frees temporary version vectors created while importing document updates", async () => {
+    let serverDoc = documentWithText("A", 1);
+    let initialSnapshot = serverDoc.export({ mode: "snapshot" });
+    let clientDoc = new LoroDoc();
+    clientDoc.import(initialSnapshot);
+    clientDoc.setPeerId(2);
+    let initialVersion = clientDoc.oplogVersion();
+    clientDoc.getText("markdown").insert(1, "B");
+    clientDoc.commit();
+    let update = clientDoc.export({ from: initialVersion, mode: "update" });
+    initialVersion.free();
+    clientDoc.free();
+    let storage = persistedShareStorage(initialSnapshot);
+    let { room, sender } = await createTestRoom(serverDoc, storage);
+    let free = vi.spyOn(VersionVector.prototype, "free");
+    free.mockClear();
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(encodeWireMessage(WireKind.Doc, update)),
+    );
+
+    expect(free).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ["malformed JSON", new TextEncoder().encode("{")],
-    ["wrong share id", hostSaveAckPayload(new VersionVector(null), "CCCCCCCCCCCCCCCCCCCCCC")],
-    [
-      "oversized version vector",
-      hostSaveAckPayload(
-        new VersionVector(
-          new Map(Array.from({ length: 129 }, (_, index) => [String(index + 1) as `${number}`, 1])),
-        ),
-      ),
-    ],
+    ["wrong share id", hostSaveAckEntriesPayload([], "CCCCCCCCCCCCCCCCCCCCCC")],
   ])("rejects a %s ACK without clearing or relaying it", async (_name, payload) => {
     let doc = documentWithText("A", 1);
     let storage = persistedShareStorage(doc.export({ mode: "snapshot" }));
@@ -303,6 +419,9 @@ type TestRoom = {
 };
 
 type ConnectionAttachment = {
+  binaryByteTokens?: number;
+  binaryMessageTokens?: number;
+  binaryTokensAt?: number;
   clientId: string;
   joinedAt: number;
   role: "guest" | "host";
@@ -502,12 +621,17 @@ function asArrayBuffer(bytes: Uint8Array) {
 }
 
 function hostSaveAckPayload(version: VersionVector, shareId = validShareId) {
+  let payload = hostSaveAckEntriesPayload(
+    [...version.toJSON()].map(([peer, counter]) => [String(peer), counter]),
+    shareId,
+  );
+  version.free();
+  return payload;
+}
+
+function hostSaveAckEntriesPayload(entries: (string | number)[][], shareId = validShareId) {
   return new TextEncoder().encode(
-    JSON.stringify({
-      savedAt: 123,
-      shareId,
-      versionVector: [...version.toJSON()].map(([peer, counter]) => [String(peer), counter]),
-    }),
+    JSON.stringify({ savedAt: 123, shareId, versionVector: entries }),
   );
 }
 

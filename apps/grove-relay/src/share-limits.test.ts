@@ -2,12 +2,16 @@ import { describe, expect, it } from "vite-plus/test";
 import { WireKind, encodeWireBatch, encodeWireMessage } from "./protocol.ts";
 import {
   estimatedDecodedBase64Bytes,
+  maxBinaryByteBurst,
+  maxBinaryBytesPerMinute,
   maxBatchMessages,
   maxDocumentUpdateBytes,
   maxFrameBytes,
   maxHostSaveAckPayloadBytes,
   maxPresencePayloadBytes,
   maxSnapshotBytes,
+  maxUpdateFrameBurst,
+  maxUpdateFramesPerMinute,
   validateWireFrameLimits,
 } from "./share-limits.ts";
 
@@ -27,6 +31,17 @@ describe("shared relay safety limits", () => {
         { kind: WireKind.Doc, payload: new Uint8Array(32) },
       ]),
     ).toEqual({ ok: true });
+  });
+
+  it("keeps the binary byte bucket large enough for the existing document update allowance", () => {
+    let maximumDocumentFrameBytes = maxDocumentUpdateBytes + 1;
+
+    expect(maxBinaryByteBurst).toBeGreaterThanOrEqual(
+      maxUpdateFrameBurst * maximumDocumentFrameBytes,
+    );
+    expect(maxBinaryBytesPerMinute).toBeGreaterThanOrEqual(
+      maxUpdateFramesPerMinute * maximumDocumentFrameBytes,
+    );
   });
 
   it("rejects oversized frames, batches, and payloads", () => {

@@ -29,11 +29,18 @@ import {
   type ShareSessionRecord,
 } from "./share.ts";
 import {
+  maxBinaryByteBurst,
+  maxBinaryBytesPerMinute,
+  maxBinaryMessageBurst,
+  maxBinaryMessagesPerMinute,
+  maxCreateQuotaSharesPerUtcDay,
+  maxCreateQuotaSnapshotBytesPerUtcDay,
   maxCreateShareBodyBytes,
   maxDocumentUpdateBytes,
   maxShareControlBodyBytes,
   maxShareGuestPeers,
   maxShareHostSessions,
+  maxSharePeers,
   maxShareSessions,
   maxSnapshotBytes,
   maxSyncVersionVectorEntries,
@@ -43,6 +50,9 @@ import {
 } from "./share-limits.ts";
 
 type ConnectionAttachment = {
+  binaryByteTokens?: number;
+  binaryMessageTokens?: number;
+  binaryTokensAt?: number;
   clientId: string;
   joinedAt: number;
   pendingShareAuth?: boolean;
@@ -80,13 +90,79 @@ const maxRetryDelayMs = 30_000;
 const shareSocketTag = "share";
 const shareAuthTimeoutMs = 10_000;
 const shareStatusBroadcastMinIntervalMs = 250;
-const maxHostSaveAckVersionVectorEntries = 128;
+const maxHostSaveAckVersionVectorEntries = maxSyncVersionVectorEntries;
 const maxVersionVectorCounter = 0x7fff_ffff;
 const maxPeerId = "18446744073709551615";
 const maxStoredUpdateLogBytes = maxSnapshotBytes;
 const maxStoredUpdateLogEntries = 256;
 const maxStorageDeleteBatch = 128;
 const requestBodyTooLarge = Symbol("requestBodyTooLarge");
+const createQuotaRecordKey = "currentUtcDay";
+
+type CreateQuotaRecord = {
+  distinctCreates: number;
+  reservations: [shareId: string, decodedSnapshotBytes: number][];
+  schemaVersion: 1;
+  snapshotBytes: number;
+  utcDay: string;
+};
+
+export type CreateQuotaReservationResult = {
+  distinctCreates: number;
+  reason?: "bytes" | "count";
+  snapshotBytes: number;
+  status: "conflict" | "exhausted" | "replayed" | "reserved";
+  utcDay: string;
+};
+
+/**
+ * One deliberately global, low-throughput coordinator for exact create
+ * admission. Edge Rate Limit bindings smooth traffic but cannot enforce a
+ * deployment-wide storage budget.
+ */
+export class GroveCreateQuota extends DurableObject<Env> {
+  async reserve(
+    shareId: string,
+    decodedSnapshotBytes: number,
+  ): Promise<CreateQuotaReservationResult> {
+    if (
+      !isValidShareId(shareId) ||
+      !Number.isSafeInteger(decodedSnapshotBytes) ||
+      decodedSnapshotBytes < 0 ||
+      decodedSnapshotBytes > maxCreateQuotaSnapshotBytesPerUtcDay
+    ) {
+      throw new TypeError("Invalid create quota reservation");
+    }
+
+    let utcDay = new Date(Date.now()).toISOString().slice(0, 10);
+    return this.ctx.storage.transaction(async (transaction) => {
+      let stored = await transaction.get<unknown>(createQuotaRecordKey);
+      let record = quotaRecordForDay(stored, utcDay);
+      let existing = record.reservations.find(([reservedShareId]) => {
+        return reservedShareId == shareId;
+      });
+
+      if (existing) {
+        return quotaReservationResult(
+          record,
+          existing[1] == decodedSnapshotBytes ? "replayed" : "conflict",
+        );
+      }
+      if (record.distinctCreates >= maxCreateQuotaSharesPerUtcDay) {
+        return quotaReservationResult(record, "exhausted", "count");
+      }
+      if (record.snapshotBytes + decodedSnapshotBytes > maxCreateQuotaSnapshotBytesPerUtcDay) {
+        return quotaReservationResult(record, "exhausted", "bytes");
+      }
+
+      record.reservations.push([shareId, decodedSnapshotBytes]);
+      record.distinctCreates++;
+      record.snapshotBytes += decodedSnapshotBytes;
+      await transaction.put(createQuotaRecordKey, record);
+      return quotaReservationResult(record, "reserved");
+    });
+  }
+}
 
 export class GroveShareRoom extends DurableObject<Env> {
   private dirty = false;
@@ -180,7 +256,30 @@ export class GroveShareRoom extends DurableObject<Env> {
     let body = parseCreateShareRequest(json);
     if (!body || body.shareId != shareId)
       return jsonResponse({ error: "Invalid share" }, 400, request);
-    if (this.shareRecord && isIdempotentCreateReplay(this.shareRecord, body)) {
+
+    let idempotencyKey = request.headers.get("Idempotency-Key");
+    if (!isValidCreateIdempotencyKey(idempotencyKey, shareId)) {
+      return jsonResponse({ error: "Invalid idempotency key" }, 400, request);
+    }
+
+    let snapshot = decodeBase64(body.snapshot);
+    if (!snapshot) return jsonResponse({ error: "Invalid snapshot" }, 400, request);
+    if (snapshot.byteLength > maxSnapshotBytes) {
+      return jsonResponse({ error: "Snapshot too large" }, 413, request);
+    }
+    let snapshotDigest = await digestBytes(snapshot);
+    let createRequestDigest = await digestCreateShareRequest(body, snapshotDigest);
+
+    if (
+      this.shareRecord &&
+      (await this.isIdempotentCreateReplay(
+        this.shareRecord,
+        body,
+        idempotencyKey,
+        snapshotDigest,
+        createRequestDigest,
+      ))
+    ) {
       return jsonResponse(
         {
           displayName: this.shareRecord.displayName,
@@ -195,58 +294,60 @@ export class GroveShareRoom extends DurableObject<Env> {
       return jsonResponse({ error: "Share already exists" }, 409, request);
     }
 
-    let snapshot = decodeBase64(body.snapshot);
-    if (!snapshot) return jsonResponse({ error: "Invalid snapshot" }, 400, request);
-    if (snapshot.byteLength > maxSnapshotBytes) {
-      return jsonResponse({ error: "Snapshot too large" }, 413, request);
-    }
-
-    let nextDoc = new LoroDoc();
+    let nextDoc: LoroDoc | null = new LoroDoc();
     try {
-      nextDoc.import(snapshot);
-    } catch {
-      return jsonResponse({ error: "Invalid snapshot" }, 400, request);
+      try {
+        nextDoc.import(snapshot);
+      } catch {
+        return jsonResponse({ error: "Invalid snapshot" }, 400, request);
+      }
+
+      let now = Date.now();
+      let record: ShareRecord = {
+        createRequestDigest,
+        createdAt: now,
+        displayName: body.displayName,
+        expiresAt: body.expiresAt,
+        guestSecretHash: body.guestSecretHash,
+        hostSecretHash: body.hostSecretHash,
+        idempotencyKey,
+        schemaVersion: shareSchemaVersion,
+        shareId,
+        snapshotDigest,
+      };
+
+      await this.ctx.storage.transaction(async (txn) => {
+        await Promise.all([
+          txn.put(shareRecordKey, record),
+          txn.put(pendingHostSaveKey, false),
+          txn.put(snapshotKey, snapshot),
+          txn.put(updatedAtKey, now),
+          txn.put(initializedAtKey, now),
+          txn.put(schemaVersionKey, schemaVersion),
+        ]);
+      });
+
+      let previousDoc = this.doc;
+      this.doc = nextDoc;
+      nextDoc = null;
+      previousDoc.free();
+      this.shareRecord = record;
+      this.initialized = true;
+      this.pendingHostSave = false;
+      await this.scheduleShareMaintenance();
+
+      return jsonResponse(
+        {
+          displayName: record.displayName,
+          expiresAt: record.expiresAt,
+          shareId: record.shareId,
+        },
+        201,
+        request,
+      );
+    } finally {
+      nextDoc?.free();
     }
-
-    let now = Date.now();
-    let record: ShareRecord = {
-      createdAt: now,
-      displayName: body.displayName,
-      expiresAt: body.expiresAt,
-      guestSecretHash: body.guestSecretHash,
-      hostSecretHash: body.hostSecretHash,
-      schemaVersion: shareSchemaVersion,
-      shareId,
-    };
-
-    await this.ctx.storage.transaction(async (txn) => {
-      await Promise.all([
-        txn.put(shareRecordKey, record),
-        txn.put(pendingHostSaveKey, false),
-        txn.put(snapshotKey, snapshot),
-        txn.put(updatedAtKey, now),
-        txn.put(initializedAtKey, now),
-        txn.put(schemaVersionKey, schemaVersion),
-      ]);
-    });
-
-    let previousDoc = this.doc;
-    this.doc = nextDoc;
-    previousDoc.free();
-    this.shareRecord = record;
-    this.initialized = true;
-    this.pendingHostSave = false;
-    await this.scheduleShareMaintenance();
-
-    return jsonResponse(
-      {
-        displayName: record.displayName,
-        expiresAt: record.expiresAt,
-        shareId: record.shareId,
-      },
-      201,
-      request,
-    );
   }
 
   private async handleCreateShareSession(request: Request, shareId: string): Promise<Response> {
@@ -266,14 +367,20 @@ export class GroveShareRoom extends DurableObject<Env> {
     if (!timingSafeEqualString(secretHash, expectedHash)) {
       return jsonResponse({ error: "Invalid session" }, 403, request);
     }
-    if (body.role == "guest" && this.shareSocketCount("guest") >= maxShareGuestPeers) {
+    this.enforceShareSocketAuthorization();
+    if (
+      this.shareSocketCount() >= maxSharePeers ||
+      (body.role == "guest" && this.shareSocketCount("guest") >= maxShareGuestPeers)
+    ) {
       return jsonResponse({ error: "Share is full" }, 429, request);
     }
 
     let sessionToken = createSessionToken();
-    let expiresAt = Date.now() + shareSessionTtlMs;
+    let createdAt = Date.now();
+    let expiresAt = createdAt + shareSessionTtlMs;
     let session: ShareSessionRecord = {
       clientId: normalizeClientId(null),
+      createdAt,
       expiresAt,
       role: body.role,
       secretHash,
@@ -323,8 +430,15 @@ export class GroveShareRoom extends DurableObject<Env> {
       expiresAt: body.expiresAt === undefined ? share.expiresAt : body.expiresAt,
       guestSecretHash: body.nextGuestSecretHash,
     };
+    await this.ctx.storage.transaction(async (txn) => {
+      let sessions = await txn.list<ShareSessionRecord>({ prefix: sessionKeyPrefix });
+      let guestSessionKeys = [...sessions]
+        .filter(([, session]) => session.role == "guest")
+        .map(([key]) => key);
+      await txn.put(shareRecordKey, next);
+      if (guestSessionKeys.length) await txn.delete(guestSessionKeys);
+    });
     this.shareRecord = next;
-    await this.ctx.storage.put(shareRecordKey, next);
     await this.scheduleShareMaintenance();
     this.broadcastShareStatus(undefined, { immediate: true });
     this.closeShareSockets(1008, "Share link rotated");
@@ -423,156 +537,165 @@ export class GroveShareRoom extends DurableObject<Env> {
     }
 
     let documentUpdateCount = messages.filter((item) => item.kind == WireKind.Doc).length;
-    let nextAttachment =
-      documentUpdateCount > 0
-        ? this.updatedAttachmentAfterConsumingTokens(ws, documentUpdateCount)
-        : undefined;
-    if (documentUpdateCount > 0 && !nextAttachment) {
-      ws.close(1008, "Document update rate limit exceeded");
+    let rateLimit = this.updatedAttachmentAfterConsumingTokens(
+      ws,
+      Math.max(1, messages.length),
+      frame.byteLength,
+      documentUpdateCount,
+    );
+    if (!rateLimit.ok) {
+      ws.close(1008, rateLimit.reason);
       return;
     }
+    ws.serializeAttachment(rateLimit.attachment);
 
     let hostSaveAckVersions: VersionVector[] = [];
-    for (let item of messages) {
-      if (item.kind != WireKind.HostSaveAck) continue;
-      let version = parseHostSaveAcknowledgement(item.payload, this.shareRecord?.shareId ?? null);
-      if (!version) {
-        freeVersionVectors(hostSaveAckVersions);
-        ws.close(1008, "Invalid host save acknowledgement");
-        return;
-      }
-      hostSaveAckVersions.push(version);
-    }
-
-    let hasDocumentPayload = messages.some(
-      (item) => item.kind == WireKind.Doc || item.kind == WireKind.Snapshot,
-    );
-    let candidate = hasDocumentPayload ? this.doc.fork() : null;
-    let relay: WireMessage[] = [];
-    let acceptedDocumentUpdates: Uint8Array[] = [];
-    let acceptedSnapshot = false;
-    let documentChanged = false;
-    let firstDocumentRelayIndex: number | null = null;
-
-    for (let item of messages) {
-      if (item.kind == WireKind.Doc || item.kind == WireKind.Snapshot) {
-        let beforeVersion = candidate!.oplogVersion();
-        try {
-          candidate!.import(item.payload);
-        } catch (error: unknown) {
-          console.warn("Dropping malformed Loro payload", error);
-          candidate!.free();
-          freeVersionVectors(hostSaveAckVersions);
-          ws.close(1003, "Malformed collaboration payload");
+    let candidate: LoroDoc | null = null;
+    try {
+      for (let item of messages) {
+        if (item.kind != WireKind.HostSaveAck) continue;
+        let version = parseHostSaveAcknowledgement(item.payload, this.shareRecord?.shareId ?? null);
+        if (!version) {
+          ws.close(1008, "Invalid host save acknowledgement");
           return;
         }
-        let afterVersion = candidate!.oplogVersion();
-        let changed = versionAdvanced(afterVersion, beforeVersion);
-        if (changed) {
-          if (firstDocumentRelayIndex == null) firstDocumentRelayIndex = relay.length;
-          documentChanged = true;
-          if (item.kind == WireKind.Snapshot) {
-            acceptedSnapshot = true;
-            relay.push(item);
-          } else {
-            let acceptedUpdate = candidate!.export({ from: beforeVersion, mode: "update" });
-            acceptedDocumentUpdates.push(acceptedUpdate);
-            relay.push({ kind: WireKind.Doc, payload: acceptedUpdate });
+        hostSaveAckVersions.push(version);
+      }
+
+      let hasDocumentPayload = messages.some(
+        (item) => item.kind == WireKind.Doc || item.kind == WireKind.Snapshot,
+      );
+      candidate = hasDocumentPayload ? this.doc.fork() : null;
+      let relay: WireMessage[] = [];
+      let acceptedDocumentUpdates: Uint8Array[] = [];
+      let acceptedSnapshot = false;
+      let documentChanged = false;
+      let firstDocumentRelayIndex: number | null = null;
+
+      for (let item of messages) {
+        if (item.kind == WireKind.Doc || item.kind == WireKind.Snapshot) {
+          let beforeVersion = candidate!.oplogVersion();
+          try {
+            try {
+              candidate!.import(item.payload);
+            } catch (error: unknown) {
+              console.warn("Dropping malformed Loro payload", error);
+              ws.close(1003, "Malformed collaboration payload");
+              return;
+            }
+            let afterVersion = candidate!.oplogVersion();
+            let changed: boolean;
+            try {
+              changed = versionAdvanced(afterVersion, beforeVersion);
+            } finally {
+              afterVersion.free();
+            }
+            if (changed) {
+              if (firstDocumentRelayIndex == null) firstDocumentRelayIndex = relay.length;
+              documentChanged = true;
+              if (item.kind == WireKind.Snapshot) {
+                acceptedSnapshot = true;
+                relay.push(item);
+              } else {
+                let acceptedUpdate = candidate!.export({ from: beforeVersion, mode: "update" });
+                acceptedDocumentUpdates.push(acceptedUpdate);
+                relay.push({ kind: WireKind.Doc, payload: acceptedUpdate });
+              }
+            }
+          } finally {
+            beforeVersion.free();
+          }
+        } else if (item.kind == WireKind.Presence) {
+          relay.push(item);
+        } else if (item.kind == WireKind.HostSaveAck) {
+          relay.push(item);
+        }
+      }
+
+      let canonicalSnapshot: Uint8Array | null = null;
+      if (documentChanged) {
+        canonicalSnapshot = candidate!.export({ mode: "snapshot" });
+        if (this.shareRecord && canonicalSnapshot.byteLength > maxSnapshotBytes) {
+          console.warn("Rejecting shared file update after candidate snapshot exceeded the limit");
+          ws.close(1009, "Document snapshot is too large");
+          return;
+        }
+        if (acceptedSnapshot) {
+          relay = relay.filter(
+            (item) => item.kind != WireKind.Doc && item.kind != WireKind.Snapshot,
+          );
+          relay.splice(firstDocumentRelayIndex ?? 0, 0, {
+            kind: WireKind.Snapshot,
+            payload: canonicalSnapshot,
+          });
+        }
+      }
+
+      let hostSaveAckCoversCanonical = false;
+      if (hostSaveAckVersions.length) {
+        let canonicalVersion = (documentChanged ? candidate! : this.doc).oplogVersion();
+        try {
+          hostSaveAckCoversCanonical = hostSaveAckVersions.some((version) => {
+            let comparison = version.compare(canonicalVersion);
+            return comparison == 0 || comparison == 1;
+          });
+        } finally {
+          canonicalVersion.free();
+        }
+      }
+
+      if (this.shareRecord && (documentChanged || hasHostSaveAck)) {
+        let nextPendingHostSave = documentChanged ? true : this.pendingHostSave;
+        if (hostSaveAckCoversCanonical) nextPendingHostSave = false;
+        if (documentChanged) {
+          try {
+            await this.persistSharedDocumentState({
+              canonicalSnapshot: canonicalSnapshot!,
+              pendingHostSave: nextPendingHostSave,
+              replaceSnapshot: acceptedSnapshot,
+              updates: acceptedDocumentUpdates,
+            });
+          } catch (error: unknown) {
+            console.error("Failed to persist shared file update log", error);
+            ws.close(1011, "Failed to persist shared file update");
+            return;
+          }
+        } else {
+          try {
+            await this.persistPendingHostSave(nextPendingHostSave);
+          } catch (error: unknown) {
+            console.error("Failed to persist host save acknowledgement", error);
+            ws.close(1011, "Failed to persist shared file update");
+            return;
           }
         }
-      } else if (item.kind == WireKind.Presence) {
-        relay.push(item);
-      } else if (item.kind == WireKind.HostSaveAck) {
-        relay.push(item);
-      }
-    }
 
-    let canonicalSnapshot: Uint8Array | null = null;
-    if (documentChanged) {
-      canonicalSnapshot = candidate!.export({ mode: "snapshot" });
-      if (this.shareRecord && canonicalSnapshot.byteLength > maxSnapshotBytes) {
-        console.warn("Rejecting shared file update after candidate snapshot exceeded the limit");
-        candidate!.free();
-        freeVersionVectors(hostSaveAckVersions);
-        ws.close(1009, "Document snapshot is too large");
+        if (documentChanged) {
+          let previousDoc = this.doc;
+          this.doc = candidate!;
+          candidate = null;
+          previousDoc.free();
+          this.initialized = true;
+        }
+        this.pendingHostSave = nextPendingHostSave;
+        if (relay.length) this.broadcast(ws, encodeWireBatch(relay));
+        this.broadcastShareStatus();
         return;
-      }
-      if (acceptedSnapshot) {
-        relay = relay.filter((item) => item.kind != WireKind.Doc && item.kind != WireKind.Snapshot);
-        relay.splice(firstDocumentRelayIndex ?? 0, 0, {
-          kind: WireKind.Snapshot,
-          payload: canonicalSnapshot,
-        });
-      }
-    }
-
-    let hostSaveAckCoversCanonical = false;
-    if (hostSaveAckVersions.length) {
-      let canonicalVersion = (documentChanged ? candidate! : this.doc).oplogVersion();
-      try {
-        hostSaveAckCoversCanonical = hostSaveAckVersions.some((version) => {
-          let comparison = version.compare(canonicalVersion);
-          return comparison == 0 || comparison == 1;
-        });
-      } finally {
-        canonicalVersion.free();
-        freeVersionVectors(hostSaveAckVersions);
-      }
-    }
-
-    if (this.shareRecord && (documentChanged || hasHostSaveAck)) {
-      let nextPendingHostSave = documentChanged ? true : this.pendingHostSave;
-      if (hostSaveAckCoversCanonical) nextPendingHostSave = false;
-      if (documentChanged) {
-        try {
-          await this.persistSharedDocumentState({
-            canonicalSnapshot: canonicalSnapshot!,
-            pendingHostSave: nextPendingHostSave,
-            replaceSnapshot: acceptedSnapshot,
-            updates: acceptedDocumentUpdates,
-          });
-        } catch (error: unknown) {
-          console.error("Failed to persist shared file update log", error);
-          candidate!.free();
-          ws.close(1011, "Failed to persist shared file update");
-          return;
-        }
-      } else {
-        try {
-          await this.persistPendingHostSave(nextPendingHostSave);
-        } catch (error: unknown) {
-          console.error("Failed to persist host save acknowledgement", error);
-          ws.close(1011, "Failed to persist shared file update");
-          return;
-        }
       }
 
       if (documentChanged) {
         let previousDoc = this.doc;
         this.doc = candidate!;
+        candidate = null;
         previousDoc.free();
         this.initialized = true;
-      } else if (candidate) {
-        candidate.free();
+        this.markDirty();
       }
-      this.pendingHostSave = nextPendingHostSave;
-      if (nextAttachment) ws.serializeAttachment(nextAttachment);
       if (relay.length) this.broadcast(ws, encodeWireBatch(relay));
-      this.broadcastShareStatus();
-      return;
+    } finally {
+      freeVersionVectors(hostSaveAckVersions);
+      candidate?.free();
     }
-
-    if (documentChanged) {
-      let previousDoc = this.doc;
-      this.doc = candidate!;
-      previousDoc.free();
-      this.initialized = true;
-      this.markDirty();
-    } else if (candidate) {
-      candidate.free();
-    }
-    if (nextAttachment) ws.serializeAttachment(nextAttachment);
-    if (relay.length) this.broadcast(ws, encodeWireBatch(relay));
   }
 
   async webSocketClose(
@@ -822,6 +945,7 @@ export class GroveShareRoom extends DurableObject<Env> {
 
     let expectedHash = session.role == "host" ? share.hostSecretHash : share.guestSecretHash;
     if (!timingSafeEqualString(session.secretHash, expectedHash)) {
+      await this.ctx.storage.delete(key);
       return { status: "invalid" } as const;
     }
     return { session, status: "valid" } as const;
@@ -839,39 +963,121 @@ export class GroveShareRoom extends DurableObject<Env> {
 
   private async storeShareSession(key: string, next: ShareSessionRecord) {
     let now = Date.now();
+    let share = this.shareRecord;
     return this.ctx.storage.transaction(async (txn) => {
       let sessions = await txn.list<ShareSessionRecord>({ prefix: sessionKeyPrefix });
-      let expiredKeys: string[] = [];
-      let activeForRole = 0;
+      let discardKeys: string[] = [];
+      let activeForRole: [string, ShareSessionRecord][] = [];
       for (let [sessionKey, session] of sessions) {
-        if (session.expiresAt <= now) expiredKeys.push(sessionKey);
-        else if (session.role == next.role) activeForRole++;
+        let expectedHash = session.role == "host" ? share?.hostSecretHash : share?.guestSecretHash;
+        if (
+          session.expiresAt <= now ||
+          !expectedHash ||
+          !timingSafeEqualString(session.secretHash, expectedHash)
+        ) {
+          discardKeys.push(sessionKey);
+        } else if (session.role == next.role) {
+          activeForRole.push([sessionKey, session]);
+        }
       }
 
-      if (expiredKeys.length) await txn.delete(expiredKeys);
+      if (discardKeys.length) await txn.delete(discardKeys);
       let roleLimit = next.role == "host" ? maxShareHostSessions : maxShareSessions;
-      if (activeForRole >= roleLimit) return false;
+      if (activeForRole.length >= roleLimit) {
+        if (next.role == "host") return false;
+        activeForRole.sort(
+          ([leftKey, left], [rightKey, right]) =>
+            sessionCreatedAt(left) - sessionCreatedAt(right) || leftKey.localeCompare(rightKey),
+        );
+        let evictCount = activeForRole.length - roleLimit + 1;
+        await txn.delete(activeForRole.slice(0, evictCount).map(([sessionKey]) => sessionKey));
+      }
       await txn.put(key, next);
       return true;
     });
   }
 
-  private updatedAttachmentAfterConsumingTokens(socket: WebSocket, count: number) {
+  private updatedAttachmentAfterConsumingTokens(
+    socket: WebSocket,
+    binaryMessageCount: number,
+    binaryByteCount: number,
+    documentUpdateCount: number,
+  ):
+    | { attachment: ConnectionAttachment; ok: true }
+    | {
+        ok: false;
+        reason: "Collaboration traffic rate limit exceeded" | "Document update rate limit exceeded";
+      } {
     let attachment = socket.deserializeAttachment() as ConnectionAttachment | undefined;
-    if (!attachment) return null;
+    if (!attachment) return { ok: false, reason: "Collaboration traffic rate limit exceeded" };
 
     let now = Date.now();
-    let previousTokens = attachment.updateTokens ?? maxUpdateFrameBurst;
-    let previousAt = attachment.updateTokensAt ?? now;
-    let refill = ((now - previousAt) / 60_000) * maxUpdateFramesPerMinute;
-    let nextTokens = Math.min(maxUpdateFrameBurst, previousTokens + refill);
-    if (nextTokens < count) return null;
+    let nextUpdateTokens = refillTokenBucket(
+      attachment.updateTokens ?? maxUpdateFrameBurst,
+      attachment.updateTokensAt ?? now,
+      now,
+      maxUpdateFrameBurst,
+      maxUpdateFramesPerMinute,
+    );
+    if (nextUpdateTokens < documentUpdateCount) {
+      return { ok: false, reason: "Document update rate limit exceeded" };
+    }
+    let nextBinaryMessageTokens = refillTokenBucket(
+      attachment.binaryMessageTokens ?? maxBinaryMessageBurst,
+      attachment.binaryTokensAt ?? now,
+      now,
+      maxBinaryMessageBurst,
+      maxBinaryMessagesPerMinute,
+    );
+    let nextBinaryByteTokens = refillTokenBucket(
+      attachment.binaryByteTokens ?? maxBinaryByteBurst,
+      attachment.binaryTokensAt ?? now,
+      now,
+      maxBinaryByteBurst,
+      maxBinaryBytesPerMinute,
+    );
+    if (nextBinaryMessageTokens < binaryMessageCount || nextBinaryByteTokens < binaryByteCount) {
+      return { ok: false, reason: "Collaboration traffic rate limit exceeded" };
+    }
 
     return {
-      ...attachment,
-      updateTokens: nextTokens - count,
-      updateTokensAt: now,
+      attachment: {
+        ...attachment,
+        binaryByteTokens: nextBinaryByteTokens - binaryByteCount,
+        binaryMessageTokens: nextBinaryMessageTokens - binaryMessageCount,
+        binaryTokensAt: now,
+        updateTokens: nextUpdateTokens - documentUpdateCount,
+        updateTokensAt: now,
+      },
+      ok: true,
     };
+  }
+
+  private async isIdempotentCreateReplay(
+    record: ShareRecord,
+    request: CreateShareRequest,
+    idempotencyKey: string,
+    snapshotDigest: string,
+    createRequestDigest: string,
+  ) {
+    if (
+      !hasMatchingCreateMetadata(record, request) ||
+      (record.idempotencyKey != null && record.idempotencyKey != idempotencyKey)
+    ) {
+      return false;
+    }
+    if (record.snapshotDigest != null || record.createRequestDigest != null) {
+      return (
+        record.snapshotDigest != null &&
+        record.createRequestDigest != null &&
+        timingSafeEqualString(record.snapshotDigest, snapshotDigest) &&
+        timingSafeEqualString(record.createRequestDigest, createRequestDigest)
+      );
+    }
+
+    let storedSnapshot = await this.ctx.storage.get<Uint8Array | ArrayBuffer>(snapshotKey);
+    if (!storedSnapshot) return false;
+    return timingSafeEqualString(await digestBytes(toUint8Array(storedSnapshot)), snapshotDigest);
   }
 
   private async verifyHostSecret(share: ShareRecord, hostSecret: string) {
@@ -1039,7 +1245,11 @@ export class GroveShareRoom extends DurableObject<Env> {
       return;
     }
     let session = validation.session;
-    if (session.role == "guest" && this.shareSocketCount("guest") >= maxShareGuestPeers) {
+    this.enforceShareSocketAuthorization();
+    if (
+      this.shareSocketCount() >= maxSharePeers ||
+      (session.role == "guest" && this.shareSocketCount("guest") >= maxShareGuestPeers)
+    ) {
       ws.close(1008, "Share is full");
       return;
     }
@@ -1049,29 +1259,34 @@ export class GroveShareRoom extends DurableObject<Env> {
       return;
     }
 
-    let attachment: ConnectionAttachment = {
-      clientId: normalizeClientId(typeof control.clientId == "string" ? control.clientId : null),
-      joinedAt: Date.now(),
-      role: session.role,
-      secretHash: session.secretHash,
-      sessionExpiresAt: session.expiresAt,
-      updateTokens: maxUpdateFrameBurst,
-      updateTokensAt: Date.now(),
-    };
-    ws.serializeAttachment(attachment);
-    if (ws.readyState != WebSocket.OPEN) {
-      clientVersion.version?.free();
-      return;
-    }
-
-    let serverVersion = this.doc.oplogVersion();
+    let clientVersionValue = clientVersion.version;
     try {
-      ws.send(encodeWireMessage(WireKind.ShareStatus, this.shareStatusPayload()));
-      this.sendInitialShareDocument(ws, clientVersion.version, serverVersion);
-      this.broadcastShareStatus(ws);
+      let authenticatedAt = Date.now();
+      let attachment: ConnectionAttachment = {
+        binaryByteTokens: maxBinaryByteBurst,
+        binaryMessageTokens: maxBinaryMessageBurst,
+        binaryTokensAt: authenticatedAt,
+        clientId: normalizeClientId(typeof control.clientId == "string" ? control.clientId : null),
+        joinedAt: authenticatedAt,
+        role: session.role,
+        secretHash: session.secretHash,
+        sessionExpiresAt: session.expiresAt,
+        updateTokens: maxUpdateFrameBurst,
+        updateTokensAt: authenticatedAt,
+      };
+      ws.serializeAttachment(attachment);
+      if (ws.readyState != WebSocket.OPEN) return;
+
+      let serverVersion = this.doc.oplogVersion();
+      try {
+        ws.send(encodeWireMessage(WireKind.ShareStatus, this.shareStatusPayload()));
+        this.sendInitialShareDocument(ws, clientVersionValue, serverVersion);
+        this.broadcastShareStatus(ws);
+      } finally {
+        serverVersion.free();
+      }
     } finally {
-      clientVersion.version?.free();
-      serverVersion.free();
+      clientVersionValue?.free();
     }
   }
 
@@ -1160,6 +1375,42 @@ export default {
 
       let body = parseCreateShareRequest(json);
       if (!body) return jsonResponse({ error: "Invalid share" }, 400, request);
+      if (!isValidCreateIdempotencyKey(request.headers.get("Idempotency-Key"), body.shareId)) {
+        return jsonResponse({ error: "Invalid idempotency key" }, 400, request);
+      }
+
+      let snapshot = decodeBase64(body.snapshot);
+      if (!snapshot) return jsonResponse({ error: "Invalid snapshot" }, 400, request);
+      if (snapshot.byteLength > maxSnapshotBytes) {
+        return jsonResponse({ error: "Snapshot too large" }, 413, request);
+      }
+      if (!isValidLoroSnapshot(snapshot)) {
+        return jsonResponse({ error: "Invalid snapshot" }, 400, request);
+      }
+
+      let quotaReservation: unknown;
+      try {
+        quotaReservation = await env.GROVE_CREATE_QUOTA.getByName("global-create-quota").reserve(
+          body.shareId,
+          snapshot.byteLength,
+        );
+      } catch (error: unknown) {
+        console.error("Grove create quota reservation failed", error);
+        return jsonResponse({ error: "Share creation temporarily unavailable" }, 503, request);
+      }
+      let quotaStatus =
+        quotaReservation && typeof quotaReservation == "object"
+          ? (quotaReservation as { status?: unknown }).status
+          : null;
+      if (quotaStatus == "exhausted") {
+        return jsonResponse({ error: "Share creation quota exceeded" }, 429, request);
+      }
+      if (quotaStatus == "conflict") {
+        return jsonResponse({ error: "Share quota reservation conflicts" }, 409, request);
+      }
+      if (quotaStatus != "reserved" && quotaStatus != "replayed") {
+        return jsonResponse({ error: "Share creation temporarily unavailable" }, 503, request);
+      }
 
       let shareUrl = new URL(`/api/shares/${encodeURIComponent(body.shareId)}`, url);
       return env.GROVE_SHARE_ROOMS.getByName(body.shareId).fetch(
@@ -1173,29 +1424,38 @@ export default {
 
     let share = shareFromPath(url.pathname);
     if (share) {
-      if (
-        share.action == "session" &&
-        request.method == "POST" &&
-        !(await allowPublicApiRequest(
-          request,
-          env.SHARE_SESSION_RATE_LIMITER,
-          "share-session",
-          share.shareId,
-        ))
-      ) {
-        return jsonResponse({ error: "Share session rate limit exceeded" }, 429, request);
+      if (share.action == "session") {
+        if (request.method != "POST") {
+          return jsonResponse({ error: "Not found" }, 404, request);
+        }
+        if (
+          !(await allowPublicApiRequest(
+            request,
+            env.SHARE_SESSION_RATE_LIMITER,
+            "share-session",
+            share.shareId,
+          ))
+        ) {
+          return jsonResponse({ error: "Share session rate limit exceeded" }, 429, request);
+        }
       }
-      if (
-        share.action == "ws" &&
-        request.headers.get("Upgrade")?.toLowerCase() == "websocket" &&
-        !(await allowPublicApiRequest(
-          request,
-          env.SHARE_WEBSOCKET_RATE_LIMITER,
-          "share-websocket",
-          share.shareId,
-        ))
-      ) {
-        return jsonResponse({ error: "Share connection rate limit exceeded" }, 429, request);
+      if (share.action == "ws") {
+        if (request.method != "GET") {
+          return jsonResponse({ error: "Not found" }, 404, request);
+        }
+        if (request.headers.get("Upgrade")?.toLowerCase() != "websocket") {
+          return new Response("Expected WebSocket", { status: 426 });
+        }
+        if (
+          !(await allowPublicApiRequest(
+            request,
+            env.SHARE_WEBSOCKET_RATE_LIMITER,
+            "share-websocket",
+            share.shareId,
+          ))
+        ) {
+          return jsonResponse({ error: "Share connection rate limit exceeded" }, 429, request);
+        }
       }
       return env.GROVE_SHARE_ROOMS.getByName(share.shareId).fetch(request);
     }
@@ -1204,12 +1464,92 @@ export default {
   },
 };
 
+function quotaRecordForDay(stored: unknown, utcDay: string): CreateQuotaRecord {
+  if (stored != null) {
+    if (!isCreateQuotaRecord(stored)) throw new Error("Invalid stored create quota record");
+    if (stored.utcDay == utcDay) return stored;
+  }
+
+  return {
+    distinctCreates: 0,
+    reservations: [],
+    schemaVersion: 1,
+    snapshotBytes: 0,
+    utcDay,
+  };
+}
+
+function isCreateQuotaRecord(value: unknown): value is CreateQuotaRecord {
+  if (!value || typeof value != "object" || Array.isArray(value)) return false;
+  let record = value as Partial<CreateQuotaRecord>;
+  if (
+    record.schemaVersion !== 1 ||
+    typeof record.utcDay != "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(record.utcDay) ||
+    !Number.isSafeInteger(record.distinctCreates) ||
+    record.distinctCreates! < 0 ||
+    record.distinctCreates! > maxCreateQuotaSharesPerUtcDay ||
+    !Number.isSafeInteger(record.snapshotBytes) ||
+    record.snapshotBytes! < 0 ||
+    record.snapshotBytes! > maxCreateQuotaSnapshotBytesPerUtcDay ||
+    !Array.isArray(record.reservations) ||
+    record.reservations.length != record.distinctCreates
+  ) {
+    return false;
+  }
+
+  let shareIds = new Set<string>();
+  let snapshotBytes = 0;
+  for (let reservation of record.reservations) {
+    if (
+      !Array.isArray(reservation) ||
+      reservation.length != 2 ||
+      !isValidShareId(reservation[0]) ||
+      shareIds.has(reservation[0]) ||
+      !Number.isSafeInteger(reservation[1]) ||
+      reservation[1] < 0 ||
+      reservation[1] > maxCreateQuotaSnapshotBytesPerUtcDay
+    ) {
+      return false;
+    }
+    shareIds.add(reservation[0]);
+    snapshotBytes += reservation[1];
+  }
+  return snapshotBytes == record.snapshotBytes;
+}
+
+function quotaReservationResult(
+  record: CreateQuotaRecord,
+  status: CreateQuotaReservationResult["status"],
+  reason?: CreateQuotaReservationResult["reason"],
+): CreateQuotaReservationResult {
+  return {
+    distinctCreates: record.distinctCreates,
+    ...(reason ? { reason } : {}),
+    snapshotBytes: record.snapshotBytes,
+    status,
+    utcDay: record.utcDay,
+  };
+}
+
+function isValidLoroSnapshot(snapshot: Uint8Array) {
+  let doc = new LoroDoc();
+  try {
+    doc.import(snapshot);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    doc.free();
+  }
+}
+
 function normalizeClientId(value: string | null): string {
   if (value && validClientIdPattern.test(value)) return value;
   return crypto.randomUUID();
 }
 
-function isIdempotentCreateReplay(record: ShareRecord, request: CreateShareRequest) {
+function hasMatchingCreateMetadata(record: ShareRecord, request: CreateShareRequest) {
   return (
     record.revokedAt == null &&
     record.shareId == request.shareId &&
@@ -1218,6 +1558,34 @@ function isIdempotentCreateReplay(record: ShareRecord, request: CreateShareReque
     timingSafeEqualString(record.guestSecretHash, request.guestSecretHash) &&
     timingSafeEqualString(record.hostSecretHash, request.hostSecretHash)
   );
+}
+
+function isValidCreateIdempotencyKey(value: string | null, shareId: string): value is string {
+  return value != null && value == shareId && isValidShareId(value);
+}
+
+async function digestCreateShareRequest(request: CreateShareRequest, snapshotDigest: string) {
+  return digestBytes(
+    new TextEncoder().encode(
+      JSON.stringify([
+        request.shareId,
+        request.displayName,
+        request.expiresAt,
+        request.guestSecretHash,
+        request.hostSecretHash,
+        snapshotDigest,
+      ]),
+    ),
+  );
+}
+
+async function digestBytes(bytes: Uint8Array) {
+  let input = new Uint8Array(bytes.byteLength);
+  input.set(bytes);
+  let digest = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
+  let binary = "";
+  for (let byte of digest) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 function shareFromPath(pathname: string) {
@@ -1234,6 +1602,10 @@ function shareFromPath(pathname: string) {
 
 function sessionKey(tokenHash: string) {
   return `${sessionKeyPrefix}${tokenHash}`;
+}
+
+function sessionCreatedAt(session: ShareSessionRecord) {
+  return session.createdAt ?? session.expiresAt - shareSessionTtlMs;
 }
 
 function updateLogEntryKey(sequence: number) {
@@ -1324,6 +1696,17 @@ function versionAdvanced(next: VersionVector, previous: VersionVector) {
   return next.compare(previous) == 1;
 }
 
+function refillTokenBucket(
+  previousTokens: number,
+  previousAt: number,
+  now: number,
+  burst: number,
+  perMinute: number,
+) {
+  let elapsed = Math.max(0, now - previousAt);
+  return Math.min(burst, previousTokens + (elapsed / 60_000) * perMinute);
+}
+
 async function allowCreateShareRequest(request: Request, env: Env) {
   return allowPublicApiRequest(request, env.CREATE_SHARE_RATE_LIMITER, "create-share", "all");
 }
@@ -1339,11 +1722,14 @@ async function allowPublicApiRequest(
     request.headers.get("Origin") ??
     request.headers.get("Referer") ??
     "unknown";
-  let results = await Promise.all([
-    limiter.limit({ key: `${route}:actor:${actor}` }),
-    limiter.limit({ key: `${route}:resource:${resource}` }),
-  ]);
-  return results.every(({ success }) => success);
+  let actorResult = await limiter.limit({ key: `${route}:actor:${actor}` });
+  if (!actorResult.success) return false;
+
+  let resourceResult = await limiter.limit({ key: `${route}:resource:${resource}` });
+  if (!resourceResult.success || resource == "all") return resourceResult.success;
+
+  let aggregateResult = await limiter.limit({ key: `${route}:resource:all` });
+  return aggregateResult.success;
 }
 
 async function readJson(request: Request, maxBytes: number) {
@@ -1387,6 +1773,8 @@ async function readTextBody(request: Request, maxBytes: number) {
 
 function forwardedJsonHeaders(request: Request) {
   let headers = new Headers({ "Content-Type": "application/json" });
+  let idempotencyKey = request.headers.get("Idempotency-Key");
+  if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
   let origin = request.headers.get("Origin");
   if (origin) headers.set("Origin", origin);
   return headers;
