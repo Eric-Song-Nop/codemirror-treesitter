@@ -257,19 +257,19 @@ import "@codemirror-treesitter/live-md/style.css";
 
 ### Properties
 
-| Property         | Type                 | Description                                                       |
-| ---------------- | -------------------- | ----------------------------------------------------------------- |
-| `value`          | `string`             | Current Markdown content, read/write.                             |
-| `defaultValue`   | `string`             | Initial content, read/write.                                      |
-| `persistKey`     | `string \| null`     | `localStorage` key, read/write.                                   |
-| `placeholder`    | `string`             | Placeholder text, read/write.                                     |
-| `readOnly`       | `boolean`            | Whether the editor is read-only, read/write.                      |
-| `dirty`          | `boolean`            | Whether content has changed since `markClean()`.                  |
-| `selectionStart` | `number`             | Selection anchor position, read/write.                            |
-| `selectionEnd`   | `number`             | Selection head position, read/write.                              |
-| `view`           | `EditorView \| null` | The underlying CodeMirror `EditorView` instance.                  |
-| `config`         | `LiveMdConfig`       | JavaScript-only Markdown feature and host plugin configuration.   |
-| `extensions`     | `Extension`          | Optional direct CodeMirror extensions configured from JavaScript. |
+| Property         | Type                 | Description                                                              |
+| ---------------- | -------------------- | ------------------------------------------------------------------------ |
+| `value`          | `string`             | Current Markdown content, read/write.                                    |
+| `defaultValue`   | `string`             | Initial content, read/write.                                             |
+| `persistKey`     | `string \| null`     | `localStorage` key, read/write.                                          |
+| `placeholder`    | `string`             | Placeholder text, read/write.                                            |
+| `readOnly`       | `boolean`            | Whether the editor is read-only, read/write.                             |
+| `dirty`          | `boolean`            | Whether content has changed since `markClean()`.                         |
+| `selectionStart` | `number`             | Selection anchor position, read/write.                                   |
+| `selectionEnd`   | `number`             | Selection head position, read/write.                                     |
+| `view`           | `EditorView \| null` | The underlying CodeMirror `EditorView` instance.                         |
+| `config`         | `LiveMdConfig`       | JavaScript-only Markdown feature and host plugin configuration.          |
+| `extensions`     | `Extension`          | Optional direct CodeMirror extensions configured from JavaScript.        |
 | `ready`          | `Promise<void>`      | Resolves after Markdown support is ready; fence grammars load on demand. |
 
 ### Methods
