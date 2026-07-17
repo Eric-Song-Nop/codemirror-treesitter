@@ -649,6 +649,22 @@ describe("tree-sitter language data", () => {
     ).toEqual({ open: "<!--", close: "-->" });
   });
 
+  it("reparses an HTML script group when one included range is deleted", async () => {
+    let support = await languages.find((lang) => lang.name == "HTML")!.load();
+    let doc =
+      "<script>let keep=1;</script>\n" + "<div>x</div>\n" + "<script>let gone=2;</script>\n";
+    let state = EditorState.create({ doc, extensions: [support.extension] });
+    expect(ensureSyntaxTree(state, state.doc.length, 5_000)).not.toBeNull();
+
+    let removeFrom = doc.lastIndexOf("<script>");
+    let transaction = state.update({ changes: { from: removeFrom, to: doc.length } });
+    let tree = ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
+    let scriptTree = tree?.nested.find((nested) => nested.tree.topNode.name == "program")?.tree;
+
+    expect(scriptTree).toBeDefined();
+    expect(scriptTree!.tree!.rootNode.toString().match(/lexical_declaration/g)).toHaveLength(1);
+  });
+
   it("marks HTML tag nodes as bidi isolates", async () => {
     let support = await languages.find((lang) => lang.name == "HTML")!.load();
     let doc = 'النص <span class="blue">الأزرق</span>\n';
@@ -710,17 +726,18 @@ describe("tree-sitter language data", () => {
     let support = await languages.find((lang) => lang.name == "Markdown")!.load();
     let doc = "# Title\n\nText with *emphasis* and `code`.\n";
     let state = EditorState.create({ doc, extensions: [support.extension] });
-    let tree = syntaxTree(state);
+    let tree = ensureSyntaxTree(state, doc.length, 5_000);
+    expect(tree).not.toBeNull();
     let highlighter = tagHighlighter([
       { tag: tags.heading, class: "heading" },
       { tag: tags.emphasis, class: "emphasis" },
       { tag: tags.monospace, class: "monospace" },
     ]);
-    let spans = __testHighlightTree(tree, [highlighter]);
+    let spans = __testHighlightTree(tree!, [highlighter]);
 
-    expect(tree.topNode.name).toBe("document");
-    expect(tree.resolveInner(doc.indexOf("emphasis")).name).toBe("emphasis");
-    expect(tree.resolveInner(doc.indexOf("code")).name).toBe("code_span");
+    expect(tree!.topNode.name).toBe("document");
+    expect(tree!.resolveInner(doc.indexOf("emphasis")).name).toBe("emphasis");
+    expect(tree!.resolveInner(doc.indexOf("code")).name).toBe("code_span");
     expect(
       spans.some(
         (span) =>
@@ -763,9 +780,14 @@ describe("tree-sitter language data", () => {
       for (let follower of followers) {
         let doc = delimiter.source + follower;
         let state = EditorState.create({ doc, extensions: [support.extension] });
-        let node = syntaxTree(state).resolveInner(doc.indexOf(target));
+        let tree = ensureSyntaxTree(state, doc.length, 5_000);
+        expect(tree).not.toBeNull();
+        let node = tree!.resolveInner(doc.indexOf(target));
 
-        expect(ancestorNames(node)).toContain(delimiter.node);
+        expect(
+          ancestorNames(node),
+          `${delimiter.source.slice(0, 2)}… followed by ${JSON.stringify(follower)}`,
+        ).toContain(delimiter.node);
       }
     }
   });
@@ -775,12 +797,14 @@ describe("tree-sitter language data", () => {
     let target = "cell text";
     let doc = `| _${target}_ | next |\n| --- | --- |\n| value | next |\n`;
     let state = EditorState.create({ doc, extensions: [support.extension] });
-    let node = syntaxTree(state).resolveInner(doc.indexOf(target));
+    let tree = ensureSyntaxTree(state, doc.length, 5_000);
+    expect(tree).not.toBeNull();
+    let node = tree!.resolveInner(doc.indexOf(target));
 
     expect(ancestorNames(node)).toContain("emphasis");
   });
 
-  it("builds Markdown inline injections through query captures without tree iteration", async () => {
+  it("builds Markdown inline injections without the allocating Tree.iterate helper", async () => {
     let support = await languages.find((lang) => lang.name == "Markdown")!.load();
     let doc =
       "Text with *emphasis* and `code`.\n\n" + "| _cell text_ | next |\n" + "| --- | --- |\n";
@@ -788,20 +812,17 @@ describe("tree-sitter language data", () => {
     Object.defineProperty(Tree.prototype, "iterate", {
       configurable: true,
       value: () => {
-        throw new Error("Markdown injections should use tree-sitter queries");
+        throw new Error("Markdown injections should use the cursor range producer");
       },
     });
 
     try {
       let state = EditorState.create({ doc, extensions: [support.extension] });
-      ensureSyntaxTree(state, doc.length, 5_000);
+      let tree = ensureSyntaxTree(state, doc.length, 5_000);
+      expect(tree).not.toBeNull();
 
-      expect(ancestorNames(syntaxTree(state).resolveInner(doc.indexOf("emphasis")))).toContain(
-        "emphasis",
-      );
-      expect(ancestorNames(syntaxTree(state).resolveInner(doc.indexOf("cell text")))).toContain(
-        "emphasis",
-      );
+      expect(ancestorNames(tree!.resolveInner(doc.indexOf("emphasis")))).toContain("emphasis");
+      expect(ancestorNames(tree!.resolveInner(doc.indexOf("cell text")))).toContain("emphasis");
     } finally {
       Object.defineProperty(Tree.prototype, "iterate", iterateDescriptor);
     }

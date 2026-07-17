@@ -35,6 +35,7 @@ export {
   type DocRange,
   type Highlighter,
   type NestedParser,
+  type NestedParserRanges,
   type NestedParserSource,
   type NestedTree,
   type NodePropSource,
