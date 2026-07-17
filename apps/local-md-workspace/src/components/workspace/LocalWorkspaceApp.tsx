@@ -14,6 +14,7 @@ import { useWorkspaceEntryDialogs } from "@/hooks/workspace/useWorkspaceEntryDia
 import { useWorkspaceFileActions } from "@/hooks/workspace/useWorkspaceFileActions";
 import { useWorkspaceImageAssets } from "@/hooks/workspace/useWorkspaceImageAssets";
 import { useWorkspaceOpeners } from "@/hooks/workspace/useWorkspaceOpeners";
+import { useWorkspacePersistenceLifecycle } from "@/hooks/workspace/useWorkspacePersistenceLifecycle";
 import { useWorkspaceShareActions } from "@/hooks/workspace/useWorkspaceShareActions";
 import { useWorkspaceShareState } from "@/hooks/workspace/useWorkspaceShareState";
 import { useWorkspaceStartup } from "@/hooks/workspace/useWorkspaceStartup";
@@ -150,35 +151,13 @@ export function LocalWorkspaceApp() {
     collabDocumentRef.current = collabDocument;
   }, [collabDocument]);
 
-  useEffect(
-    () => () => {
-      collabSyncCleanupRef.current();
-      let document = collabDocumentRef.current;
-      collabDocumentRef.current = null;
-      if (document) void document.dispose().catch(() => {});
-    },
-    [],
-  );
-
-  useEffect(() => {
-    let flushActiveCollabDocument = () => {
-      let document = collabDocumentRef.current;
-      if (!document) return;
-      void flushCollabDocumentPersistence(document).catch((error: unknown) => {
-        setErrorMessage(errorToMessage(error));
-      });
-    };
-    let handleVisibilityChange = () => {
-      if (document.visibilityState == "hidden") flushActiveCollabDocument();
-    };
-
-    window.addEventListener("pagehide", flushActiveCollabDocument);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      window.removeEventListener("pagehide", flushActiveCollabDocument);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [setErrorMessage]);
+  useWorkspacePersistenceLifecycle({
+    autoSaveTaskRef,
+    collabDocumentRef,
+    collabSyncCleanupRef,
+    flushCollabDocument: flushCollabDocumentPersistence,
+    setErrorMessage,
+  });
 
   useEffect(() => {
     completeDropboxPopupOAuthIfPresent();
@@ -390,13 +369,6 @@ export function LocalWorkspaceApp() {
     storedWorkspaceKind,
     workspaceBackend,
   });
-
-  useEffect(
-    () => () => {
-      autoSaveTaskRef.current?.task.dispose();
-    },
-    [],
-  );
 
   let selectFile = useCallback(
     (file: MarkdownFileNode) => {
