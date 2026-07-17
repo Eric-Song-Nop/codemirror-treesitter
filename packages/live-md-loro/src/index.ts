@@ -28,7 +28,7 @@ export type LiveMdLoroCollaborationOptions = {
 const drainLoroInitGuard = StateEffect.define<void>();
 
 export function liveMdLoroCollaboration(options: LiveMdLoroCollaborationOptions): Extension {
-  let getTextFromDoc = createLiveMdLoroTextGetter(options.text);
+  let getTextFromDoc = createCollaborationLoroTextGetter(options.text);
   return [
     markLoroSyncTransactionsRemote(),
     LoroExtensions(options.doc, options.presence, options.undoManager, getTextFromDoc),
@@ -47,6 +47,18 @@ export function liveMdLoroCollaborationPlugin(
 export function createLiveMdLoroTextGetter(text: LiveMdLoroTextSource = "markdown") {
   if (typeof text == "function") return text;
   return (doc: LoroDoc) => doc.getText(text);
+}
+
+function createCollaborationLoroTextGetter(text: LiveMdLoroTextSource = "markdown") {
+  if (typeof text == "function") return text;
+
+  return (doc: LoroDoc) => {
+    let ownedText = doc.getText(text);
+    // loro-codemirror consumes every getter result synchronously, but requests a fresh
+    // handle for each read or edit. Release our string-key handles after that stack ends.
+    queueMicrotask(() => ownedText.free());
+    return ownedText;
+  };
 }
 
 export function getLiveMdLoroText(doc: LoroDoc, text: LiveMdLoroTextSource = "markdown"): LoroText {

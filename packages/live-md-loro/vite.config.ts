@@ -8,6 +8,7 @@ export default defineConfig({
       "@codemirror-treesitter/basic-setup",
       "@codemirror-treesitter/commands",
       "@codemirror-treesitter/language",
+      "@codemirror-treesitter/language-data/live-md",
       "@codemirror-treesitter/language-data",
       "@codemirror-treesitter/live-md",
       "@codemirror-treesitter/live-md-theme",
