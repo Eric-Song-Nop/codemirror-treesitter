@@ -82,16 +82,49 @@ const codeFenceRendererVersion = "code-fence-highlight-v1";
 const codeFenceExactSourceKeyLimit = 16 * 1024;
 
 export const liveMdFullQueryRenderKey = "live-md-full-query";
+export const liveMdRenderCacheLimits = {
+  codeFenceHighlights: 256,
+  images: 256,
+  latex: 256,
+  measuredHeights: 512,
+  mermaid: 64,
+  tables: 128,
+} as const;
 
 export function createLiveMdRenderCache(): LiveMdRenderCache {
   return {
-    codeFenceHighlights: new Map(),
-    images: new Map(),
-    latex: new Map(),
-    measuredHeights: new Map(),
-    mermaid: new Map(),
-    tables: new Map(),
+    codeFenceHighlights: new LruMap(liveMdRenderCacheLimits.codeFenceHighlights),
+    images: new LruMap(liveMdRenderCacheLimits.images),
+    latex: new LruMap(liveMdRenderCacheLimits.latex),
+    measuredHeights: new LruMap(liveMdRenderCacheLimits.measuredHeights),
+    mermaid: new LruMap(liveMdRenderCacheLimits.mermaid),
+    tables: new LruMap(liveMdRenderCacheLimits.tables),
   };
+}
+
+class LruMap<Key, Value> extends Map<Key, Value> {
+  constructor(private readonly maxEntries: number) {
+    super();
+  }
+
+  override get(key: Key) {
+    let value = super.get(key);
+    if (value === undefined && !super.has(key)) return undefined;
+    super.delete(key);
+    super.set(key, value!);
+    return value;
+  }
+
+  override set(key: Key, value: Value) {
+    super.delete(key);
+    while (this.size >= this.maxEntries) {
+      let oldest = this.keys().next();
+      if (oldest.done) break;
+      super.delete(oldest.value);
+    }
+    super.set(key, value);
+    return this;
+  }
 }
 
 export function cachedLiveMdImageSource(
