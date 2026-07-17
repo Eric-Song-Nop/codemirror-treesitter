@@ -22,8 +22,10 @@ struct OpendalBrowserOperatorConfig {
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 struct OpendalBrowserWriteOptions {
     if_match: Option<String>,
+    if_not_exists: bool,
 }
 
 #[derive(Serialize)]
@@ -38,6 +40,8 @@ struct OpendalBrowserCapabilities {
     native_stat: bool,
     native_write: bool,
     native_write_with_if_match: bool,
+    native_write_with_if_not_exists: bool,
+    native_write_with_version: bool,
 }
 
 #[derive(Serialize)]
@@ -54,6 +58,12 @@ struct OpendalBrowserEntry {
     size: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
+}
+
+#[derive(Serialize)]
+struct OpendalBrowserReadTextResult {
+    entry: OpendalBrowserEntry,
+    value: String,
 }
 
 #[wasm_bindgen(js_name = OpendalBrowserOperator)]
@@ -203,6 +213,8 @@ impl WasmOpendalBrowserOperator {
             native_stat: cap.stat,
             native_write: cap.write,
             native_write_with_if_match: cap.write_with_if_match,
+            native_write_with_if_not_exists: cap.write_with_if_not_exists,
+            native_write_with_version: false,
         })
     }
 
@@ -227,6 +239,21 @@ impl WasmOpendalBrowserOperator {
             .await
             .map_err(js_error)?;
         String::from_utf8(bytes.to_vec()).map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = readTextWithMetadata)]
+    pub async fn read_text_with_metadata(&self, path: String) -> Result<JsValue, JsValue> {
+        let path = normalize_file_path(&path)?;
+        let reader = self.operator.reader(&path).await.map_err(js_error)?;
+        let bytes = reader.read(..).await.map_err(js_error)?;
+        let metadata = reader.metadata().ok_or_else(|| {
+            js_error("OpenDAL read did not return metadata from the content snapshot.")
+        })?;
+        let value = String::from_utf8(bytes.to_vec()).map_err(js_error)?;
+        to_js_value(OpendalBrowserReadTextResult {
+            entry: metadata_to_payload(path, metadata),
+            value,
+        })
     }
 
     #[wasm_bindgen(js_name = readBytes)]
@@ -311,16 +338,31 @@ async fn write_operator_bytes(
     let path = normalize_file_path(&path)?;
     let options = parse_write_options(options)?;
     let cap = operator.info().native_capability();
-    let metadata = match optional_text(options.if_match.as_deref()) {
-        Some(if_match) if cap.write_with_if_match => {
-            operator
-                .write_with(&path, bytes)
-                .if_match(if_match)
-                .await
-                .map_err(js_error)?
-        }
-        _ => operator.write(&path, bytes).await.map_err(js_error)?,
-    };
+    let if_match = optional_text(options.if_match.as_deref());
+    if if_match.is_some() && options.if_not_exists {
+        return Err(js_error(
+            "OpenDAL browser writes accept only one atomic write condition.",
+        ));
+    }
+    if if_match.is_some() && !cap.write_with_if_match {
+        return Err(js_error(
+            "OpenDAL backend does not support atomic ETag writes.",
+        ));
+    }
+    if options.if_not_exists && !cap.write_with_if_not_exists {
+        return Err(js_error(
+            "OpenDAL backend does not support atomic no-clobber writes.",
+        ));
+    }
+
+    let mut write = operator.write_with(&path, bytes);
+    if let Some(if_match) = if_match {
+        write = write.if_match(if_match);
+    }
+    if options.if_not_exists {
+        write = write.if_not_exists(true);
+    }
+    let metadata = write.await.map_err(js_error)?;
     to_js_value(metadata_to_payload(path, &metadata))
 }
 

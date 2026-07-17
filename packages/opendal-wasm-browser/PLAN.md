@@ -351,8 +351,8 @@ Autosave requirements:
       stays mounted.
 - [x] Keep dirty state intact on failed Dropbox writes and surface a recoverable
       save error.
-- [x] Use last-write-wins for the MVP, but leave room for a later Dropbox
-      revision-based conflict check.
+- [x] Create Dropbox files with atomic no-clobber semantics and update existing
+      files with Dropbox revision CAS.
 
 Current implementation:
 
@@ -375,6 +375,9 @@ Current implementation:
 - The wrapper exposes `createDir`, and the Dropbox workspace backend ensures
   nested file parent directories before writes when the OpenDAL backend
   advertises `nativeCreateDir`.
+- The browser facade supplements OpenDAL 0.57 with Dropbox-native `add` and
+  `update(rev)` uploads. A single download response supplies both Markdown text
+  and its revision; unsupported conditional writes fail closed.
 - Dropbox autosave uses a longer app-side debounce than the local backend and a
   per-file write queue that serializes saves while coalescing pending editor
   values.
@@ -385,9 +388,9 @@ Current implementation:
 - App error display now classifies Dropbox OAuth failures, expired tokens,
   missing file scopes, revoked/invalid authorization, token exchange failures,
   and unsupported storage operations into distinct recoverable messages.
-- Dropbox remains last-write-wins for the user-facing MVP. The shared OpenDAL
-  backend now carries revision metadata so providers with ETag support can opt
-  into conditional writes.
+- Dropbox creates and Save As writes cannot replace an existing path. Existing
+  document saves use the last observed Dropbox revision, while providers with
+  native ETag support continue to use `ifMatch`.
 
 Exit criteria:
 
