@@ -19,6 +19,7 @@ import {
   setCodeFenceLanguages,
 } from "./languages.js";
 import type { LiveMdLinkBaseUrl } from "./links.js";
+import { waitForLiveMdAnalysis } from "./runtime/field.js";
 
 export type LiveMdEditorChange = {
   update: ViewUpdate;
@@ -129,7 +130,9 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       activePluginCleanups = [];
       view.destroy();
     },
-    ready: Promise.all([markdownReady, codeFenceReady]).then(() => undefined),
+    ready: Promise.all([markdownReady, codeFenceReady]).then(async () => {
+      if (!cancelled) await waitForLiveMdAnalysis(view, () => cancelled);
+    }),
     setConfig(config) {
       reconfigureLiveMdConfig(normalizeLiveMdConfig(config));
     },

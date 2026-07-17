@@ -33,6 +33,7 @@ import {
   disposeLeafAnalysisResumeState,
   emptyLeafAnalysisCacheTrace,
   findLeafAnalysisRecordsTouchingRanges,
+  leafAnalysisResumeStateFromYield,
   leafAnalysisCacheRangesInDoc,
   takeLeafAnalysisResumeStateFromYield,
   materializeLeafAnalysisCacheRecords,
@@ -122,8 +123,10 @@ import { createLiveMdRenderCache, type LiveMdRenderCache } from "./render-cache.
 
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
 const liveMdSchedulerQuietDelay = 24;
-const liveMdSchedulerMaxDeadlineYields = 2;
 const liveMdSchedulerMaxInputYields = 5;
+const liveMdSchedulerSliceBudgetMs = 8;
+
+type LiveMdYieldCheck = (madeProgress?: boolean) => void;
 
 type BuildLiveMdAnalysisOptions = {
   activeSourceRanges?: readonly DocRange[] | null;
@@ -133,7 +136,7 @@ type BuildLiveMdAnalysisOptions = {
   transaction?: Transaction;
   transitionBase?: LiveMdPendingAnalysis;
   tree?: Tree;
-  yieldCheck?: () => void;
+  yieldCheck?: LiveMdYieldCheck;
 };
 
 type LiveMdScheduledAnalysis = {
@@ -196,11 +199,15 @@ const liveMdAnalysisField = StateField.define<LiveMdRuntimeState>({
       return pendingSourceAnalysis(value, transaction);
     }
 
+    let tree = syntaxTree(transaction.state);
+    if (scheduledRebuildInputsChanged(transaction)) {
+      return pendingSourceAnalysis(value, transaction);
+    }
+
     if (value.pending) {
       return pendingSelectionAnalysis(value, transaction);
     }
 
-    let tree = syntaxTree(transaction.state);
     let activeLines = getActiveLines(transaction.state);
     let activeSourceRanges =
       tree == value.tree && !transaction.docChanged
@@ -254,7 +261,6 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
     private resumeEpochs: LiveMdRuntimeEpochs | null = null;
     private scheduled: LiveMdScheduledWork | null = null;
     private yieldedRevision = -1;
-    private deadlineYieldCount = 0;
     private inputYieldCount = 0;
 
     constructor(readonly view: EditorView) {
@@ -305,8 +311,7 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
         pending.revision,
         (deadline) => this.runScheduled(pending.revision, deadline),
         {
-          allowDeadlineYield: this.deadlineYieldCount < liveMdSchedulerMaxDeadlineYields,
-          quietDelay: this.lastCommitWasCheap ? 0 : liveMdSchedulerQuietDelay,
+          quietDelay: this.resume || this.lastCommitWasCheap ? 0 : liveMdSchedulerQuietDelay,
           shouldYieldForInput: () => this.shouldYieldForInput(pending.revision),
         },
       );
@@ -326,11 +331,7 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
         return;
       }
 
-      let yieldCheck = scheduledYieldCheck(
-        deadline,
-        this.deadlineYieldCount < liveMdSchedulerMaxDeadlineYields,
-        () => this.shouldYieldForInput(revision),
-      );
+      let yieldCheck = scheduledYieldCheck(deadline, () => this.shouldYieldForInput(revision));
       let analysis: LiveMdRuntimeState;
       try {
         yieldCheck();
@@ -351,7 +352,6 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
           } else if (resume) {
             disposeLeafAnalysisResumeState(resume);
           }
-          if (error.reason == "deadline") this.deadlineYieldCount++;
           this.scheduleIfPending();
           return;
         }
@@ -371,7 +371,6 @@ const liveMdSchedulerPlugin = ViewPlugin.fromClass(
 
     private resetYieldCount(revision = -1) {
       this.yieldedRevision = revision;
-      this.deadlineYieldCount = 0;
       this.inputYieldCount = 0;
     }
 
@@ -729,7 +728,6 @@ type LiveMdScheduledWork = {
 };
 
 type LiveMdScheduleWorkOptions = {
-  allowDeadlineYield?: boolean;
   quietDelay?: number;
   shouldYieldForInput?: () => boolean;
 };
@@ -1246,11 +1244,10 @@ function runtimeEpochsChanged(left: LiveMdRuntimeEpochs, right: LiveMdRuntimeEpo
   );
 }
 
-function semanticAnalysisEpochsMatchState(pending: LiveMdPendingAnalysis, state: EditorState) {
-  let current = runtimeEpochs(state);
+function scheduledRebuildInputsChanged(transaction: Transaction) {
   return (
-    pending.epochs.markdownParserService == current.markdownParserService &&
-    sameArrayItems(pending.epochs.markdownFeatures, current.markdownFeatures)
+    syntaxTree(transaction.startState) != syntaxTree(transaction.state) ||
+    runtimeEpochsChanged(runtimeEpochs(transaction.startState), runtimeEpochs(transaction.state))
   );
 }
 
@@ -1295,7 +1292,6 @@ function scheduleLiveMdWork(
   run: (deadline?: IdleDeadline) => void,
   options: LiveMdScheduleWorkOptions = {},
 ): LiveMdScheduledWork {
-  let allowDeadlineYield = options.allowDeadlineYield ?? true;
   let quietDelay = options.quietDelay ?? liveMdSchedulerQuietDelay;
   let cancelled = false;
   let frame: number | null = null;
@@ -1321,10 +1317,7 @@ function scheduleLiveMdWork(
       idle = requestIdle((deadline) => {
         idle = null;
         if (cancelled) return;
-        if (
-          shouldYieldForPendingInput(options) ||
-          (allowDeadlineYield && idleDeadlineExhausted(deadline))
-        ) {
+        if (shouldYieldForPendingInput(options)) {
           scheduleQuietTask();
           return;
         }
@@ -1386,12 +1379,16 @@ function idleDeadlineExhausted(deadline: IdleDeadline | undefined) {
 
 function scheduledYieldCheck(
   deadline: IdleDeadline | undefined,
-  allowDeadlineYield: boolean,
   shouldYieldForInput: () => boolean,
 ) {
-  return () => {
+  let startedAt = performance.now();
+  return (madeProgress = false) => {
     if (isInputPending() && shouldYieldForInput()) throw new LiveMdScheduledYield("input");
-    if (allowDeadlineYield && idleDeadlineExhausted(deadline)) {
+    if (
+      madeProgress &&
+      (idleDeadlineExhausted(deadline) ||
+        performance.now() - startedAt >= liveMdSchedulerSliceBudgetMs)
+    ) {
       throw new LiveMdScheduledYield("deadline");
     }
   };
@@ -1507,7 +1504,7 @@ function projectionCompileInput(
     renderCache?: LiveMdRenderCache;
     sourceIslandMode: boolean;
     trace: LiveMdSemanticTrace;
-    yieldCheck?: () => void;
+    yieldCheck?: LiveMdYieldCheck;
   },
 ): LiveMdProjectionCompileInput {
   return {
@@ -1793,7 +1790,7 @@ function buildLiveMdSemanticAnalysis(input: {
   transaction?: Transaction;
   transitionBase?: LiveMdPendingAnalysis;
   tree: Tree;
-  yieldCheck?: () => void;
+  yieldCheck?: LiveMdYieldCheck;
 }) {
   let previous = input.previous;
   let previousSemantic = input.previous?.semantic ?? null;
@@ -1820,10 +1817,12 @@ function buildLiveMdSemanticAnalysis(input: {
 
   let transaction = input.transaction;
   let transitionBase = input.transitionBase;
+  let localFallbackTrace: LiveMdLeafAnalysisTrace | null = null;
   if (
     previousSemantic &&
     transitionBase &&
-    semanticAnalysisEpochsMatchState(transitionBase, input.state)
+    !runtimeEpochsChanged(transitionBase.epochs, runtimeEpochs(input.state)) &&
+    input.leafAnalysisResume?.kind != "transition"
   ) {
     let transition = transitionLeafAnalysisCacheLocal({
       analysisInput: {
@@ -1859,84 +1858,76 @@ function buildLiveMdSemanticAnalysis(input: {
         transition,
       };
     }
-
-    input.yieldCheck?.();
-    let walked = walkMarkdownBlocks(input.tree, input.state.doc);
-    input.yieldCheck?.();
-    let fallback = transitionLeafAnalysisCache({
-      analysisInput: {
-        renderKeyContext,
-        service: input.service,
-        state: input.state,
-        tree: input.tree,
-      },
-      changes: transitionBase.changes,
-      oldCache: previousSemantic.cache,
-      oldDoc: transitionBase.baseDoc,
-      resume: input.leafAnalysisResume,
-      revision: transitionBase.revision,
-      snapshot: walked.snapshot,
-      yieldCheck: input.yieldCheck,
-    });
-    fallback.trace.blockNodesVisited = walked.trace.visitedBlockNodes;
-    fallback.trace.checkedRanges = [{ from: 0, to: input.state.doc.length }];
-    fallback.trace.fallbackCount = 1;
-    fallback.trace.fixedPointRounds = transition.trace.fixedPointRounds;
-    fallback.trace.leavesCollected = walked.snapshot.leaves.length + walked.snapshot.markers.length;
-    let sourceIslandLeaves = sourceIslandLeavesFromLeafAnalysisRecords(
-      input.state.doc,
-      materializeLeafAnalysisCacheRecords(fallback.cache),
-    );
-    return {
-      activeSourceRanges: liveMdActiveSourceRanges(input.state, sourceIslandLeaves),
-      semantic: {
-        cache: fallback.cache,
-        revision: (previousSemantic.revision ?? 0) + 1,
-      },
-      sourceIslandLeaves,
-      trace: fallback.trace,
-      transition: null,
-    };
+    localFallbackTrace = transition.trace;
   }
 
   input.yieldCheck?.();
-  let walked = walkMarkdownBlocks(input.tree, input.state.doc);
+  let revision = semanticResumeRevision(input);
+  let fullResume =
+    input.leafAnalysisResume &&
+    input.leafAnalysisResume.revision == revision &&
+    input.leafAnalysisResume.kind != "local"
+      ? input.leafAnalysisResume
+      : null;
+  let walked = fullResume ? null : walkMarkdownBlocks(input.tree, input.state.doc);
   input.yieldCheck?.();
-  let transition =
-    previousSemantic &&
-    transaction &&
-    !markdownParserServiceChanged(transaction.startState, transaction.state)
-      ? transitionLeafAnalysisCache({
-          analysisInput: {
-            renderKeyContext,
-            service: input.service,
-            state: input.state,
-            tree: input.tree,
-          },
-          changes: transaction.changes,
-          oldCache: previousSemantic.cache,
-          oldDoc: transaction.startState.doc,
-          resume: input.leafAnalysisResume,
-          revision: semanticResumeRevision(input),
-          snapshot: walked.snapshot,
-          yieldCheck: input.yieldCheck,
-        })
-      : buildFreshLeafAnalysisCache({
-          analysisInput: {
-            renderKeyContext,
-            service: input.service,
-            state: input.state,
-            tree: input.tree,
-          },
-          resume: input.leafAnalysisResume,
-          revision: semanticResumeRevision(input),
-          snapshot: walked.snapshot,
-          startCacheId: previousSemantic?.cache.nextCacheId,
-          yieldCheck: input.yieldCheck,
-        });
+  let snapshot = fullResume?.snapshot ?? walked!.snapshot;
+  let changes = transitionBase?.changes ?? transaction?.changes;
+  let oldDoc = transitionBase?.baseDoc ?? transaction?.startState.doc;
+  let parserServiceStable = transitionBase
+    ? transitionBase.epochs.markdownParserService ==
+      input.state.facet(liveMdMarkdownParserServiceFacet)
+    : transaction
+      ? !markdownParserServiceChanged(transaction.startState, transaction.state)
+      : false;
+  let transition: LeafAnalysisCacheTransition;
+  try {
+    transition =
+      previousSemantic && changes && oldDoc && parserServiceStable
+        ? transitionLeafAnalysisCache({
+            analysisInput: {
+              renderKeyContext,
+              service: input.service,
+              state: input.state,
+              tree: input.tree,
+            },
+            changes,
+            oldCache: previousSemantic.cache,
+            oldDoc,
+            resume: fullResume,
+            revision,
+            snapshot,
+            yieldCheck: input.yieldCheck,
+          })
+        : buildFreshLeafAnalysisCache({
+            analysisInput: {
+              renderKeyContext,
+              service: input.service,
+              state: input.state,
+              tree: input.tree,
+            },
+            resume: fullResume,
+            revision,
+            snapshot,
+            startCacheId: previousSemantic?.cache.nextCacheId,
+            yieldCheck: input.yieldCheck,
+          });
+  } catch (error) {
+    let yieldedResume = leafAnalysisResumeStateFromYield(error);
+    if (yieldedResume && walked) {
+      applyMarkdownWalkTrace(
+        yieldedResume.trace,
+        walked,
+        input.state.doc.length,
+        localFallbackTrace,
+      );
+    }
+    throw error;
+  }
 
-  transition.trace.blockNodesVisited = walked.trace.visitedBlockNodes;
-  transition.trace.checkedRanges = walked.trace.checkedRanges;
+  if (walked) {
+    applyMarkdownWalkTrace(transition.trace, walked, input.state.doc.length, localFallbackTrace);
+  }
   let sourceIslandLeaves = sourceIslandLeavesFromLeafAnalysisRecords(
     input.state.doc,
     materializeLeafAnalysisCacheRecords(transition.cache),
@@ -1951,8 +1942,25 @@ function buildLiveMdSemanticAnalysis(input: {
     },
     sourceIslandLeaves,
     trace: transition.trace,
-    transition,
+    transition: localFallbackTrace || transition.trace.fallbackCount ? null : transition,
   };
+}
+
+function applyMarkdownWalkTrace(
+  trace: LiveMdLeafAnalysisTrace,
+  walked: ReturnType<typeof walkMarkdownBlocks>,
+  docLength: number,
+  localFallbackTrace: LiveMdLeafAnalysisTrace | null,
+) {
+  trace.blockNodesVisited = walked.trace.visitedBlockNodes;
+  trace.checkedRanges = localFallbackTrace
+    ? [{ from: 0, to: docLength }]
+    : walked.trace.checkedRanges;
+  if (localFallbackTrace) {
+    trace.fallbackCount = 1;
+    trace.fixedPointRounds = localFallbackTrace.fixedPointRounds;
+    trace.leavesCollected = walked.snapshot.leaves.length + walked.snapshot.markers.length;
+  }
 }
 
 function semanticResumeRevision(input: {
@@ -2209,6 +2217,15 @@ export function __testRefreshLiveMdSurfacePreservingState(view: EditorView) {
 export async function __testFlushLiveMdAnalysis(view: EditorView) {
   for (let index = 0; index < 120; index++) {
     if (!view.state.field(liveMdAnalysisField).pending) return;
+    await waitForScheduledTurn();
+  }
+}
+
+export async function waitForLiveMdAnalysis(
+  view: EditorView,
+  cancelled: () => boolean = () => false,
+) {
+  while (!cancelled() && view.state.field(liveMdAnalysisField).pending) {
     await waitForScheduledTurn();
   }
 }

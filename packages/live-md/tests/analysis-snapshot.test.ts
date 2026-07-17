@@ -17,6 +17,7 @@ import {
   ensureSyntaxTree,
   forceParsing,
   HighlightStyle,
+  Language,
   syntaxHighlighting,
   syntaxHighlighters,
   tags as t,
@@ -176,6 +177,7 @@ describe("LiveMD analysis snapshot", () => {
 
     let view = await markdownAnalysisView(doc, "after");
     view.dispatch({ effects: setCodeFenceLanguages.of(languages) });
+    await __testFlushLiveMdAnalysis(view);
     expect(tablePreviewTables(view.state)).toHaveLength(1);
 
     parseCalls = 0;
@@ -334,8 +336,22 @@ describe("LiveMD analysis snapshot", () => {
       expect(resume?.revision).toBe(7);
       expect(resume?.unitIndex).toBeGreaterThan(0);
       expect(resume?.records).toHaveLength(resume!.unitIndex);
+      expect(resume?.units).toHaveLength(96);
       expect(resume?.trace.inlineParserSessions).toBe(1);
       expect(resume?.trace.inlineParserSessionDisposals).toBe(0);
+
+      Object.defineProperties(resume!.snapshot, {
+        leaves: {
+          get() {
+            throw new Error("resumed transition must reuse its sorted units");
+          },
+        },
+        markers: {
+          get() {
+            throw new Error("resumed transition must reuse its sorted units");
+          },
+        },
+      });
 
       let resumed = transitionLeafAnalysisCache({
         analysisInput: { service, state: transaction.state, tree: nextTree },
@@ -511,6 +527,8 @@ describe("LiveMD analysis snapshot", () => {
         liveMdImageSource((source) => `blob:second/${source}`),
       ),
     });
+    expect(__testLiveMdAnalysis(view).pending).toBeTruthy();
+    await __testFlushLiveMdAnalysis(view);
     let resolverChanged = __testLiveMdAnalysis(view);
     let resolverImage = recordBySource(view.state, resolverChanged, "![Alt](assets/one.png)");
     let resolverFence = recordByKind(resolverChanged, "fencedCode");
@@ -523,6 +541,8 @@ describe("LiveMD analysis snapshot", () => {
         syntaxHighlighting(testDarkCodeFenceHighlightStyle),
       ),
     });
+    expect(__testLiveMdAnalysis(view).pending).toBeTruthy();
+    await __testFlushLiveMdAnalysis(view);
     let themeChanged = __testLiveMdAnalysis(view);
     let themeFence = recordByKind(themeChanged, "fencedCode");
     expect(themeChanged.semanticTrace?.recordsAnalyzed).toBe(0);
@@ -650,6 +670,147 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("keeps a full Markdown tree commit off the synchronous transaction path", async () => {
+    let originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+    let originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    let frames: FrameRequestCallback[] = [];
+    let parserCompartment = new Compartment();
+    let service = await loadMarkdownParserService();
+    let parseCalls = 0;
+    let inlineParser = Object.create(service.inlineParser) as typeof service.inlineParser;
+    inlineParser.parseWith = (...args: Parameters<typeof service.inlineParser.parseWith>) => {
+      parseCalls++;
+      return service.inlineParser.parseWith(...args);
+    };
+    let trackedService = { ...service, inlineParser };
+    let doc = emphasisParagraphDoc(10_000, "scheduled");
+
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    }) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = (() => {}) as typeof globalThis.cancelAnimationFrame;
+
+    let view = new EditorView({
+      parent: document.body.appendChild(document.createElement("div")),
+      state: EditorState.create({
+        doc,
+        extensions: [parserCompartment.of([]), codeFenceLanguagesField, liveMdAnalysis],
+      }),
+    });
+    try {
+      view.dispatch({
+        effects: parserCompartment.reconfigure([
+          service.blockLanguage.extension,
+          liveMdMarkdownParserServiceFacet.of(trackedService),
+        ]),
+      });
+      expect(ensureSyntaxTree(view.state, view.state.doc.length, 5_000)).not.toBeNull();
+
+      parseCalls = 0;
+      dispatchCurrentLanguageTree(view);
+
+      let pending = __testLiveMdAnalysis(view);
+      expect(pending.pending).toBeTruthy();
+      expect(pending.trace.blockNodesVisited).toBe(0);
+      expect(pending.trace.inlineParseCalls).toBe(0);
+      expect(parseCalls).toBe(0);
+      expect(frames.length).toBeGreaterThan(0);
+    } finally {
+      view.destroy();
+      globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+    }
+  }, 60_000);
+
+  it("makes bounded progress across zero-budget idle turns and matches canonical analysis", async () => {
+    let originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+    let originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    let originalRequestIdleCallback = globalThis.requestIdleCallback;
+    let originalCancelIdleCallback = globalThis.cancelIdleCallback;
+    let parserCompartment = new Compartment();
+    let service = await loadMarkdownParserService();
+    let parseCalls = 0;
+    let parseCallsPerIdleTurn: number[] = [];
+    let inlineParser = Object.create(service.inlineParser) as typeof service.inlineParser;
+    inlineParser.parseWith = (...args: Parameters<typeof service.inlineParser.parseWith>) => {
+      parseCalls++;
+      return service.inlineParser.parseWith(...args);
+    };
+    let trackedService = { ...service, inlineParser };
+    let doc = emphasisParagraphDoc(10_000, "scheduled");
+
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) =>
+      setTimeout(
+        () => callback(performance.now()),
+        0,
+      ) as unknown as number) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((id: number) => {
+      clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
+    }) as typeof globalThis.cancelAnimationFrame;
+    globalThis.requestIdleCallback = ((callback: IdleRequestCallback) =>
+      setTimeout(() => {
+        let before = parseCalls;
+        callback({ didTimeout: false, timeRemaining: () => 0 });
+        parseCallsPerIdleTurn.push(parseCalls - before);
+      }, 0) as unknown as number) as typeof globalThis.requestIdleCallback;
+    globalThis.cancelIdleCallback = ((id: number) => {
+      clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
+    }) as typeof globalThis.cancelIdleCallback;
+
+    let view = new EditorView({
+      parent: document.body.appendChild(document.createElement("div")),
+      state: EditorState.create({
+        doc,
+        extensions: [parserCompartment.of([]), codeFenceLanguagesField, liveMdAnalysis],
+      }),
+    });
+    try {
+      view.dispatch({
+        effects: parserCompartment.reconfigure([
+          service.blockLanguage.extension,
+          liveMdMarkdownParserServiceFacet.of(trackedService),
+        ]),
+      });
+      let tree = ensureSyntaxTree(view.state, view.state.doc.length, 30_000);
+      expect(tree).not.toBeNull();
+      parseCalls = 0;
+      let cursorSpy = vi.spyOn(tree!, "cursor");
+      let committed: ReturnType<typeof __testLiveMdAnalysis>;
+      try {
+        dispatchCurrentLanguageTree(view);
+        expect(__testLiveMdAnalysis(view).pending).toBeTruthy();
+
+        await waitForTestCondition(() => parseCallsPerIdleTurn.length >= 4, 10_000);
+        expect(parseCallsPerIdleTurn.slice(0, 4)).toEqual([32, 32, 32, 32]);
+
+        await waitForTestCondition(() => __testLiveMdAnalysis(view).pending == null, 60_000);
+
+        committed = __testLiveMdAnalysis(view);
+        expect(cursorSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        cursorSpy.mockRestore();
+      }
+      expect(parseCallsPerIdleTurn.length).toBeGreaterThan(4);
+      expect(parseCallsPerIdleTurn.every((count) => count > 0 && count <= 32)).toBe(true);
+      expect(parseCalls).toBe(10_000);
+      expect(committed.semanticTrace?.blockNodesVisited).toBeGreaterThan(0);
+      let canonical = __testBuildCanonicalLiveMdAnalysis(view.state);
+      expect(canonicalSemanticCache(view.state, committed)).toEqual(
+        canonicalSemanticCache(view.state, canonical),
+      );
+      expect(canonicalSourceIslandLeaves(committed.sourceIslandLeaves)).toEqual(
+        canonicalSourceIslandLeaves(canonical.sourceIslandLeaves),
+      );
+    } finally {
+      view.destroy();
+      globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+      globalThis.requestIdleCallback = originalRequestIdleCallback;
+      globalThis.cancelIdleCallback = originalCancelIdleCallback;
+    }
+  }, 90_000);
+
   it("resumes scheduled fresh rebuilds after parser service changes while pending", async () => {
     let originalRequestAnimationFrame = globalThis.requestAnimationFrame;
     let originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
@@ -676,13 +837,12 @@ describe("LiveMD analysis snapshot", () => {
     }) as typeof globalThis.cancelAnimationFrame;
     globalThis.requestIdleCallback = ((callback: IdleRequestCallback) => {
       let attempt = idleAttempts++;
-      let reads = 0;
       return setTimeout(() => {
         callback({
           didTimeout: false,
           timeRemaining() {
             if (attempt > 0) return 50;
-            return reads++ < 5 ? 50 : 0;
+            return 0;
           },
         });
       }, 0) as unknown as number;
@@ -694,6 +854,7 @@ describe("LiveMD analysis snapshot", () => {
     let view = await markdownAnalysisView(emphasisParagraphDoc(96, "old"), "paragraph 0", [
       parserCompartment.of(liveMdMarkdownParserServiceFacet.of(service)),
     ]);
+    idleAttempts = 0;
     try {
       view.dispatch({ changes: { from: 0, insert: "new " } });
       expect(__testLiveMdAnalysis(view).pending).toBeTruthy();
@@ -741,7 +902,7 @@ describe("LiveMD analysis snapshot", () => {
       clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
     }) as typeof globalThis.cancelIdleCallback;
 
-    let view = await markdownAnalysisView("alpha\n\nbeta", "alpha");
+    let view = await markdownAnalysisView("alpha\n\nbeta", "alpha", [], false);
     try {
       frames = [];
       view.dispatch({ changes: { from: 0, insert: "new " } });
@@ -763,7 +924,7 @@ describe("LiveMD analysis snapshot", () => {
     }
   });
 
-  it("reschedules scheduled analysis without starving on short idle deadlines", async () => {
+  it("finishes a sub-quantum analysis on a short idle deadline", async () => {
     let originalRequestIdleCallback = globalThis.requestIdleCallback;
     let originalCancelIdleCallback = globalThis.cancelIdleCallback;
     let idleAttempts = 0;
@@ -785,11 +946,12 @@ describe("LiveMD analysis snapshot", () => {
     }) as typeof globalThis.cancelIdleCallback;
 
     let view = await markdownAnalysisView("alpha\n\nbeta", "alpha");
+    idleAttempts = 0;
     try {
       view.dispatch({ changes: { from: 0, insert: "new " } });
       await __testFlushLiveMdAnalysis(view);
 
-      expect(idleAttempts).toBeGreaterThanOrEqual(3);
+      expect(idleAttempts).toBe(1);
       expect(__testLiveMdAnalysis(view).pending).toBeNull();
     } finally {
       view.destroy();
@@ -830,6 +992,7 @@ describe("LiveMD analysis snapshot", () => {
     }) as typeof globalThis.cancelIdleCallback;
 
     let view = await markdownAnalysisView("alpha\n\nbeta", "alpha");
+    idleAttempts = 0;
     try {
       view.dispatch({ changes: { from: 0, insert: "new " } });
       await __testFlushLiveMdAnalysis(view);
@@ -884,6 +1047,8 @@ describe("LiveMD analysis snapshot", () => {
     });
 
     let view = await markdownAnalysisView(numberedPlainParagraphDoc(3), "paragraph 0");
+    idleAttempts = 0;
+    inputChecks = 0;
     try {
       let baseState = view.state;
       let base = __testLiveMdAnalysis(view);
@@ -2700,6 +2865,7 @@ describe("LiveMD analysis snapshot", () => {
     expect(initial.trace.heavyRenderStarts).toBeGreaterThanOrEqual(2);
 
     view.dispatch({ effects: setCodeFenceLanguages.of(tracked.languages) });
+    await __testFlushLiveMdAnalysis(view);
     let withCodeFence = __testLiveMdAnalysis(view);
     expect(withCodeFence.semantic).toBeTruthy();
     expect(tracked.parseCalls()).toBe(1);
@@ -3013,6 +3179,7 @@ describe("LiveMD analysis snapshot", () => {
       syntaxHighlighting(testLightCodeFenceHighlightStyle),
     ]);
     view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+    await __testFlushLiveMdAnalysis(view);
 
     view.dispatch({ changes: { from: doc.indexOf("tail"), insert: "new " } });
 
@@ -3117,6 +3284,7 @@ describe("LiveMD analysis snapshot", () => {
       syntaxHighlighting(testLightCodeFenceHighlightStyle),
     ]);
     view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+    await __testFlushLiveMdAnalysis(view);
     let keywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
     if (!keywordClass) throw new Error("Expected keyword highlight class");
 
@@ -3154,6 +3322,7 @@ describe("LiveMD analysis snapshot", () => {
       syntaxHighlighting(testLightCodeFenceHighlightStyle),
     ]);
     view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+    await __testFlushLiveMdAnalysis(view);
 
     let beforeRanges = decorationRangesForClassFromSet(
       view.state,
@@ -3624,6 +3793,7 @@ describe("LiveMD analysis snapshot", () => {
       syntaxHighlighting(testLightCodeFenceHighlightStyle),
     ]);
     view.dispatch({ effects: setCodeFenceLanguages.of(languages) });
+    await __testFlushLiveMdAnalysis(view);
     let keywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
     if (!keywordClass) throw new Error("Expected keyword highlight class");
     let initialAnalysis = __testLiveMdAnalysis(view);
@@ -3904,6 +4074,7 @@ describe("LiveMD analysis snapshot", () => {
       highlighterCompartment.of(syntaxHighlighting(testLightCodeFenceHighlightStyle)),
     ]);
     view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+    await __testFlushLiveMdAnalysis(view);
     let lightKeywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
     let darkKeywordClass = testDarkCodeFenceHighlightStyle.style([t.keyword]);
 
@@ -3920,6 +4091,7 @@ describe("LiveMD analysis snapshot", () => {
         syntaxHighlighting(testDarkCodeFenceHighlightStyle),
       ),
     });
+    await __testFlushLiveMdAnalysis(view);
 
     let reconfiguredAnalysis = __testLiveMdAnalysis(view);
     let reconfiguredClasses = decorationClasses(view.state, reconfiguredAnalysis);
@@ -3935,6 +4107,7 @@ describe("LiveMD analysis snapshot", () => {
       liveMdCodeFenceHighlighting(testDarkCodeFenceHighlightStyle),
     ]);
     view.dispatch({ effects: setCodeFenceLanguages.of(await loadCodeFenceLanguages()) });
+    await __testFlushLiveMdAnalysis(view);
     let lightKeywordClass = testLightCodeFenceHighlightStyle.style([t.keyword]);
     let darkKeywordClass = testDarkCodeFenceHighlightStyle.style([t.keyword]);
 
@@ -4041,6 +4214,7 @@ describe("LiveMD analysis snapshot", () => {
       ),
     });
 
+    await __testFlushLiveMdAnalysis(view);
     expect(imagePreviewSources(view.state)).toEqual(["blob:second/assets/local.png"]);
     view.destroy();
   });
@@ -4169,6 +4343,7 @@ describe("LiveMD analysis snapshot", () => {
       effects: featureCompartment.reconfigure(markHeadingFeature("cm-md-feature-second")),
     });
 
+    await __testFlushLiveMdAnalysis(view);
     expect(decorationClasses(view.state).has("cm-md-feature-first")).toBe(false);
     expect(decorationClasses(view.state).has("cm-md-feature-second")).toBe(true);
     view.destroy();
@@ -4224,7 +4399,12 @@ async function markdownAnalysisState(doc: string, selectionText = "", extensions
   return state.update({ selection: { anchor: selection } }).state;
 }
 
-async function markdownAnalysisView(doc: string, selectionText = "", extensions: Extension = []) {
+async function markdownAnalysisView(
+  doc: string,
+  selectionText = "",
+  extensions: Extension = [],
+  waitForInitialAnalysis = true,
+) {
   let selection = selectionText ? doc.indexOf(selectionText) : 0;
   let view = new EditorView({
     parent: document.body.appendChild(document.createElement("div")),
@@ -4240,6 +4420,9 @@ async function markdownAnalysisView(doc: string, selectionText = "", extensions:
     }),
   });
   expect(forceParsing(view, doc.length, 5_000)).toBe(true);
+  if (waitForInitialAnalysis) {
+    await waitForTestCondition(() => __testLiveMdAnalysis(view).pending == null, 60_000);
+  }
   return view;
 }
 
@@ -4251,6 +4434,23 @@ function completedState(state: EditorState) {
 function dispatchParsedTransaction(view: EditorView, transaction: Transaction) {
   view.dispatch(transaction);
   expect(forceParsing(view, view.state.doc.length, 5_000)).toBe(true);
+}
+
+function dispatchCurrentLanguageTree(view: EditorView) {
+  let current = view.state.field(Language.state) as unknown as {
+    constructor: new (context: unknown) => unknown;
+    context: unknown;
+  };
+  let committed = new current.constructor(current.context);
+  view.dispatch({ effects: Language.setState.of(committed as never) });
+}
+
+async function waitForTestCondition(predicate: () => boolean, timeout: number) {
+  let expires = Date.now() + timeout;
+  while (!predicate()) {
+    if (Date.now() >= expires) throw new Error(`Timed out after ${timeout}ms`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 async function trackedHtmlCodeFenceLanguages() {
