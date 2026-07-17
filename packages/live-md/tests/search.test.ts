@@ -117,6 +117,7 @@ describe("LiveMD Markdown search", () => {
     }).state;
 
     expect(collectMatches(state, getSearchQuery(state))).toHaveLength(10_000);
+    expect(counts.inlineRanges).toBeLessThanOrEqual(32);
     expect(counts.parseWith).toBe(0);
     expect(counts.createParser).toBe(0);
   }, 60_000);
@@ -148,6 +149,39 @@ describe("LiveMD Markdown search", () => {
     expectRangeVisible(state, state.doc.toString(), "*", false);
     expect(counts.parseWith).toBeLessThanOrEqual(1);
     expect(counts.createParser).toBeLessThanOrEqual(1);
+  }, 60_000);
+
+  it("keeps many pending edits off the synchronous search path", async () => {
+    let doc = Array.from({ length: 10_000 }, () => "*target*").join("\n\n");
+    let counts = { createParser: 0, deleteParser: 0, inlineRanges: 0, parseWith: 0 };
+    let service = countSearchParserService(await loadMarkdownParserService(), counts);
+    let state = EditorState.create({
+      doc,
+      extensions: [
+        service.blockLanguage.extension,
+        liveMdMarkdownParserServiceFacet.of(service),
+        liveMdSearch,
+      ],
+    });
+    ensureSyntaxTree(state, doc.length, 30_000);
+    state = state.update({}).state;
+    state = state.update({ effects: StateEffect.appendConfig.of(liveMdAnalysis) }).state;
+    state = state.update({
+      effects: setSearchQuery.of(new SearchQuery({ search: "target" })),
+    }).state;
+    counts.createParser = counts.deleteParser = counts.inlineRanges = counts.parseWith = 0;
+    state = state.update({
+      changes: Array.from({ length: 128 }, (_, index) => ({
+        from: index * 700,
+        insert: "x",
+      })),
+    }).state;
+    expect(__testLiveMdAnalysis({ state }).pending).not.toBeNull();
+    ensureSyntaxTree(state, state.doc.length, 30_000);
+
+    expect(collectMatches(state, getSearchQuery(state))).toHaveLength(10_000);
+    expect(counts.parseWith).toBe(0);
+    expect(counts.createParser).toBe(0);
   }, 60_000);
 
   it("does not synchronously reparse the document before the first scheduled commit", async () => {

@@ -22,6 +22,9 @@ import { liveMdSearchSemanticSnapshot } from "./runtime/field.js";
 
 type SearchTest = NonNullable<SearchQuery["test"]>;
 
+const maxSynchronousSearchRepairHosts = 32;
+const maxSynchronousSearchRepairCharacters = 64 * 1024;
+
 const liveMdSearchTests = new WeakSet<SearchTest>();
 const combinedSearchTests = new WeakMap<SearchTest, SearchTest>();
 const visibilityIndexCache = new WeakMap<EditorState, RangeSet<HiddenSourceRange>>();
@@ -112,9 +115,11 @@ function buildLiveMdSearchVisibilityIndex(state: EditorState) {
   let semanticSnapshot = liveMdSearchSemanticSnapshot(state);
   if (semanticSnapshot) {
     let dirtyInlineRanges = [...semanticSnapshot.dirtyRanges];
+    let dirtyInlineHosts = 0;
     forEachLeafAnalysisCacheRecord(semanticSnapshot.cache, (record) => {
       let mappedSourceRange = mapSemanticRange(record.sourceRange, 0, semanticSnapshot.changes);
-      if (semanticSnapshot.dirtyRanges.some((range) => rangesTouch(mappedSourceRange, range))) {
+      if (rangeTouchesAny(mappedSourceRange, semanticSnapshot.dirtyRanges)) {
+        dirtyInlineHosts++;
         dirtyInlineRanges.push(mappedSourceRange);
         return;
       }
@@ -126,12 +131,13 @@ function buildLiveMdSearchVisibilityIndex(state: EditorState) {
         collectHiddenSemanticDescriptor(descriptor, offset, semanticSnapshot.changes, ranges);
       }
     });
-    if (service && dirtyInlineRanges.length) {
+    let normalizedDirtyInlineRanges = normalizeRanges(dirtyInlineRanges);
+    if (service && shouldRepairSearchInlineRanges(normalizedDirtyInlineRanges, dirtyInlineHosts)) {
       withLiveMdMarkdownInlineTreesInRanges(
         service,
         state.doc,
         tree,
-        normalizeRanges(dirtyInlineRanges),
+        normalizedDirtyInlineRanges,
         (inlineTrees) => {
           for (let inlineTree of inlineTrees) {
             collectHiddenMarkdownSourceRanges(inlineTree, ranges);
@@ -206,8 +212,34 @@ function mapSemanticRange(
   return { from: mappedFrom, to: Math.max(mappedFrom, changes.mapPos(to, -1)) };
 }
 
-function rangesTouch(left: { from: number; to: number }, right: { from: number; to: number }) {
-  return left.from <= right.to && right.from <= left.to;
+function rangeTouchesAny(
+  range: { from: number; to: number },
+  sortedRanges: readonly { from: number; to: number }[],
+) {
+  let low = 0;
+  let high = sortedRanges.length;
+  while (low < high) {
+    let middle = (low + high) >> 1;
+    if (sortedRanges[middle]!.to < range.from) low = middle + 1;
+    else high = middle;
+  }
+  let candidate = sortedRanges[low];
+  return candidate != null && candidate.from <= range.to;
+}
+
+function shouldRepairSearchInlineRanges(
+  ranges: readonly { from: number; to: number }[],
+  dirtyHostCount: number,
+) {
+  if (!ranges.length || dirtyHostCount > maxSynchronousSearchRepairHosts) return false;
+  if (ranges.length > maxSynchronousSearchRepairHosts) return false;
+
+  let characters = 0;
+  for (let range of ranges) {
+    characters += range.to - range.from;
+    if (characters > maxSynchronousSearchRepairCharacters) return false;
+  }
+  return true;
 }
 
 function collectHiddenMarkdownSourceRanges(
