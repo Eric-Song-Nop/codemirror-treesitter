@@ -23,6 +23,7 @@ import {
   shareSchemaVersion,
   shareSessionTtlMs,
   timingSafeEqualString,
+  type CreateShareRequest,
   type ShareRecord,
   type ShareRole,
   type ShareSessionRecord,
@@ -179,6 +180,17 @@ export class GroveShareRoom extends DurableObject<Env> {
     let body = parseCreateShareRequest(json);
     if (!body || body.shareId != shareId)
       return jsonResponse({ error: "Invalid share" }, 400, request);
+    if (this.shareRecord && isIdempotentCreateReplay(this.shareRecord, body)) {
+      return jsonResponse(
+        {
+          displayName: this.shareRecord.displayName,
+          expiresAt: this.shareRecord.expiresAt,
+          shareId: this.shareRecord.shareId,
+        },
+        200,
+        request,
+      );
+    }
     if (this.shareRecord || this.initialized) {
       return jsonResponse({ error: "Share already exists" }, 409, request);
     }
@@ -1197,6 +1209,17 @@ function normalizeClientId(value: string | null): string {
   return crypto.randomUUID();
 }
 
+function isIdempotentCreateReplay(record: ShareRecord, request: CreateShareRequest) {
+  return (
+    record.revokedAt == null &&
+    record.shareId == request.shareId &&
+    record.displayName == request.displayName &&
+    record.expiresAt == request.expiresAt &&
+    timingSafeEqualString(record.guestSecretHash, request.guestSecretHash) &&
+    timingSafeEqualString(record.hostSecretHash, request.hostSecretHash)
+  );
+}
+
 function shareFromPath(pathname: string) {
   let match = sharePattern.exec(pathname);
   if (!match) return null;
@@ -1379,7 +1402,7 @@ function jsonResponse(value: unknown, status: number, request: Request) {
 function corsHeaders(request: Request) {
   let origin = request.headers.get("Origin");
   return {
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Idempotency-Key",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Origin": origin || "*",
     Vary: "Origin",

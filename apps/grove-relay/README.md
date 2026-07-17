@@ -28,6 +28,10 @@ in `apps/local-md-workspace`.
 - `POST /api/shares/:shareId/rotate`
 - `POST /api/shares/:shareId/revoke`
 - `GET /api/shares/:shareId/ws` with WebSocket upgrade
+
+Share creation is idempotent for an exact replay with the same share id,
+metadata, and host/guest capability hashes. This lets the workspace safely
+retry when the relay committed a create but its response was lost.
 - `GET /__debug` for local readiness checks used by
   `apps/local-md-workspace/scripts/dev.mjs`
 

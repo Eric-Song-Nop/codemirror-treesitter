@@ -1,6 +1,7 @@
 import { LoroDoc } from "loro-crdt";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  encodeBase64,
   hashShareSecret,
   shareSessionTtlMs,
   type ShareRecord,
@@ -170,6 +171,35 @@ describe("Grove share sessions", () => {
 
     expect(socket.closed).toEqual({ code: 1008, reason: "Invalid sync version" });
   });
+
+  it("returns the existing share for an idempotent create replay", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = await shareStorage(now);
+    let room = await createTestRoom(storage);
+
+    let response = await createShare(room, storage.records.get("share") as ShareRecord);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      displayName: "note.md",
+      expiresAt: now + 24 * 60 * 60 * 1000,
+      shareId: validShareId,
+    });
+  });
+
+  it("rejects a create replay whose owner capability does not match", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = await shareStorage(now);
+    let room = await createTestRoom(storage);
+    let record = storage.records.get("share") as ShareRecord;
+
+    let response = await createShare(room, { ...record, hostSecretHash: "x".repeat(43) });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Share already exists" });
+  });
 });
 
 type TestRoom = {
@@ -218,6 +248,26 @@ async function createSession(room: TestRoom, role: "guest" | "host", secret: str
   return room.fetch(
     new Request(`https://relay.example/api/shares/${validShareId}/session`, {
       body: JSON.stringify({ role, secret }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+}
+
+async function createShare(room: TestRoom, record: ShareRecord) {
+  let doc = new LoroDoc();
+  let snapshot = doc.export({ mode: "snapshot" });
+  doc.free();
+  return room.fetch(
+    new Request(`https://relay.example/api/shares/${validShareId}`, {
+      body: JSON.stringify({
+        displayName: record.displayName,
+        expiresAt: record.expiresAt,
+        guestSecretHash: record.guestSecretHash,
+        hostSecretHash: record.hostSecretHash,
+        shareId: record.shareId,
+        snapshot: encodeBase64(snapshot),
+      }),
       headers: { "Content-Type": "application/json" },
       method: "POST",
     }),

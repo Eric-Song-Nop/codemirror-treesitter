@@ -46,20 +46,32 @@ export async function createRelayShare(
   let origin = normalizeRelayOrigin(relayOrigin);
   if (!origin) throw new Error("Shared file relay is not configured.");
 
-  let response = await fetchImpl(new URL("/api/shares", origin), {
-    body: JSON.stringify({
-      displayName: request.displayName,
-      expiresAt: request.expiresAt,
-      guestSecretHash: request.guestSecretHash,
-      hostSecretHash: request.hostSecretHash,
-      shareId: request.shareId,
-      snapshot: encodeBase64(request.snapshot),
-    }),
-    headers: { "Content-Type": "application/json" },
-    method: "POST",
+  let body = JSON.stringify({
+    displayName: request.displayName,
+    expiresAt: request.expiresAt,
+    guestSecretHash: request.guestSecretHash,
+    hostSecretHash: request.hostSecretHash,
+    shareId: request.shareId,
+    snapshot: encodeBase64(request.snapshot),
   });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let response: Response;
+    try {
+      response = await fetchImpl(new URL("/api/shares", origin), {
+        body,
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": request.shareId,
+        },
+        method: "POST",
+      });
+    } catch (error) {
+      if (attempt == 0) continue;
+      throw error;
+    }
 
-  if (!response.ok) {
+    if (response.ok) return;
+    if (attempt == 0 && response.status >= 500) continue;
     throw new Error(`Could not create shared file (${response.status}).`);
   }
 }
