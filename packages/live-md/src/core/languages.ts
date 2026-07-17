@@ -2,17 +2,17 @@ import { Facet, StateEffect, StateField, Text, type Extension } from "@codemirro
 import {
   HighlightStyle,
   Tree,
-  TreeSitterLanguage,
   queryTreeMatches,
   tags as t,
   type Highlighter,
   type TreeSitterParser,
 } from "@codemirror-treesitter/language";
 import {
-  languages,
+  liveMdCodeFenceLanguageNames,
+  loadLiveMdCodeFenceLanguage,
   loadMarkdownParserService,
   type MarkdownParserService,
-} from "@codemirror-treesitter/language-data";
+} from "@codemirror-treesitter/language-data/live-md";
 import { EditorView } from "@codemirror/view";
 import liveMdMarkdownInlineQuerySource from "./queries/decorations-markdown-inline.scm?raw";
 import liveMdMarkdownQuerySource from "./queries/decorations-markdown.scm?raw";
@@ -88,7 +88,7 @@ export const liveMdDefaultCodeFenceHighlighting: Extension = neutralCodeFenceHig
   : [];
 
 let markdownExtensionPromise: Promise<Extension> | null = null;
-let codeFenceLanguagesPromise: Promise<CodeFenceLanguageMap> | null = null;
+const loadedCodeFenceLanguages = new Map<string, TreeSitterParser>();
 
 export type PrepareLiveMdOptions = {
   codeFences?: boolean;
@@ -112,15 +112,54 @@ export function loadMarkdownExtension() {
   return markdownExtensionPromise;
 }
 
-export function loadCodeFenceLanguages() {
-  if (!codeFenceLanguagesPromise) {
-    let current = loadCodeFenceLanguagesOnce();
-    codeFenceLanguagesPromise = current;
-    void current.catch(() => {
-      if (codeFenceLanguagesPromise === current) codeFenceLanguagesPromise = null;
-    });
+export async function loadCodeFenceLanguages(
+  names: Iterable<string> = liveMdCodeFenceLanguageNames,
+): Promise<CodeFenceLanguageMap> {
+  let uniqueNames = new Set(Array.from(names, (name) => name.trim().toLowerCase()).filter(Boolean));
+  await Promise.all(
+    Array.from(uniqueNames, async (name) => {
+      if (loadedCodeFenceLanguages.has(name)) return;
+      let loaded = await loadLiveMdCodeFenceLanguage(name).catch(() => null);
+      if (!loaded) return;
+      for (let alias of loaded.aliases) {
+        loadedCodeFenceLanguages.set(alias.toLowerCase(), loaded.parser);
+      }
+    }),
+  );
+  let requested = new Map<string, TreeSitterParser>();
+  for (let name of uniqueNames) {
+    let parser = loadedCodeFenceLanguages.get(name);
+    if (!parser) continue;
+    for (let [alias, candidate] of loadedCodeFenceLanguages) {
+      if (candidate === parser) requested.set(alias, parser);
+    }
   }
-  return codeFenceLanguagesPromise;
+  return requested;
+}
+
+export function codeFenceLanguageNames(doc: string): string[] {
+  let names = new Set<string>();
+  let openFence: { marker: "`" | "~"; length: number } | null = null;
+  for (let line of doc.split(/\r?\n/u)) {
+    let match = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+    if (!match) continue;
+    let marker = match[1]!;
+    let rest = match[2]!;
+    if (openFence) {
+      if (marker[0] == openFence.marker && marker.length >= openFence.length && !rest.trim()) {
+        openFence = null;
+      }
+      continue;
+    }
+    if (marker[0] == "`" && rest.includes("`")) continue;
+    openFence = { marker: marker[0] as "`" | "~", length: marker.length };
+    let token = rest.trim().split(/\s/u, 1)[0] ?? "";
+    if (token.startsWith("{")) token = token.slice(1);
+    if (token.startsWith(".")) token = token.slice(1);
+    if (token.endsWith("}")) token = token.slice(0, -1);
+    if (token) names.add(token.toLowerCase());
+  }
+  return Array.from(names);
 }
 
 async function loadMarkdownExtensionOnce() {
@@ -219,41 +258,4 @@ function warmLiveMdMarkdownQueries(service: LiveMdMarkdownParserService) {
       }
     });
   });
-}
-
-async function loadCodeFenceLanguagesOnce() {
-  let languageMap = new Map<string, TreeSitterParser>();
-  let aliasesByLanguage = new Map([
-    ["CSS", ["css"]],
-    ["HTML", ["html", "xhtml"]],
-    ["JSON", ["json", "json5"]],
-    ["JavaScript", ["javascript", "js", "jsx", "ecmascript", "node"]],
-    ["Markdown", ["markdown", "md", "mkd"]],
-    ["Python", ["python", "py"]],
-    ["Shell", ["shell", "sh", "bash", "zsh"]],
-    ["TSX", ["tsx"]],
-    ["TypeScript", ["typescript", "ts", "mts", "cts"]],
-  ]);
-
-  await Promise.all(
-    Array.from(aliasesByLanguage.keys()).map(async (name) => {
-      let description = languages.find((language) => language.name == name);
-      if (!description) return;
-
-      let support = await description.load().catch(() => null);
-      if (!support) return;
-      if (!(support.language instanceof TreeSitterLanguage)) return;
-
-      let parser = support.language.parser;
-      let aliases = new Set([
-        name.toLowerCase(),
-        ...description.alias.map((alias) => alias.toLowerCase()),
-        ...description.extensions.map((extension) => extension.toLowerCase()),
-        ...(aliasesByLanguage.get(name) ?? []),
-      ]);
-      for (let alias of aliases) languageMap.set(alias, parser);
-    }),
-  );
-
-  return languageMap;
 }

@@ -14,6 +14,8 @@ import { liveMarkdown } from "./extension.js";
 import { liveMdMarkdownFeatures } from "./features.js";
 import type { LiveMdImageSourceResolver } from "./images.js";
 import {
+  codeFenceLanguageNames,
+  codeFenceLanguagesField,
   loadCodeFenceLanguages,
   loadMarkdownExtension,
   setCodeFenceLanguages,
@@ -73,6 +75,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
   let suppressChange = false;
   let liveMdConfig = normalizeLiveMdConfig(options.config);
   let persistKey = normalizePersistKey(options.persistKey);
+  let pendingCodeFenceLanguages = new Set<string>();
   let view: EditorView;
   let initialValue = initialEditorValue(options, persistKey);
 
@@ -99,6 +102,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
           if (!update.docChanged) return;
           let value = update.state.doc.toString();
           savePersistedValue(persistKey, value);
+          void loadEncounteredCodeFenceLanguages(changedCodeFenceLanguageNames(update));
           if (!suppressChange) {
             options.onChange?.({ update, value, view });
           }
@@ -116,12 +120,23 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
     });
   });
 
-  let codeFenceReady = loadCodeFenceLanguages().then((languageMap) => {
+  let codeFenceReady = loadEncounteredCodeFenceLanguages(codeFenceLanguageNames(initialValue));
+
+  async function loadEncounteredCodeFenceLanguages(encounteredNames: Iterable<string>) {
+    let current = view.state.field(codeFenceLanguagesField, false) ?? new Map();
+    let names = Array.from(encounteredNames).filter(
+      (name) => !current.has(name) && !pendingCodeFenceLanguages.has(name),
+    );
+    if (!names.length) return;
+    for (let name of names) pendingCodeFenceLanguages.add(name);
+    let languageMap = await loadCodeFenceLanguages(names);
+    for (let name of names) pendingCodeFenceLanguages.delete(name);
     if (cancelled || !languageMap.size) return;
+    let latest = view.state.field(codeFenceLanguagesField, false) ?? new Map();
     view.dispatch({
-      effects: setCodeFenceLanguages.of(languageMap),
+      effects: setCodeFenceLanguages.of(new Map([...latest, ...languageMap])),
     });
-  });
+  }
 
   let controller: LiveMdEditorController = {
     destroy() {
@@ -208,6 +223,17 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       view,
     });
   }
+}
+
+function changedCodeFenceLanguageNames(update: ViewUpdate) {
+  let names = new Set<string>();
+  let doc = update.state.doc;
+  update.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    let start = doc.lineAt(Math.min(fromB, doc.length)).from;
+    let end = doc.lineAt(Math.min(toB, doc.length)).to;
+    for (let name of codeFenceLanguageNames(doc.sliceString(start, end))) names.add(name);
+  });
+  return names;
 }
 
 function initialEditorValue(options: LiveMdEditorOptions, persistKey: null | string) {

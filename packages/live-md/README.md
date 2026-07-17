@@ -27,9 +27,10 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Provide the `liveMarkdown(...)` extension for live Markdown editing.
 - Define and register `<live-md-editor>` through `defineLiveMdEditor(...)` and
   the side-effect `./register` entry.
-- Load block-only Markdown language support, an explicit Markdown inline parser
-  service, and a focused set of code-fence languages from
-  `@codemirror-treesitter/language-data`.
+- Load block-only Markdown language support and an explicit Markdown inline
+  parser service from the focused `@codemirror-treesitter/language-data/live-md`
+  entry. Code-fence grammars load only when the document encounters a supported
+  fence alias; hosts may still explicitly preload the full focused set.
 - Render Markdown documents to sanitized HTML through
   `renderMarkdownToHtml(...)` using explicit block parsing followed by
   leaf-local inline parsing with the Tree-sitter Markdown grammars.

@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 const markdownLoader = vi.hoisted(() => ({ calls: 0, fail: true }));
 
-vi.mock("@codemirror-treesitter/language-data", async (importOriginal) => {
-  let actual = await importOriginal<typeof import("@codemirror-treesitter/language-data")>();
+vi.mock("@codemirror-treesitter/language-data/live-md", async (importOriginal) => {
+  let actual =
+    await importOriginal<typeof import("@codemirror-treesitter/language-data/live-md")>();
   return {
     ...actual,
     async loadMarkdownParserService() {

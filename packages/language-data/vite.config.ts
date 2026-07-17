@@ -9,6 +9,10 @@ export default defineConfig({
   },
   pack: {
     copy: "src/wasm",
+    entry: {
+      index: "src/index.ts",
+      "live-md": "src/live-md.ts",
+    },
     plugins: [liveMdRawCssPlugin()],
     dts: {
       tsgo: true,

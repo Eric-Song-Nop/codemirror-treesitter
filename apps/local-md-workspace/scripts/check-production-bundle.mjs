@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -6,6 +6,19 @@ const appDirectory = path.resolve(fileURLToPath(new URL("..", import.meta.url)))
 const distDirectory = path.join(appDirectory, "dist");
 const manifest = JSON.parse(
   await readFile(path.join(distDirectory, ".vite", "manifest.json"), "utf8"),
+);
+const assetsDirectory = path.join(distDirectory, "assets");
+const grammarAssets = (await readdir(assetsDirectory)).filter(
+  (name) => name.startsWith("tree-sitter-") && name.endsWith(".wasm"),
+);
+const grammarBytes = (
+  await Promise.all(grammarAssets.map((name) => stat(path.join(assetsDirectory, name))))
+).reduce((total, asset) => total + asset.size, 0);
+
+assert(
+  grammarAssets.length <= 10 && grammarBytes <= 7 * 1024 * 1024,
+  `The workspace bundle contains ${grammarAssets.length} Tree-sitter grammars (${grammarBytes} bytes); ` +
+    "LiveMD must ship only its focused, demand-loaded grammar set.",
 );
 
 const collaborationRoots = [

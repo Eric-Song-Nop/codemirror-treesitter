@@ -8,6 +8,9 @@
       "@codemirror-treesitter/basic-setup": ["./packages/codemirror/src/index.ts"],
       "@codemirror-treesitter/commands": ["./packages/commands/src/index.ts"],
       "@codemirror-treesitter/language": ["./packages/language/src/index.ts"],
+      "@codemirror-treesitter/language-data/live-md": [
+        "./packages/language-data/src/live-md.ts"
+      ],
       "@codemirror-treesitter/language-data": ["./packages/language-data/src/index.ts"],
       "@codemirror-treesitter/live-md": ["./packages/live-md/src/index.ts"],
       "@codemirror-treesitter/live-md/fixtures": ["./packages/live-md/src/fixtures/index.ts"],
