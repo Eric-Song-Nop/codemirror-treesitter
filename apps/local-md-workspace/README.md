@@ -32,6 +32,8 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
 - Create, rotate, revoke, and host shared-file links through the Grove relay.
 - Open guest shared-file routes and sync through the relay without requiring
   access to the owner's local or cloud workspace.
+- Refresh expired Grove relay sessions automatically for guests and owner
+  hosts, while retaining queued/offline document edits across the reconnect.
 - Switch the full workspace, shared-file route, LiveMD editor chrome, nested
   code highlighting, and file tree between named Gruvbox, GitHub Light, and
   Catppuccin themes.
@@ -112,11 +114,16 @@ to test installability and offline app-shell loading.
 
 The service worker caches same-origin GET navigations and static assets. Cloud
 storage requests, relay API mutations, and relay WebSockets remain network-only.
-Loro, the guest shared-file route, and the owner relay connection are excluded
-from the launcher bundle. Production builds inject their complete static chunk
-closure and Loro WASM asset into the service-worker precache without caching the
-unrelated Tree-sitter grammar WASM assets. Run `bundle:check` after `build` to
-verify this production bundle contract.
+The initial app shell does not execute or compile Loro: collaboration code and
+its WASM runtime are loaded only when a workspace file is opened or a shared-file
+route is entered. Production builds inject the launcher and collaboration
+static closures, Loro WASM, the Tree-sitter runtime, the Markdown block and
+inline grammars, and their highlight-query dependencies into a content-keyed
+offline precache. Installation fails closed if a critical asset is unavailable.
+`vp run local-md-workspace#bundle:check` verifies that boundary and caps bundled
+Tree-sitter grammars to LiveMD's focused set. Code-fence parsers are fetched and
+compiled only after a supported fence alias appears in the document and remain
+outside the critical offline precache.
 
 On Android browsers that support the Web Share Target API for installed PWAs,
 Grove registers as a share target for Markdown files. Shared `.md` and

@@ -381,13 +381,13 @@ Cloudflare-specific code, and concrete theme packages.
   changed-leaf discovery: local changed leaves match the full-walk oracle, and
   ordinary edits stay local. Its `sourceHash` is diagnostic only; exact source
   text is used for the oracle so hash collisions cannot hide changed leaves.
-  Direct incremental projection, range-local production analysis, and
-  input-to-paint latency reduction remain future work. PR78 uses `renderKey`
-  with source identity plus renderer, resolver, and highlighter epochs for the
-  synchronous render cache covering image sources, KaTeX, table previews,
-  Mermaid render requests, and code fence highlights. `cacheId` is deliberately
-  excluded from render cache keys so record identity churn does not invalidate
-  unchanged render work.
+  Semantic work is scheduled in bounded units, and search reuses committed or
+  pending semantic records while reparsing only dirty inline hosts. Direct
+  incremental projection remains future work. Render caches use bounded LRU
+  storage keyed by source identity plus renderer, resolver, and highlighter
+  epochs for image sources, KaTeX, table previews, Mermaid render requests, and
+  code fence highlights. `cacheId` is deliberately excluded from render cache
+  keys so record identity churn does not invalidate unchanged render work.
 
 ## Validation
 
