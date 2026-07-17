@@ -17,6 +17,9 @@ in `apps/local-md-workspace`.
 - Enforce payload size, frame burst, per-minute update, role-specific session,
   guest-peer, and sync-version-vector limits. Guest sessions cannot consume the
   host's reserved session capacity.
+- Apply edge rate limits to share creation, session issuance, and WebSocket
+  upgrades before waking a share Durable Object. Each route has both a
+  per-caller key and an aggregate create/per-share capacity key.
 
 ## API Shape
 

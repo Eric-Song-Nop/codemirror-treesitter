@@ -44,6 +44,37 @@ describe("shared file Worker routes", () => {
     expect(getByName).not.toHaveBeenCalled();
   });
 
+  it("rate-limits public session creation before waking a share Durable Object", async () => {
+    let { default: worker } = await import("./worker.ts");
+    let getByName = vi.fn();
+    let response = await worker.fetch(
+      new Request(`https://relay.example/api/shares/${validShareId}/session`, {
+        body: JSON.stringify({ role: "guest", secret: "g".repeat(43) }),
+        method: "POST",
+      }),
+      relayEnv(getByName, { session: false }),
+    );
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ error: "Share session rate limit exceeded" });
+    expect(getByName).not.toHaveBeenCalled();
+  });
+
+  it("rate-limits public WebSocket upgrades before waking a share Durable Object", async () => {
+    let { default: worker } = await import("./worker.ts");
+    let getByName = vi.fn();
+    let response = await worker.fetch(
+      new Request(`https://relay.example/api/shares/${validShareId}/ws`, {
+        headers: { Upgrade: "websocket" },
+      }),
+      relayEnv(getByName, { websocket: false }),
+    );
+
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ error: "Share connection rate limit exceeded" });
+    expect(getByName).not.toHaveBeenCalled();
+  });
+
   it("compacts stored share update logs into a snapshot", async () => {
     let { GroveShareRoom } = await import("./worker.ts");
     let storage = new MemoryDurableObjectStorage();
@@ -167,4 +198,20 @@ function shareRecord(): ShareRecord {
     schemaVersion: 1,
     shareId: validShareId,
   };
+}
+
+function relayEnv(
+  getByName: ReturnType<typeof vi.fn>,
+  allowed: { create?: boolean; session?: boolean; websocket?: boolean } = {},
+) {
+  return {
+    GROVE_SHARE_ROOMS: { getByName },
+    CREATE_SHARE_RATE_LIMITER: rateLimiter(allowed.create ?? true),
+    SHARE_SESSION_RATE_LIMITER: rateLimiter(allowed.session ?? true),
+    SHARE_WEBSOCKET_RATE_LIMITER: rateLimiter(allowed.websocket ?? true),
+  } as unknown as Env;
+}
+
+function rateLimiter(success: boolean) {
+  return { limit: vi.fn(async () => ({ success })) };
 }

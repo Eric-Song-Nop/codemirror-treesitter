@@ -1160,7 +1160,33 @@ export default {
     }
 
     let share = shareFromPath(url.pathname);
-    if (share) return env.GROVE_SHARE_ROOMS.getByName(share.shareId).fetch(request);
+    if (share) {
+      if (
+        share.action == "session" &&
+        request.method == "POST" &&
+        !(await allowPublicApiRequest(
+          request,
+          env.SHARE_SESSION_RATE_LIMITER,
+          "share-session",
+          share.shareId,
+        ))
+      ) {
+        return jsonResponse({ error: "Share session rate limit exceeded" }, 429, request);
+      }
+      if (
+        share.action == "ws" &&
+        request.headers.get("Upgrade")?.toLowerCase() == "websocket" &&
+        !(await allowPublicApiRequest(
+          request,
+          env.SHARE_WEBSOCKET_RATE_LIMITER,
+          "share-websocket",
+          share.shareId,
+        ))
+      ) {
+        return jsonResponse({ error: "Share connection rate limit exceeded" }, 429, request);
+      }
+      return env.GROVE_SHARE_ROOMS.getByName(share.shareId).fetch(request);
+    }
 
     return new Response("Not Found", { status: 404 });
   },
@@ -1276,13 +1302,25 @@ function versionAdvanced(next: VersionVector, previous: VersionVector) {
 }
 
 async function allowCreateShareRequest(request: Request, env: Env) {
-  let key =
+  return allowPublicApiRequest(request, env.CREATE_SHARE_RATE_LIMITER, "create-share", "all");
+}
+
+async function allowPublicApiRequest(
+  request: Request,
+  limiter: RateLimit,
+  route: string,
+  resource: string,
+) {
+  let actor =
     request.headers.get("cf-connecting-ip") ??
     request.headers.get("Origin") ??
     request.headers.get("Referer") ??
     "unknown";
-  let { success } = await env.CREATE_SHARE_RATE_LIMITER.limit({ key: `create-share:${key}` });
-  return success;
+  let results = await Promise.all([
+    limiter.limit({ key: `${route}:actor:${actor}` }),
+    limiter.limit({ key: `${route}:resource:${resource}` }),
+  ]);
+  return results.every(({ success }) => success);
 }
 
 async function readJson(request: Request, maxBytes: number) {

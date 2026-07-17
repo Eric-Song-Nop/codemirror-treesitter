@@ -28,6 +28,22 @@
         "period": 60,
       },
     },
+    {
+      "name": "SHARE_SESSION_RATE_LIMITER",
+      "namespace_id": "43542",
+      "simple": {
+        "limit": 120,
+        "period": 60,
+      },
+    },
+    {
+      "name": "SHARE_WEBSOCKET_RATE_LIMITER",
+      "namespace_id": "43543",
+      "simple": {
+        "limit": 120,
+        "period": 60,
+      },
+    },
   ],
   "migrations": [
     {
