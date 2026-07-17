@@ -241,8 +241,7 @@ export function withLiveMdMarkdownInlineTrees<T>(
 }
 
 export function deleteLiveMdTree(tree: Tree) {
-  for (let nested of tree.nested) deleteLiveMdTree(nested.tree);
-  tree.tree?.delete();
+  tree.delete();
 }
 
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {

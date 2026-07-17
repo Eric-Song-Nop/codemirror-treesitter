@@ -2,6 +2,7 @@ import { Compartment, EditorState, type Text } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
 import {
   defineLanguageFacet,
+  ensureSyntaxTree,
   Language,
   ParseContext,
   Tree,
@@ -128,6 +129,24 @@ function rangeGroupKey(ranges: readonly DocRange[] | undefined) {
   return ranges ? ranges.map((range) => `${range.from}:${range.to}`).join(",") : "root";
 }
 
+function throwingRangeGroups(message: string): Iterable<readonly DocRange[]> {
+  return {
+    [Symbol.iterator]() {
+      let yielded = false;
+      return {
+        next(): IteratorResult<readonly DocRange[]> {
+          if (yielded) return { done: true, value: undefined };
+          yielded = true;
+          return { done: false, value: [{ from: 0, to: 1 }] };
+        },
+        return(): IteratorResult<readonly DocRange[]> {
+          throw new Error(message);
+        },
+      };
+    },
+  };
+}
+
 function keepNestedOnEqualLengthEdit(parser: TreeSitterParser) {
   let editCount = 0;
   parser.editWrappedTree = ((tree: Tree, _changes: unknown, oldDoc: Text, newDoc: Text) => {
@@ -172,6 +191,38 @@ function changedContext(context: ParseContext, state: EditorState, from: number,
 }
 
 describe("resumable nested parse sessions", () => {
+  it("explicitly releases a parse context's root native parser exactly once", () => {
+    let created: FakeNativeParser[] = [];
+    let root = fakeParser(() => fakeTree("root"), [], created);
+    let context = ParseContext.create(root, EditorState.create({ doc: "x" }));
+
+    (context as ParseContext & { destroy(): void }).destroy();
+    (context as ParseContext & { destroy(): void }).destroy();
+
+    expect(created).toHaveLength(1);
+    expect(created[0]!.deleteCalls).toBe(1);
+  });
+
+  it("keeps an old editor state's parse context usable after reconfiguration", () => {
+    let calls = 0;
+    let created: FakeNativeParser[] = [];
+    let root = fakeParser(() => (++calls == 1 ? pause : fakeTree("old-state-root")), [], created);
+    let replacement = fakeParser(() => fakeTree("replacement-root"));
+    let currentLanguage = new Language(defineLanguageFacet(), root);
+    let replacementLanguage = new Language(defineLanguageFacet(), replacement);
+    let compartment = new Compartment();
+    let state = EditorState.create({
+      doc: "xxxx",
+      extensions: [compartment.of(currentLanguage.extension)],
+    });
+
+    void state.update({ effects: compartment.reconfigure(replacementLanguage.extension) }).state;
+
+    expect(() => ensureSyntaxTree(state, state.doc.length)).not.toThrow();
+    expect(ensureSyntaxTree(state, state.doc.length)).not.toBeNull();
+    expect(created[0]!.deleteCalls).toBe(0);
+  });
+
   it("checks the budget between tiny groups and resumes without replay before publishing", () => {
     let nestedCalls: string[] = [];
     let stop = false;
@@ -349,7 +400,7 @@ describe("resumable nested parse sessions", () => {
 
     context.reset();
     expect(closed).toBe(1);
-    expect(rootParsers[0]!.resetCalls).toBe(1);
+    expect(rootParsers[0]!.resetCalls).toBe(2);
     expect(rootParsers[0]!.deleteCalls).toBe(0);
     expect(nestedParsers[0]!.resetCalls).toBe(1);
     expect(nestedParsers[0]!.deleteCalls).toBe(1);
@@ -464,6 +515,7 @@ describe("resumable nested parse sessions", () => {
 
     expect(closed).toBe(1);
     expect(rootParsers[0]!.resetCalls).toBe(1);
+    expect(rootParsers[0]!.deleteCalls).toBe(0);
     expect(nestedParsers[0]!.resetCalls).toBe(1);
     expect(nestedParsers[0]!.deleteCalls).toBe(1);
     expect(pendingRootTree.deleteCalls).toBe(1);
@@ -497,6 +549,30 @@ describe("resumable nested parse sessions", () => {
     expect(created[0]!.resetCalls).toBe(1);
     expect(created[0]!.deleteCalls).toBe(1);
     expect(completedTree.deleteCalls).toBe(1);
+  });
+
+  it("reparses the root after a transient nested parse failure", () => {
+    let rootCalls = 0;
+    let nestedCalls = 0;
+    let roots: FakeNativeTree[] = [];
+    let nested = fakeParser(() => {
+      if (++nestedCalls == 1) throw new Error("transient nested failure");
+      return fakeTree("nested-after-retry");
+    });
+    let root = fakeParser(() => {
+      rootCalls++;
+      let tree = fakeTree(`root-${rootCalls}`);
+      roots.push(tree);
+      return tree;
+    }, [{ parser: nested, ranges: () => [[{ from: 0, to: 1 }]] }]);
+    let context = ParseContext.create(root, EditorState.create({ doc: "x" }));
+
+    expect(() => context.work(() => false)).toThrow("transient nested failure");
+    expect(rootCalls).toBe(1);
+    expect(roots[0]!.deleteCalls).toBe(1);
+
+    expect(context.work(() => false)).toBe(true);
+    expect(rootCalls).toBe(2);
   });
 
   it("resumes a grouped range iterable without rebuilding or replaying it", () => {
@@ -592,6 +668,72 @@ describe("resumable nested parse sessions", () => {
     expect(closed).toBe(1);
   });
 
+  it("releases a suspended session even when its range iterator throws while closing", () => {
+    let nestedParsers: FakeNativeParser[] = [];
+    let pendingRoot = fakeTree("pending-root");
+    let nested = fakeParser(() => pause, [], nestedParsers);
+    let root = fakeParser(
+      () => pendingRoot,
+      [{ parser: nested, ranges: () => throwingRangeGroups("range iterator close failed") }],
+    );
+    let context = ParseContext.create(root, EditorState.create({ doc: "xx" }));
+
+    expect(context.work(() => false)).toBe(false);
+    expect(() => context.reset()).toThrow("range iterator close failed");
+
+    expect(pendingRoot.deleteCalls).toBe(1);
+    expect(nestedParsers[0]!.resetCalls).toBe(1);
+    expect(nestedParsers[0]!.deleteCalls).toBe(1);
+  });
+
+  it("preserves a parse failure when iterator cleanup also fails", () => {
+    let nestedParsers: FakeNativeParser[] = [];
+    let pendingRoot = fakeTree("pending-root-before-double-failure");
+    let nested = fakeParser(
+      () => {
+        throw new Error("primary nested parse failure");
+      },
+      [],
+      nestedParsers,
+    );
+    let root = fakeParser(
+      () => pendingRoot,
+      [
+        {
+          parser: nested,
+          ranges: () => throwingRangeGroups("secondary iterator close failure"),
+        },
+      ],
+    );
+    let context = ParseContext.create(root, EditorState.create({ doc: "xx" }));
+
+    expect(() => context.work(() => false)).toThrow("primary nested parse failure");
+    expect(pendingRoot.deleteCalls).toBe(1);
+    expect(nestedParsers[0]!.deleteCalls).toBe(1);
+  });
+
+  it("finishes destroying a context when iterator cleanup fails", () => {
+    let rootParsers: FakeNativeParser[] = [];
+    let nestedParsers: FakeNativeParser[] = [];
+    let pendingRoot = fakeTree("pending-root-before-destroy");
+    let nested = fakeParser(() => pause, [], nestedParsers);
+    let root = fakeParser(
+      () => pendingRoot,
+      [{ parser: nested, ranges: () => throwingRangeGroups("destroy iterator close failure") }],
+      rootParsers,
+    );
+    let context = ParseContext.create(root, EditorState.create({ doc: "xx" }));
+
+    expect(context.work(() => false)).toBe(false);
+    expect(() => context.destroy()).toThrow("destroy iterator close failure");
+    expect(pendingRoot.deleteCalls).toBe(1);
+    expect(nestedParsers[0]!.deleteCalls).toBe(1);
+    expect(rootParsers[0]!.deleteCalls).toBe(1);
+
+    expect(() => context.destroy()).not.toThrow();
+    expect(rootParsers[0]!.deleteCalls).toBe(1);
+  });
+
   it("keeps flat ranges in one group while arrays and iterables produce multiple groups", () => {
     function parsedGroups(ranges: NestedParserSource["ranges"]) {
       let calls: string[] = [];
@@ -633,6 +775,29 @@ describe("resumable nested parse sessions", () => {
 });
 
 describe("incremental nested direct reuse", () => {
+  it("releases cloned reuse wrappers when an incremental build is cancelled", () => {
+    let fixture = directReuseFixture("abcdef", [[{ from: 0, to: 1 }]]);
+    let oldNested = fixture.context.tree.nested[0]!.tree;
+    let nativeNested = oldNested.tree as FakeNativeTree;
+    let stop = false;
+    let observedNested = new Proxy(oldNested, {
+      get(target, property, receiver) {
+        if (property == "tree") stop = true;
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    fixture.context.tree = new Tree(fakeTree("old-root"), fixture.context.tree.config, 6, [
+      { ...fixture.context.tree.nested[0]!, tree: observedNested },
+    ]);
+    let next = changedContext(fixture.context, fixture.state, 4, "Z");
+
+    expect(next.context.work(() => stop)).toBe(false);
+    next.context.reset();
+    oldNested.delete();
+
+    expect(nativeNested.deleteCalls).toBe(1);
+  });
+
   it("checks the budget before indexing old nested groups and resumes without replay", () => {
     let count = 10_000;
     let reusedRanges = [{ from: (count - 1) * 2, to: (count - 1) * 2 + 1 }];
@@ -688,10 +853,13 @@ describe("incremental nested direct reuse", () => {
     expect(next.work(() => false)).toBe(true);
     expect(reads).toBe(count);
     expect(sourceCalls).toBe(1);
-    expect(next.tree.nested).toEqual([reused]);
+    expect(next.tree.nested).toHaveLength(1);
+    expect(next.tree.nested[0]).not.toBe(reused);
+    expect(next.tree.nested[0]!.tree).not.toBe(reused.tree);
+    expect(next.tree.nested[0]!.tree.tree).toBe(reused.tree.tree);
   });
 
-  it("reuses untouched exact groups in FIFO order without calling nested parseWith", () => {
+  it("reuses untouched native trees with independently owned wrappers", () => {
     let fixture = directReuseFixture("abcdefghij", [
       [{ from: 0, to: 1 }],
       [{ from: 2, to: 3 }],
@@ -707,7 +875,9 @@ describe("incremental nested direct reuse", () => {
     expect(fixture.sourceCalls()).toBe(2);
     expect(next.context.tree.nested).toHaveLength(firstGeneration.length);
     for (let index = 0; index < firstGeneration.length; index++) {
-      expect(next.context.tree.nested[index]).toBe(firstGeneration[index]);
+      expect(next.context.tree.nested[index]).not.toBe(firstGeneration[index]);
+      expect(next.context.tree.nested[index]!.tree).not.toBe(firstGeneration[index]!.tree);
+      expect(next.context.tree.nested[index]!.tree.tree).toBe(firstGeneration[index]!.tree.tree);
     }
   });
 
@@ -724,9 +894,11 @@ describe("incremental nested direct reuse", () => {
     expect(next.context.work(() => false)).toBe(true);
 
     expect(fixture.nestedCalls).toEqual(["2:3"]);
-    expect(next.context.tree.nested[0]).toBe(firstGeneration[0]);
+    expect(next.context.tree.nested[0]).not.toBe(firstGeneration[0]);
+    expect(next.context.tree.nested[0]!.tree.tree).toBe(firstGeneration[0]!.tree.tree);
     expect(next.context.tree.nested[1]).not.toBe(firstGeneration[1]);
-    expect(next.context.tree.nested[2]).toBe(firstGeneration[2]);
+    expect(next.context.tree.nested[2]).not.toBe(firstGeneration[2]);
+    expect(next.context.tree.nested[2]!.tree.tree).toBe(firstGeneration[2]!.tree.tree);
   });
 
   it("does not directly reuse groups across an externally invalidated reset", () => {
@@ -812,7 +984,8 @@ describe("incremental nested direct reuse", () => {
     expect(fixture.sourceCalls() - sourceCallsBefore).toBe(1);
     expect(next.context.tree.nested).toHaveLength(count);
     for (let index = 0; index < count; index++) {
-      expect(next.context.tree.nested[index]).toBe(firstGeneration[index]);
+      expect(next.context.tree.nested[index]).not.toBe(firstGeneration[index]);
+      expect(next.context.tree.nested[index]!.tree.tree).toBe(firstGeneration[index]!.tree.tree);
     }
   });
 });

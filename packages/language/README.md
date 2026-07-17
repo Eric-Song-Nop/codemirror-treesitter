@@ -114,6 +114,24 @@ ownership rules:
   not materialize `SyntaxNode.children`, `SyntaxNode.namedChildren`, or scan
   large sibling lists from the beginning.
 
+## Native Resource Lifetime
+
+- Package-owned cursors are always deleted, including early returns and thrown
+  traversal callbacks. A cursor returned directly to a caller still follows the
+  `TreeCursor` ownership contract above.
+- Wrapped native trees are reference-counted across temporary and published
+  wrappers. Incremental-edit copies are released as soon as matching finishes;
+  published trees are released when their wrapper becomes unreachable. Call
+  `Tree.delete()` when an exclusively owned published tree graph can be
+  released earlier. Incremental reuse creates independent wrappers for shared
+  native trees, and repeated calls are safe.
+- `TreeSitterParser.parse(...)` deletes its one-shot native parser before it
+  returns. Long-lived editor parse contexts retain one native parser; callers
+  that create a `ParseContext` directly may call `destroy()` when finished.
+- Compiled queries live with their `TreeSitterParser`. Call
+  `clearQueryCache()` to release both cached helper queries and the highlight
+  query immediately; the highlight query is recreated lazily if used again.
+
 ## Validation
 
 Run from the workspace root:

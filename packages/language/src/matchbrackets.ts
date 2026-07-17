@@ -152,37 +152,41 @@ function matchMarkedBrackets(
   let firstToken = { from: handle.from, to: handle.to };
   let depth = 0;
   let cursor = parent?.cursor();
-  if (cursor && (dir < 0 ? cursor.childBefore(token.from) : cursor.childAfter(token.to))) {
-    do {
-      if (dir < 0 ? cursor.to <= token.from : cursor.from >= token.to) {
-        if (depth == 0 && matching.includes(cursor.type.name) && cursor.from < cursor.to) {
-          let endHandle = findHandle(cursor.node);
-          return {
-            start: firstToken,
-            end: endHandle ? { from: endHandle.from, to: endHandle.to } : undefined,
-            matched: true,
-          };
-        }
-        if (matchingNodes(cursor.type, dir, brackets)) {
-          depth++;
-        } else if (matchingNodes(cursor.type, -dir as -1 | 1, brackets)) {
-          if (depth == 0) {
+  try {
+    if (cursor && (dir < 0 ? cursor.childBefore(token.from) : cursor.childAfter(token.to))) {
+      do {
+        if (dir < 0 ? cursor.to <= token.from : cursor.from >= token.to) {
+          if (depth == 0 && matching.includes(cursor.type.name) && cursor.from < cursor.to) {
             let endHandle = findHandle(cursor.node);
             return {
               start: firstToken,
-              end:
-                endHandle && endHandle.from < endHandle.to
-                  ? { from: endHandle.from, to: endHandle.to }
-                  : undefined,
-              matched: false,
+              end: endHandle ? { from: endHandle.from, to: endHandle.to } : undefined,
+              matched: true,
             };
           }
-          depth--;
+          if (matchingNodes(cursor.type, dir, brackets)) {
+            depth++;
+          } else if (matchingNodes(cursor.type, -dir as -1 | 1, brackets)) {
+            if (depth == 0) {
+              let endHandle = findHandle(cursor.node);
+              return {
+                start: firstToken,
+                end:
+                  endHandle && endHandle.from < endHandle.to
+                    ? { from: endHandle.from, to: endHandle.to }
+                    : undefined,
+                matched: false,
+              };
+            }
+            depth--;
+          }
         }
-      }
-    } while (dir < 0 ? cursor.prevSibling() : cursor.nextSibling());
+      } while (dir < 0 ? cursor.prevSibling() : cursor.nextSibling());
+    }
+    return { start: firstToken, matched: false };
+  } finally {
+    cursor?.delete();
   }
-  return { start: firstToken, matched: false };
 }
 
 function matchPlainBrackets(

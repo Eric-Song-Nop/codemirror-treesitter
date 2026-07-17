@@ -878,7 +878,7 @@ describe("tree-sitter language data", () => {
         inlineTrees.some((tree) => hasAncestorNamed(tree, doc.indexOf("cell text"), "emphasis")),
       ).toBe(true);
     } finally {
-      for (let tree of inlineTrees) tree.tree?.delete();
+      for (let tree of inlineTrees) tree.delete();
       parser.delete();
     }
   });

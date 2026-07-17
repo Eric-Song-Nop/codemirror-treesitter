@@ -12,7 +12,7 @@ describe("focused LiveMD language-data entry", () => {
       expect(service.blockLanguage.language).toBeInstanceOf(TreeSitterLanguage);
       expect(tree.topNode.name).toBe("document");
     } finally {
-      tree.tree?.delete();
+      tree.delete();
     }
   });
 

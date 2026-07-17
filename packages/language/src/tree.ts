@@ -177,6 +177,75 @@ export interface IterateSpec {
   leave?: (node: SyntaxNode) => void;
 }
 
+type NativeTreeResource = {
+  deleted: boolean;
+  references: number;
+  tree: TSTree;
+};
+
+const nativeTreeResources = new WeakMap<TSTree, NativeTreeResource>();
+const wrappedTreeResources = new WeakMap<Tree, NativeTreeResource>();
+const disposedWrappedTrees = new WeakSet<Tree>();
+const nativeTreeFinalizer =
+  typeof FinalizationRegistry == "undefined"
+    ? null
+    : new FinalizationRegistry<NativeTreeResource>((resource) => releaseNativeTree(resource));
+
+function retainNativeTree(owner: Tree, tree: TSTree) {
+  if (typeof tree.delete != "function") return;
+  let resource = nativeTreeResources.get(tree);
+  if (!resource) {
+    resource = { deleted: false, references: 0, tree };
+    nativeTreeResources.set(tree, resource);
+  }
+  resource.references++;
+  wrappedTreeResources.set(owner, resource);
+  nativeTreeFinalizer?.register(owner, resource, owner);
+}
+
+function releaseNativeTree(resource: NativeTreeResource) {
+  resource.references--;
+  if (!resource.references && !resource.deleted) {
+    resource.deleted = true;
+    resource.tree.delete();
+  }
+}
+
+/** @internal Release one wrapped-tree reference. */
+export function disposeTree(tree: Tree) {
+  if (disposedWrappedTrees.has(tree)) return;
+  disposedWrappedTrees.add(tree);
+  nativeTreeFinalizer?.unregister(tree);
+  let resource = wrappedTreeResources.get(tree);
+  if (resource) releaseNativeTree(resource);
+}
+
+function disposeTreeGraph(tree: Tree) {
+  let pending = [tree];
+  let visited = new Set<Tree>();
+  while (pending.length) {
+    let current = pending.pop()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (let nested of current.nested) pending.push(nested.tree);
+    disposeTree(current);
+  }
+}
+
+/** @internal Force-release an unpublished native tree. */
+export function disposeNativeTree(tree: TSTree) {
+  if (typeof tree.delete != "function") return;
+  let resource = nativeTreeResources.get(tree);
+  if (resource) {
+    if (!resource.deleted) {
+      resource.deleted = true;
+      tree.delete();
+    }
+  } else {
+    tree.delete();
+  }
+}
+
 export class Tree {
   static empty = new Tree(null, null, 0);
   readonly rootNodeId: number | null;
@@ -187,6 +256,7 @@ export class Tree {
     readonly length: number,
     readonly nested: readonly NestedTree[] = [],
   ) {
+    if (tree) retainNativeTree(this, tree);
     this.rootNodeId = tree?.rootNode?.id ?? null;
   }
 
@@ -208,8 +278,20 @@ export class Tree {
 
   cursorAt(pos: number, side: -1 | 0 | 1 = 0) {
     let cursor = this.cursor();
-    if (cursor) cursor.moveTo(pos, side);
+    if (cursor) {
+      try {
+        cursor.moveTo(pos, side);
+      } catch (error) {
+        cursor.delete();
+        throw error;
+      }
+    }
     return cursor;
+  }
+
+  /** Release this tree graph's native references. Calling this twice is safe. */
+  delete() {
+    disposeTreeGraph(this);
   }
 
   resolve(pos: number, side: -1 | 0 | 1 = 0) {
@@ -700,20 +782,25 @@ export class SyntaxNode {
 
     let cursor = this.cursor();
     let result: SyntaxNode[] = [];
-    if (!cursor?.firstChild()) return result;
+    if (!cursor) return result;
 
-    if (before != null) {
-      for (;;) {
-        if (cursor.type.is(before)) break;
+    try {
+      if (!cursor.firstChild()) return result;
+      if (before != null) {
+        for (;;) {
+          if (cursor.type.is(before)) break;
+          if (!cursor.nextSibling()) return result;
+        }
         if (!cursor.nextSibling()) return result;
       }
-      if (!cursor.nextSibling()) return result;
-    }
 
-    for (;;) {
-      if (after != null && cursor.type.is(after)) return result;
-      if (cursor.type.is(type)) result.push(cursor.node);
-      if (!cursor.nextSibling()) return after == null ? result : [];
+      for (;;) {
+        if (after != null && cursor.type.is(after)) return result;
+        if (cursor.type.is(type)) result.push(cursor.node);
+        if (!cursor.nextSibling()) return after == null ? result : [];
+      }
+    } finally {
+      cursor.delete();
     }
   }
 
@@ -792,6 +879,8 @@ export class SyntaxNode {
 export type SyntaxNodeRef = SyntaxNode;
 
 export class TreeCursor {
+  private deleted = false;
+
   constructor(
     private readonly ownerTree: Tree,
     private readonly cursor: TSTreeCursor,
@@ -892,7 +981,10 @@ export class TreeCursor {
   }
 
   delete() {
-    this.cursor.delete();
+    if (!this.deleted) {
+      this.deleted = true;
+      this.cursor.delete();
+    }
   }
 
   firstChild() {
@@ -933,14 +1025,14 @@ export class TreeCursor {
 
   enter(pos: number, side: -1 | 0 | 1 = 0) {
     let start = this.copyCursor();
-    let index = cursorSearchIndex(this, pos, side);
-    if (this.cursor.gotoFirstChildForIndex(index) && rangeContains(this, pos, side)) {
+    try {
+      let index = cursorSearchIndex(this, pos, side);
+      if (this.cursor.gotoFirstChildForIndex(index) && rangeContains(this, pos, side)) return true;
+      this.cursor.resetTo(start);
+      return false;
+    } finally {
       start.delete();
-      return true;
     }
-    this.cursor.resetTo(start);
-    start.delete();
-    return false;
   }
 
   nextSibling() {
@@ -967,13 +1059,15 @@ export class TreeCursor {
     if (!this.resetToRoot()) return this;
     for (;;) {
       let start = this.copyCursor();
-      let index = cursorSearchIndex(this, pos, side);
-      if (!this.cursor.gotoFirstChildForIndex(index) || !rangeContains(this, pos, side)) {
-        this.cursor.resetTo(start);
+      try {
+        let index = cursorSearchIndex(this, pos, side);
+        if (!this.cursor.gotoFirstChildForIndex(index) || !rangeContains(this, pos, side)) {
+          this.cursor.resetTo(start);
+          return this;
+        }
+      } finally {
         start.delete();
-        return this;
       }
-      start.delete();
     }
   }
 

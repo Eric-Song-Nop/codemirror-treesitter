@@ -336,11 +336,21 @@ function markdownTable(table: LiveMdTableModel): MarkdownTable {
 }
 
 function countNativeTrees(tree: Tree): number {
-  let count = tree.tree ? 1 : 0;
-  for (let nested of tree.nested) {
-    count += countNativeTrees(nested.tree);
+  let count = 0;
+  let pending = [tree];
+  let visited = new Set<Tree>();
+  while (pending.length) {
+    let current = pending.pop()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    if (current.tree) count++;
+    for (let nested of current.nested) pending.push(nested.tree);
   }
   return count;
+}
+
+export function __testCountNativeTrees(tree: Tree) {
+  return countNativeTrees(tree);
 }
 
 function keyParts(...parts: readonly (boolean | number | string | null | undefined)[]) {
