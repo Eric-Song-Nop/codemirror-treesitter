@@ -1,4 +1,4 @@
-import { LoroDoc } from "loro-crdt";
+import { LoroDoc, VersionVector } from "loro-crdt";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { WireKind, encodeWireBatch, encodeWireMessage } from "./protocol.ts";
 import { maxSnapshotBytes } from "./share-limits.ts";
@@ -182,6 +182,105 @@ describe("shared file Durable Object persistence", () => {
     expect(peer.sent).toEqual([]);
     expect(sender.closed).toEqual({ code: 1011, reason: "Failed to persist shared file update" });
     expect(storage.transactionCalls).toBe(1);
+  });
+
+  it("clears pending host save only when the ACK covers the canonical V2", async () => {
+    let doc = documentWithText("A", 1);
+    doc.getText("markdown").insert(1, "B");
+    doc.commit();
+    let storage = persistedShareStorage(doc.export({ mode: "snapshot" }));
+    let { room, sender } = await createTestRoom(doc, storage, { role: "host" });
+    setPendingHostSave(room, storage, true);
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(
+        encodeWireMessage(WireKind.HostSaveAck, hostSaveAckPayload(doc.oplogVersion())),
+      ),
+    );
+
+    expect(room.pendingHostSave).toBe(false);
+    expect(storage.records.get("pendingHostSave")).toBe(false);
+    expect(storage.transactionCalls).toBe(1);
+  });
+
+  it("keeps pending host save for a stale V1 ACK while relaying that valid ACK", async () => {
+    let doc = documentWithText("A", 1);
+    let versionV1 = doc.oplogVersion();
+    doc.getText("markdown").insert(1, "B");
+    doc.commit();
+    let storage = persistedShareStorage(doc.export({ mode: "snapshot" }));
+    let { peer, room, sender } = await createTestRoom(doc, storage, { role: "host" });
+    setPendingHostSave(room, storage, true);
+    let ackPayload = hostSaveAckPayload(versionV1);
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(encodeWireMessage(WireKind.HostSaveAck, ackPayload)),
+    );
+
+    expect(room.pendingHostSave).toBe(true);
+    expect(storage.records.get("pendingHostSave")).toBe(true);
+    expect(storage.transactionCalls).toBe(0);
+    expect(peer.sent[0]).toEqual(encodeWireMessage(WireKind.HostSaveAck, ackPayload));
+  });
+
+  it("keeps pending host save when a batch adds V2 but only ACKs V1", async () => {
+    let serverDoc = documentWithText("A", 1);
+    let snapshotV1 = serverDoc.export({ mode: "snapshot" });
+    let versionV1 = serverDoc.oplogVersion();
+    let clientDoc = new LoroDoc();
+    clientDoc.import(snapshotV1);
+    clientDoc.setPeerId(2);
+    clientDoc.getText("markdown").insert(1, "B");
+    clientDoc.commit();
+    let updateV2 = clientDoc.export({ from: versionV1, mode: "update" });
+    let storage = persistedShareStorage(snapshotV1);
+    let { room, sender } = await createTestRoom(serverDoc, storage, { role: "host" });
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(
+        encodeWireBatch([
+          { kind: WireKind.Doc, payload: updateV2 },
+          { kind: WireKind.HostSaveAck, payload: hostSaveAckPayload(versionV1) },
+        ]),
+      ),
+    );
+
+    expect(room.doc.getText("markdown").toString()).toBe("AB");
+    expect(room.pendingHostSave).toBe(true);
+    expect(storage.records.get("pendingHostSave")).toBe(true);
+    expect(storage.transactionCalls).toBe(1);
+  });
+
+  it.each([
+    ["malformed JSON", new TextEncoder().encode("{")],
+    ["wrong share id", hostSaveAckPayload(new VersionVector(null), "CCCCCCCCCCCCCCCCCCCCCC")],
+    [
+      "oversized version vector",
+      hostSaveAckPayload(
+        new VersionVector(
+          new Map(Array.from({ length: 129 }, (_, index) => [String(index + 1) as `${number}`, 1])),
+        ),
+      ),
+    ],
+  ])("rejects a %s ACK without clearing or relaying it", async (_name, payload) => {
+    let doc = documentWithText("A", 1);
+    let storage = persistedShareStorage(doc.export({ mode: "snapshot" }));
+    let { peer, room, sender } = await createTestRoom(doc, storage, { role: "host" });
+    setPendingHostSave(room, storage, true);
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(encodeWireMessage(WireKind.HostSaveAck, payload)),
+    );
+
+    expect(room.pendingHostSave).toBe(true);
+    expect(storage.records.get("pendingHostSave")).toBe(true);
+    expect(storage.transactionCalls).toBe(0);
+    expect(peer.sent).toEqual([]);
+    expect(sender.closed).toEqual({ code: 1008, reason: "Invalid host save acknowledgement" });
   });
 });
 
@@ -400,6 +499,25 @@ function deterministicText(length: number, initialState = 123_456_789) {
 
 function asArrayBuffer(bytes: Uint8Array) {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+function hostSaveAckPayload(version: VersionVector, shareId = validShareId) {
+  return new TextEncoder().encode(
+    JSON.stringify({
+      savedAt: 123,
+      shareId,
+      versionVector: [...version.toJSON()].map(([peer, counter]) => [String(peer), counter]),
+    }),
+  );
+}
+
+function setPendingHostSave(
+  room: TestRoom,
+  storage: MemoryDurableObjectStorage,
+  pendingHostSave: boolean,
+) {
+  room.pendingHostSave = pendingHostSave;
+  storage.records.set("pendingHostSave", pendingHostSave);
 }
 
 function shareRecord(): ShareRecord {

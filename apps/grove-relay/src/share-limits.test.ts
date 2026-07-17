@@ -5,6 +5,7 @@ import {
   maxBatchMessages,
   maxDocumentUpdateBytes,
   maxFrameBytes,
+  maxHostSaveAckPayloadBytes,
   maxPresencePayloadBytes,
   maxSnapshotBytes,
   validateWireFrameLimits,
@@ -73,5 +74,13 @@ describe("shared relay safety limits", () => {
       closeCode: 1009,
       ok: false,
     });
+  });
+
+  it("rejects host save acknowledgements larger than 16 KiB", () => {
+    let payload = new Uint8Array(maxHostSaveAckPayloadBytes + 1);
+
+    expect(
+      validateWireFrameLimits(payload.byteLength + 1, [{ kind: WireKind.HostSaveAck, payload }]),
+    ).toMatchObject({ closeCode: 1009, ok: false });
   });
 });

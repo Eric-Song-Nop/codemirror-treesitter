@@ -5,6 +5,7 @@ export const maxShareControlBodyBytes = 64 * 1024;
 export const maxSnapshotBytes = 1024 * 1024;
 export const maxDocumentUpdateBytes = 256 * 1024;
 export const maxPresencePayloadBytes = 32 * 1024;
+export const maxHostSaveAckPayloadBytes = 16 * 1024;
 export const maxBatchMessages = 64;
 export const maxBatchPayloadBytes = maxSnapshotBytes;
 export const maxFrameBytes = maxBatchPayloadBytes + maxBatchMessages * 5 + 1;
@@ -67,6 +68,12 @@ export function validateWireFrameLimits(
     }
     if (message.kind == WireKind.Presence && message.payload.byteLength > maxPresencePayloadBytes) {
       return { closeCode: 1009, ok: false, reason: "Presence update is too large" };
+    }
+    if (
+      message.kind == WireKind.HostSaveAck &&
+      message.payload.byteLength > maxHostSaveAckPayloadBytes
+    ) {
+      return { closeCode: 1009, ok: false, reason: "Host save acknowledgement is too large" };
     }
   }
 

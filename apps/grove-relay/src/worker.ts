@@ -76,7 +76,9 @@ const maxRetryDelayMs = 30_000;
 const shareSocketTag = "share";
 const shareAuthTimeoutMs = 10_000;
 const shareStatusBroadcastMinIntervalMs = 250;
-const maxAuthVersionVectorEntries = 128;
+const maxVersionVectorEntries = 128;
+const maxVersionVectorCounter = 0x7fff_ffff;
+const maxPeerId = "18446744073709551615";
 const maxStoredUpdateLogBytes = maxSnapshotBytes;
 const maxStoredUpdateLogEntries = 256;
 const maxStorageDeleteBatch = 128;
@@ -396,8 +398,8 @@ export class GroveShareRoom extends DurableObject<Env> {
       return;
     }
 
-    let hostSaveAcked = messages.some((item) => item.kind == WireKind.HostSaveAck);
-    if (hostSaveAcked && this.socketRole(ws) != "host") {
+    let hasHostSaveAck = messages.some((item) => item.kind == WireKind.HostSaveAck);
+    if (hasHostSaveAck && this.socketRole(ws) != "host") {
       ws.close(1008, "Host authorization required");
       return;
     }
@@ -410,6 +412,18 @@ export class GroveShareRoom extends DurableObject<Env> {
     if (documentUpdateCount > 0 && !nextAttachment) {
       ws.close(1008, "Document update rate limit exceeded");
       return;
+    }
+
+    let hostSaveAckVersions: VersionVector[] = [];
+    for (let item of messages) {
+      if (item.kind != WireKind.HostSaveAck) continue;
+      let version = parseHostSaveAcknowledgement(item.payload, this.shareRecord?.shareId ?? null);
+      if (!version) {
+        freeVersionVectors(hostSaveAckVersions);
+        ws.close(1008, "Invalid host save acknowledgement");
+        return;
+      }
+      hostSaveAckVersions.push(version);
     }
 
     let hasDocumentPayload = messages.some(
@@ -430,6 +444,7 @@ export class GroveShareRoom extends DurableObject<Env> {
         } catch (error: unknown) {
           console.warn("Dropping malformed Loro payload", error);
           candidate!.free();
+          freeVersionVectors(hostSaveAckVersions);
           ws.close(1003, "Malformed collaboration payload");
           return;
         }
@@ -460,6 +475,7 @@ export class GroveShareRoom extends DurableObject<Env> {
       if (this.shareRecord && canonicalSnapshot.byteLength > maxSnapshotBytes) {
         console.warn("Rejecting shared file update after candidate snapshot exceeded the limit");
         candidate!.free();
+        freeVersionVectors(hostSaveAckVersions);
         ws.close(1009, "Document snapshot is too large");
         return;
       }
@@ -472,12 +488,23 @@ export class GroveShareRoom extends DurableObject<Env> {
       }
     }
 
-    if (this.shareRecord && (documentChanged || hostSaveAcked)) {
-      let nextPendingHostSave = documentChanged
-        ? !hostSaveAcked
-        : hostSaveAcked
-          ? false
-          : this.pendingHostSave;
+    let hostSaveAckCoversCanonical = false;
+    if (hostSaveAckVersions.length) {
+      let canonicalVersion = (documentChanged ? candidate! : this.doc).oplogVersion();
+      try {
+        hostSaveAckCoversCanonical = hostSaveAckVersions.some((version) => {
+          let comparison = version.compare(canonicalVersion);
+          return comparison == 0 || comparison == 1;
+        });
+      } finally {
+        canonicalVersion.free();
+        freeVersionVectors(hostSaveAckVersions);
+      }
+    }
+
+    if (this.shareRecord && (documentChanged || hasHostSaveAck)) {
+      let nextPendingHostSave = documentChanged ? true : this.pendingHostSave;
+      if (hostSaveAckCoversCanonical) nextPendingHostSave = false;
       if (documentChanged) {
         try {
           await this.persistSharedDocumentState({
@@ -1125,27 +1152,76 @@ function parseAuthVersionVector(
   value: unknown,
 ): { ok: true; version: VersionVector | null } | { ok: false } {
   if (value == null) return { ok: true, version: null };
-  if (!Array.isArray(value) || value.length > maxAuthVersionVectorEntries) {
-    return { ok: false };
+  let version = parseVersionVector(value);
+  return version ? { ok: true, version } : { ok: false };
+}
+
+function parseHostSaveAcknowledgement(payload: Uint8Array, expectedShareId: string | null) {
+  if (!expectedShareId) return null;
+
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payload));
+  } catch {
+    return null;
   }
+  if (!value || typeof value != "object" || Array.isArray(value)) return null;
+
+  let acknowledgement = value as Record<string, unknown>;
+  if (
+    acknowledgement.shareId !== expectedShareId ||
+    typeof acknowledgement.shareId != "string" ||
+    !isValidShareId(acknowledgement.shareId)
+  ) {
+    return null;
+  }
+  let savedAt = acknowledgement.savedAt;
+  if (
+    savedAt != null &&
+    (typeof savedAt != "number" || !Number.isSafeInteger(savedAt) || savedAt < 0)
+  ) {
+    return null;
+  }
+  return parseVersionVector(acknowledgement.versionVector);
+}
+
+function parseVersionVector(value: unknown) {
+  if (!Array.isArray(value) || value.length > maxVersionVectorEntries) return null;
 
   let version = new Map<`${number}`, number>();
   for (let entry of value) {
-    if (!Array.isArray(entry) || entry.length != 2) return { ok: false };
+    if (!Array.isArray(entry) || entry.length != 2) return null;
     let [peer, counter] = entry;
     if (
       typeof peer != "string" ||
-      !/^\d+$/.test(peer) ||
+      !isCanonicalPeerId(peer) ||
+      version.has(peer as `${number}`) ||
       typeof counter != "number" ||
       !Number.isSafeInteger(counter) ||
-      counter < 0
+      counter < 0 ||
+      counter > maxVersionVectorCounter
     ) {
-      return { ok: false };
+      return null;
     }
     version.set(peer as `${number}`, counter);
   }
 
-  return { ok: true, version: new VersionVector(version) };
+  try {
+    return new VersionVector(version);
+  } catch {
+    return null;
+  }
+}
+
+function isCanonicalPeerId(value: string) {
+  if (!/^(?:0|[1-9]\d*)$/.test(value)) return false;
+  return (
+    value.length < maxPeerId.length || (value.length == maxPeerId.length && value <= maxPeerId)
+  );
+}
+
+function freeVersionVectors(versions: readonly VersionVector[]) {
+  for (let version of versions) version.free();
 }
 
 function serializeVersionVector(version: VersionVector) {
