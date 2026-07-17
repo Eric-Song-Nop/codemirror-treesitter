@@ -274,6 +274,28 @@ async function listWorkspaceEntries(rootHandle: AccessDirectoryHandle, path: str
   );
 }
 
+async function completeCopiedRename(options: {
+  copy: () => Promise<void>;
+  removeSource: () => Promise<void>;
+  rollbackTarget: () => Promise<void>;
+}) {
+  try {
+    await options.copy();
+    await options.removeSource();
+  } catch (error) {
+    try {
+      await options.rollbackTarget();
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        "Rename failed and the copied target could not be removed.",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
 async function renameWorkspaceEntry(rootHandle: AccessDirectoryHandle, from: string, to: string) {
   let source = await statWorkspaceEntry(rootHandle, from);
   if (!source.exists) throw new DOMException("Entry not found.", "NotFoundError");
@@ -290,8 +312,11 @@ async function renameWorkspaceEntry(rootHandle: AccessDirectoryHandle, from: str
     }
     let currentDirectory = await directory.getDirectoryHandle(fileName);
     let nextDirectory = await targetDirectory.getDirectoryHandle(targetName, { create: true });
-    await copyDirectoryEntries(currentDirectory, nextDirectory);
-    await directory.removeEntry(fileName, { recursive: true });
+    await completeCopiedRename({
+      copy: () => copyDirectoryEntries(currentDirectory, nextDirectory),
+      removeSource: () => directory.removeEntry(fileName, { recursive: true }),
+      rollbackTarget: () => targetDirectory.removeEntry(targetName, { recursive: true }),
+    });
     return;
   }
 
@@ -303,8 +328,11 @@ async function renameWorkspaceEntry(rootHandle: AccessDirectoryHandle, from: str
   );
   if (await entryExists(targetDirectory, targetName)) throw new Error(`${to} already exists.`);
   let nextHandle = await targetDirectory.getFileHandle(targetName, { create: true });
-  await writeFileData(nextHandle, await readWorkspaceBytes(rootHandle, from));
-  await directory.removeEntry(fileName);
+  await completeCopiedRename({
+    copy: async () => writeFileData(nextHandle, await readWorkspaceBytes(rootHandle, from)),
+    removeSource: () => directory.removeEntry(fileName),
+    rollbackTarget: () => targetDirectory.removeEntry(targetName),
+  });
 }
 
 async function statWorkspaceEntry(
@@ -418,8 +446,11 @@ async function renameMarkdownFile(
   }
 
   let nextHandle = await directory.getFileHandle(fileName, { create: true });
-  await writeFileData(nextHandle, await readMarkdownPath(rootHandle, path));
-  await directory.removeEntry(currentName);
+  await completeCopiedRename({
+    copy: async () => writeFileData(nextHandle, await readMarkdownPath(rootHandle, path)),
+    removeSource: () => directory.removeEntry(currentName),
+    rollbackTarget: () => directory.removeEntry(fileName),
+  });
   return joinWorkspacePath(parentPath, fileName);
 }
 
@@ -441,8 +472,11 @@ async function renameMarkdownDirectory(
 
   let currentDirectory = await directory.getDirectoryHandle(currentName);
   let nextDirectory = await directory.getDirectoryHandle(directoryName, { create: true });
-  await copyDirectoryEntries(currentDirectory, nextDirectory);
-  await directory.removeEntry(currentName, { recursive: true });
+  await completeCopiedRename({
+    copy: () => copyDirectoryEntries(currentDirectory, nextDirectory),
+    removeSource: () => directory.removeEntry(currentName, { recursive: true }),
+    rollbackTarget: () => directory.removeEntry(directoryName, { recursive: true }),
+  });
   return joinWorkspacePath(parentPath, directoryName);
 }
 
