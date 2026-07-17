@@ -249,9 +249,9 @@ describe("shared file relay connection helpers", () => {
       ...sentHostSaveAckBatches(retrySocket).flat(),
     ];
     expect(delivered).toHaveLength(130);
-    expect(
-      delivered.map((message) => (message.payload[0]! << 8) | message.payload[1]!),
-    ).toEqual(Array.from({ length: 130 }, (_, index) => index));
+    expect(delivered.map((message) => (message.payload[0]! << 8) | message.payload[1]!)).toEqual(
+      Array.from({ length: 130 }, (_, index) => index),
+    );
     expect(sentHostSaveAckBatches(retrySocket).map((batch) => batch.length)).toEqual([64, 2]);
 
     connection.close();
