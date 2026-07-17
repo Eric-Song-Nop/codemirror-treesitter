@@ -455,13 +455,58 @@ describe("Grove share sessions", () => {
     expect(response.status).toBe(400);
     expect(free).toHaveBeenCalledTimes(1);
   });
+
+  it("cleans up a maximally populated share without exceeding storage delete batches", async () => {
+    let now = Date.now();
+    let storage = await shareStorage(now);
+    populateCleanupRecords(storage, now);
+    expect(storage.records.size).toBe(336);
+    let room = await createTestRoom(storage);
+
+    await room.cleanupShareState();
+
+    expect(storage.deleteBatchSizes.length).toBeGreaterThan(1);
+    expect(Math.max(...storage.deleteBatchSizes)).toBeLessThanOrEqual(128);
+    expect(storage.records.size).toBe(0);
+    expect(storage.alarmAt).toBeNull();
+    expect(room.shareRecord).toBeNull();
+    room.doc.free();
+  });
+
+  it("retains cleanup authority when a dynamic-key delete batch fails", async () => {
+    let now = Date.now();
+    let storage = await shareStorage(now);
+    populateCleanupRecords(storage, now);
+    storage.failDeleteCall = 2;
+    let room = await createTestRoom(storage);
+
+    await expect(room.cleanupShareState()).rejects.toThrow("injected delete failure");
+
+    expect(storage.records.has("share")).toBe(true);
+    expect(storage.alarmAt).toBe(now);
+
+    storage.failDeleteCall = null;
+    await room.cleanupShareState();
+
+    expect(storage.records.size).toBe(0);
+    expect(storage.alarmAt).toBeNull();
+    expect(room.shareRecord).toBeNull();
+    room.doc.free();
+  });
 });
 
 type TestRoom = {
+  cleanupShareState(): Promise<void>;
   ctx: TestDurableObjectState;
+  dirty: boolean;
   doc: LoroDoc;
+  firstDirtyAt: number;
   initialized: boolean;
+  maxSaveTimer: ReturnType<typeof setTimeout> | null;
   pendingHostSave: boolean;
+  retryDelayMs: number;
+  saveTimer: ReturnType<typeof setTimeout> | null;
+  saving: boolean;
   lastShareStatusBroadcastAt: number;
   shareRecord: ShareRecord | null;
   shareStatusTimer: ReturnType<typeof setTimeout> | null;
@@ -489,10 +534,16 @@ async function createTestRoom(storage: MemoryDurableObjectStorage) {
   let { GroveShareRoom } = await import("./worker.ts");
   let room = Object.create(GroveShareRoom.prototype) as TestRoom;
   room.ctx = { getWebSockets: () => [...room.sockets], storage };
+  room.dirty = false;
   room.doc = new LoroDoc();
+  room.firstDirtyAt = 0;
   room.initialized = true;
   room.lastShareStatusBroadcastAt = 0;
+  room.maxSaveTimer = null;
   room.pendingHostSave = false;
+  room.retryDelayMs = 1000;
+  room.saveTimer = null;
+  room.saving = false;
   room.shareRecord = storage.records.get("share") as ShareRecord;
   room.shareStatusTimer = null;
   room.sockets = new Set();
@@ -550,6 +601,22 @@ async function shareStorage(now: number) {
   storage.records.set("snapshot", doc.export({ mode: "snapshot" }));
   doc.free();
   return storage;
+}
+
+function populateCleanupRecords(storage: MemoryDurableObjectStorage, now: number) {
+  storage.alarmAt = now;
+  for (let index = 0; index < 72; index++) {
+    storage.records.set(`session:${String(index).padStart(3, "0")}`, { index });
+  }
+  for (let index = 1; index <= 256; index++) {
+    storage.records.set(`update:${String(index).padStart(12, "0")}`, new Uint8Array([index]));
+  }
+  storage.records.set("pendingHostSave", true);
+  storage.records.set("updatedAt", now);
+  storage.records.set("initializedAt", now);
+  storage.records.set("schemaVersion", 1);
+  storage.records.set("updateLogBytes", 256);
+  storage.records.set("updateLogSequence", 256);
 }
 
 async function testShareRecord(now: number) {
@@ -612,6 +679,9 @@ class TestWebSocket {
 
 class MemoryDurableObjectStorage {
   alarmAt: number | null = null;
+  deleteBatchSizes: number[] = [];
+  deleteCalls = 0;
+  failDeleteCall: number | null = null;
   records = new Map<string, unknown>();
 
   async deleteAlarm() {
@@ -619,8 +689,13 @@ class MemoryDurableObjectStorage {
   }
 
   async delete(keys: string | string[]) {
+    let batch = Array.isArray(keys) ? keys : [keys];
+    this.deleteBatchSizes.push(batch.length);
+    if (batch.length > 128) throw new Error("delete batch is too large");
+    this.deleteCalls++;
+    if (this.deleteCalls == this.failDeleteCall) throw new Error("injected delete failure");
     let deleted = 0;
-    for (let key of Array.isArray(keys) ? keys : [keys]) {
+    for (let key of batch) {
       if (this.records.delete(key)) deleted++;
     }
     return deleted;

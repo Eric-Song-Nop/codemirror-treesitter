@@ -798,6 +798,12 @@ export class GroveShareRoom extends DurableObject<Env> {
 
     let sessionRecords = await this.ctx.storage.list({ prefix: sessionKeyPrefix });
     let updateLogRecords = await this.ctx.storage.list({ prefix: updateLogEntryPrefix });
+    let dynamicKeys = [...sessionRecords.keys(), ...updateLogRecords.keys()];
+    for (let index = 0; index < dynamicKeys.length; index += maxStorageDeleteBatch) {
+      await this.ctx.storage.delete(dynamicKeys.slice(index, index + maxStorageDeleteBatch));
+    }
+    // Keep the share record and its alarm until every variable-sized collection
+    // is gone so a failed batch remains discoverable and retryable.
     await this.ctx.storage.delete([
       shareRecordKey,
       pendingHostSaveKey,
@@ -807,8 +813,6 @@ export class GroveShareRoom extends DurableObject<Env> {
       schemaVersionKey,
       updateLogBytesKey,
       updateLogSequenceKey,
-      ...sessionRecords.keys(),
-      ...updateLogRecords.keys(),
     ]);
     await this.ctx.storage.deleteAlarm();
 
