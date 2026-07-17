@@ -75,7 +75,6 @@ type OpenMarkdownCollabDocumentOptions = {
 export type CollabDocumentMaterialization = {
   frontiers: SerializedCollabFrontier[];
   value: string;
-  version: VersionVector;
   versionVector: SerializedCollabVersionVector;
 };
 
@@ -119,90 +118,106 @@ export async function openMarkdownCollabDocument(
   let workspaceId = sourceRef.workspaceNamespace;
   let stored = await loadStoredCollabDocumentCandidate(backend, path, sourceRef, docId);
   let doc = new LoroDoc();
+  let undoManager: UndoManager | null = null;
   let externalEdit: CollabExternalEditResolution | undefined;
   let sourceState: CollabSourceState = { kind: "synced" };
   let metadata: BrowserCollabDocumentMetadata;
 
-  if (stored) {
-    metadata = stored.metadata;
-    doc.import(stored.snapshot);
-    if (stored.updates.length) doc.importBatch(stored.updates);
-    if (options.reconcileExternalEdits ?? true) {
-      let result = await reconcileExternalMarkdownEdit(backend, metadata, doc);
-      externalEdit = result.externalEdit;
-      metadata = result.metadata;
-      sourceState = result.sourceState;
+  try {
+    if (stored) {
+      metadata = stored.metadata;
+      doc.import(stored.snapshot);
+      if (stored.updates.length) doc.importBatch(stored.updates);
+      if (options.reconcileExternalEdits ?? true) {
+        let result = await reconcileExternalMarkdownEdit(backend, metadata, doc);
+        externalEdit = result.externalEdit;
+        metadata = result.metadata;
+        sourceState = result.sourceState;
+      }
+      if (stored.migratedFromAlias) await compactDocumentSnapshot(metadata, doc);
+    } else {
+      let initialValue = await backend.readFile(path);
+      let text = doc.getText(textKey);
+      try {
+        if (initialValue) text.insert(0, initialValue);
+        if (initialValue) doc.commit();
+      } finally {
+        text.free();
+      }
+      metadata = {
+        docId,
+        path,
+        workspaceId,
+        ...currentDocumentMaterializationFields(doc, initialValue),
+      };
+      await compactDocumentSnapshot(metadata, doc);
     }
-    if (stored.migratedFromAlias) await compactDocumentSnapshot(metadata, doc);
-  } else {
-    let initialValue = await backend.readFile(path);
-    let text = doc.getText(textKey);
-    if (initialValue) text.insert(0, initialValue);
-    if (initialValue) doc.commit();
-    metadata = {
+
+    let ownedUndoManager = new UndoManager(doc, {});
+    undoManager = ownedUndoManager;
+    let value = readMarkdownText(doc);
+    if (!(options.reconcileExternalEdits ?? true)) {
+      sourceState = sourceStateForValue(metadata, value);
+    }
+    let pendingUpdates: Uint8Array[] = [];
+    let state: CollabDocumentState;
+    let pendingUpdateFlush = createDebouncedTask({
+      delayMs: pendingUpdateFlushDelayMs,
+      maxWaitMs: pendingUpdateFlushMaxWaitMs,
+      run: () => appendPendingCollabDocumentUpdates(state),
+    });
+    let snapshotFlush = createDebouncedTask({
+      delayMs: snapshotFlushDelayMs,
+      maxWaitMs: snapshotFlushMaxWaitMs,
+      run: () => writeCollabDocumentSnapshot(state),
+    });
+    let disposePromise: Promise<void> | null = null;
+    let unsubscribeLocalUpdates = doc.subscribeLocalUpdates((bytes) => {
+      pendingUpdates.push(new Uint8Array(bytes));
+      schedulePendingCollabDocumentUpdateFlush(state);
+    });
+
+    state = {
+      cleanValue: value,
+      doc,
       docId,
+      dispose() {
+        if (disposePromise) return disposePromise;
+        unsubscribeLocalUpdates();
+        disposePromise = (async () => {
+          try {
+            await flushCollabDocumentPersistence(state);
+          } finally {
+            pendingUpdateFlush.dispose();
+            snapshotFlush.dispose();
+            ownedUndoManager.free();
+            doc.free();
+          }
+        })();
+        return disposePromise;
+      },
+      externalEdit,
+      liveMdConfig: {
+        plugins: [
+          liveMdLoroCollaborationPlugin({ doc, undoManager: ownedUndoManager, text: textKey }),
+        ],
+      },
+      metadata,
       path,
-      workspaceId,
-      ...currentDocumentMaterializationFields(doc, initialValue),
+      pendingUpdateFlush,
+      pendingUpdates,
+      persistence: Promise.resolve(),
+      snapshotFlush,
+      sourceState,
+      undoManager: ownedUndoManager,
+      value,
     };
-    await compactDocumentSnapshot(metadata, doc);
+    return state;
+  } catch (error) {
+    undoManager?.free();
+    doc.free();
+    throw error;
   }
-
-  let undoManager = new UndoManager(doc, {});
-  let value = doc.getText(textKey).toString();
-  if (!(options.reconcileExternalEdits ?? true)) {
-    sourceState = sourceStateForValue(metadata, value);
-  }
-  let pendingUpdates: Uint8Array[] = [];
-  let state: CollabDocumentState;
-  let pendingUpdateFlush = createDebouncedTask({
-    delayMs: pendingUpdateFlushDelayMs,
-    maxWaitMs: pendingUpdateFlushMaxWaitMs,
-    run: () => appendPendingCollabDocumentUpdates(state),
-  });
-  let snapshotFlush = createDebouncedTask({
-    delayMs: snapshotFlushDelayMs,
-    maxWaitMs: snapshotFlushMaxWaitMs,
-    run: () => writeCollabDocumentSnapshot(state),
-  });
-  let disposePromise: Promise<void> | null = null;
-  let unsubscribeLocalUpdates = doc.subscribeLocalUpdates((bytes) => {
-    pendingUpdates.push(new Uint8Array(bytes));
-    schedulePendingCollabDocumentUpdateFlush(state);
-  });
-
-  state = {
-    cleanValue: value,
-    doc,
-    docId,
-    dispose() {
-      if (disposePromise) return disposePromise;
-      unsubscribeLocalUpdates();
-      disposePromise = (async () => {
-        try {
-          await flushCollabDocumentPersistence(state);
-        } finally {
-          pendingUpdateFlush.dispose();
-          snapshotFlush.dispose();
-        }
-      })();
-      return disposePromise;
-    },
-    externalEdit,
-    liveMdConfig: {
-      plugins: [liveMdLoroCollaborationPlugin({ doc, undoManager, text: textKey })],
-    },
-    metadata,
-    path,
-    pendingUpdateFlush,
-    pendingUpdates,
-    persistence: Promise.resolve(),
-    snapshotFlush,
-    sourceState,
-    undoManager,
-    value,
-  };
-  return state;
 }
 
 async function loadStoredCollabDocumentCandidate(
@@ -263,7 +278,7 @@ function storedCollabMetadataForSource(
 }
 
 export function getCollabDocumentValue(state: CollabDocumentState) {
-  return state.doc.getText(textKey).toString();
+  return readMarkdownText(state.doc);
 }
 
 export function collabDocumentNeedsSourceWrite(state: CollabDocumentState) {
@@ -376,7 +391,7 @@ export async function acknowledgeCollabDocumentSourceSaved(
     ...sourceCheckpointFields(
       value,
       options.frontiers ?? serializeFrontiers(state.doc.frontiers()),
-      options.versionVector ?? serializeVersionVector(state.doc.oplogVersion()),
+      options.versionVector ?? serializeCurrentVersion(state.doc),
     ),
   };
   await writeBrowserCollabSnapshot(state.metadata, state.doc.export({ mode: "snapshot" }));
@@ -391,12 +406,10 @@ export function captureCollabDocumentMaterialization(
 ): CollabDocumentMaterialization {
   state.doc.commit();
   let value = getCollabDocumentValue(state);
-  let version = state.doc.oplogVersion();
   return {
     frontiers: serializeFrontiers(state.doc.frontiers()),
     value,
-    version,
-    versionVector: serializeVersionVector(version),
+    versionVector: serializeCurrentVersion(state.doc),
   };
 }
 
@@ -448,7 +461,7 @@ async function importExternalMarkdownEdit(
 ): Promise<SourceImportOutcome> {
   let visibleValue = sourceValue ?? (await backend.readFile(metadata.path));
   let visibleHash = hashMarkdownText(visibleValue);
-  let currentValue = doc.getText(textKey).toString();
+  let currentValue = readMarkdownText(doc);
   let currentHash = hashMarkdownText(currentValue);
 
   if (visibleValue == currentValue) {
@@ -474,28 +487,38 @@ async function importExternalMarkdownEdit(
 
   try {
     let checkpoint = sourceCheckpointFromMetadata(metadata);
-    let fork = doc.forkAt(checkpoint.frontiers);
-    let forkText = fork.getText(textKey);
-    if (forkText.toString() == checkpoint.value) {
-      forkText.update(visibleValue);
-      let update = fork.export({ mode: "update", from: checkpoint.versionVector });
-      let nextMetadata = {
-        ...metadata,
-        ...sourceCheckpointFields(
-          visibleValue,
-          serializeFrontiers(fork.frontiers()),
-          serializeVersionVector(fork.oplogVersion()),
-        ),
-      };
-      if (update.byteLength) doc.import(update);
-      let value = doc.getText(textKey).toString();
-      return {
-        externalEdit: { kind: "imported", path: metadata.path },
-        metadata: nextMetadata,
-        sourceState: sourceStateForSourceValue(value, visibleValue),
-        update: update.byteLength ? new Uint8Array(update) : null,
-        value,
-      };
+    let fork: LoroDoc | null = null;
+    try {
+      fork = doc.forkAt(checkpoint.frontiers);
+      let forkText = fork.getText(textKey);
+      try {
+        if (forkText.toString() == checkpoint.value) {
+          forkText.update(visibleValue);
+          let update = fork.export({ mode: "update", from: checkpoint.versionVector });
+          let nextMetadata = {
+            ...metadata,
+            ...sourceCheckpointFields(
+              visibleValue,
+              serializeFrontiers(fork.frontiers()),
+              serializeCurrentVersion(fork),
+            ),
+          };
+          if (update.byteLength) doc.import(update);
+          let value = readMarkdownText(doc);
+          return {
+            externalEdit: { kind: "imported", path: metadata.path },
+            metadata: nextMetadata,
+            sourceState: sourceStateForSourceValue(value, visibleValue),
+            update: update.byteLength ? new Uint8Array(update) : null,
+            value,
+          };
+        }
+      } finally {
+        forkText.free();
+      }
+    } finally {
+      fork?.free();
+      checkpoint.versionVector.free();
     }
   } catch {
     // A complete but unusable checkpoint is treated as a bad browser snapshot.
@@ -503,8 +526,32 @@ async function importExternalMarkdownEdit(
 
   if (currentHash == metadata.materializedHash) {
     let fromVersion = doc.oplogVersion();
-    let text = doc.getText(textKey);
-    text.update(visibleValue);
+    try {
+      let text = doc.getText(textKey);
+      try {
+        text.update(visibleValue);
+      } finally {
+        text.free();
+      }
+      let update = doc.export({ mode: "update", from: fromVersion });
+      return {
+        externalEdit: { kind: "imported", path: metadata.path },
+        metadata: {
+          ...metadata,
+          ...currentDocumentMaterializationFields(doc, visibleValue),
+        },
+        sourceState: { kind: "synced" },
+        update: update.byteLength ? new Uint8Array(update) : null,
+        value: readMarkdownText(doc),
+      };
+    } finally {
+      fromVersion.free();
+    }
+  }
+
+  let fromVersion = doc.oplogVersion();
+  try {
+    replaceMarkdownText(doc, visibleValue);
     let update = doc.export({ mode: "update", from: fromVersion });
     return {
       externalEdit: { kind: "imported", path: metadata.path },
@@ -514,23 +561,11 @@ async function importExternalMarkdownEdit(
       },
       sourceState: { kind: "synced" },
       update: update.byteLength ? new Uint8Array(update) : null,
-      value: doc.getText(textKey).toString(),
+      value: visibleValue,
     };
+  } finally {
+    fromVersion.free();
   }
-
-  let fromVersion = doc.oplogVersion();
-  replaceMarkdownText(doc, visibleValue);
-  let update = doc.export({ mode: "update", from: fromVersion });
-  return {
-    externalEdit: { kind: "imported", path: metadata.path },
-    metadata: {
-      ...metadata,
-      ...currentDocumentMaterializationFields(doc, visibleValue),
-    },
-    sourceState: { kind: "synced" },
-    update: update.byteLength ? new Uint8Array(update) : null,
-    value: visibleValue,
-  };
 }
 
 function sourceCheckpointFromMetadata(metadata: BrowserCollabDocumentMetadata): SourceCheckpoint {
@@ -555,7 +590,7 @@ function currentDocumentMaterializationFields(doc: LoroDoc, value: string) {
   return sourceCheckpointFields(
     value,
     serializeFrontiers(doc.frontiers()),
-    serializeVersionVector(doc.oplogVersion()),
+    serializeCurrentVersion(doc),
   );
 }
 
@@ -595,6 +630,15 @@ function deserializeVersionVector(value: SerializedCollabVersionVector): Version
   return new VersionVector(new Map(value));
 }
 
+function serializeCurrentVersion(doc: LoroDoc): SerializedCollabVersionVector {
+  let version = doc.oplogVersion();
+  try {
+    return serializeVersionVector(version);
+  } finally {
+    version.free();
+  }
+}
+
 function enqueueDocumentPersistence(state: CollabDocumentState, operation: () => Promise<void>) {
   let task = state.persistence.catch(() => {}).then(operation);
   state.persistence = task.catch(() => {});
@@ -608,12 +652,25 @@ async function compactDocumentSnapshot(metadata: BrowserCollabDocumentMetadata, 
 
 function replaceMarkdownText(doc: LoroDoc, value: string) {
   let text = doc.getText(textKey);
-  let current = text.toString();
-  if (current == value) return;
+  try {
+    let current = text.toString();
+    if (current == value) return;
 
-  if (current) text.delete(0, current.length);
-  if (value) text.insert(0, value);
-  doc.commit();
+    if (current) text.delete(0, current.length);
+    if (value) text.insert(0, value);
+    doc.commit();
+  } finally {
+    text.free();
+  }
+}
+
+function readMarkdownText(doc: LoroDoc) {
+  let text = doc.getText(textKey);
+  try {
+    return text.toString();
+  } finally {
+    text.free();
+  }
 }
 
 async function createDocumentIdForSourceRef(sourceRef: DocumentSourceRef) {

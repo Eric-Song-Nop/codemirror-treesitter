@@ -84,6 +84,7 @@ export class ShareRelayConnection {
     this.stopHeartbeat();
     this.socket?.close(1000, "Page closed");
     this.socket = null;
+    this.releaseOfflineBaseVersion();
   }
 
   flushNow() {
@@ -265,7 +266,7 @@ export class ShareRelayConnection {
           return;
         }
       }
-      this.offlineBaseVersion = null;
+      this.releaseOfflineBaseVersion();
     }
 
     while (this.queue.length && this.readyToSend()) {
@@ -294,10 +295,16 @@ export class ShareRelayConnection {
     this.offlineBaseVersion = this.options.doc.oplogVersion();
   }
 
+  private releaseOfflineBaseVersion() {
+    this.offlineBaseVersion?.free();
+    this.offlineBaseVersion = null;
+  }
+
   private enterResyncRequired(message: string) {
     this.queue = [];
     this.queuedBytes = 0;
     this.queueRequiresResync = true;
+    this.releaseOfflineBaseVersion();
     this.clearFlushTimer();
     this.clearReconnectTimer();
     this.options.onError?.(message);
@@ -390,7 +397,11 @@ export class ShareRelayConnection {
       this.socket?.close(clientCloseCodeMalformed, "Malformed sync metadata");
       return;
     }
-    this.completeInitialSync(serverVersion);
+    try {
+      this.completeInitialSync(serverVersion);
+    } finally {
+      serverVersion.free();
+    }
   }
 
   private sendClientCatchUp(serverVersion: VersionVector) {
@@ -421,7 +432,7 @@ export class ShareRelayConnection {
       }
     }
     this.discardQueuedDocumentUpdates();
-    this.offlineBaseVersion = null;
+    this.releaseOfflineBaseVersion();
     return true;
   }
 
@@ -566,7 +577,12 @@ function queuedMessagesBytes(messages: readonly QueuedRelayMessage[]) {
 }
 
 function serializeDocVersionVector(doc: LoroDoc) {
-  return serializeVersionVector(doc.oplogVersion());
+  let version = doc.oplogVersion();
+  try {
+    return serializeVersionVector(version);
+  } finally {
+    version.free();
+  }
 }
 
 function serializeVersionVector(version: VersionVector) {

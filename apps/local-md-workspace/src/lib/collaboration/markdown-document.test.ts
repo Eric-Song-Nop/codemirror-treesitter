@@ -40,6 +40,35 @@ afterEach(() => {
 });
 
 describe("Markdown collaboration documents", () => {
+  it("releases owned Loro resources exactly once when disposed", async () => {
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let freeDocument = vi.spyOn(document.doc, "free");
+    let freeUndoManager = vi.spyOn(document.undoManager, "free");
+
+    await document.dispose();
+    await document.dispose();
+
+    expect(freeUndoManager).toHaveBeenCalledOnce();
+    expect(freeDocument).toHaveBeenCalledOnce();
+  });
+
+  it("releases temporary fork documents after importing external edits", async () => {
+    let backend = createMemoryBackend([["note.md", "# First\n\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let text = document.doc.getText("markdown");
+    text.insert(text.toString().length, "Shared paragraph.\n");
+    document.doc.commit();
+    text.free();
+    backend.files.set("note.md", "# First\n\nExternal paragraph.\n");
+    let freeDocument = vi.spyOn(LoroDoc.prototype, "free");
+
+    await ingestExternalMarkdownEdit(backend, document);
+
+    expect(freeDocument).toHaveBeenCalledOnce();
+    await document.dispose();
+  });
+
   it("debounces local Loro update-log persistence", async () => {
     vi.useFakeTimers();
     let backend = createMemoryBackend([["note.md", "# First\n"]]);

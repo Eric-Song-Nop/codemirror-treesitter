@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
-import type { VersionVector } from "loro-crdt";
+import type { SerializedCollabVersionVector } from "@/lib/collaboration/collab-browser-store";
 import {
   getCollabDocumentValue,
   scheduleCollabDocumentSnapshotFlush,
@@ -16,7 +16,6 @@ import {
   getOrCreateOwnerShareClientId,
   mergeOwnerShareStatus,
   readHostSecret,
-  serializeVersionVector,
 } from "@/lib/workspace/share-host";
 import type { ActiveOwnerShareRecord, SaveState } from "@/lib/workspace/types";
 import type { WorkspaceBackend } from "@/lib/workspace-backend";
@@ -71,7 +70,12 @@ export function useOwnerShareHost({
   );
 
   let sendHostSaveAck = useCallback(
-    (backend: WorkspaceBackend, path: string, value: string, savedVersion: VersionVector) => {
+    (
+      backend: WorkspaceBackend,
+      path: string,
+      value: string,
+      savedVersion: SerializedCollabVersionVector,
+    ) => {
       let record = shareHostRecordRef.current;
       let connection = shareHostConnectionRef.current;
       if (!record || !connection || !isOwnerShareSource(record, backend, path)) return;
@@ -83,7 +87,7 @@ export function useOwnerShareHost({
             materializedHash,
             savedAt: Date.now(),
             shareId: record.shareId,
-            versionVector: serializeVersionVector(savedVersion),
+            versionVector: savedVersion,
           }),
         ),
       );

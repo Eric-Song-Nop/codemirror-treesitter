@@ -1,4 +1,4 @@
-import { LoroDoc } from "loro-crdt";
+import { LoroDoc, VersionVector } from "loro-crdt";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   ShareRelayConnection,
@@ -17,6 +17,35 @@ afterEach(() => {
 });
 
 describe("shared file relay connection helpers", () => {
+  it("releases temporary and retained version vectors across the connection lifecycle", () => {
+    vi.stubGlobal("navigator", { onLine: true });
+    vi.stubGlobal("window", globalThis);
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    let free = vi.spyOn(VersionVector.prototype, "free");
+    let doc = new LoroDoc();
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc,
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+
+    connection.connect();
+    let socket = mockSockets[0]!;
+    socket.open();
+    expect(free).toHaveBeenCalledTimes(1);
+
+    socket.receive(JSON.stringify({ type: "sync-ready", versionVector: [] }));
+    expect(free).toHaveBeenCalledTimes(2);
+
+    connection.pause();
+    connection.close();
+    expect(free).toHaveBeenCalledTimes(3);
+
+    doc.free();
+  });
+
   it("parses share status frames", () => {
     let payload = new TextEncoder().encode(
       JSON.stringify({

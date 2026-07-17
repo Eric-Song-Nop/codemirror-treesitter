@@ -1,5 +1,5 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
-import type { VersionVector } from "loro-crdt";
+import type { SerializedCollabVersionVector } from "@/lib/collaboration/collab-browser-store";
 import {
   acknowledgeCollabDocumentSourceSaved,
   captureCollabDocumentMaterialization,
@@ -46,7 +46,7 @@ type UseWorkspaceSaveActionsOptions = {
     backend: WorkspaceBackend,
     path: string,
     value: string,
-    savedVersion: VersionVector,
+    savedVersion: SerializedCollabVersionVector,
   ) => void;
   setEditorDocument: Dispatch<SetStateAction<EditorDocument>>;
   setErrorMessage: (message: string) => void;
@@ -155,7 +155,7 @@ export function useWorkspaceSaveActions({
           frontiers: materialization.frontiers,
           versionVector: materialization.versionVector,
         });
-        sendHostSaveAck(backend, file.path, materialization.value, materialization.version);
+        sendHostSaveAck(backend, file.path, materialization.value, materialization.versionVector);
       } else {
         await backend.writeFile(file.path, value);
       }
@@ -190,7 +190,12 @@ export function useWorkspaceSaveActions({
               frontiers: materialization.frontiers,
               versionVector: materialization.versionVector,
             });
-            sendHostSaveAck(backend, file.path, materialization.value, materialization.version);
+            sendHostSaveAck(
+              backend,
+              file.path,
+              materialization.value,
+              materialization.versionVector,
+            );
             if (isCurrentSaveTarget()) {
               cleanValueRef.current = value;
               if (editVersion == editVersionRef.current) {
