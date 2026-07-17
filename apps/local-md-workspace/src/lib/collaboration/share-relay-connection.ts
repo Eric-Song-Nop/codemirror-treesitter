@@ -47,6 +47,7 @@ const clientCloseCodeStale = 4001;
 export const maxQueuedRelayMessages = 512;
 export const maxQueuedRelayBytes = 1024 * 1024;
 export const maxSingleQueuedDocumentUpdateBytes = 256 * 1024;
+export const maxRelayBatchMessages = 64;
 
 export class ShareRelayConnection {
   private activeGeneration = 0;
@@ -219,12 +220,6 @@ export class ShareRelayConnection {
     this.flushTimer = null;
     if (!this.hasQueuedMessages() || !this.readyToSend()) return;
 
-    let messages = this.queue.splice(0);
-    this.queuedBytes = 0;
-    let frameMessages: RelayWireMessage[] = messages.map(({ kind, payload }) => ({
-      kind,
-      payload,
-    }));
     if (this.offlineBaseVersion) {
       let mergedUpdate = this.options.doc.export({
         from: this.offlineBaseVersion,
@@ -239,25 +234,28 @@ export class ShareRelayConnection {
         return;
       }
       if (mergedUpdate.byteLength) {
-        frameMessages.unshift({
-          kind: RelayWireKind.Doc,
-          payload: mergedUpdate,
-        });
+        try {
+          this.socket!.send(
+            encodeRelayWireBatch([{ kind: RelayWireKind.Doc, payload: mergedUpdate }]),
+          );
+        } catch {
+          this.socket?.close();
+          return;
+        }
       }
-    }
-    if (!frameMessages.length) {
       this.offlineBaseVersion = null;
-      return;
     }
-    let frame = encodeRelayWireBatch(frameMessages);
 
-    try {
-      this.socket!.send(frame);
-      this.offlineBaseVersion = null;
-    } catch {
-      this.queue.unshift(...messages);
-      this.queuedBytes += queuedMessagesBytes(messages);
-      this.socket?.close();
+    while (this.queue.length && this.readyToSend()) {
+      let messages = this.queue.slice(0, maxRelayBatchMessages);
+      try {
+        this.socket!.send(encodeRelayWireBatch(messages));
+      } catch {
+        this.socket?.close();
+        return;
+      }
+      this.queue.splice(0, messages.length);
+      this.queuedBytes -= queuedMessagesBytes(messages);
     }
   }
 
