@@ -188,7 +188,6 @@ describe("Dropbox workspace backend", () => {
     let entries: OpendalBrowserEntry[] = [
       { isDirectory: true, isFile: false, path: ".livemd" },
       { isDirectory: false, isFile: true, path: ".livemd/manifest.json" },
-      { isDirectory: false, isFile: true, path: "notes/today.md" },
       { isDirectory: false, isFile: true, path: "notes/tomorrow.txt" },
       { isDirectory: true, isFile: false, path: "notes" },
       { isDirectory: true, isFile: false, path: "drafts" },
@@ -210,12 +209,14 @@ describe("Dropbox workspace backend", () => {
       children: [
         {
           children: [],
+          childrenLoaded: false,
           kind: "directory",
           name: "drafts",
           path: "drafts",
         },
         {
-          children: [{ kind: "file", name: "today.md", path: "notes/today.md" }],
+          children: [],
+          childrenLoaded: false,
           kind: "directory",
           name: "notes",
           path: "notes",

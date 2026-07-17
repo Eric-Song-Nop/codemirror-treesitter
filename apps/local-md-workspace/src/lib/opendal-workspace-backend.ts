@@ -8,7 +8,7 @@ import {
   type OpendalBrowserWriteOptions,
 } from "@codemirror-treesitter/opendal-wasm-browser";
 import {
-  buildMarkdownTreeFromEntries,
+  buildMarkdownDirectoryFromEntries,
   joinWorkspacePath,
   normalizeMarkdownFileName,
   normalizeWorkspaceDirectoryName,
@@ -383,7 +383,7 @@ export function createOpendalWorkspaceBackend(
     async readTree() {
       let entries = await withOpendalRetry((operator) => operator.list(""));
       for (let entry of entries) rememberEntry(entry, knownRevisions);
-      return buildMarkdownTreeFromEntries(backendName, entries.map(entryToWorkspaceEntry));
+      return buildMarkdownDirectoryFromEntries(backendName, "", entries.map(entryToWorkspaceEntry));
     },
     async renameEntry(from, to) {
       await renamePath(from, to);
