@@ -56,10 +56,18 @@ describe("shared file Worker routes", () => {
     room.doc = doc;
     room.firstDirtyAt = 0;
     room.maxSaveTimer = null;
+    room.pendingHostSave = false;
     room.saveTimer = null;
     room.saving = false;
 
-    await room.appendStoredDocumentUpdates([new Uint8Array([1, 2, 3])]);
+    for (let sequence = 1; sequence <= 256; sequence++) {
+      storage.records.set(
+        `update:${String(sequence).padStart(12, "0")}`,
+        new Uint8Array([1, 2, 3]),
+      );
+    }
+    storage.records.set("updateLogBytes", 256 * 3);
+    storage.records.set("updateLogSequence", 256);
     expect([...storage.records.keys()]).toEqual(
       expect.arrayContaining(["update:000000000001", "updateLogBytes", "updateLogSequence"]),
     );
@@ -67,9 +75,9 @@ describe("shared file Worker routes", () => {
     await room.flushSnapshot({ force: true });
 
     expect(storage.records.has("snapshot")).toBe(true);
-    expect([...storage.records.keys()]).not.toEqual(
-      expect.arrayContaining(["update:000000000001", "updateLogBytes", "updateLogSequence"]),
-    );
+    expect([...storage.records.keys()].filter((key) => key.startsWith("update:"))).toEqual([]);
+    expect(storage.records.has("updateLogBytes")).toBe(false);
+    expect(storage.records.has("updateLogSequence")).toBe(false);
   });
 });
 
@@ -79,13 +87,13 @@ type TestGroveShareRoom = {
 };
 
 type TestStorageRoom = {
-  appendStoredDocumentUpdates(updates: Uint8Array[]): Promise<number>;
   ctx: { storage: MemoryDurableObjectStorage };
   dirty: boolean;
   doc: LoroDoc;
   firstDirtyAt: number;
   flushSnapshot(options: { force?: boolean }): Promise<void>;
   maxSaveTimer: ReturnType<typeof setTimeout> | null;
+  pendingHostSave: boolean;
   saveTimer: ReturnType<typeof setTimeout> | null;
   saving: boolean;
 };
@@ -94,6 +102,40 @@ class MemoryDurableObjectStorage {
   records = new Map<string, unknown>();
 
   async delete(keys: string | string[]) {
+    if (Array.isArray(keys) && keys.length > 128) throw new Error("delete batch is too large");
+    for (let key of Array.isArray(keys) ? keys : [keys]) this.records.delete(key);
+  }
+
+  async get<T>(key: string) {
+    return this.records.get(key) as T | undefined;
+  }
+
+  async list<T>(options: { prefix?: string } = {}) {
+    let result = new Map<string, T>();
+    for (let [key, value] of this.records) {
+      if (options.prefix && !key.startsWith(options.prefix)) continue;
+      result.set(key, value as T);
+    }
+    return result;
+  }
+
+  async put<T>(key: string, value: T) {
+    this.records.set(key, value);
+  }
+
+  async transaction<T>(callback: (txn: MemoryDurableObjectTransaction) => Promise<T>) {
+    let records = new Map(this.records);
+    let result = await callback(new MemoryDurableObjectTransaction(records));
+    this.records = records;
+    return result;
+  }
+}
+
+class MemoryDurableObjectTransaction {
+  constructor(private readonly records: Map<string, unknown>) {}
+
+  async delete(keys: string | string[]) {
+    if (Array.isArray(keys) && keys.length > 128) throw new Error("delete batch is too large");
     for (let key of Array.isArray(keys) ? keys : [keys]) this.records.delete(key);
   }
 

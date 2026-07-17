@@ -1,0 +1,440 @@
+import { LoroDoc } from "loro-crdt";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { WireKind, encodeWireBatch, encodeWireMessage } from "./protocol.ts";
+import { maxSnapshotBytes } from "./share-limits.ts";
+import type { ShareRecord } from "./share.ts";
+
+const validShareId = "AAAAAAAAAAAAAAAAAAAAAA";
+const validHash = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+
+vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("shared file Durable Object persistence", () => {
+  it("persists the canonical merge when a client sends a stale snapshot", async () => {
+    let original = documentWithText("A", 1);
+    let originalSnapshot = original.export({ mode: "snapshot" });
+
+    let serverDoc = new LoroDoc();
+    serverDoc.import(originalSnapshot);
+    serverDoc.setPeerId(2);
+    serverDoc.getText("markdown").insert(1, "B");
+    serverDoc.commit();
+    let serverUpdate = serverDoc.export({ from: original.oplogVersion(), mode: "update" });
+
+    let clientDoc = new LoroDoc();
+    clientDoc.import(originalSnapshot);
+    clientDoc.setPeerId(3);
+    clientDoc.getText("markdown").insert(1, "C");
+    clientDoc.commit();
+
+    let storage = persistedShareStorage(originalSnapshot, serverUpdate);
+    let { room, sender } = await createTestRoom(serverDoc, storage);
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(encodeWireMessage(WireKind.Snapshot, clientDoc.export({ mode: "snapshot" }))),
+    );
+
+    let restarted = new LoroDoc();
+    restarted.import(storage.records.get("snapshot") as Uint8Array);
+    for (let [key, value] of storage.records) {
+      if (key.startsWith("update:")) restarted.import(value as Uint8Array);
+    }
+
+    expect(room.doc.getText("markdown").toString()).toBe("ABC");
+    expect(restarted.getText("markdown").toString()).toBe("ABC");
+    expect([...storage.records.keys()].filter((key) => key.startsWith("update:"))).toEqual([]);
+    expect(storage.records.get("pendingHostSave")).toBe(true);
+    expect(room.pendingHostSave).toBe(true);
+    expect(storage.transactionCalls).toBe(1);
+  });
+
+  it("preflights the whole update burst before importing any document payload", async () => {
+    let serverDoc = documentWithText("A", 1);
+    let initialSnapshot = serverDoc.export({ mode: "snapshot" });
+    let clientDoc = new LoroDoc();
+    clientDoc.import(initialSnapshot);
+    clientDoc.setPeerId(2);
+    let initialVersion = clientDoc.oplogVersion();
+    clientDoc.getText("markdown").insert(1, "B");
+    clientDoc.commit();
+    let firstUpdate = clientDoc.export({ from: initialVersion, mode: "update" });
+    let firstVersion = clientDoc.oplogVersion();
+    clientDoc.getText("markdown").insert(2, "C");
+    clientDoc.commit();
+    let secondUpdate = clientDoc.export({ from: firstVersion, mode: "update" });
+
+    let storage = persistedShareStorage(initialSnapshot);
+    let { room, sender } = await createTestRoom(serverDoc, storage, { updateTokens: 1 });
+    let beforeVersion = serverDoc.oplogVersion();
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(
+        encodeWireBatch([
+          { kind: WireKind.Doc, payload: firstUpdate },
+          { kind: WireKind.Doc, payload: secondUpdate },
+        ]),
+      ),
+    );
+
+    expect(room.doc.oplogVersion().compare(beforeVersion)).toBe(0);
+    expect(room.doc.getText("markdown").toString()).toBe("A");
+    expect(sender.attachment.updateTokens).toBe(1);
+    expect(sender.closed).toEqual({ code: 1008, reason: "Document update rate limit exceeded" });
+    expect(storage.transactionCalls).toBe(0);
+  });
+
+  it("commits a document update, pending-save flag, and relay only after one transaction", async () => {
+    let serverDoc = documentWithText("A", 1);
+    let initialSnapshot = serverDoc.export({ mode: "snapshot" });
+    let clientDoc = new LoroDoc();
+    clientDoc.import(initialSnapshot);
+    clientDoc.setPeerId(2);
+    let initialVersion = clientDoc.oplogVersion();
+    clientDoc.getText("markdown").insert(1, "B");
+    clientDoc.commit();
+    let update = clientDoc.export({ from: initialVersion, mode: "update" });
+
+    let storage = persistedShareStorage(initialSnapshot);
+    let { peer, room, sender } = await createTestRoom(serverDoc, storage);
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(encodeWireMessage(WireKind.Doc, update)),
+    );
+
+    let restarted = new LoroDoc();
+    restarted.import(storage.records.get("snapshot") as Uint8Array);
+    for (let [key, value] of storage.records) {
+      if (key.startsWith("update:")) restarted.import(value as Uint8Array);
+    }
+
+    expect(room.doc.getText("markdown").toString()).toBe("AB");
+    expect(restarted.getText("markdown").toString()).toBe("AB");
+    expect(storage.records.get("pendingHostSave")).toBe(true);
+    expect(room.pendingHostSave).toBe(true);
+    expect(peer.sent.length).toBeGreaterThan(0);
+    expect(storage.transactionCalls).toBe(1);
+  });
+
+  it("rejects an oversized candidate without poisoning the live document", async () => {
+    let baseText = deterministicText(510_000);
+    let serverDoc = documentWithText(baseText, 1);
+    let initialSnapshot = serverDoc.export({ mode: "snapshot" });
+    expect(initialSnapshot.byteLength).toBeLessThan(maxSnapshotBytes);
+
+    let clientDoc = new LoroDoc();
+    clientDoc.import(initialSnapshot);
+    clientDoc.setPeerId(2);
+    let initialVersion = clientDoc.oplogVersion();
+    clientDoc.getText("markdown").insert(baseText.length, deterministicText(20_000, 987_654_321));
+    clientDoc.commit();
+    let update = clientDoc.export({ from: initialVersion, mode: "update" });
+    expect(update.byteLength).toBeLessThan(256 * 1024);
+    expect(clientDoc.export({ mode: "snapshot" }).byteLength).toBeGreaterThan(maxSnapshotBytes);
+
+    let storage = persistedShareStorage(initialSnapshot);
+    let { room, sender } = await createTestRoom(serverDoc, storage);
+    let beforeVersion = serverDoc.oplogVersion();
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(encodeWireMessage(WireKind.Doc, update)),
+    );
+
+    expect(room.doc.oplogVersion().compare(beforeVersion)).toBe(0);
+    expect(room.doc.getText("markdown").toString()).toBe(baseText);
+    expect(storage.records.get("snapshot")).toEqual(initialSnapshot);
+    expect(storage.transactionCalls).toBe(0);
+    expect(sender.closed).toEqual({ code: 1009, reason: "Document snapshot is too large" });
+  });
+
+  it("keeps live and durable state unchanged when the document transaction fails", async () => {
+    let serverDoc = documentWithText("A", 1);
+    let initialSnapshot = serverDoc.export({ mode: "snapshot" });
+    let clientDoc = new LoroDoc();
+    clientDoc.import(initialSnapshot);
+    clientDoc.setPeerId(2);
+    let initialVersion = clientDoc.oplogVersion();
+    clientDoc.getText("markdown").insert(1, "B");
+    clientDoc.commit();
+    let update = clientDoc.export({ from: initialVersion, mode: "update" });
+
+    let storage = persistedShareStorage(initialSnapshot);
+    storage.failTransactionAfterWrites = 2;
+    let { peer, room, sender } = await createTestRoom(serverDoc, storage);
+    let beforeVersion = serverDoc.oplogVersion();
+
+    await room.webSocketMessage(
+      sender.asWebSocket(),
+      asArrayBuffer(encodeWireMessage(WireKind.Doc, update)),
+    );
+
+    expect(room.doc.oplogVersion().compare(beforeVersion)).toBe(0);
+    expect(room.doc.getText("markdown").toString()).toBe("A");
+    expect(storage.records.get("snapshot")).toEqual(initialSnapshot);
+    expect(storage.records.get("pendingHostSave")).toBe(false);
+    expect(peer.sent).toEqual([]);
+    expect(sender.closed).toEqual({ code: 1011, reason: "Failed to persist shared file update" });
+    expect(storage.transactionCalls).toBe(1);
+  });
+});
+
+type TestRoom = {
+  ctx: TestDurableObjectState;
+  dirty: boolean;
+  doc: LoroDoc;
+  firstDirtyAt: number;
+  initialized: boolean;
+  lastShareStatusBroadcastAt: number;
+  maxSaveTimer: ReturnType<typeof setTimeout> | null;
+  pendingHostSave: boolean;
+  retryDelayMs: number;
+  saveTimer: ReturnType<typeof setTimeout> | null;
+  saving: boolean;
+  shareRecord: ShareRecord | null;
+  shareStatusTimer: ReturnType<typeof setTimeout> | null;
+  sockets: Set<WebSocket>;
+  webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void>;
+};
+
+type ConnectionAttachment = {
+  clientId: string;
+  joinedAt: number;
+  role: "guest" | "host";
+  secretHash: string;
+  updateTokens: number;
+  updateTokensAt: number;
+};
+
+type TestDurableObjectState = {
+  getWebSockets(tag?: string): WebSocket[];
+  storage: MemoryDurableObjectStorage;
+};
+
+async function createTestRoom(
+  doc: LoroDoc,
+  storage: MemoryDurableObjectStorage,
+  attachmentOverrides: Partial<ConnectionAttachment> = {},
+) {
+  vi.stubGlobal("WebSocket", { OPEN: 1 });
+  let { GroveShareRoom } = await import("./worker.ts");
+  let room = Object.create(GroveShareRoom.prototype) as TestRoom;
+  let attachment: ConnectionAttachment = {
+    clientId: "sender-client",
+    joinedAt: Date.now(),
+    role: "guest",
+    secretHash: validHash,
+    updateTokens: 60,
+    updateTokensAt: Date.now(),
+    ...attachmentOverrides,
+  };
+  let sender = new TestWebSocket(attachment);
+  let peer = new TestWebSocket({ ...attachment, clientId: "peer-client" });
+  let sockets = new Set<WebSocket>([sender.asWebSocket(), peer.asWebSocket()]);
+
+  room.ctx = {
+    getWebSockets: () => [...sockets],
+    storage,
+  };
+  room.dirty = false;
+  room.doc = doc;
+  room.firstDirtyAt = 0;
+  room.initialized = true;
+  room.lastShareStatusBroadcastAt = 0;
+  room.maxSaveTimer = null;
+  room.pendingHostSave = false;
+  room.retryDelayMs = 1000;
+  room.saveTimer = null;
+  room.saving = false;
+  room.shareRecord = shareRecord();
+  room.shareStatusTimer = null;
+  room.sockets = sockets;
+
+  return { peer, room, sender };
+}
+
+class TestWebSocket {
+  closed: { code: number; reason: string } | null = null;
+  readyState = 1;
+  sent: Array<string | Uint8Array> = [];
+
+  constructor(public attachment: ConnectionAttachment) {}
+
+  asWebSocket() {
+    return this as unknown as WebSocket;
+  }
+
+  close(code = 1000, reason = "") {
+    this.closed = { code, reason };
+    this.readyState = 3;
+  }
+
+  deserializeAttachment() {
+    return this.attachment;
+  }
+
+  send(value: string | ArrayBuffer | ArrayBufferView) {
+    this.sent.push(
+      typeof value == "string"
+        ? value
+        : value instanceof ArrayBuffer
+          ? new Uint8Array(value)
+          : new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+    );
+  }
+
+  serializeAttachment(value: ConnectionAttachment) {
+    this.attachment = value;
+  }
+}
+
+class MemoryDurableObjectStorage {
+  failTransactionAfterWrites: number | null = null;
+  records = new Map<string, unknown>();
+  transactionCalls = 0;
+
+  async delete(keys: string | string[]) {
+    return deleteRecords(this.records, keys);
+  }
+
+  async get<T>(key: string) {
+    return this.records.get(key) as T | undefined;
+  }
+
+  async list<T>(options: { prefix?: string } = {}) {
+    return listRecords<T>(this.records, options);
+  }
+
+  async put<T>(key: string, value: T) {
+    this.records.set(key, cloneStoredValue(value));
+  }
+
+  async transaction<T>(callback: (txn: MemoryDurableObjectTransaction) => Promise<T>) {
+    this.transactionCalls++;
+    let records = cloneRecords(this.records);
+    let result = await callback(
+      new MemoryDurableObjectTransaction(records, this.failTransactionAfterWrites),
+    );
+    this.records = records;
+    return result;
+  }
+}
+
+class MemoryDurableObjectTransaction {
+  private writes = 0;
+
+  constructor(
+    private readonly records: Map<string, unknown>,
+    private readonly failAfterWrites: number | null,
+  ) {}
+
+  async delete(keys: string | string[]) {
+    let result = deleteRecords(this.records, keys);
+    this.failIfRequested();
+    return result;
+  }
+
+  async get<T>(key: string) {
+    return this.records.get(key) as T | undefined;
+  }
+
+  async list<T>(options: { prefix?: string } = {}) {
+    return listRecords<T>(this.records, options);
+  }
+
+  async put<T>(key: string, value: T) {
+    this.records.set(key, cloneStoredValue(value));
+    this.failIfRequested();
+  }
+
+  private failIfRequested() {
+    this.writes++;
+    if (this.failAfterWrites != null && this.writes >= this.failAfterWrites) {
+      throw new Error("injected transaction failure");
+    }
+  }
+}
+
+function persistedShareStorage(snapshot: Uint8Array, update?: Uint8Array) {
+  let storage = new MemoryDurableObjectStorage();
+  storage.records.set("share", shareRecord());
+  storage.records.set("snapshot", new Uint8Array(snapshot));
+  storage.records.set("pendingHostSave", false);
+  if (update) {
+    storage.records.set("update:000000000001", new Uint8Array(update));
+    storage.records.set("updateLogBytes", update.byteLength);
+    storage.records.set("updateLogSequence", 1);
+  }
+  return storage;
+}
+
+function documentWithText(value: string, peerId: number) {
+  let doc = new LoroDoc();
+  doc.setPeerId(peerId);
+  doc.getText("markdown").insert(0, value);
+  doc.commit();
+  return doc;
+}
+
+function deterministicText(length: number, initialState = 123_456_789) {
+  let state = initialState;
+  let chunks: string[] = [];
+  let chunk = "";
+  for (let index = 0; index < length; index++) {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+    chunk += String.fromCharCode(32 + (state % 95));
+    if (chunk.length == 8192) {
+      chunks.push(chunk);
+      chunk = "";
+    }
+  }
+  if (chunk) chunks.push(chunk);
+  return chunks.join("");
+}
+
+function asArrayBuffer(bytes: Uint8Array) {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+function shareRecord(): ShareRecord {
+  return {
+    createdAt: Date.now(),
+    displayName: "note.md",
+    expiresAt: Date.now() + 60_000,
+    guestSecretHash: validHash,
+    hostSecretHash: validHash,
+    schemaVersion: 1,
+    shareId: validShareId,
+  };
+}
+
+function deleteRecords(records: Map<string, unknown>, keys: string | string[]) {
+  let deleted = 0;
+  for (let key of Array.isArray(keys) ? keys : [keys]) {
+    if (records.delete(key)) deleted++;
+  }
+  return deleted;
+}
+
+function listRecords<T>(records: Map<string, unknown>, options: { prefix?: string }) {
+  let result = new Map<string, T>();
+  for (let [key, value] of records) {
+    if (options.prefix && !key.startsWith(options.prefix)) continue;
+    result.set(key, value as T);
+  }
+  return result;
+}
+
+function cloneRecords(records: Map<string, unknown>) {
+  return new Map([...records].map(([key, value]) => [key, cloneStoredValue(value)]));
+}
+
+function cloneStoredValue<T>(value: T): T {
+  return (value instanceof Uint8Array ? new Uint8Array(value) : structuredClone(value)) as T;
+}

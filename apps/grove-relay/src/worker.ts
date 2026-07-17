@@ -79,6 +79,7 @@ const shareStatusBroadcastMinIntervalMs = 250;
 const maxAuthVersionVectorEntries = 128;
 const maxStoredUpdateLogBytes = maxSnapshotBytes;
 const maxStoredUpdateLogEntries = 256;
+const maxStorageDeleteBatch = 128;
 const requestBodyTooLarge = Symbol("requestBodyTooLarge");
 
 export class GroveShareRoom extends DurableObject<Env> {
@@ -201,19 +202,23 @@ export class GroveShareRoom extends DurableObject<Env> {
       shareId,
     };
 
+    await this.ctx.storage.transaction(async (txn) => {
+      await Promise.all([
+        txn.put(shareRecordKey, record),
+        txn.put(pendingHostSaveKey, false),
+        txn.put(snapshotKey, snapshot),
+        txn.put(updatedAtKey, now),
+        txn.put(initializedAtKey, now),
+        txn.put(schemaVersionKey, schemaVersion),
+      ]);
+    });
+
+    let previousDoc = this.doc;
     this.doc = nextDoc;
+    previousDoc.free();
     this.shareRecord = record;
     this.initialized = true;
     this.pendingHostSave = false;
-
-    await Promise.all([
-      this.ctx.storage.put(shareRecordKey, record),
-      this.ctx.storage.put(pendingHostSaveKey, false),
-      this.ctx.storage.put(snapshotKey, snapshot),
-      this.ctx.storage.put(updatedAtKey, now),
-      this.ctx.storage.put(initializedAtKey, now),
-      this.ctx.storage.put(schemaVersionKey, schemaVersion),
-    ]);
     await this.scheduleShareMaintenance();
 
     return jsonResponse(
@@ -375,11 +380,6 @@ export class GroveShareRoom extends DurableObject<Env> {
     if (this.socketRole(ws)) await this.refreshShareRecord();
     if (!this.ensureSocketShareAuthorization(ws)) return;
 
-    let relay: WireMessage[] = [];
-    let acceptedDocumentUpdates: Uint8Array[] = [];
-    let acceptedSnapshot: Uint8Array | null = null;
-    let documentChanged = false;
-    let hostSaveAcked = false;
     let messages: WireMessage[];
 
     let frame = toUint8Array(message);
@@ -396,74 +396,138 @@ export class GroveShareRoom extends DurableObject<Env> {
       return;
     }
 
+    let hostSaveAcked = messages.some((item) => item.kind == WireKind.HostSaveAck);
+    if (hostSaveAcked && this.socketRole(ws) != "host") {
+      ws.close(1008, "Host authorization required");
+      return;
+    }
+
+    let documentUpdateCount = messages.filter((item) => item.kind == WireKind.Doc).length;
+    let nextAttachment =
+      documentUpdateCount > 0
+        ? this.updatedAttachmentAfterConsumingTokens(ws, documentUpdateCount)
+        : undefined;
+    if (documentUpdateCount > 0 && !nextAttachment) {
+      ws.close(1008, "Document update rate limit exceeded");
+      return;
+    }
+
+    let hasDocumentPayload = messages.some(
+      (item) => item.kind == WireKind.Doc || item.kind == WireKind.Snapshot,
+    );
+    let candidate = hasDocumentPayload ? this.doc.fork() : null;
+    let relay: WireMessage[] = [];
+    let acceptedDocumentUpdates: Uint8Array[] = [];
+    let acceptedSnapshot = false;
+    let documentChanged = false;
+    let firstDocumentRelayIndex: number | null = null;
+
     for (let item of messages) {
       if (item.kind == WireKind.Doc || item.kind == WireKind.Snapshot) {
-        if (item.kind == WireKind.Doc && !this.consumeUpdateToken(ws)) {
-          ws.close(1008, "Document update rate limit exceeded");
-          return;
-        }
-        let beforeVersion = this.doc.oplogVersion();
+        let beforeVersion = candidate!.oplogVersion();
         try {
-          this.doc.import(item.payload);
+          candidate!.import(item.payload);
         } catch (error: unknown) {
           console.warn("Dropping malformed Loro payload", error);
+          candidate!.free();
           ws.close(1003, "Malformed collaboration payload");
           return;
         }
-        let afterVersion = this.doc.oplogVersion();
+        let afterVersion = candidate!.oplogVersion();
         let changed = versionAdvanced(afterVersion, beforeVersion);
-        if (this.shareRecord && !this.enforceDocumentSnapshotLimit(ws)) return;
         if (changed) {
-          let relayItem = item;
-          this.initialized = true;
-          documentChanged = this.shareRecord != null;
-          if (this.shareRecord) {
-            if (item.kind == WireKind.Snapshot) acceptedSnapshot = item.payload;
-            else {
-              let acceptedUpdate = this.doc.export({ from: beforeVersion, mode: "update" });
-              acceptedDocumentUpdates.push(acceptedUpdate);
-              relayItem = { kind: WireKind.Doc, payload: acceptedUpdate };
-            }
+          if (firstDocumentRelayIndex == null) firstDocumentRelayIndex = relay.length;
+          documentChanged = true;
+          if (item.kind == WireKind.Snapshot) {
+            acceptedSnapshot = true;
+            relay.push(item);
           } else {
-            this.markDirty();
+            let acceptedUpdate = candidate!.export({ from: beforeVersion, mode: "update" });
+            acceptedDocumentUpdates.push(acceptedUpdate);
+            relay.push({ kind: WireKind.Doc, payload: acceptedUpdate });
           }
-          relay.push(relayItem);
         }
       } else if (item.kind == WireKind.Presence) {
         relay.push(item);
       } else if (item.kind == WireKind.HostSaveAck) {
-        if (this.socketRole(ws) != "host") {
-          ws.close(1008, "Host authorization required");
-          return;
-        }
-        hostSaveAcked = true;
         relay.push(item);
       }
     }
 
+    let canonicalSnapshot: Uint8Array | null = null;
+    if (documentChanged) {
+      canonicalSnapshot = candidate!.export({ mode: "snapshot" });
+      if (this.shareRecord && canonicalSnapshot.byteLength > maxSnapshotBytes) {
+        console.warn("Rejecting shared file update after candidate snapshot exceeded the limit");
+        candidate!.free();
+        ws.close(1009, "Document snapshot is too large");
+        return;
+      }
+      if (acceptedSnapshot) {
+        relay = relay.filter((item) => item.kind != WireKind.Doc && item.kind != WireKind.Snapshot);
+        relay.splice(firstDocumentRelayIndex ?? 0, 0, {
+          kind: WireKind.Snapshot,
+          payload: canonicalSnapshot,
+        });
+      }
+    }
+
     if (this.shareRecord && (documentChanged || hostSaveAcked)) {
+      let nextPendingHostSave = documentChanged
+        ? !hostSaveAcked
+        : hostSaveAcked
+          ? false
+          : this.pendingHostSave;
       if (documentChanged) {
         try {
-          if (acceptedSnapshot) {
-            await this.persistShareSnapshot(acceptedSnapshot);
-          } else {
-            let updateLogBytes = await this.appendStoredDocumentUpdates(acceptedDocumentUpdates);
-            if (updateLogBytes >= maxStoredUpdateLogBytes) {
-              await this.flushSnapshot({ force: true });
-            }
-          }
+          await this.persistSharedDocumentState({
+            canonicalSnapshot: canonicalSnapshot!,
+            pendingHostSave: nextPendingHostSave,
+            replaceSnapshot: acceptedSnapshot,
+            updates: acceptedDocumentUpdates,
+          });
         } catch (error: unknown) {
           console.error("Failed to persist shared file update log", error);
+          candidate!.free();
+          ws.close(1011, "Failed to persist shared file update");
+          return;
+        }
+      } else {
+        try {
+          await this.persistPendingHostSave(nextPendingHostSave);
+        } catch (error: unknown) {
+          console.error("Failed to persist host save acknowledgement", error);
           ws.close(1011, "Failed to persist shared file update");
           return;
         }
       }
+
+      if (documentChanged) {
+        let previousDoc = this.doc;
+        this.doc = candidate!;
+        previousDoc.free();
+        this.initialized = true;
+      } else if (candidate) {
+        candidate.free();
+      }
+      this.pendingHostSave = nextPendingHostSave;
+      if (nextAttachment) ws.serializeAttachment(nextAttachment);
       if (relay.length) this.broadcast(ws, encodeWireBatch(relay));
-      await this.setPendingHostSave(documentChanged && !hostSaveAcked);
       this.broadcastShareStatus();
-    } else if (relay.length) {
-      this.broadcast(ws, encodeWireBatch(relay));
+      return;
     }
+
+    if (documentChanged) {
+      let previousDoc = this.doc;
+      this.doc = candidate!;
+      previousDoc.free();
+      this.initialized = true;
+      this.markDirty();
+    } else if (candidate) {
+      candidate.free();
+    }
+    if (nextAttachment) ws.serializeAttachment(nextAttachment);
+    if (relay.length) this.broadcast(ws, encodeWireBatch(relay));
   }
 
   async webSocketClose(
@@ -581,6 +645,7 @@ export class GroveShareRoom extends DurableObject<Env> {
     await this.ctx.storage.deleteAlarm();
 
     this.dirty = false;
+    this.doc.free();
     this.doc = new LoroDoc();
     this.firstDirtyAt = 0;
     this.initialized = false;
@@ -641,10 +706,11 @@ export class GroveShareRoom extends DurableObject<Env> {
     );
   }
 
-  private async setPendingHostSave(value: boolean) {
+  private async persistPendingHostSave(value: boolean) {
     if (this.pendingHostSave == value) return;
-    await this.ctx.storage.put(pendingHostSaveKey, value);
-    this.pendingHostSave = value;
+    await this.ctx.storage.transaction(async (txn) => {
+      await txn.put(pendingHostSaveKey, value);
+    });
   }
 
   private socketRole(socket: WebSocket) {
@@ -720,26 +786,22 @@ export class GroveShareRoom extends DurableObject<Env> {
     return count;
   }
 
-  private consumeUpdateToken(socket: WebSocket) {
+  private updatedAttachmentAfterConsumingTokens(socket: WebSocket, count: number) {
     let attachment = socket.deserializeAttachment() as ConnectionAttachment | undefined;
-    if (!attachment) return false;
+    if (!attachment) return null;
 
     let now = Date.now();
     let previousTokens = attachment.updateTokens ?? maxUpdateFrameBurst;
     let previousAt = attachment.updateTokensAt ?? now;
     let refill = ((now - previousAt) / 60_000) * maxUpdateFramesPerMinute;
     let nextTokens = Math.min(maxUpdateFrameBurst, previousTokens + refill);
-    if (nextTokens < 1) {
-      socket.serializeAttachment({ ...attachment, updateTokens: nextTokens, updateTokensAt: now });
-      return false;
-    }
+    if (nextTokens < count) return null;
 
-    socket.serializeAttachment({
+    return {
       ...attachment,
-      updateTokens: nextTokens - 1,
+      updateTokens: nextTokens - count,
       updateTokensAt: now,
-    });
-    return true;
+    };
   }
 
   private async verifyHostSecret(share: ShareRecord, hostSecret: string) {
@@ -768,13 +830,12 @@ export class GroveShareRoom extends DurableObject<Env> {
 
     try {
       let snapshot = this.doc.export({ mode: "snapshot" });
-      await Promise.all([
-        this.ctx.storage.put(snapshotKey, snapshot),
-        this.ctx.storage.put(updatedAtKey, Date.now()),
-        this.ctx.storage.put(initializedAtKey, Date.now()),
-        this.ctx.storage.put(schemaVersionKey, schemaVersion),
-        this.deleteStoredUpdateLog(),
-      ]);
+      await this.persistSharedDocumentState({
+        canonicalSnapshot: snapshot,
+        pendingHostSave: this.pendingHostSave,
+        replaceSnapshot: true,
+        updates: [],
+      });
       this.firstDirtyAt = 0;
       this.retryDelayMs = 1000;
     } catch (error: unknown) {
@@ -789,55 +850,89 @@ export class GroveShareRoom extends DurableObject<Env> {
     }
   }
 
-  private async persistShareSnapshot(snapshot: Uint8Array) {
+  private async persistSharedDocumentState(options: {
+    canonicalSnapshot: Uint8Array;
+    pendingHostSave: boolean;
+    replaceSnapshot: boolean;
+    updates: Uint8Array[];
+  }) {
+    let now = Date.now();
+    let updateBytes = options.updates.reduce((total, update) => total + update.byteLength, 0);
+
+    return this.ctx.storage.transaction(async (txn) => {
+      if (options.replaceSnapshot) {
+        await this.writeCanonicalSnapshot(
+          txn,
+          options.canonicalSnapshot,
+          options.pendingHostSave,
+          now,
+        );
+        return 0;
+      }
+
+      let [previousSequence, previousBytes, existingEntries] = await Promise.all([
+        txn.get<number>(updateLogSequenceKey),
+        txn.get<number>(updateLogBytesKey),
+        txn.list({ prefix: updateLogEntryPrefix }),
+      ]);
+      let nextBytes = (previousBytes ?? 0) + updateBytes;
+      if (
+        existingEntries.size + options.updates.length > maxStoredUpdateLogEntries ||
+        nextBytes >= maxStoredUpdateLogBytes
+      ) {
+        await this.writeCanonicalSnapshot(
+          txn,
+          options.canonicalSnapshot,
+          options.pendingHostSave,
+          now,
+          existingEntries,
+        );
+        return 0;
+      }
+
+      let nextSequence = previousSequence ?? 0;
+      for (let update of options.updates) {
+        nextSequence += 1;
+        await txn.put(updateLogEntryKey(nextSequence), new Uint8Array(update));
+      }
+      await Promise.all([
+        txn.put(updateLogSequenceKey, nextSequence),
+        txn.put(updateLogBytesKey, nextBytes),
+        txn.put(pendingHostSaveKey, options.pendingHostSave),
+        txn.put(updatedAtKey, now),
+        txn.put(initializedAtKey, now),
+        txn.put(schemaVersionKey, schemaVersion),
+      ]);
+      return nextBytes;
+    });
+  }
+
+  private async writeCanonicalSnapshot(
+    txn: DurableObjectTransaction,
+    snapshot: Uint8Array,
+    pendingHostSave: boolean,
+    now: number,
+    existingEntries?: Map<string, unknown>,
+  ) {
     await Promise.all([
-      this.ctx.storage.put(snapshotKey, snapshot),
-      this.ctx.storage.put(updatedAtKey, Date.now()),
-      this.ctx.storage.put(initializedAtKey, Date.now()),
-      this.ctx.storage.put(schemaVersionKey, schemaVersion),
-      this.deleteStoredUpdateLog(),
+      txn.put(snapshotKey, new Uint8Array(snapshot)),
+      txn.put(pendingHostSaveKey, pendingHostSave),
+      txn.put(updatedAtKey, now),
+      txn.put(initializedAtKey, now),
+      txn.put(schemaVersionKey, schemaVersion),
     ]);
-    this.dirty = false;
-    this.firstDirtyAt = 0;
+    await this.deleteStoredUpdateLog(txn, existingEntries);
   }
 
-  private async appendStoredDocumentUpdates(updates: Uint8Array[]) {
-    if (!updates.length) return (await this.ctx.storage.get<number>(updateLogBytesKey)) ?? 0;
-
-    let [previousSequence, previousBytes, existingEntries] = await Promise.all([
-      this.ctx.storage.get<number>(updateLogSequenceKey),
-      this.ctx.storage.get<number>(updateLogBytesKey),
-      this.ctx.storage.list({ prefix: updateLogEntryPrefix }),
-    ]);
-    if (existingEntries.size + updates.length > maxStoredUpdateLogEntries) {
-      await this.flushSnapshot({ force: true });
-      return 0;
-    }
-
-    let nextSequence = previousSequence ?? 0;
-    let nextBytes = previousBytes ?? 0;
-    let writes: Array<Promise<void>> = [];
-    for (let update of updates) {
-      nextSequence += 1;
-      let payload = new Uint8Array(update);
-      nextBytes += payload.byteLength;
-      writes.push(this.ctx.storage.put(updateLogEntryKey(nextSequence), payload));
-    }
-    writes.push(
-      this.ctx.storage.put(updateLogSequenceKey, nextSequence),
-      this.ctx.storage.put(updateLogBytesKey, nextBytes),
-      this.ctx.storage.put(updatedAtKey, Date.now()),
-      this.ctx.storage.put(initializedAtKey, Date.now()),
-      this.ctx.storage.put(schemaVersionKey, schemaVersion),
-    );
-    await Promise.all(writes);
-    return nextBytes;
-  }
-
-  private async deleteStoredUpdateLog() {
-    let updateLogRecords = await this.ctx.storage.list({ prefix: updateLogEntryPrefix });
+  private async deleteStoredUpdateLog(
+    txn: DurableObjectTransaction,
+    existingEntries?: Map<string, unknown>,
+  ) {
+    let updateLogRecords = existingEntries ?? (await txn.list({ prefix: updateLogEntryPrefix }));
     let keys = [...updateLogRecords.keys(), updateLogBytesKey, updateLogSequenceKey];
-    if (keys.length) await this.ctx.storage.delete(keys);
+    for (let index = 0; index < keys.length; index += maxStorageDeleteBatch) {
+      await txn.delete(keys.slice(index, index + maxStorageDeleteBatch));
+    }
   }
 
   private async handleControlMessage(ws: WebSocket, message: string) {
@@ -937,18 +1032,6 @@ export class GroveShareRoom extends DurableObject<Env> {
         versionVector: serializeVersionVector(serverVersion),
       }),
     );
-  }
-
-  private enforceDocumentSnapshotLimit(sender: WebSocket) {
-    let snapshot = this.doc.export({ mode: "snapshot" });
-    if (snapshot.byteLength <= maxSnapshotBytes) return true;
-
-    console.warn("Closing shared file room after snapshot size exceeded the product limit");
-    sender.close(1009, "Document snapshot is too large");
-    this.closeShareSockets(1009, "Document snapshot is too large");
-    this.dirty = false;
-    this.clearSaveTimers();
-    return false;
   }
 
   private markDirty() {
