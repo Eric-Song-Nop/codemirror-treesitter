@@ -32,8 +32,10 @@ import {
   maxDocumentUpdateBytes,
   maxShareControlBodyBytes,
   maxShareGuestPeers,
+  maxShareHostSessions,
   maxShareSessions,
   maxSnapshotBytes,
+  maxSyncVersionVectorEntries,
   maxUpdateFrameBurst,
   maxUpdateFramesPerMinute,
   validateWireFrameLimits,
@@ -45,6 +47,7 @@ type ConnectionAttachment = {
   pendingShareAuth?: boolean;
   role?: ShareRole;
   secretHash?: string;
+  sessionExpiresAt?: number;
   updateTokens?: number;
   updateTokensAt?: number;
 };
@@ -76,7 +79,7 @@ const maxRetryDelayMs = 30_000;
 const shareSocketTag = "share";
 const shareAuthTimeoutMs = 10_000;
 const shareStatusBroadcastMinIntervalMs = 250;
-const maxVersionVectorEntries = 128;
+const maxHostSaveAckVersionVectorEntries = 128;
 const maxVersionVectorCounter = 0x7fff_ffff;
 const maxPeerId = "18446744073709551615";
 const maxStoredUpdateLogBytes = maxSnapshotBytes;
@@ -254,9 +257,6 @@ export class GroveShareRoom extends DurableObject<Env> {
     if (body.role == "guest" && this.shareSocketCount("guest") >= maxShareGuestPeers) {
       return jsonResponse({ error: "Share is full" }, 429, request);
     }
-    if ((await this.activeShareSessionCount()) >= maxShareSessions) {
-      return jsonResponse({ error: "Too many active sessions" }, 429, request);
-    }
 
     let sessionToken = createSessionToken();
     let expiresAt = Date.now() + shareSessionTtlMs;
@@ -266,7 +266,13 @@ export class GroveShareRoom extends DurableObject<Env> {
       role: body.role,
       secretHash,
     };
-    await this.ctx.storage.put(sessionKey(await hashShareSecret(sessionToken)), session);
+    let stored = await this.storeShareSession(
+      sessionKey(await hashShareSecret(sessionToken)),
+      session,
+    );
+    if (!stored) {
+      return jsonResponse({ error: `Too many active ${body.role} sessions` }, 429, request);
+    }
 
     return jsonResponse(
       {
@@ -764,6 +770,11 @@ export class GroveShareRoom extends DurableObject<Env> {
       socket.close(1008, "Share session required");
       return false;
     }
+    let sessionExpiresAt = attachment.sessionExpiresAt ?? attachment.joinedAt + shareSessionTtlMs;
+    if (sessionExpiresAt <= Date.now()) {
+      this.requestSessionRefresh(socket, "expired");
+      return false;
+    }
 
     let share = this.shareRecord;
     let expectedHash =
@@ -787,30 +798,50 @@ export class GroveShareRoom extends DurableObject<Env> {
 
   private async validateShareSession(sessionToken: string | null) {
     let share = this.activeShareRecord();
-    if (!share || !sessionToken) return null;
+    if (!share || !sessionToken) return { status: "invalid" } as const;
 
-    let session = await this.ctx.storage.get<ShareSessionRecord>(
-      sessionKey(await hashShareSecret(sessionToken)),
-    );
-    if (!session || session.expiresAt <= Date.now()) return null;
+    let key = sessionKey(await hashShareSecret(sessionToken));
+    let session = await this.ctx.storage.get<ShareSessionRecord>(key);
+    if (!session) return { status: "invalid" } as const;
+    if (session.expiresAt <= Date.now()) {
+      await this.ctx.storage.delete(key);
+      return { status: "expired" } as const;
+    }
 
     let expectedHash = session.role == "host" ? share.hostSecretHash : share.guestSecretHash;
-    if (!timingSafeEqualString(session.secretHash, expectedHash)) return null;
-    return session;
+    if (!timingSafeEqualString(session.secretHash, expectedHash)) {
+      return { status: "invalid" } as const;
+    }
+    return { session, status: "valid" } as const;
   }
 
-  private async activeShareSessionCount() {
-    let now = Date.now();
-    let sessions = await this.ctx.storage.list<ShareSessionRecord>({ prefix: sessionKeyPrefix });
-    let expiredKeys: string[] = [];
-    let count = 0;
-
-    for (let [key, session] of sessions) {
-      if (session.expiresAt <= now) expiredKeys.push(key);
-      else count++;
+  private requestSessionRefresh(socket: WebSocket, reason: "expired" | "invalid") {
+    if (socket.readyState == WebSocket.OPEN) {
+      socket.send(JSON.stringify({ reason, recoverable: true, type: "session-refresh-required" }));
     }
-    if (expiredKeys.length) await this.ctx.storage.delete(expiredKeys);
-    return count;
+    socket.close(
+      4001,
+      reason == "expired" ? "Share session expired" : "Share session is no longer valid",
+    );
+  }
+
+  private async storeShareSession(key: string, next: ShareSessionRecord) {
+    let now = Date.now();
+    return this.ctx.storage.transaction(async (txn) => {
+      let sessions = await txn.list<ShareSessionRecord>({ prefix: sessionKeyPrefix });
+      let expiredKeys: string[] = [];
+      let activeForRole = 0;
+      for (let [sessionKey, session] of sessions) {
+        if (session.expiresAt <= now) expiredKeys.push(sessionKey);
+        else if (session.role == next.role) activeForRole++;
+      }
+
+      if (expiredKeys.length) await txn.delete(expiredKeys);
+      let roleLimit = next.role == "host" ? maxShareHostSessions : maxShareSessions;
+      if (activeForRole >= roleLimit) return false;
+      await txn.put(key, next);
+      return true;
+    });
   }
 
   private updatedAttachmentAfterConsumingTokens(socket: WebSocket, count: number) {
@@ -976,6 +1007,8 @@ export class GroveShareRoom extends DurableObject<Env> {
       return;
     }
 
+    if (!this.ensureSocketShareAuthorization(ws)) return;
+
     if (control.type == "ping") {
       ws.send(JSON.stringify({ type: "pong" }));
     }
@@ -988,13 +1021,19 @@ export class GroveShareRoom extends DurableObject<Env> {
     }
 
     await this.refreshShareRecord();
-    let session = await this.validateShareSession(control.sessionToken);
-    if (!session) {
-      ws.close(1008, "Invalid share session");
+    let validation = await this.validateShareSession(control.sessionToken);
+    if (validation.status != "valid") {
+      this.requestSessionRefresh(ws, validation.status);
       return;
     }
+    let session = validation.session;
     if (session.role == "guest" && this.shareSocketCount("guest") >= maxShareGuestPeers) {
       ws.close(1008, "Share is full");
+      return;
+    }
+    let clientVersion = parseAuthVersionVector(control.versionVector);
+    if (!clientVersion.ok) {
+      ws.close(1008, "Invalid sync version");
       return;
     }
 
@@ -1003,21 +1042,25 @@ export class GroveShareRoom extends DurableObject<Env> {
       joinedAt: Date.now(),
       role: session.role,
       secretHash: session.secretHash,
+      sessionExpiresAt: session.expiresAt,
       updateTokens: maxUpdateFrameBurst,
       updateTokensAt: Date.now(),
     };
     ws.serializeAttachment(attachment);
-    if (ws.readyState != WebSocket.OPEN) return;
-    let clientVersion = parseAuthVersionVector(control.versionVector);
-    if (!clientVersion.ok) {
-      ws.close(1008, "Invalid sync version");
+    if (ws.readyState != WebSocket.OPEN) {
+      clientVersion.version?.free();
       return;
     }
 
     let serverVersion = this.doc.oplogVersion();
-    ws.send(encodeWireMessage(WireKind.ShareStatus, this.shareStatusPayload()));
-    this.sendInitialShareDocument(ws, clientVersion.version, serverVersion);
-    this.broadcastShareStatus(ws);
+    try {
+      ws.send(encodeWireMessage(WireKind.ShareStatus, this.shareStatusPayload()));
+      this.sendInitialShareDocument(ws, clientVersion.version, serverVersion);
+      this.broadcastShareStatus(ws);
+    } finally {
+      clientVersion.version?.free();
+      serverVersion.free();
+    }
   }
 
   private sendInitialShareDocument(
@@ -1152,7 +1195,7 @@ function parseAuthVersionVector(
   value: unknown,
 ): { ok: true; version: VersionVector | null } | { ok: false } {
   if (value == null) return { ok: true, version: null };
-  let version = parseVersionVector(value);
+  let version = parseVersionVector(value, maxSyncVersionVectorEntries);
   return version ? { ok: true, version } : { ok: false };
 }
 
@@ -1182,11 +1225,11 @@ function parseHostSaveAcknowledgement(payload: Uint8Array, expectedShareId: stri
   ) {
     return null;
   }
-  return parseVersionVector(acknowledgement.versionVector);
+  return parseVersionVector(acknowledgement.versionVector, maxHostSaveAckVersionVectorEntries);
 }
 
-function parseVersionVector(value: unknown) {
-  if (!Array.isArray(value) || value.length > maxVersionVectorEntries) return null;
+function parseVersionVector(value: unknown, maxEntries: number) {
+  if (!Array.isArray(value) || value.length > maxEntries) return null;
 
   let version = new Map<`${number}`, number>();
   for (let entry of value) {

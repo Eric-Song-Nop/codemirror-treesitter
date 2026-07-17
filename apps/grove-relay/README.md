@@ -14,8 +14,9 @@ in `apps/local-md-workspace`.
   status messages over WebSockets.
 - Persist snapshots, pending host-save state, and bounded update logs in a
   Durable Object.
-- Enforce payload size, frame burst, per-minute update, session, and guest-peer
-  limits.
+- Enforce payload size, frame burst, per-minute update, role-specific session,
+  guest-peer, and sync-version-vector limits. Guest sessions cannot consume the
+  host's reserved session capacity.
 
 ## API Shape
 
@@ -56,3 +57,9 @@ vp run grove-relay#deploy:worker
 
 `local-md-workspace#dev` starts this relay automatically when
 `VITE_LOCAL_MD_SHARE_RELAY_ORIGIN` or `--relay-origin` points at a local host.
+
+WebSocket authentication records the session expiry on the connection. An
+expired session receives a `session-refresh-required` control message and close
+code `4001`; clients should request a new session through the session endpoint
+before reconnecting. Reconnect metadata accepts up to 4096 version-vector
+entries, with the control-message byte limit remaining the outer bound.

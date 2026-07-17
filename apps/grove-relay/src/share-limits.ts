@@ -11,7 +11,11 @@ export const maxBatchPayloadBytes = maxSnapshotBytes;
 export const maxFrameBytes = maxBatchPayloadBytes + maxBatchMessages * 5 + 1;
 export const maxSharePeers = 64;
 export const maxShareGuestPeers = maxSharePeers - 1;
+// Guest tokens retain the existing bounded allowance, while a small separate
+// host allowance prevents guests from locking the owner out of their share.
 export const maxShareSessions = 64;
+export const maxShareHostSessions = 8;
+export const maxSyncVersionVectorEntries = 4096;
 export const maxShareTtlMs = 30 * 24 * 60 * 60 * 1000;
 export const maxUpdateFrameBurst = 60;
 export const maxUpdateFramesPerMinute = 120;
