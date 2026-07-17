@@ -191,18 +191,37 @@ describe("native resource lifetime", () => {
 
   it("bounds each long-lived parser's compiled-query cache", async () => {
     let parser = await TreeSitterParser.load(javascriptWasm);
-    let first = compileTreeSitterQuery(parser, "(identifier) @capture0");
-    for (let index = 1; index <= 64; index++) {
-      compileTreeSitterQuery(parser, `(identifier) @capture${index}`);
-    }
-    let cacheSize = (
-      languageInternals as typeof languageInternals & {
-        __testCachedQueryCount?(parser: TreeSitterParser): number;
+    let deleteDescriptor = Object.getOwnPropertyDescriptor(WebTreeSitterQuery.prototype, "delete")!;
+    let originalDelete = deleteDescriptor.value as (this: NativeQuery) => void;
+    let nativeDeletes = 0;
+    WebTreeSitterQuery.prototype.delete = function (this: NativeQuery) {
+      nativeDeletes++;
+      originalDelete.call(this);
+    };
+    try {
+      let first = compileTreeSitterQuery(parser, "(identifier) @capture0");
+      for (let index = 1; index <= 64; index++) {
+        compileTreeSitterQuery(parser, `(identifier) @capture${index}`);
       }
-    ).__testCachedQueryCount?.(parser);
+      let cacheSize = (
+        languageInternals as typeof languageInternals & {
+          __testCachedQueryCount?(parser: TreeSitterParser): number;
+        }
+      ).__testCachedQueryCount?.(parser);
 
-    expect(cacheSize).toBe(64);
-    expect(compileTreeSitterQuery(parser, "(identifier) @capture0")).not.toBe(first);
+      expect(cacheSize).toBe(64);
+      expect(nativeDeletes).toBe(1);
+      expect((first as NativeQuery & { 0: number })[0]).toBe(0);
+      expect(compileTreeSitterQuery(parser, "(identifier) @capture0")).not.toBe(first);
+
+      parser.clearQueryCache();
+      expect(nativeDeletes).toBe(66);
+      parser.clearQueryCache();
+      expect(nativeDeletes).toBe(66);
+    } finally {
+      Object.defineProperty(WebTreeSitterQuery.prototype, "delete", deleteDescriptor);
+      parser.clearQueryCache();
+    }
   });
 
   it("deletes temporary edited trees used to compute changed ranges", async () => {

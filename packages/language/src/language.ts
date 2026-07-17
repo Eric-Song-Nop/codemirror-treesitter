@@ -503,6 +503,7 @@ export function compileTreeSitterQuery(parser: TreeSitterParser, source: string)
       let evicted = parserCache.get(oldestSource)!;
       parserCache.delete(oldestSource);
       queryResources(parser).delete(evicted);
+      evicted.delete();
     }
   }
   return query;
