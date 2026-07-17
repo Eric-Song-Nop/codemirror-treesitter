@@ -26,6 +26,7 @@ type UseWorkspaceEntryDialogsOptions = {
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   beginDocumentTransition: (path?: string) => void;
   clearActiveDocument: () => void;
+  documentTargetGenerationRef: MutableRef<number>;
   loadTree: (
     backend: WorkspaceBackend,
     nextSelectedPath?: null | string,
@@ -49,6 +50,7 @@ export function useWorkspaceEntryDialogs({
   autoSaveTaskRef,
   beginDocumentTransition,
   clearActiveDocument,
+  documentTargetGenerationRef,
   loadTree,
   saveCurrentFile,
   saveOperationRef,
@@ -114,6 +116,7 @@ export function useWorkspaceEntryDialogs({
   let submitFileDialog = useCallback(
     async (value: string) => {
       if (!workspaceBackend || !fileDialogMode) return;
+      documentTargetGenerationRef.current += 1;
       if (!(await saveCurrentFile())) return;
 
       setFileDialogError("");
@@ -157,6 +160,7 @@ export function useWorkspaceEntryDialogs({
     },
     [
       beginDocumentTransition,
+      documentTargetGenerationRef,
       fileDialogMode,
       fileDialogTarget,
       loadTree,
@@ -185,6 +189,7 @@ export function useWorkspaceEntryDialogs({
     let backend = workspaceBackend;
     let target = deleteTarget;
     if (!backend || !target) return;
+    documentTargetGenerationRef.current += 1;
     if (!(await saveCurrentFile())) return;
 
     setBusy(true);
@@ -229,6 +234,7 @@ export function useWorkspaceEntryDialogs({
     clearActiveDocument,
     autoSaveTaskRef,
     deleteTarget,
+    documentTargetGenerationRef,
     loadTree,
     saveCurrentFile,
     saveOperationRef,

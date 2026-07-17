@@ -22,6 +22,7 @@ type MutableRef<T> = {
 
 type UseWorkspaceTreeOptions = {
   clearActiveDocument: () => void;
+  documentTargetGenerationRef: MutableRef<number>;
   loadFile: (
     backend: WorkspaceBackend,
     file: MarkdownFileNode,
@@ -37,6 +38,7 @@ type UseWorkspaceTreeOptions = {
 
 export function useWorkspaceTree({
   clearActiveDocument,
+  documentTargetGenerationRef,
   loadFile,
   localFileHandleRef,
   selectedFileBackendRef,
@@ -53,6 +55,7 @@ export function useWorkspaceTree({
       nextSelectedPath?: null | string,
       options: { saveBeforeSelect?: boolean } = {},
     ) => {
+      documentTargetGenerationRef.current += 1;
       let nextTree = await loadSelectedPathAncestors(
         backend,
         await readWorkspaceTree(queryClient, backend),
@@ -85,6 +88,7 @@ export function useWorkspaceTree({
     },
     [
       clearActiveDocument,
+      documentTargetGenerationRef,
       loadFile,
       selectedFileBackendRef,
       selectedFileRef,

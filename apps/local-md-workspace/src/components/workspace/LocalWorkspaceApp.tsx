@@ -110,6 +110,7 @@ export function LocalWorkspaceApp() {
   let scheduleAutoSaveRef = useRef<() => void>(() => {});
   let saveOperationRef = useRef(0);
   let activeDocumentGenerationRef = useRef(0);
+  let documentTargetGenerationRef = useRef(0);
   let loadFileRequestRef = useRef(0);
   let {
     activeShareForSelectedFile,
@@ -188,9 +189,11 @@ export function LocalWorkspaceApp() {
     imageInputRef,
     resolveImageAssetFile,
   } = useWorkspaceImageAssets({
+    documentTargetGenerationRef,
     editorDocument,
     editorElementRef,
     selectedFile,
+    selectedFileBackendRef,
     selectedFileRef,
     setBusy,
     setErrorMessage,
@@ -260,6 +263,7 @@ export function LocalWorkspaceApp() {
     cleanValueRef,
     collabDocumentRef,
     collabSyncCleanupRef,
+    documentTargetGenerationRef,
     dirtyRef,
     editVersionRef,
     editorValueRef,
@@ -291,6 +295,7 @@ export function LocalWorkspaceApp() {
 
   let { loadDirectory, loadTree, refreshWorkspaceForCurrentEditor } = useWorkspaceTree({
     clearActiveDocument,
+    documentTargetGenerationRef,
     loadFile,
     localFileHandleRef,
     selectedFileBackendRef,
@@ -330,6 +335,7 @@ export function LocalWorkspaceApp() {
   } = useWorkspaceOpeners({
     clearDropboxAccessToken,
     createDropboxBackend,
+    documentTargetGenerationRef,
     folderAccessUnavailableMessage,
     loadTree,
     refreshWorkspaceForCurrentEditor,
@@ -400,6 +406,7 @@ export function LocalWorkspaceApp() {
     autoSaveTaskRef,
     beginDocumentTransition,
     clearActiveDocument,
+    documentTargetGenerationRef,
     loadTree,
     saveCurrentFile,
     saveOperationRef,
@@ -484,6 +491,7 @@ export function LocalWorkspaceApp() {
     collabDocumentRef,
     createDropboxBackend,
     discardMaterializedDraft,
+    documentTargetGenerationRef,
     editorElementRef,
     editorValueRef,
     loadTree,
