@@ -242,7 +242,9 @@ describe("highlight tags", () => {
       doc,
       extensions: [javascript.extension],
     });
-    let spans = __testHighlightTree(syntaxTree(state), [highlighter]);
+    let tree = ensureSyntaxTree(state, doc.length, 20_000);
+    expect(tree).not.toBeNull();
+    let spans = __testHighlightTree(tree!, [highlighter]);
     let classAt = (text: string) =>
       spans.find(
         (span) => span.from == doc.indexOf(text) && span.to == doc.indexOf(text) + text.length,
@@ -330,6 +332,25 @@ describe("highlight tags", () => {
     expect(html).toContain("<def>value</def>");
     expect(html).toContain("<num>1</num>");
     expect(html).toContain("<br>");
+  });
+
+  it("highlights deeply nested syntax without using the JavaScript call stack", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    let depth = 5_000;
+    let code = `${"(".repeat(depth)}value${")".repeat(depth)};`;
+    let tree = (await javascriptParser).parse(Text.of([code]));
+    let highlighter = tagHighlighter([{ tag: tags.variableName, class: "var" }]);
+    let spans: Array<{ class: string; from: number; to: number }> = [];
+
+    highlightTree(tree, highlighter, (from, to, className) => {
+      spans.push({ class: className, from, to });
+    });
+
+    expect(spans).toContainEqual({
+      class: "var",
+      from: depth,
+      to: depth + "value".length,
+    });
   });
 
   it("highlights host HTML after nested CSS and JavaScript ranges", async () => {

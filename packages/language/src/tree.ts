@@ -179,13 +179,16 @@ export interface IterateSpec {
 
 export class Tree {
   static empty = new Tree(null, null, 0);
+  readonly rootNodeId: number | null;
 
   constructor(
     readonly tree: TSTree | null,
     readonly config: TreeConfig | null,
     readonly length: number,
     readonly nested: readonly NestedTree[] = [],
-  ) {}
+  ) {
+    this.rootNodeId = tree?.rootNode?.id ?? null;
+  }
 
   get type() {
     return this.topNode.type;
@@ -265,32 +268,10 @@ export class Tree {
         if (start >= from && (includeTo ? start <= to : start < to)) emitNested(entry);
       }
     };
-    let visit = (cursor: TreeCursor) => {
-      let node = cursor.node;
-      if (node.to < from || node.from > to) return;
-      if (spec.enter?.(node) === false) return;
-      let pos = node.from;
-      let child = cursor.copy();
-      try {
-        if (firstIteratedCursorChild(child, from)) {
-          do {
-            if (child.from > to) break;
-            emitNestedIn(pos, Math.min(child.from, node.to), false);
-            visit(child);
-            emitNestedIn(child.from, child.to, false);
-            pos = child.to;
-          } while (child.nextSibling());
-        }
-      } finally {
-        child.delete();
-      }
-      emitNestedIn(pos, node.to, false);
-      spec.leave?.(node);
-    };
     let cursor = this.cursor();
     if (cursor) {
       try {
-        visit(cursor);
+        iterateTreeCursor(cursor, from, to, spec, emitNestedIn);
       } finally {
         cursor.delete();
       }
@@ -310,13 +291,72 @@ export class Tree {
   }
 }
 
-function firstIteratedCursorChild(cursor: TreeCursor, from: number): boolean {
+function enterFirstIteratedCursorChild(cursor: TreeCursor, from: number, to: number): boolean {
   let index = cursorSearchIndex(cursor, from, -1);
   if (!cursor.firstChildForIndex(index)) return false;
   while (cursor.to < from) {
-    if (!cursor.nextSibling()) return false;
+    if (!cursor.nextSibling()) {
+      cursor.parent();
+      return false;
+    }
+  }
+  if (cursor.from > to) {
+    cursor.parent();
+    return false;
   }
   return true;
+}
+
+type TreeIterationFrame = {
+  childrenStarted: boolean;
+  node: SyntaxNode;
+  pos: number;
+};
+
+function iterateTreeCursor(
+  cursor: TreeCursor,
+  from: number,
+  to: number,
+  spec: IterateSpec,
+  emitNestedIn: (from: number, to: number, includeTo?: boolean) => void,
+) {
+  let frames: TreeIterationFrame[] = [];
+  let enterCurrent = () => {
+    let node = cursor.node;
+    if (node.to < from || node.from > to || spec.enter?.(node) === false) return false;
+    frames.push({ childrenStarted: false, node, pos: node.from });
+    return true;
+  };
+  let advanceAfterChild = (parent: TreeIterationFrame) => {
+    for (;;) {
+      emitNestedIn(cursor.from, cursor.to, false);
+      parent.pos = cursor.to;
+      if (!cursor.nextSibling() || cursor.from > to) {
+        cursor.parent();
+        return false;
+      }
+      emitNestedIn(parent.pos, Math.min(cursor.from, parent.node.to), false);
+      if (enterCurrent()) return true;
+    }
+  };
+
+  if (!enterCurrent()) return;
+  while (frames.length) {
+    let frame = frames.at(-1)!;
+    if (!frame.childrenStarted) {
+      frame.childrenStarted = true;
+      if (enterFirstIteratedCursorChild(cursor, from, to)) {
+        emitNestedIn(frame.pos, Math.min(cursor.from, frame.node.to), false);
+        if (enterCurrent() || advanceAfterChild(frame)) continue;
+      }
+    }
+
+    emitNestedIn(frame.pos, frame.node.to, false);
+    spec.leave?.(frame.node);
+    frames.pop();
+    let parent = frames.at(-1);
+    if (parent && advanceAfterChild(parent)) continue;
+  }
 }
 
 function nestedStart(nest: NestedTree | { range: DocRange }) {
@@ -373,7 +413,9 @@ export class SyntaxNode {
       this.node.type,
       this.node.typeId,
       this.node.isNamed,
-      this.node.parent == null,
+      this.tree.rootNodeId == null
+        ? this.node.parent == null
+        : this.node.id == this.tree.rootNodeId,
       this.node.isError || this.node.isMissing,
     );
   }
@@ -978,19 +1020,35 @@ function iterateSyntaxCursor(
   enter: (node: SyntaxNodeRef) => boolean | void,
   leave?: (node: SyntaxNodeRef) => void,
 ) {
-  let node = cursor.node;
-  if (enter(node) === false) return;
-  let child = cursor.copy();
-  try {
-    if (child.firstChild()) {
-      do {
-        iterateSyntaxCursor(child, enter, leave);
-      } while (child.nextSibling());
+  let frames: Array<{ childrenStarted: boolean; node: SyntaxNode }> = [];
+  let enterCurrent = () => {
+    let node = cursor.node;
+    if (enter(node) === false) return false;
+    frames.push({ childrenStarted: false, node });
+    return true;
+  };
+  let advanceAfterChild = () => {
+    for (;;) {
+      if (!cursor.nextSibling()) {
+        cursor.parent();
+        return false;
+      }
+      if (enterCurrent()) return true;
     }
-  } finally {
-    child.delete();
+  };
+
+  if (!enterCurrent()) return;
+  while (frames.length) {
+    let frame = frames.at(-1)!;
+    if (!frame.childrenStarted) {
+      frame.childrenStarted = true;
+      if (cursor.firstChild() && (enterCurrent() || advanceAfterChild())) continue;
+    }
+
+    leave?.(frame.node);
+    frames.pop();
+    if (frames.length && advanceAfterChild()) continue;
   }
-  leave?.(node);
 }
 
 export function pointAfterText(start: Point, text: string): Point {

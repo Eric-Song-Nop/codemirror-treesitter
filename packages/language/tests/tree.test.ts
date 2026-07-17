@@ -682,6 +682,40 @@ describe("tree-sitter tree wrapper", () => {
     expect(events).toEqual([">array", ">number", ">number", "<number", "<array"]);
   });
 
+  it("iterates deeply nested syntax without using the JavaScript call stack", async () => {
+    let depth = 5_000;
+    let doc = `${"(".repeat(depth)}value${")".repeat(depth)};\n`;
+    let state = await javascriptState(doc);
+    let tree = ensureSyntaxTree(state, doc.length, 20_000)!;
+    let treeEntered = 0;
+    let treeLeft = 0;
+
+    tree.iterate({
+      enter() {
+        treeEntered++;
+      },
+      leave() {
+        treeLeft++;
+      },
+    });
+
+    let nodeEntered = 0;
+    let nodeLeft = 0;
+    tree.topNode.iterate(
+      () => {
+        nodeEntered++;
+      },
+      () => {
+        nodeLeft++;
+      },
+    );
+
+    expect(treeEntered).toBeGreaterThan(depth);
+    expect(treeLeft).toBe(treeEntered);
+    expect(nodeEntered).toBe(treeEntered);
+    expect(nodeLeft).toBe(nodeEntered);
+  });
+
   it("skips setext heading subtrees during cursor iteration", async () => {
     let doc = "Title\n=====\n\nParagraph\n";
     let state = await markdownState(doc);
