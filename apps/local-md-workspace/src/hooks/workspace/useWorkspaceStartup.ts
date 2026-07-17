@@ -89,6 +89,9 @@ export function useWorkspaceStartup({
   workspaceBackend,
 }: UseWorkspaceStartupOptions) {
   let dropboxAutoRestoreAttemptedRef = useRef(false);
+  let dropboxRedirectCompletionRef = useRef<
+    ReturnType<typeof completeDropboxRedirectOAuthIfPresent> | undefined
+  >(undefined);
   let dropboxRedirectPendingRef = useRef(isDropboxRedirectCallbackWindow());
   let sharedDraftLaunchRef = useRef(readSharedMarkdownDraftLaunch());
   let [sharedDraftLaunchChecked, setSharedDraftLaunchChecked] = useState(
@@ -113,7 +116,9 @@ export function useWorkspaceStartup({
 
     void (async () => {
       try {
-        let token = await completeDropboxRedirectOAuthIfPresent();
+        let completion = (dropboxRedirectCompletionRef.current ??=
+          completeDropboxRedirectOAuthIfPresent());
+        let token = await completion;
         if (canceled || !token) return;
 
         let draft = takeDropboxRedirectDraft();
@@ -136,8 +141,8 @@ export function useWorkspaceStartup({
           setRetryLoadPath(null);
         }
       } finally {
-        dropboxRedirectPendingRef.current = false;
         if (!canceled) {
+          dropboxRedirectPendingRef.current = false;
           setDropboxAutoRestoreChecked(true);
           setDropboxConnecting(false);
           setBusy(false);
