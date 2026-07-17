@@ -14,6 +14,7 @@ type UseWorkspacePersistenceLifecycleOptions<Document extends DisposableDocument
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   collabDocumentRef: MutableRef<Document | null>;
   collabSyncCleanupRef: MutableRef<() => void>;
+  dirtyRef: MutableRef<boolean>;
   flushCollabDocument: (document: Document) => Promise<void>;
   setErrorMessage: (message: string) => void;
 };
@@ -22,6 +23,7 @@ export function useWorkspacePersistenceLifecycle<Document extends DisposableDocu
   autoSaveTaskRef,
   collabDocumentRef,
   collabSyncCleanupRef,
+  dirtyRef,
   flushCollabDocument,
   setErrorMessage,
 }: UseWorkspacePersistenceLifecycleOptions<Document>) {
@@ -53,11 +55,19 @@ export function useWorkspacePersistenceLifecycle<Document extends DisposableDocu
     let handleVisibilityChange = () => {
       if (document.visibilityState == "hidden") handlePageHide();
     };
+    let handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirtyRef.current) return;
+      handlePageHide();
+      event.preventDefault();
+      event.returnValue = true;
+    };
 
+    window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("pagehide", handlePageHide);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       active = false;
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       window.removeEventListener("pagehide", handlePageHide);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
 
@@ -78,6 +88,7 @@ export function useWorkspacePersistenceLifecycle<Document extends DisposableDocu
     autoSaveTaskRef,
     collabDocumentRef,
     collabSyncCleanupRef,
+    dirtyRef,
     flushCollabDocument,
     setErrorMessage,
   ]);

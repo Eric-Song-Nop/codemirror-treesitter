@@ -160,6 +160,7 @@ export function LocalWorkspaceApp() {
     autoSaveTaskRef,
     collabDocumentRef,
     collabSyncCleanupRef,
+    dirtyRef,
     flushCollabDocument: flushCollabDocumentPersistence,
     setErrorMessage,
   });
