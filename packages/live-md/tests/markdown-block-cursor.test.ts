@@ -1,5 +1,5 @@
 import { EditorState } from "@codemirror/state";
-import { ensureSyntaxTree, type Tree } from "@codemirror-treesitter/language";
+import { ensureSyntaxTree, type SyntaxNode, type Tree } from "@codemirror-treesitter/language";
 import { describe, expect, it } from "vite-plus/test";
 import {
   collectMarkdownBlocksInRanges,
@@ -234,7 +234,117 @@ describe("LiveMD Markdown block cursor", () => {
     ).toEqual([">"]);
     expect(result.trace.visitedBlockNodes).toBeLessThan(50);
   });
+
+  it("walks a 12,000-level block tree without consuming the JavaScript call stack", () => {
+    let doc = EditorState.create({ doc: "x" }).doc;
+    let tree = syntheticChainTree(12_000, "paragraph");
+
+    let result = walkMarkdownBlocks(tree, doc);
+
+    expect(result.snapshot.leaves).toHaveLength(1);
+    expect(result.snapshot.leaves[0]?.kind).toBe("paragraph");
+    expect(result.trace.visitedBlockNodes).toBe(12_001);
+  });
+
+  it("collects full-document quote markers through 12,000 nested nodes iteratively", () => {
+    let doc = EditorState.create({ doc: ">" }).doc;
+    let tree = syntheticChainTree(12_000, "block_quote_marker", "block_quote");
+
+    let result = walkMarkdownBlocks(tree, doc);
+
+    expect(result.snapshot.markers.map((marker) => marker.kind)).toEqual(["quoteMarker"]);
+    expect(result.snapshot.markers[0]?.context.quoteDepth).toBe(1);
+  });
+
+  it("collects range-local quote markers through 12,000 nested nodes iteratively", () => {
+    let doc = EditorState.create({ doc: ">" }).doc;
+    let tree = syntheticChainTree(12_000, "block_quote_marker", "block_quote");
+
+    let result = collectMarkdownBlocksInRanges(tree, doc, [{ from: 0, to: 1 }]);
+
+    expect(result.snapshot.markers.map((marker) => marker.kind)).toEqual(["quoteMarker"]);
+    expect(result.snapshot.markers[0]?.context.quoteDepth).toBe(1);
+  });
 });
+
+type SyntheticNode = {
+  children: SyntheticNode[];
+  from: number;
+  id: number;
+  name: string;
+  parent: SyntheticNode | null;
+  to: number;
+};
+
+function syntheticChainTree(depth: number, leafName: string, rootName = "document"): Tree {
+  let root: SyntheticNode = syntheticNode(rootName, 0, null);
+  let parent = root;
+  for (let index = 1; index < depth; index++) {
+    let child = syntheticNode("container", index, parent);
+    parent.children.push(child);
+    parent = child;
+  }
+  parent.children.push(syntheticNode(leafName, depth, parent));
+  return {
+    cursor() {
+      return new SyntheticCursor(root);
+    },
+  } as unknown as Tree;
+}
+
+function syntheticNode(name: string, id: number, parent: SyntheticNode | null): SyntheticNode {
+  return { children: [], from: 0, id, name, parent, to: 1 };
+}
+
+class SyntheticCursor {
+  constructor(private current: SyntheticNode) {}
+
+  get from() {
+    return this.current.from;
+  }
+
+  get node() {
+    return this.current as unknown as SyntaxNode;
+  }
+
+  get to() {
+    return this.current.to;
+  }
+
+  copy() {
+    return new SyntheticCursor(this.current);
+  }
+
+  delete() {}
+
+  firstChild() {
+    let child = this.current.children[0];
+    if (!child) return false;
+    this.current = child;
+    return true;
+  }
+
+  firstChildForIndex(_index: number) {
+    return this.firstChild();
+  }
+
+  nextSibling() {
+    let parent = this.current.parent;
+    if (!parent) return false;
+    let index = parent.children.indexOf(this.current);
+    let sibling = parent.children[index + 1];
+    if (!sibling) return false;
+    this.current = sibling;
+    return true;
+  }
+
+  parent() {
+    let parent = this.current.parent;
+    if (!parent) return false;
+    this.current = parent;
+    return true;
+  }
+}
 
 async function markdownState(doc: string) {
   let state = EditorState.create({

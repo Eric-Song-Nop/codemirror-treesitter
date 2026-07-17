@@ -112,26 +112,29 @@ function walkFullCursor(
   context: MarkdownBlockContext,
   builder: SnapshotBuilder,
 ) {
-  builder.trace.visitedBlockNodes++;
-  collectContainerMarkers(cursor, doc, context, builder, null);
+  let contexts = [context];
+  for (;;) {
+    let currentContext = contexts.at(-1)!;
+    builder.trace.visitedBlockNodes++;
+    collectContainerMarkers(cursor, doc, currentContext, builder, null);
 
-  let node = cursor.node;
-  let kind = classifyMarkdownLeaf(node);
-  if (kind) {
-    addLeaf(builder, leafRecord(node, kind, context, doc));
-    return;
-  }
-
-  let childContext = contextAfterEntering(cursor, doc, context);
-  let child = cursor.copy();
-  try {
-    if (child.firstChild()) {
-      do {
-        walkFullCursor(child, doc, childContext, builder);
-      } while (child.nextSibling());
+    let node = cursor.node;
+    let kind = classifyMarkdownLeaf(node);
+    if (kind) {
+      addLeaf(builder, leafRecord(node, kind, currentContext, doc));
+    } else {
+      let childContext = contextAfterEntering(cursor, doc, currentContext);
+      if (cursor.firstChild()) {
+        contexts.push(childContext);
+        continue;
+      }
     }
-  } finally {
-    child.delete();
+
+    while (!cursor.nextSibling()) {
+      if (contexts.length == 1) return;
+      cursor.parent();
+      contexts.pop();
+    }
   }
 }
 
@@ -142,29 +145,30 @@ function walkRangeCursor(
   context: MarkdownBlockContext,
   builder: SnapshotBuilder,
 ) {
-  builder.trace.visitedBlockNodes++;
-  if (!rangesTouchInclusive(cursor, range)) return;
-  collectContainerMarkers(cursor, doc, context, builder, range);
+  let contexts = [context];
+  for (;;) {
+    let currentContext = contexts.at(-1)!;
+    builder.trace.visitedBlockNodes++;
+    let touchesRange = rangesTouchInclusive(cursor, range);
+    if (touchesRange) {
+      collectContainerMarkers(cursor, doc, currentContext, builder, range);
 
-  let node = cursor.node;
-  let kind = classifyMarkdownLeaf(node);
-  if (kind) {
-    addLeaf(builder, leafRecord(node, kind, context, doc));
-    return;
-  }
-
-  let childContext = contextAfterEntering(cursor, doc, context);
-  let child = cursor.copy();
-  try {
-    if (!firstRangeChild(child, range.from)) return;
-    do {
-      if (child.from > range.to) break;
-      if (child.to >= range.from) {
-        walkRangeCursor(child, doc, range, childContext, builder);
+      let node = cursor.node;
+      let kind = classifyMarkdownLeaf(node);
+      if (kind) {
+        addLeaf(builder, leafRecord(node, kind, currentContext, doc));
+      } else {
+        let childContext = contextAfterEntering(cursor, doc, currentContext);
+        if (enterFirstRangeChild(cursor, range.from)) {
+          contexts.push(childContext);
+          continue;
+        }
       }
-    } while (child.nextSibling());
-  } finally {
-    child.delete();
+    }
+
+    let nextDepth = advanceRangeCursor(cursor, range, contexts.length);
+    if (nextDepth == null) return;
+    contexts.length = nextDepth;
   }
 }
 
@@ -203,11 +207,16 @@ function collectQuoteMarkers(
   context: MarkdownBlockContext,
   builder: SnapshotBuilder,
 ) {
-  for (let child of node.children) {
+  let pending = Array.from(node.children).reverse();
+  while (pending.length) {
+    let child = pending.pop()!;
     if (isQuoteMarker(child)) {
       addMarker(builder, markerRecord(doc, child, quoteMarkerKind(child), context));
     } else if (child.name != "block_quote") {
-      collectQuoteMarkers(child, doc, context, builder);
+      let grandchildren = child.children;
+      for (let index = grandchildren.length - 1; index >= 0; index--) {
+        pending.push(grandchildren[index]!);
+      }
     }
   }
 }
@@ -233,57 +242,62 @@ function collectQuoteMarkersInCursorRange(
 ) {
   let child = cursor.copy();
   try {
-    if (!firstRangeChild(child, range.from)) return;
-    do {
-      if (child.from > range.to) break;
-      if (child.to >= range.from) {
-        collectQuoteMarkersInRange(child, doc, context, builder, range);
+    if (!enterFirstRangeChild(child, range.from)) return;
+    let depth = 1;
+    for (;;) {
+      if (rangesTouchInclusive(child, range)) {
+        let node = child.node;
+        if (isQuoteMarker(node)) {
+          let line = doc.lineAt(node.from);
+          if (line.from == range.from && line.to == range.to) {
+            addMarker(builder, markerRecord(doc, node, quoteMarkerKind(node), context));
+          }
+        } else if (node.name != "block_quote" && enterFirstRangeChild(child, range.from)) {
+          depth++;
+          continue;
+        }
       }
-    } while (child.nextSibling());
-  } finally {
-    child.delete();
-  }
-}
 
-function collectQuoteMarkersInRange(
-  cursor: MarkdownTreeCursor,
-  doc: Text,
-  context: MarkdownBlockContext,
-  builder: SnapshotBuilder,
-  range: DocRange,
-) {
-  if (!rangesTouchInclusive(cursor, range)) return;
-
-  let node = cursor.node;
-  if (isQuoteMarker(node)) {
-    let line = doc.lineAt(node.from);
-    if (line.from == range.from && line.to == range.to) {
-      addMarker(builder, markerRecord(doc, node, quoteMarkerKind(node), context));
+      let nextDepth = advanceRangeCursor(child, range, depth);
+      if (nextDepth == null) return;
+      depth = nextDepth;
     }
-    return;
-  }
-  if (node.name == "block_quote") return;
-
-  let child = cursor.copy();
-  try {
-    if (!firstRangeChild(child, range.from)) return;
-    do {
-      if (child.from > range.to) break;
-      if (child.to >= range.from) {
-        collectQuoteMarkersInRange(child, doc, context, builder, range);
-      }
-    } while (child.nextSibling());
   } finally {
     child.delete();
   }
 }
 
-function firstRangeChild(cursor: MarkdownTreeCursor, from: number) {
+function advanceRangeCursor(
+  cursor: MarkdownTreeCursor,
+  range: DocRange,
+  depth: number,
+): number | null {
+  for (;;) {
+    if (cursor.nextSibling()) {
+      if (cursor.from <= range.to) {
+        if (cursor.to >= range.from) return depth;
+        continue;
+      }
+      cursor.parent();
+      depth--;
+      if (depth == 0) return null;
+      continue;
+    }
+    if (depth == 1) return null;
+    cursor.parent();
+    depth--;
+  }
+}
+
+function enterFirstRangeChild(cursor: MarkdownTreeCursor, from: number) {
   if (!cursor.firstChildForIndex(cursorSearchIndex(cursor, from))) {
     if (!cursor.firstChild()) return false;
   }
   while (cursor.to < from) {
-    if (!cursor.nextSibling()) return false;
+    if (!cursor.nextSibling()) {
+      cursor.parent();
+      return false;
+    }
   }
   return true;
 }
