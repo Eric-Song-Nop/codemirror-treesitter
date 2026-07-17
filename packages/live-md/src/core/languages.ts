@@ -1,4 +1,11 @@
-import { Facet, StateEffect, StateField, Text, type Extension } from "@codemirror/state";
+import {
+  Facet,
+  StateEffect,
+  StateField,
+  Text,
+  type ChangeDesc,
+  type Extension,
+} from "@codemirror/state";
 import {
   HighlightStyle,
   Tree,
@@ -161,6 +168,35 @@ export function codeFenceLanguageNames(doc: string): string[] {
     if (token) names.add(token.toLowerCase());
   }
   return Array.from(names);
+}
+
+export function changedCodeFenceLanguageNames(
+  oldDoc: Text,
+  newDoc: Text,
+  changes: ChangeDesc,
+): string[] {
+  let changedNames = new Set<string>();
+  let structureChanged = false;
+  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    let oldLines = linesCoveringChange(oldDoc, fromA, toA);
+    let newLines = linesCoveringChange(newDoc, fromB, toB);
+    if (containsCodeFenceDelimiter(oldLines) || containsCodeFenceDelimiter(newLines)) {
+      structureChanged = true;
+      return;
+    }
+    for (let name of codeFenceLanguageNames(newLines)) changedNames.add(name);
+  });
+  return structureChanged ? codeFenceLanguageNames(newDoc.toString()) : Array.from(changedNames);
+}
+
+function linesCoveringChange(doc: Text, from: number, to: number) {
+  let start = doc.lineAt(Math.min(from, doc.length)).from;
+  let end = doc.lineAt(Math.min(to, doc.length)).to;
+  return doc.sliceString(start, end);
+}
+
+function containsCodeFenceDelimiter(source: string) {
+  return /^ {0,3}(?:`{3,}|~{3,})/mu.test(source);
 }
 
 async function loadMarkdownExtensionOnce() {

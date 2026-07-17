@@ -1,5 +1,10 @@
+import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
-import { codeFenceLanguageNames, loadCodeFenceLanguages } from "../src/core/languages.js";
+import {
+  changedCodeFenceLanguageNames,
+  codeFenceLanguageNames,
+  loadCodeFenceLanguages,
+} from "../src/core/languages.js";
 
 describe("LiveMD code-fence language loading", () => {
   it("loads only the language requested by an encountered fence", async () => {
@@ -18,5 +23,16 @@ describe("LiveMD code-fence language loading", () => {
       ),
     ).toEqual(["ts", "py"]);
     expect(codeFenceLanguageNames("no fences here")).toEqual([]);
+  });
+
+  it("rescans downstream fences when an upstream delimiter changes their role", () => {
+    let before = EditorState.create({
+      doc: ["```", "ordinary body", "```ts", "let value = 1", "```"].join("\n"),
+    });
+    let transaction = before.update({ changes: { from: 0, to: 3 } });
+
+    expect(
+      changedCodeFenceLanguageNames(before.doc, transaction.state.doc, transaction.changes),
+    ).toEqual(["ts"]);
   });
 });

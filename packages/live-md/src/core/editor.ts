@@ -14,6 +14,7 @@ import { liveMarkdown } from "./extension.js";
 import { liveMdMarkdownFeatures } from "./features.js";
 import type { LiveMdImageSourceResolver } from "./images.js";
 import {
+  changedCodeFenceLanguageNames,
   codeFenceLanguageNames,
   codeFenceLanguagesField,
   loadCodeFenceLanguages,
@@ -102,7 +103,9 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
           if (!update.docChanged) return;
           let value = update.state.doc.toString();
           savePersistedValue(persistKey, value);
-          void loadEncounteredCodeFenceLanguages(changedCodeFenceLanguageNames(update));
+          void loadEncounteredCodeFenceLanguages(
+            changedCodeFenceLanguageNames(update.startState.doc, update.state.doc, update.changes),
+          );
           if (!suppressChange) {
             options.onChange?.({ update, value, view });
           }
@@ -223,17 +226,6 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       view,
     });
   }
-}
-
-function changedCodeFenceLanguageNames(update: ViewUpdate) {
-  let names = new Set<string>();
-  let doc = update.state.doc;
-  update.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
-    let start = doc.lineAt(Math.min(fromB, doc.length)).from;
-    let end = doc.lineAt(Math.min(toB, doc.length)).to;
-    for (let name of codeFenceLanguageNames(doc.sliceString(start, end))) names.add(name);
-  });
-  return names;
 }
 
 function initialEditorValue(options: LiveMdEditorOptions, persistKey: null | string) {
