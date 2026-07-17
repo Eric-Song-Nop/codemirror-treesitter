@@ -4,6 +4,7 @@ import { normalizeLiveMdLinkBaseUrl, resolveLiveMdLinkDestination } from "./link
 
 const shiftHoverClass = "cm-md-link-shift-hover";
 const interactiveLinkDecorationSpec = Symbol("liveMdInteractiveLinkDecoration");
+const linkMarkCacheLimit = 256;
 const linkMarkCache = new Map<string, Decoration>();
 const plainLinkMark = Decoration.mark({ class: "cm-md-link" });
 
@@ -40,7 +41,10 @@ export function liveMdLinkMark(destination: null | string | undefined, baseUrl: 
   if (!href) return plainLinkMark;
 
   let cached = linkMarkCache.get(href);
-  if (!cached) {
+  if (cached) {
+    linkMarkCache.delete(href);
+    linkMarkCache.set(href, cached);
+  } else {
     cached = Decoration.mark({
       attributes: {
         "data-live-md-href": href,
@@ -49,8 +53,19 @@ export function liveMdLinkMark(destination: null | string | undefined, baseUrl: 
       [interactiveLinkDecorationSpec]: true,
     } as Parameters<typeof Decoration.mark>[0] & InteractiveLinkDecorationSpec);
     linkMarkCache.set(href, cached);
+    if (linkMarkCache.size > linkMarkCacheLimit) {
+      linkMarkCache.delete(linkMarkCache.keys().next().value!);
+    }
   }
   return cached;
+}
+
+export function __testLiveMdLinkMarkCacheSize() {
+  return linkMarkCache.size;
+}
+
+export function __testClearLiveMdLinkMarkCache() {
+  linkMarkCache.clear();
 }
 
 export function resolveLiveMdLinkHref(

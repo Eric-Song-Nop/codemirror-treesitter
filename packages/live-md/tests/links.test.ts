@@ -11,7 +11,13 @@ import {
 } from "../src/core/decorations.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
 import { codeFenceLanguagesField, loadMarkdownExtension } from "../src/core/languages.js";
-import { liveMdLinkOpen, type LiveMdLinkBaseUrl } from "../src/core/links.js";
+import {
+  __testClearLiveMdLinkMarkCache,
+  __testLiveMdLinkMarkCacheSize,
+  liveMdLinkMark,
+  liveMdLinkOpen,
+  type LiveMdLinkBaseUrl,
+} from "../src/core/links.js";
 
 let openLink: ReturnType<typeof vi.fn>;
 let locationDescriptor: PropertyDescriptor | undefined;
@@ -27,6 +33,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  __testClearLiveMdLinkMarkCache();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -36,6 +43,14 @@ afterEach(() => {
 });
 
 describe("LiveMD links", () => {
+  it("bounds cached interactive link decorations", () => {
+    for (let index = 0; index < 2_000; index++) {
+      liveMdLinkMark(`https://example.com/${index}`, null);
+    }
+
+    expect(__testLiveMdLinkMarkCacheSize()).toBeLessThanOrEqual(256);
+  });
+
   it("opens inline Markdown links on Shift-click", async () => {
     let editor = await mountEditor("[Vite+](https://viteplus.dev/)");
 
