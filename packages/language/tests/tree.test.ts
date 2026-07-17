@@ -749,6 +749,8 @@ describe("tree-sitter tree wrapper", () => {
       .join("\n")
       .concat("\n");
     let state = await markdownState(doc);
+    let tree = ensureSyntaxTree(state, state.doc.length, 5_000);
+    expect(tree).not.toBeNull();
     let copyDescriptor = Object.getOwnPropertyDescriptor(TreeCursor.prototype, "copy")!;
     let originalCopy = copyDescriptor.value as (this: TreeCursor) => TreeCursor;
     let createdCopies = 0;
@@ -769,7 +771,7 @@ describe("tree-sitter tree wrapper", () => {
       return copied;
     };
     try {
-      let cursor = syntaxTree(state).cursor()!;
+      let cursor = tree!.cursor()!;
       try {
         let visited = 0;
         cursor.iterate((node) => {
@@ -1062,6 +1064,8 @@ describe("tree-sitter tree wrapper", () => {
     let doc =
       "<main><script>let first = 1;</script><p>text</p><script>let second = 2;</script></main>";
     let { state, javascript } = await mixedHtmlState(doc);
+    expect(ensureSyntaxTree(state, state.doc.length, 5_000)).not.toBeNull();
+    state = state.update({}).state;
     let first = doc.indexOf("first");
     let second = doc.indexOf("second");
     let firstRange = { from: doc.indexOf("let first"), to: doc.indexOf("</script>") };
