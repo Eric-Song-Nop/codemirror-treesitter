@@ -1486,7 +1486,13 @@ const markdownSpec: LanguageSpec = {
 let markdownParserServicePromise: Promise<MarkdownParserService> | null = null;
 
 export function loadMarkdownParserService(): Promise<MarkdownParserService> {
-  markdownParserServicePromise ??= loadMarkdownParserServiceOnce();
+  if (!markdownParserServicePromise) {
+    let current = loadMarkdownParserServiceOnce();
+    markdownParserServicePromise = current;
+    void current.catch(() => {
+      if (markdownParserServicePromise === current) markdownParserServicePromise = null;
+    });
+  }
   return markdownParserServicePromise;
 }
 

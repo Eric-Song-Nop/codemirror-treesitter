@@ -102,12 +102,24 @@ export async function prepareLiveMd(options: PrepareLiveMdOptions = {}) {
 }
 
 export function loadMarkdownExtension() {
-  markdownExtensionPromise ??= loadMarkdownExtensionOnce();
+  if (!markdownExtensionPromise) {
+    let current = loadMarkdownExtensionOnce();
+    markdownExtensionPromise = current;
+    void current.catch(() => {
+      if (markdownExtensionPromise === current) markdownExtensionPromise = null;
+    });
+  }
   return markdownExtensionPromise;
 }
 
 export function loadCodeFenceLanguages() {
-  codeFenceLanguagesPromise ??= loadCodeFenceLanguagesOnce();
+  if (!codeFenceLanguagesPromise) {
+    let current = loadCodeFenceLanguagesOnce();
+    codeFenceLanguagesPromise = current;
+    void current.catch(() => {
+      if (codeFenceLanguagesPromise === current) codeFenceLanguagesPromise = null;
+    });
+  }
   return codeFenceLanguagesPromise;
 }
 

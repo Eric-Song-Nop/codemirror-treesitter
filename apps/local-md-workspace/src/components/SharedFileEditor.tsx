@@ -18,7 +18,7 @@ import { parseShareLink, type ShareLinkParts } from "@/lib/collaboration/share-i
 import { useSharedFileConnection } from "@/hooks/shared/useSharedFileConnection";
 import { useSharedFileSession } from "@/hooks/shared/useSharedFileSession";
 import { translateKnownMessage, useI18n, type TFunction, type Locale } from "@/lib/i18n";
-import { useLiveMdPreloadError } from "@/lib/live-md-preload";
+import { useLiveMdPreload } from "@/lib/live-md-preload";
 
 type SharedFileRoute =
   | {
@@ -36,7 +36,11 @@ type SharedFileEditorProps = {
 
 export function SharedFileEditor({ href = window.location.href }: SharedFileEditorProps) {
   let { locale, t } = useI18n();
-  let liveMdPreloadError = useLiveMdPreloadError();
+  let {
+    error: liveMdPreloadError,
+    retry: retryLiveMdPreload,
+    retrying: liveMdPreloadRetrying,
+  } = useLiveMdPreload();
   let route = useMemo(() => sharedFileRouteFromHref(href), [href]);
   let relayOrigin = useMemo(() => configuredShareRelayOrigin(), []);
   let shareId = route.kind == "share" ? route.parts.shareId : "";
@@ -97,6 +101,9 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
       ? t("shared.title")
       : sharedConnection.displayName;
   let visibleErrorMessage = sharedConnection.errorMessage || liveMdPreloadError;
+  let retryingVisibleError = sharedConnection.errorMessage
+    ? joiningSharedFile
+    : liveMdPreloadRetrying;
 
   return (
     <TooltipProvider>
@@ -141,15 +148,20 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
           <div className="flex shrink-0 items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
             <AlertCircleIcon className="size-4 shrink-0" />
             <div className="min-w-0 flex-1">{translateKnownMessage(visibleErrorMessage, t)}</div>
-            {sharedConnection.errorMessage && route.kind == "share" && (
+            {((sharedConnection.errorMessage && route.kind == "share") ||
+              (!sharedConnection.errorMessage && liveMdPreloadError)) && (
               <Button
-                disabled={joiningSharedFile}
+                disabled={retryingVisibleError}
                 size="sm"
                 variant="outline"
-                onClick={retrySharedFileConnection}
+                onClick={
+                  sharedConnection.errorMessage
+                    ? retrySharedFileConnection
+                    : () => void retryLiveMdPreload()
+                }
               >
                 <PendingButtonContent
-                  pending={joiningSharedFile}
+                  pending={retryingVisibleError}
                   pendingLabel={t("actions.connecting")}
                 >
                   <>

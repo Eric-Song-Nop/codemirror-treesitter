@@ -18,6 +18,7 @@ import {
   catppuccinMacchiatoLiveMdTheme,
 } from "@codemirror-treesitter/live-md-theme-catppuccin";
 import { githubLightLiveMdTheme } from "@codemirror-treesitter/live-md-theme-github";
+import { useLiveMdPreload } from "@/lib/live-md-preload";
 import { useTheme, type Theme } from "@/theme";
 
 type LiveMdEditorProps = {
@@ -41,6 +42,7 @@ export function LiveMdEditor({
   onInput,
 }: LiveMdEditorProps) {
   let { theme } = useTheme();
+  let { generation: liveMdPreloadGeneration } = useLiveMdPreload();
   let editorRef = useRef<LiveMdEditorElement | null>(null);
   let initialValueRef = useRef(initialValue);
   let onEditorReadyRef = useRef(onEditorReady);
@@ -100,6 +102,7 @@ export function LiveMdEditor({
 
   return (
     <live-md-editor
+      key={liveMdPreloadGeneration}
       ref={setEditorRef}
       className="local-md-live-editor block size-full min-h-0"
       data-theme={theme}

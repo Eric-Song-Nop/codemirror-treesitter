@@ -227,6 +227,8 @@ LiveMD analysis/export layer instead of depending on the generic nested
 Markdown language entry. Pass
 `{ codeFences: true }` when a host also wants to preload the bundled
 code-fence language parsers during startup.
+Rejected preload attempts are not cached permanently; callers may invoke
+`prepareLiveMd()` again after a transient asset or network failure.
 
 `renderMarkdownToHtml(markdown, options?)` converts Markdown source to escaped
 HTML with the package Tree-sitter Markdown parser. Hosts can pass the same

@@ -18,7 +18,9 @@ parsers while keeping the public CodeMirror language surface.
 
 ## Responsibilities
 
-- Load and configure Tree-sitter grammars through `TreeSitterParser`.
+- Load and configure Tree-sitter grammars through `TreeSitterParser`. Failed
+  runtime initialization remains retryable while successful initialization is
+  shared by later parsers.
 - Expose CodeMirror language constructs such as `Language`,
   `LanguageSupport`, `LanguageDescription`, `LRLanguage`, `ParseContext`, and
   the `language` facet.

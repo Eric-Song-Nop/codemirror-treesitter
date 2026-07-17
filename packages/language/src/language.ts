@@ -152,7 +152,14 @@ export class TreeSitterParser implements TreeConfig {
   }
 
   static async init(options?: Parameters<typeof TSParser.init>[0]) {
-    return (parserInit ??= TSParser.init(options));
+    if (!parserInit) {
+      let current = TSParser.init(options);
+      parserInit = current;
+      void current.catch(() => {
+        if (parserInit === current) parserInit = null;
+      });
+    }
+    return parserInit;
   }
 
   static async load(wasm: string | Uint8Array, config: TreeSitterParserConfig = {}) {

@@ -38,6 +38,8 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
 - Install as a PWA with an app manifest and production service worker for the
   app shell, icons, same-origin static assets, and the lazy collaboration
   runtime needed to open local or shared files while offline.
+- Surface transient LiveMD language initialization failures with an in-page
+  retry that reloads the language service and remounts the active editor.
 
 ## Source Layout
 

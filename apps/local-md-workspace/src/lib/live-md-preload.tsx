@@ -1,37 +1,84 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
-const LiveMdPreloadErrorContext = createContext("");
+export type LiveMdPreloadState = {
+  error: string;
+  generation: number;
+  retry: () => Promise<void>;
+  retrying: boolean;
+};
+
+const LiveMdPreloadContext = createContext<LiveMdPreloadState>({
+  error: "",
+  generation: 0,
+  retry: async () => {},
+  retrying: false,
+});
 
 type LiveMdPreloadErrorProviderProps = {
   children: ReactNode;
-  preloadStatus: Promise<string>;
+  preload: () => Promise<void>;
 };
 
-export function LiveMdPreloadErrorProvider({
-  children,
-  preloadStatus,
-}: LiveMdPreloadErrorProviderProps) {
-  let [preloadError, setPreloadError] = useState("");
+export function LiveMdPreloadErrorProvider({ children, preload }: LiveMdPreloadErrorProviderProps) {
+  let [error, setError] = useState("");
+  let [generation, setGeneration] = useState(0);
+  let [retrying, setRetrying] = useState(false);
+  let mountedRef = useRef(false);
+  let inFlightRef = useRef<Promise<void> | null>(null);
+
+  let retry = useCallback(() => {
+    if (inFlightRef.current) return inFlightRef.current;
+    if (mountedRef.current) setRetrying(true);
+
+    let current = Promise.resolve()
+      .then(preload)
+      .then(() => {
+        if (!mountedRef.current) return;
+        setError("");
+        setGeneration((value) => value + 1);
+      })
+      .catch((nextError: unknown) => {
+        if (mountedRef.current) setError(liveMdPreloadErrorMessage(nextError));
+      })
+      .finally(() => {
+        if (inFlightRef.current === current) inFlightRef.current = null;
+        if (mountedRef.current) setRetrying(false);
+      });
+    inFlightRef.current = current;
+    return current;
+  }, [preload]);
 
   useEffect(() => {
-    let canceled = false;
-    void preloadStatus.then((message) => {
-      if (!canceled) setPreloadError(message);
-    });
+    mountedRef.current = true;
+    void retry();
     return () => {
-      canceled = true;
+      mountedRef.current = false;
     };
-  }, [preloadStatus]);
+  }, [retry]);
 
-  return (
-    <LiveMdPreloadErrorContext.Provider value={preloadError}>
-      {children}
-    </LiveMdPreloadErrorContext.Provider>
+  let state = useMemo<LiveMdPreloadState>(
+    () => ({ error, generation, retry, retrying }),
+    [error, generation, retry, retrying],
   );
+
+  return <LiveMdPreloadContext.Provider value={state}>{children}</LiveMdPreloadContext.Provider>;
 }
 
 export function useLiveMdPreloadError() {
-  return useContext(LiveMdPreloadErrorContext);
+  return useLiveMdPreload().error;
+}
+
+export function useLiveMdPreload() {
+  return useContext(LiveMdPreloadContext);
 }
 
 export function liveMdPreloadErrorMessage(error: unknown) {
