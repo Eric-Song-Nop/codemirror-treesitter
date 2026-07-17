@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:frontend": "vp dev",
-    "build": "vp run @codemirror-treesitter/opendal-wasm-browser#build && tsc && vp build",
+    "build": "vp run @codemirror-treesitter/opendal-wasm-browser#build && tsc && vp build && node scripts/check-production-bundle.mjs",
+    "bundle:check": "node scripts/check-production-bundle.mjs",
     "i18n:check": "node scripts/check-i18n.mjs",
     "test": "vp test",
     "preview": "vp preview",

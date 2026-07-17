@@ -200,10 +200,6 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
   );
 }
 
-export function isSharedFilePath(pathname: string) {
-  return /^\/share(?:\/|$)/.test(pathname);
-}
-
 function sharedFileRouteFromHref(href: string): SharedFileRoute {
   let parts = parseShareLink(href);
   if (parts) return { kind: "share", parts };

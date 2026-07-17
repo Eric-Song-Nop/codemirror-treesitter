@@ -36,7 +36,8 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   code highlighting, and file tree between named Gruvbox, GitHub Light, and
   Catppuccin themes.
 - Install as a PWA with an app manifest and production service worker for the
-  app shell, icons, and same-origin static assets.
+  app shell, icons, same-origin static assets, and the lazy collaboration
+  runtime needed to open local or shared files while offline.
 
 ## Source Layout
 
@@ -69,9 +70,14 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   Markdown HTML.
 - `src/lib/collaboration/*`: local Loro document persistence, share identity,
   relay protocol/client/connection, share storage, and document sync helpers.
+  `markdown-document.ts` is a lightweight facade; it loads
+  `markdown-document-runtime.ts` only when a file is opened.
 - `src/components/ui/*`: local shadcn/radix UI primitives.
 - `scripts/dev.mjs`: starts the local Grove relay when needed, then starts the
   frontend with `VITE_LOCAL_MD_SHARE_RELAY_ORIGIN`.
+- `service-worker-precache-plugin.ts` and
+  `scripts/check-production-bundle.mjs`: derive and verify the lazy
+  collaboration bundle closure used by the production service worker.
 - `smoke/ui-smoke.mjs`: headless Chrome UI smoke for local, sharing, conflict,
   and Dropbox UI flows.
 
@@ -104,6 +110,11 @@ to test installability and offline app-shell loading.
 
 The service worker caches same-origin GET navigations and static assets. Cloud
 storage requests, relay API mutations, and relay WebSockets remain network-only.
+Loro, the guest shared-file route, and the owner relay connection are excluded
+from the launcher bundle. Production builds inject their complete static chunk
+closure and Loro WASM asset into the service-worker precache without caching the
+unrelated Tree-sitter grammar WASM assets. Run `bundle:check` after `build` to
+verify this production bundle contract.
 
 On Android browsers that support the Web Share Target API for installed PWAs,
 Grove registers as a share target for Markdown files. Shared `.md` and
@@ -119,6 +130,7 @@ Run from the workspace root:
 vp run local-md-workspace#dev
 vp run local-md-workspace#dev:frontend
 vp run local-md-workspace#build
+vp run local-md-workspace#bundle:check
 vp run local-md-workspace#i18n:check
 vp run local-md-workspace#test
 vp run local-md-workspace#preview
