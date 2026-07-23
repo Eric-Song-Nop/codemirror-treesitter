@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "grove-local-md-workspace";
-const SHELL_CACHE = `${CACHE_PREFIX}-shell-2026-07-04`;
+const SHELL_CACHE = `${CACHE_PREFIX}-shell-__GROVE_SHELL_CACHE_KEY__`;
 const RUNTIME_CACHE = `${CACHE_PREFIX}-runtime`;
 const SHARE_TARGET_PATH = "/share";
 const SHARED_DRAFT_SEARCH_PARAM = "shared-draft";
@@ -9,6 +9,9 @@ const DB_VERSION = 1;
 const DB_STORE_NAME = "workspace";
 const DRAFT_KEY_PREFIX = "single-file-draft:";
 const LAST_DRAFT_KEY = "single-file-draft:last";
+const COLLABORATION_PRECACHE_URLS = [
+  /* __GROVE_COLLABORATION_PRECACHE__ */
+];
 
 const APP_SHELL_URLS = [
   "/",
@@ -18,6 +21,7 @@ const APP_SHELL_URLS = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
+  ...COLLABORATION_PRECACHE_URLS,
 ];
 
 const CACHEABLE_DESTINATIONS = new Set([

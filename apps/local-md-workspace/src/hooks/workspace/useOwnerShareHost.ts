@@ -8,7 +8,7 @@ import {
   configuredShareRelayOrigin,
   createRelayShareSession,
 } from "@/lib/collaboration/share-relay-client";
-import { ShareRelayConnection } from "@/lib/collaboration/share-relay-connection";
+import type { ShareRelayConnection } from "@/lib/collaboration/share-relay-connection";
 import type { OwnerShareRecord } from "@/lib/collaboration/share-storage";
 import { hashMarkdownText } from "@/lib/markdown-hash";
 import { errorToMessage } from "@/lib/workspace/errors";
@@ -139,6 +139,8 @@ export function useOwnerShareHost({
           "host",
           hostSecret,
         );
+        if (options.shouldContinue && !options.shouldContinue()) return;
+        let { ShareRelayConnection } = await import("@/lib/collaboration/share-relay-connection");
         if (options.shouldContinue && !options.shouldContinue()) return;
         setActiveShareRecord((current) =>
           current?.shareId == record.shareId

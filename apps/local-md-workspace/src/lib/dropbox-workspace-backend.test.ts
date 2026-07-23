@@ -3,6 +3,7 @@ import type {
   OpendalBrowserOperator,
   OpendalBrowserOperatorConfig,
   OpendalBrowserEntry,
+  OpendalBrowserWriteOptions,
 } from "@codemirror-treesitter/opendal-wasm-browser";
 import { createDropboxWorkspaceBackend } from "./dropbox-workspace-backend.ts";
 import { documentSourceDocumentIdInput, documentSourceRef } from "./workspace/source-identity.ts";
@@ -61,6 +62,96 @@ describe("Dropbox workspace backend", () => {
     expect(writes).toEqual(["first", "third"]);
   });
 
+  it("creates files with an atomic no-clobber write", async () => {
+    let writes: Array<{ options?: OpendalBrowserWriteOptions; path: string; value: string }> = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          capabilities: () => ({
+            ...fakeCapabilities(),
+            nativeWriteWithIfNotExists: true,
+            nativeWriteWithVersion: true,
+          }),
+          async writeText(path, value, options) {
+            writes.push({ options, path, value });
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await expect(backend.createFile("new.md")).resolves.toBe("new.md");
+
+    expect(writes).toEqual([
+      {
+        options: { ifNotExists: true },
+        path: "new.md",
+        value: "# new\n",
+      },
+    ]);
+  });
+
+  it("fails closed instead of overwriting when no-clobber is unsupported", async () => {
+    let writes = 0;
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          async writeText() {
+            writes += 1;
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await expect(backend.createFile("existing.md")).rejects.toThrow(
+      "does not support atomic no-clobber writes",
+    );
+    expect(writes).toBe(0);
+  });
+
+  it("reads content and revision from one snapshot and writes with Dropbox revision CAS", async () => {
+    let reads: string[] = [];
+    let statCalls = 0;
+    let writes: Array<{ options?: OpendalBrowserWriteOptions; value: string }> = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          capabilities: () => ({
+            ...fakeCapabilities(),
+            nativeWriteWithIfNotExists: true,
+            nativeWriteWithVersion: true,
+          }),
+          async readTextWithMetadata(path) {
+            reads.push(path);
+            return {
+              entry: { isDirectory: false, isFile: true, path, version: "rev-a" },
+              value: "# source\n",
+            };
+          },
+          async stat(path) {
+            statCalls += 1;
+            return fileEntry(path);
+          },
+          async writeText(path, value, options) {
+            writes.push({ options, value });
+            return { isDirectory: false, isFile: true, path, version: "rev-b" };
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await expect(backend.readFile("note.md")).resolves.toBe("# source\n");
+    await expect(backend.writeFile("note.md", "# update\n")).resolves.toEqual({
+      revision: { version: "rev-b" },
+    });
+
+    expect(reads).toEqual(["note.md"]);
+    expect(statCalls).toBe(0);
+    expect(writes).toEqual([{ options: { ifVersion: "rev-a" }, value: "# update\n" }]);
+  });
+
   it("refreshes an expired token and retries once", async () => {
     let createCalls: OpendalBrowserOperatorConfig[] = [];
     let createCount = 0;
@@ -97,7 +188,6 @@ describe("Dropbox workspace backend", () => {
     let entries: OpendalBrowserEntry[] = [
       { isDirectory: true, isFile: false, path: ".livemd" },
       { isDirectory: false, isFile: true, path: ".livemd/manifest.json" },
-      { isDirectory: false, isFile: true, path: "notes/today.md" },
       { isDirectory: false, isFile: true, path: "notes/tomorrow.txt" },
       { isDirectory: true, isFile: false, path: "notes" },
       { isDirectory: true, isFile: false, path: "drafts" },
@@ -119,12 +209,14 @@ describe("Dropbox workspace backend", () => {
       children: [
         {
           children: [],
+          childrenLoaded: false,
           kind: "directory",
           name: "drafts",
           path: "drafts",
         },
         {
-          children: [{ kind: "file", name: "today.md", path: "notes/today.md" }],
+          children: [],
+          childrenLoaded: false,
           kind: "directory",
           name: "notes",
           path: "notes",
@@ -222,6 +314,11 @@ describe("Dropbox workspace backend", () => {
     let backend = createDropboxWorkspaceBackend({
       createOperator: async () =>
         fakeOperator({
+          capabilities: () => ({
+            ...fakeCapabilities(),
+            nativeWriteWithIfNotExists: true,
+            nativeWriteWithVersion: true,
+          }),
           async createDir(path) {
             createdDirectories.push(path);
           },
@@ -557,17 +654,7 @@ function fakeMapOperator(files: Map<string, string | Uint8Array>, operations: st
 
 function fakeOperator(overrides: Partial<OpendalBrowserOperator>): OpendalBrowserOperator {
   return {
-    capabilities: () => ({
-      nativeCopy: true,
-      nativeCreateDir: true,
-      nativeDelete: true,
-      nativeList: true,
-      nativeRead: true,
-      nativeRename: true,
-      nativeStat: true,
-      nativeWrite: true,
-      nativeWriteWithIfMatch: false,
-    }),
+    capabilities: fakeCapabilities,
     createDir: async () => {},
     delete: async () => {},
     list: async () => [],
@@ -578,6 +665,22 @@ function fakeOperator(overrides: Partial<OpendalBrowserOperator>): OpendalBrowse
     writeBytes: async () => {},
     writeText: async () => {},
     ...overrides,
+  };
+}
+
+function fakeCapabilities() {
+  return {
+    nativeCopy: true,
+    nativeCreateDir: true,
+    nativeDelete: true,
+    nativeList: true,
+    nativeRead: true,
+    nativeRename: true,
+    nativeStat: true,
+    nativeWrite: true,
+    nativeWriteWithIfMatch: false,
+    nativeWriteWithIfNotExists: false,
+    nativeWriteWithVersion: false,
   };
 }
 

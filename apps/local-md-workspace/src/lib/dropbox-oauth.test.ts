@@ -6,6 +6,7 @@ import {
   createDropboxPkceChallenge,
   createDropboxPkceVerifier,
   DEFAULT_DROPBOX_SCOPES,
+  DROPBOX_AUTHORIZE_URL,
   DROPBOX_REDIRECT_TRANSACTION_KEY,
   fetchDropboxAccountIdentity,
   hasDropboxOAuthCallback,
@@ -129,6 +130,41 @@ describe("Dropbox OAuth PKCE helpers", () => {
     expect(transaction.codeVerifier).toEqual(expect.any(String));
     expect(authUrl.searchParams.get("code_challenge")).toEqual(expect.any(String));
   });
+
+  it("rejects promptly when the Dropbox authorization popup is closed", async () => {
+    let popupClosed = false;
+    let popup = {
+      close: vi.fn(() => {
+        popupClosed = true;
+      }),
+      document: { title: "" },
+      focus: vi.fn(),
+      get closed() {
+        return popupClosed;
+      },
+      location: { href: "about:blank" },
+    };
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      clearInterval: globalThis.clearInterval.bind(globalThis),
+      clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      open: vi.fn(() => popup),
+      removeEventListener: vi.fn(),
+      setInterval: globalThis.setInterval.bind(globalThis),
+      setTimeout: globalThis.setTimeout.bind(globalThis),
+    });
+
+    let authorization = authorizeDropboxWithPkce({
+      appKey: "app-key",
+      redirectUri: "http://127.0.0.1:5173/",
+    });
+    await waitFor(() => popup.location.href.startsWith(DROPBOX_AUTHORIZE_URL));
+    popupClosed = true;
+
+    await expect(authorization).rejects.toThrow(
+      "Dropbox authorization was closed before it completed.",
+    );
+  }, 1000);
 
   it("completes full-page redirect OAuth from a stored PKCE transaction", async () => {
     let values = new Map<string, string>();

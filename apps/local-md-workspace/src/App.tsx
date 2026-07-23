@@ -1,6 +1,12 @@
-import { SharedFileEditor, isSharedFilePath } from "@/components/SharedFileEditor";
+import { lazy, Suspense } from "react";
 import { LocalWorkspaceApp } from "@/components/workspace/LocalWorkspaceApp";
+import { isSharedFilePath } from "@/lib/collaboration/shared-file-route";
 import { I18nProvider } from "@/lib/i18n";
+
+const SharedFileEditor = lazy(async () => {
+  let module = await import("@/components/SharedFileEditor");
+  return { default: module.SharedFileEditor };
+});
 
 export function App() {
   return (
@@ -12,7 +18,11 @@ export function App() {
 
 function AppRoutes() {
   if (isSharedFilePath(window.location.pathname)) {
-    return <SharedFileEditor />;
+    return (
+      <Suspense fallback={null}>
+        <SharedFileEditor />
+      </Suspense>
+    );
   }
 
   return <LocalWorkspaceApp />;

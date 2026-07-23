@@ -33,6 +33,7 @@ import {
 import type { SingleFileSource } from "@/lib/workspace/types";
 import {
   normalizeMarkdownPath,
+  writeNewWorkspaceFile,
   type MarkdownFileNode,
   type WorkspaceBackend,
 } from "@/lib/workspace-backend";
@@ -62,6 +63,7 @@ type UseWorkspaceFileActionsOptions = {
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
   createDropboxBackend: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceBackend>;
   discardMaterializedDraft: (source: SingleFileSource | null) => void;
+  documentTargetGenerationRef: MutableRef<number>;
   editorElementRef: RefObject<LiveMdEditorElement | null>;
   editorValueRef: MutableRef<string>;
   loadTree: (
@@ -91,6 +93,7 @@ export function useWorkspaceFileActions({
   collabDocumentRef,
   createDropboxBackend,
   discardMaterializedDraft,
+  documentTargetGenerationRef,
   editorElementRef,
   editorValueRef,
   loadTree,
@@ -256,6 +259,7 @@ export function useWorkspaceFileActions({
 
     let source = singleFileSourceRef.current;
     let value = currentMarkdownValue();
+    documentTargetGenerationRef.current += 1;
     setBusy(true);
     setErrorMessage("");
     setRetryLoadPath(null);
@@ -285,6 +289,7 @@ export function useWorkspaceFileActions({
     activateSingleFileDocument,
     currentMarkdownValue,
     discardMaterializedDraft,
+    documentTargetGenerationRef,
     downloadCurrentMarkdownCopy,
     localFileHandleRef,
     refreshWorkspaceForCurrentEditor,
@@ -321,6 +326,7 @@ export function useWorkspaceFileActions({
         return;
       }
 
+      documentTargetGenerationRef.current += 1;
       setBusy(true);
       setDropboxConnecting(true);
       setSaveAsDropboxError("");
@@ -335,7 +341,7 @@ export function useWorkspaceFileActions({
                 appKey,
                 root: storedDropboxConfig?.root ?? defaultDropboxRoot(),
               });
-        await backend.writeFile(path, value);
+        await writeNewWorkspaceFile(backend, path, value);
         setWorkspaceBackend(backend);
         await loadTree(backend, path, { saveBeforeSelect: false });
         discardMaterializedDraft(source);
@@ -351,6 +357,7 @@ export function useWorkspaceFileActions({
       createDropboxBackend,
       currentMarkdownValue,
       discardMaterializedDraft,
+      documentTargetGenerationRef,
       loadTree,
       setBusy,
       setDropboxConnecting,

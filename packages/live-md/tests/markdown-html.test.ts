@@ -120,6 +120,22 @@ describe("Tree-sitter Markdown HTML rendering", () => {
     expect(html).toContain('<td><a href="https://example.com">https://example.com</a></td>');
   });
 
+  it("preserves unsafe link labels without exporting active links", async () => {
+    let html = await renderMarkdownToHtml(
+      [
+        "[script](javascript:alert(1))",
+        "[data](data:text/html,unsafe)",
+        "[relative](../safe.md)",
+      ].join(" "),
+    );
+
+    expect(html).toContain("script");
+    expect(html).toContain("data");
+    expect(html).not.toContain('href="javascript:');
+    expect(html).not.toContain('href="data:');
+    expect(html).toContain('<a href="../safe.md">relative</a>');
+  });
+
   it("renders LaTeX spans and display blocks with KaTeX HTML", async () => {
     let html = await renderMarkdownToHtml(
       ["Inline $x^2 + y^2$ formula.", "", "$$x^2$$", "", "$$", "a^2 + b^2 = c^2", "$$"].join("\n"),

@@ -83,20 +83,25 @@ describe("single file draft store", () => {
     await expect(loadLastSingleFileDraft()).resolves.toBeNull();
   });
 
-  it("falls back to null/no-op behavior when IndexedDB is unavailable", async () => {
+  it("fails draft writes when IndexedDB is unavailable", async () => {
     vi.stubGlobal("window", {});
 
-    let draft = await createSingleFileDraft({ name: "offline.md", now: 300, value: "offline" });
-
-    expect(draft).toMatchObject({
+    let draft = {
       createdAt: 300,
+      id: "offline",
       name: "offline.md",
       updatedAt: 300,
       value: "offline",
-    });
+    };
+
+    await expect(
+      createSingleFileDraft({ name: "offline.md", now: 300, value: "offline" }),
+    ).rejects.toThrow("Browser draft storage is unavailable");
+    await expect(saveSingleFileDraft(draft)).rejects.toThrow(
+      "Browser draft storage is unavailable",
+    );
     await expect(loadSingleFileDraft(draft.id)).resolves.toBeNull();
     await expect(loadLastSingleFileDraft()).resolves.toBeNull();
-    await expect(saveSingleFileDraft(draft)).resolves.toBeUndefined();
     await expect(rememberLastSingleFileDraft(draft.id)).resolves.toBeUndefined();
     await expect(clearLastSingleFileDraft()).resolves.toBeUndefined();
     await expect(deleteSingleFileDraft(draft.id)).resolves.toBeUndefined();

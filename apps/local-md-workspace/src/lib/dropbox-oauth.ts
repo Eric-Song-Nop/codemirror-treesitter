@@ -302,6 +302,7 @@ function waitForDropboxPopupCode(popup: Window, authUrl: URL, expectedState: str
   return new Promise<string>((resolve, reject) => {
     let cleanup = () => {
       window.removeEventListener("message", handleMessage);
+      window.clearInterval(closedPoll);
       window.clearTimeout(timeout);
     };
 
@@ -331,6 +332,16 @@ function waitForDropboxPopupCode(popup: Window, authUrl: URL, expectedState: str
       },
       5 * 60 * 1000,
     );
+    let closedPoll = window.setInterval(() => {
+      let closed = false;
+      try {
+        closed = popup.closed;
+      } catch {}
+      if (!closed) return;
+
+      cleanup();
+      reject(new Error("Dropbox authorization was closed before it completed."));
+    }, 250);
 
     window.addEventListener("message", handleMessage);
     popup.location.href = authUrl.href;

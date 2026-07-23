@@ -18,6 +18,7 @@ export type WorkspaceSourceAlias = {
 
 export type WorkspaceWriteOptions = {
   baseRevision?: WorkspaceSourceRevision;
+  ifNotExists?: boolean;
 };
 
 export type WorkspaceWriteResult = {
@@ -195,6 +196,14 @@ export function normalizeWorkspaceDirectoryName(rawName: string) {
 export function starterMarkdown(path: string) {
   let title = path.split("/").at(-1)!.replace(/\.md$/i, "").replace(/[-_]+/g, " ").trim();
   return title ? `# ${title}\n` : "";
+}
+
+export function writeNewWorkspaceFile(
+  backend: Pick<WorkspaceBackend, "writeFile">,
+  path: string,
+  value: string,
+) {
+  return backend.writeFile(path, value, { ifNotExists: true });
 }
 
 export function joinWorkspacePath(parentPath: string, name: string) {

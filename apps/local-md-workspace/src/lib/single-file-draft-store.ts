@@ -61,7 +61,9 @@ export async function loadLastSingleFileDraft(): Promise<SingleFileDraft | null>
 }
 
 export async function saveSingleFileDraft(draft: SingleFileDraft): Promise<void> {
-  if (!canUseIndexedDb()) return;
+  if (!canUseIndexedDb()) {
+    throw new Error("Browser draft storage is unavailable. Save the file to persistent storage.");
+  }
 
   let db = await openSingleFileDraftDatabase();
   try {

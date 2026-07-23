@@ -45,6 +45,8 @@ export type OpendalBrowserCapabilities = {
   nativeStat: boolean;
   nativeWrite: boolean;
   nativeWriteWithIfMatch: boolean;
+  nativeWriteWithIfNotExists?: boolean;
+  nativeWriteWithVersion?: boolean;
 };
 
 export type OpendalBrowserEntry = {
@@ -59,6 +61,13 @@ export type OpendalBrowserEntry = {
 
 export type OpendalBrowserWriteOptions = {
   ifMatch?: string;
+  ifNotExists?: boolean;
+  ifVersion?: string;
+};
+
+export type OpendalBrowserReadResult<T> = {
+  entry: OpendalBrowserEntry;
+  value: T;
 };
 
 export type OpendalBrowserOperator = {
@@ -68,6 +77,7 @@ export type OpendalBrowserOperator = {
   list(prefix: string): Promise<OpendalBrowserEntry[]>;
   readBytes(path: string): Promise<Uint8Array>;
   readText(path: string): Promise<string>;
+  readTextWithMetadata?(path: string): Promise<OpendalBrowserReadResult<string>>;
   rename(from: string, to: string): Promise<void>;
   stat(path: string): Promise<OpendalBrowserEntry>;
   writeBytes(
@@ -99,6 +109,7 @@ type GeneratedOperator = {
   list(prefix: string): Promise<unknown>;
   readBytes(path: string): Promise<unknown>;
   readText(path: string): Promise<string>;
+  readTextWithMetadata?(path: string): Promise<unknown>;
   rename(from: string, to: string): Promise<void>;
   stat(path: string): Promise<unknown>;
   writeBytes(
@@ -123,7 +134,10 @@ export async function createOpendalBrowserOperator(
   let normalizedConfig = normalizeConfig(config);
   let generated = await loadGeneratedModule(options.generatedModuleUrl);
   await initializeGeneratedModule(generated, options.wasmModuleUrl);
-  return new WasmOpendalBrowserOperator(new generated.OpendalBrowserOperator(normalizedConfig));
+  return new WasmOpendalBrowserOperator(
+    new generated.OpendalBrowserOperator(normalizedConfig),
+    normalizedConfig,
+  );
 }
 
 export function defaultGeneratedModuleUrl() {
@@ -155,10 +169,19 @@ async function initializeGeneratedModule(
 }
 
 class WasmOpendalBrowserOperator implements OpendalBrowserOperator {
-  constructor(private readonly operator: GeneratedOperator) {}
+  constructor(
+    private readonly operator: GeneratedOperator,
+    private readonly config: OpendalBrowserOperatorConfig,
+  ) {}
 
   capabilities() {
-    return parseCapabilities(this.operator.capabilities());
+    let capabilities = parseCapabilities(this.operator.capabilities());
+    if (this.config.provider != "dropbox") return capabilities;
+    return {
+      ...capabilities,
+      nativeWriteWithIfNotExists: true,
+      nativeWriteWithVersion: true,
+    };
   }
 
   async createDir(path: string) {
@@ -181,6 +204,22 @@ class WasmOpendalBrowserOperator implements OpendalBrowserOperator {
     return this.operator.readText(path);
   }
 
+  async readTextWithMetadata(path: string) {
+    if (this.config.provider == "dropbox") {
+      return readDropboxText(this.config, path);
+    }
+
+    if (typeof this.operator.readTextWithMetadata == "function") {
+      return parseReadTextResult(await this.operator.readTextWithMetadata(path));
+    }
+
+    let [value, entry] = await Promise.all([
+      this.operator.readText(path),
+      this.operator.stat(path),
+    ]);
+    return { entry: parseEntry(entry), value };
+  }
+
   async rename(from: string, to: string) {
     await this.operator.rename(from, to);
   }
@@ -190,15 +229,174 @@ class WasmOpendalBrowserOperator implements OpendalBrowserOperator {
   }
 
   async writeBytes(path: string, bytes: Uint8Array, options?: OpendalBrowserWriteOptions) {
+    assertSupportedWriteOptions(this.capabilities(), options);
+    if (this.config.provider == "dropbox" && hasDropboxWriteCondition(options)) {
+      return writeDropboxBytes(this.config, path, Uint8Array.from(bytes).buffer, options!);
+    }
     let result = await this.operator.writeBytes(path, bytes, options);
     if (result == null) return undefined;
     return parseEntry(result, "write result");
   }
 
   async writeText(path: string, value: string, options?: OpendalBrowserWriteOptions) {
+    assertSupportedWriteOptions(this.capabilities(), options);
+    if (this.config.provider == "dropbox" && hasDropboxWriteCondition(options)) {
+      return writeDropboxBytes(this.config, path, value, options!);
+    }
     let result = await this.operator.writeText(path, value, options);
     if (result == null) return undefined;
     return parseEntry(result, "write result");
+  }
+}
+
+function assertSupportedWriteOptions(
+  capabilities: OpendalBrowserCapabilities,
+  options: OpendalBrowserWriteOptions | undefined,
+) {
+  if (!options) return;
+  let conditions = [
+    options.ifMatch != null,
+    options.ifNotExists === true,
+    options.ifVersion != null,
+  ];
+  if (conditions.filter(Boolean).length > 1) {
+    throw new Error("OpenDAL browser writes accept only one atomic write condition.");
+  }
+  if (options.ifMatch != null && !capabilities.nativeWriteWithIfMatch) {
+    throw new Error("OpenDAL backend does not support atomic ETag writes.");
+  }
+  if (options.ifNotExists && !capabilities.nativeWriteWithIfNotExists) {
+    throw new Error("OpenDAL backend does not support atomic no-clobber writes.");
+  }
+  if (options.ifVersion != null && !capabilities.nativeWriteWithVersion) {
+    throw new Error("OpenDAL backend does not support atomic version writes.");
+  }
+}
+
+function hasDropboxWriteCondition(options: OpendalBrowserWriteOptions | undefined) {
+  return options?.ifNotExists === true || options?.ifVersion != null;
+}
+
+async function readDropboxText(
+  config: OpendalDropboxOperatorConfig,
+  path: string,
+): Promise<OpendalBrowserReadResult<string>> {
+  let normalizedPath = normalizeStoragePath(path);
+  let response = await fetch("https://content.dropboxapi.com/2/files/download", {
+    headers: dropboxHeaders(config, {
+      path: dropboxApiPath(config.root, normalizedPath),
+    }),
+    method: "POST",
+  });
+  if (!response.ok) throw await dropboxResponseError(response);
+
+  let rawMetadata = response.headers.get("Dropbox-API-Result");
+  if (!rawMetadata) {
+    throw new Error("Dropbox download response did not include file revision metadata.");
+  }
+
+  return {
+    entry: dropboxEntry(normalizedPath, parseJsonRecord(rawMetadata, "download metadata")),
+    value: await response.text(),
+  };
+}
+
+async function writeDropboxBytes(
+  config: OpendalDropboxOperatorConfig,
+  path: string,
+  body: BodyInit,
+  options: OpendalBrowserWriteOptions,
+) {
+  let normalizedPath = normalizeStoragePath(path);
+  let condition: "no-clobber" | "revision" = options.ifNotExists ? "no-clobber" : "revision";
+  let mode = options.ifNotExists
+    ? "add"
+    : {
+        ".tag": "update",
+        update: requireText(options.ifVersion, "ifVersion"),
+      };
+  let response = await fetch("https://content.dropboxapi.com/2/files/upload", {
+    body,
+    headers: {
+      ...dropboxHeaders(config, {
+        autorename: false,
+        mode,
+        mute: true,
+        path: dropboxApiPath(config.root, normalizedPath),
+        strict_conflict: true,
+      }),
+      "Content-Type": "application/octet-stream",
+    },
+    method: "POST",
+  });
+  if (!response.ok) throw await dropboxResponseError(response, condition);
+
+  return dropboxEntry(
+    normalizedPath,
+    requireRecord(await response.json(), "Dropbox upload metadata"),
+  );
+}
+
+function dropboxHeaders(config: OpendalDropboxOperatorConfig, args: unknown) {
+  return {
+    Authorization: `Bearer ${config.accessToken}`,
+    "Dropbox-API-Arg": JSON.stringify(args),
+  };
+}
+
+function dropboxApiPath(root: string | undefined, path: string) {
+  return `${root ?? ""}/${path}`.replace(/\/{2,}/g, "/");
+}
+
+function normalizeStoragePath(path: string) {
+  let normalized = path.trim().replace(/\\/g, "/");
+  let parts = normalized.split("/").filter(Boolean);
+  if (!parts.length) throw new Error("expected a file path");
+  if (parts.some((part) => part == "." || part == "..")) {
+    throw new Error("paths cannot include . or .. segments");
+  }
+  return parts.join("/");
+}
+
+function dropboxEntry(path: string, metadata: Record<string, unknown>): OpendalBrowserEntry {
+  return {
+    etag: optionalText(metadata.content_hash, "Dropbox metadata.content_hash"),
+    isDirectory: false,
+    isFile: true,
+    lastModified: optionalText(
+      metadata.server_modified ?? metadata.client_modified,
+      "Dropbox metadata.server_modified",
+    ),
+    path,
+    size: optionalNumber(metadata.size, "Dropbox metadata.size"),
+    version: optionalText(metadata.rev, "Dropbox metadata.rev"),
+  };
+}
+
+async function dropboxResponseError(response: Response, condition?: "no-clobber" | "revision") {
+  let responseText = await response.text();
+  let detail = responseText;
+  try {
+    let payload = JSON.parse(responseText) as { error_summary?: unknown };
+    if (typeof payload.error_summary == "string") detail = payload.error_summary;
+  } catch {
+    // Preserve non-JSON Dropbox error responses verbatim.
+  }
+  let prefix =
+    condition && response.status == 409 ? `Dropbox ${condition} conflict: ` : "Dropbox API error: ";
+  return new Error(
+    `${prefix}${response.status} ${response.statusText}${detail ? `: ${detail}` : ""}`,
+  );
+}
+
+function parseJsonRecord(value: string, label: string) {
+  try {
+    return requireRecord(JSON.parse(value), `Dropbox ${label}`);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`Dropbox ${label} returned invalid JSON.`, { cause: error });
+    }
+    throw error;
   }
 }
 
@@ -265,6 +463,19 @@ function parseCapabilities(value: unknown): OpendalBrowserCapabilities {
     nativeStat: Boolean(record.nativeStat),
     nativeWrite: Boolean(record.nativeWrite),
     nativeWriteWithIfMatch: Boolean(record.nativeWriteWithIfMatch),
+    nativeWriteWithIfNotExists: Boolean(record.nativeWriteWithIfNotExists),
+    nativeWriteWithVersion: false,
+  };
+}
+
+function parseReadTextResult(value: unknown): OpendalBrowserReadResult<string> {
+  let record = requireRecord(value, "readTextWithMetadata");
+  if (typeof record.value != "string") {
+    throw new Error("OpenDAL readTextWithMetadata.value returned a non-string value.");
+  }
+  return {
+    entry: parseEntry(record.entry, "readTextWithMetadata.entry"),
+    value: record.value,
   };
 }
 

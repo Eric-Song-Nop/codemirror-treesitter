@@ -152,6 +152,14 @@ export function workspaceErrorMessage(error: unknown) {
     }
   }
 
+  if (normalized.includes("dropbox no clobber conflict")) {
+    return "A file already exists at that Dropbox path. Choose another name.";
+  }
+
+  if (normalized.includes("dropbox revision conflict")) {
+    return "This Dropbox file changed elsewhere. Reload it before saving again.";
+  }
+
   if (matchesAny(normalized, ["popup was blocked", "popup blocked"])) {
     return "Dropbox authorization popup was blocked. Allow popups for this site and try again.";
   }
