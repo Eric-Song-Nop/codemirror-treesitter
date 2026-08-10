@@ -35,7 +35,8 @@ describe("LiveMD Markdown parser service", () => {
       doc,
       extensions: [await loadMarkdownExtension(), liveMarkdown()],
     });
-    ensureSyntaxTree(state, doc.length, 5_000);
+    expect(ensureSyntaxTree(state, doc.length, 5_000)).not.toBeNull();
+    state = state.update({}).state;
 
     expect(syntaxTree(state).nested).toHaveLength(0);
     expectRangeVisible(state, doc, "emphasis", true);

@@ -6,6 +6,7 @@ import {
   TreeSitterLanguage,
   TreeSitterParser,
   classHighlighter,
+  ensureSyntaxTree,
   highlightCode,
   highlightTree,
   highlightingFor,
@@ -43,10 +44,12 @@ let cssParser: Promise<TreeSitterParser> | null = null;
 let htmlParser: Promise<TreeSitterParser> | null = null;
 
 async function languageState(doc: string, language: TreeSitterLanguage, highlight: HighlightStyle) {
-  return EditorState.create({
+  let state = EditorState.create({
     doc,
     extensions: [language.extension, syntaxHighlighting(highlight)],
   });
+  expect(ensureSyntaxTree(state, state.doc.length, 5_000)).not.toBeNull();
+  return state.update({}).state;
 }
 
 function scriptTextRanges(tree: Tree): DocRange[] {
@@ -205,8 +208,10 @@ describe("highlight tags", () => {
       doc: mixedDoc,
       extensions: [nestedHtml.extension],
     });
+    let mixedTree = ensureSyntaxTree(mixedState, mixedState.doc.length, 5_000);
+    expect(mixedTree).not.toBeNull();
     let mixedValue = mixedDoc.indexOf("value");
-    let mixedSpans = __testHighlightTree(syntaxTree(mixedState), [htmlHighlight, highlight]);
+    let mixedSpans = __testHighlightTree(mixedTree!, [htmlHighlight, highlight]);
 
     expect(mixedSpans).toContainEqual({
       from: mixedValue,
@@ -370,7 +375,9 @@ describe("highlight tags", () => {
       doc,
       extensions: [html.extension],
     });
-    let spans = __testHighlightTree(syntaxTree(state), [highlighter]);
+    let tree = ensureSyntaxTree(state, state.doc.length, 5_000);
+    expect(tree).not.toBeNull();
+    let spans = __testHighlightTree(tree!, [highlighter]);
     let classAt = (text: string, start = doc.indexOf(text)) =>
       spans.find((span) => span.from == start && span.to == start + text.length)?.class;
 

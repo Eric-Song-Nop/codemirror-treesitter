@@ -39,18 +39,24 @@ let javascriptParser: Promise<TreeSitterParser> | null = null;
 let htmlParser: Promise<TreeSitterParser> | null = null;
 let markdownParser: Promise<TreeSitterParser> | null = null;
 
-async function javascriptState(doc: string) {
+function completedState(state: EditorState) {
+  expect(ensureSyntaxTree(state, state.doc.length, 5_000)).not.toBeNull();
+  return state.update({}).state;
+}
+
+async function javascriptState(doc: string, initialParse: "complete" | "budgeted" = "complete") {
   javascriptParser ??= TreeSitterParser.load(javascriptWasm);
   let parser = await javascriptParser;
   let language = TreeSitterLanguage.define({ name: "javascript", parser });
-  return EditorState.create({ doc, extensions: [language.extension] });
+  let state = EditorState.create({ doc, extensions: [language.extension] });
+  return initialParse == "complete" ? completedState(state) : state;
 }
 
 async function markdownState(doc: string) {
   markdownParser ??= TreeSitterParser.load(markdownWasm);
   let parser = await markdownParser;
   let language = TreeSitterLanguage.define({ name: "markdown", parser });
-  return EditorState.create({ doc, extensions: [language.extension] });
+  return completedState(EditorState.create({ doc, extensions: [language.extension] }));
 }
 
 function stackNames(state: EditorState, pos: number) {
@@ -112,7 +118,7 @@ function expectNativeCursorFirstChildForPosition(parent: TSNode, doc: string, in
   }
 }
 
-async function mixedHtmlState(doc: string) {
+async function mixedHtmlState(doc: string, initialParse: "complete" | "budgeted" = "complete") {
   javascriptParser ??= TreeSitterParser.load(javascriptWasm);
   htmlParser ??= TreeSitterParser.load(htmlWasm);
   let [jsParser, baseHtmlParser] = await Promise.all([javascriptParser, htmlParser]);
@@ -133,6 +139,7 @@ async function mixedHtmlState(doc: string) {
     ],
   });
   let state = EditorState.create({ doc, extensions: [html.extension] });
+  if (initialParse == "complete") state = completedState(state);
   return { state, html, javascript };
 }
 
@@ -833,6 +840,8 @@ describe("tree-sitter tree wrapper", () => {
     let scriptTo = doc.indexOf("</script>");
     let { state, javascript, sawContext, skippedRange } = await deferredMixedHtmlState(doc);
 
+    expect(ensureSyntaxTree(state, scriptFrom, 5_000)).not.toBeNull();
+    state = state.update({}).state;
     expect(sawContext()).toBe(true);
     expect(skippedRange()).toEqual({ from: scriptFrom, to: scriptTo });
     expect(syntaxTree(state).resolveInner(delayed).name).not.toBe("identifier");
@@ -868,7 +877,9 @@ describe("tree-sitter tree wrapper", () => {
     let before = syntaxTree(state).resolveInner(doc.indexOf("value"));
     let inserted = "<!-- heading -->";
     let tr = state.update({ changes: { from: 0, insert: inserted } });
-    let after = syntaxTree(tr.state).resolveInner(doc.indexOf("value") + inserted.length);
+    let updatedTree = ensureSyntaxTree(tr.state, tr.state.doc.length, 5_000);
+    expect(updatedTree).not.toBeNull();
+    let after = updatedTree!.resolveInner(doc.indexOf("value") + inserted.length);
 
     expect(after.name).toBe("identifier");
     expect(after.node?.id).toBe(before.node?.id);
@@ -975,6 +986,11 @@ describe("tree-sitter tree wrapper", () => {
     let scriptTo = doc.indexOf("</script>");
     let { state } = await deferredMixedHtmlState(doc);
 
+    // Commit a complete outer tree while the nested range is still outside the
+    // viewport. Under parallel test load the initial parse may otherwise retain
+    // an incomplete outer tree, for which a full-document dirty range is correct.
+    expect(ensureSyntaxTree(state, scriptFrom, 5_000)).not.toBeNull();
+    state = state.update({}).state;
     expect(syntaxTreeAvailable(state, scriptTo)).toBe(false);
     ensureSyntaxTree(state, scriptTo, 5_000);
     let transaction = state.update({});
@@ -1026,7 +1042,9 @@ describe("tree-sitter tree wrapper", () => {
     expect(javascript.findRegions(state)).toEqual([firstRange, secondRange]);
 
     let tr = state.update({ changes: { from: first, to: first + "first".length, insert: "one" } });
-    let afterSecond = syntaxTree(tr.state).resolveInner(second - "first".length + "one".length);
+    let updatedTree = ensureSyntaxTree(tr.state, tr.state.doc.length, 5_000);
+    expect(updatedTree).not.toBeNull();
+    let afterSecond = updatedTree!.resolveInner(second - "first".length + "one".length);
 
     expect(afterSecond.name).toBe("identifier");
     expect(afterSecond.node?.id).toBe(beforeSecond.node?.id);
@@ -1035,7 +1053,7 @@ describe("tree-sitter tree wrapper", () => {
   it("resumes interrupted nested tree-sitter parsing", async () => {
     let script = `${"let value = 1;\n".repeat(80_000)}let done = true;\n`;
     let doc = `<script>${script}</script>`;
-    let { state } = await mixedHtmlState(doc);
+    let { state } = await mixedHtmlState(doc, "budgeted");
 
     expect(ensureSyntaxTree(state, state.doc.length, 0)).toBe(null);
     expect(syntaxTreeAvailable(state)).toBe(false);
@@ -1047,7 +1065,7 @@ describe("tree-sitter tree wrapper", () => {
 
   it("lets parse work stop through a scheduler predicate and resume later", async () => {
     let doc = `${"let value = 1;\n".repeat(80_000)}let done = true;\n`;
-    let state = await javascriptState(doc);
+    let state = await javascriptState(doc, "budgeted");
     let field = state.field(Language.state, false)!;
 
     expect(field.context.work(() => true)).toBe(false);
