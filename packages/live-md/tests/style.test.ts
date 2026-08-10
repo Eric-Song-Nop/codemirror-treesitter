@@ -19,6 +19,17 @@ describe("public LiveMD stylesheet", () => {
     expect(css).toContain("padding-bottom: calc(8px + 0.55em)");
   });
 
+  for (let { name, selector } of [
+    { name: "Mermaid", selector: ".live-md-codemirror .cm-md-mermaid" },
+    { name: "block LaTeX", selector: ".live-md-codemirror .cm-md-latex-display" },
+  ]) {
+    it(`keeps ${name} spacing inside CodeMirror's measured boxes`, async () => {
+      let css = await readFile(join(liveMdSourceRoot, "style.css"), "utf8");
+
+      expect(verticalMarginDeclarations(cssRule(css, selector))).toEqual([]);
+    });
+  }
+
   it("exports rich Markdown preview CSS for standalone HTML", () => {
     let css = liveMdMarkdownDocumentCss();
 
@@ -203,4 +214,27 @@ function collectBuildOutputs(result: Awaited<ReturnType<typeof build>>): BuildOu
   }
 
   return buildResults.flatMap((entry) => entry.output);
+}
+
+function cssRule(css: string, selector: string) {
+  let escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let match = new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`, "u").exec(css);
+  expect(match, `Expected stylesheet rule for ${selector}`).not.toBeNull();
+  return match![1]!;
+}
+
+function verticalMarginDeclarations(rule: string) {
+  let declarations = rule.matchAll(
+    /\b(margin(?:-(?:block(?:-(?:start|end))?|top|bottom))?)\s*:\s*([^;]+)/gu,
+  );
+  return [...declarations]
+    .filter(([, property, value]) => hasNonzeroVerticalMargin(property!, value!))
+    .map(([, property, value]) => `${property}: ${value.trim()}`);
+}
+
+function hasNonzeroVerticalMargin(property: string, value: string) {
+  let values = value.trim().split(/\s+/u);
+  let verticalValues =
+    property == "margin" ? (values.length >= 3 ? [values[0], values[2]] : [values[0]]) : values;
+  return verticalValues.some((entry) => !/^0(?:[a-z%]+)?$/iu.test(entry!));
 }

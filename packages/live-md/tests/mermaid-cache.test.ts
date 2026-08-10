@@ -7,7 +7,12 @@ import {
   cachedLiveMdMermaidRequest,
   createLiveMdRenderCache,
 } from "../src/core/runtime/render-cache.js";
-import { MermaidWidget } from "../src/core/widgets.js";
+import {
+  ImagePreviewWidget,
+  MermaidWidget,
+  TablePreviewWidget,
+  type MarkdownTable,
+} from "../src/core/widgets.js";
 
 const mermaidMock = vi.hoisted(() => ({
   beautifulCalls: 0,
@@ -48,6 +53,7 @@ const inertView = {
   posAtDOM() {
     return 0;
   },
+  requestMeasure() {},
 } as unknown as EditorView;
 
 beforeEach(() => {
@@ -154,6 +160,64 @@ describe("Mermaid render cache", () => {
   });
 });
 
+describe("block widget measurement", () => {
+  it("requests an editor remeasurement after an asynchronous Mermaid render", async () => {
+    let cache = createLiveMdRenderCache();
+    let trace = emptyLiveMdLeafAnalysisTrace();
+    let handle = cachedLiveMdMermaidRequest(cache, trace, "measure-request", "flowchart TD\nA");
+    let { requestMeasure, view } = measurementView();
+    let element = new MermaidWidget(handle, cache.measuredHeights).toDOM(view);
+    document.body.append(element);
+
+    await waitForMermaidSvg(element);
+    await waitForRequestMeasure(requestMeasure);
+
+    expect(requestMeasure).toHaveBeenCalled();
+  });
+
+  it("requests an editor remeasurement when a block image loads", async () => {
+    let { requestMeasure, view } = measurementView();
+    let figure = new ImagePreviewWidget("Diagram", "assets/diagram.png", new Map(), true).toDOM(
+      view,
+    );
+    document.body.append(figure);
+
+    figure.querySelector("img")!.dispatchEvent(new Event("load"));
+    await waitForRequestMeasure(requestMeasure);
+
+    expect(requestMeasure).toHaveBeenCalled();
+  });
+
+  it("requests an editor remeasurement when an inline table image loads", async () => {
+    let table: MarkdownTable = {
+      alignments: ["left"],
+      header: ["![Diagram](assets/diagram.png)"],
+      headerCells: [
+        {
+          inline: [
+            {
+              alt: "Diagram",
+              kind: "image",
+              source: "assets/diagram.png",
+              title: null,
+            },
+          ],
+          text: "![Diagram](assets/diagram.png)",
+        },
+      ],
+      rows: [],
+    };
+    let { requestMeasure, view } = measurementView();
+    let wrapper = new TablePreviewWidget(table).toDOM(view);
+    document.body.append(wrapper);
+
+    wrapper.querySelector("img")!.dispatchEvent(new Event("load"));
+    await waitForRequestMeasure(requestMeasure);
+
+    expect(requestMeasure).toHaveBeenCalled();
+  });
+});
+
 async function waitForMermaidSvg(element: Element) {
   for (let attempt = 0; attempt < 20; attempt++) {
     let svg = element.querySelector("svg");
@@ -169,4 +233,24 @@ async function waitForMermaidError(element: HTMLElement) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error("Expected cached Mermaid preview to render an error");
+}
+
+function measurementView() {
+  let requestMeasure = vi.fn();
+  let view = {
+    dispatch() {},
+    focus() {},
+    posAtDOM() {
+      return 0;
+    },
+    requestMeasure,
+  } as unknown as EditorView;
+  return { requestMeasure, view };
+}
+
+async function waitForRequestMeasure(requestMeasure: ReturnType<typeof vi.fn>) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (requestMeasure.mock.calls.length) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }

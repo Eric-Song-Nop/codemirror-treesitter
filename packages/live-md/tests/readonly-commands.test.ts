@@ -211,5 +211,13 @@ function clickTaskCheckbox(view: EditorView) {
 function clickTablePreview(view: EditorView) {
   let preview = view.dom.querySelector<HTMLElement>(".cm-md-table-preview");
   expect(preview).toBeTruthy();
-  preview?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  preview!.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+  preview!.dispatchEvent(
+    new MouseEvent("mousedown", {
+      bubbles: true,
+      button: 0,
+      cancelable: true,
+      clientY: 25,
+    }),
+  );
 }

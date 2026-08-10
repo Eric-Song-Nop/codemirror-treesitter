@@ -15,7 +15,17 @@ export function analyzeMarkdownFenceDescriptor(
   let content = node.children.find((child) => child.name == "code_fence_content") ?? null;
   let language = readFenceLanguage(doc, findFenceLanguageNode(node));
   let mermaidSource =
-    content && content.from < content.to ? readMermaidSource(doc, content, language) : null;
+    closingDelimiter && content && content.from < content.to
+      ? readMermaidSource(doc, content, language)
+      : null;
+  let replacementRange =
+    mermaidSource && closingDelimiter
+      ? {
+          block: true,
+          from: openingDelimiter.from,
+          to: doc.lineAt(closingDelimiter.from).to,
+        }
+      : null;
 
   return {
     closingDelimiterRange: closingDelimiter ? nodeRange(closingDelimiter) : null,
@@ -25,6 +35,7 @@ export function analyzeMarkdownFenceDescriptor(
     mermaidSource,
     openingDelimiterRange: nodeRange(openingDelimiter),
     range: nodeRange(node),
+    replacementRange,
   };
 }
 

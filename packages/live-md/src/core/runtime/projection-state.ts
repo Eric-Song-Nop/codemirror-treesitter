@@ -8,7 +8,11 @@ import {
 import { patchRangeSet } from "@codemirror-treesitter/language";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import { type DocRange } from "../analysis/types.js";
-import { liveMdProjectionValueOwnerKeys, type LiveMdProjectionLayer } from "../projection/emit.js";
+import {
+  isLiveMdReplacementDecoration,
+  liveMdProjectionValueOwnerKeys,
+  type LiveMdProjectionLayer,
+} from "../projection/emit.js";
 
 export type ProjectionSets = {
   atomicRanges: RangeSet<RangeValue>;
@@ -87,13 +91,34 @@ export function mapProjectionSets(
   return revealProjectionSets(
     {
       atomicRanges: sets.atomicRanges.map(changes),
-      destructiveDecorations: sets.destructiveDecorations.map(changes),
-      interactiveDecorations: sets.interactiveDecorations.map(changes),
-      sourceSafeDecorations: sets.sourceSafeDecorations.map(changes),
-      structuralLineDecorations: sets.structuralLineDecorations.map(changes),
+      destructiveDecorations: mapProjectionDecorations(sets.destructiveDecorations, changes),
+      interactiveDecorations: mapProjectionDecorations(sets.interactiveDecorations, changes),
+      sourceSafeDecorations: mapProjectionDecorations(sets.sourceSafeDecorations, changes),
+      structuralLineDecorations: mapProjectionDecorations(sets.structuralLineDecorations, changes),
     },
     revealRanges,
   );
+}
+
+function mapProjectionDecorations(decorations: DecorationSet, changes: ChangeDesc): DecorationSet {
+  let replacements: Array<Range<Decoration>> = [];
+  let hasReplacement = false;
+  decorations.between(0, Number.MAX_SAFE_INTEGER, (from, to, value) => {
+    if (!isLiveMdReplacementDecoration(value)) return;
+    hasReplacement = true;
+    // Replacement ownership is exact: boundary insertions stay outside,
+    // while edits inside the source continue to map with the replacement.
+    let mappedFrom = changes.mapPos(from, 1);
+    let mappedTo = changes.mapPos(to, -1);
+    if (mappedFrom < mappedTo) replacements.push(value.range(mappedFrom, mappedTo));
+  });
+  if (!hasReplacement) return decorations.map(changes);
+  let mappedOther = decorations
+    .update({ filter: (_from, _to, value) => !isLiveMdReplacementDecoration(value) })
+    .map(changes);
+  return replacements.length
+    ? RangeSet.join([mappedOther, RangeSet.of(replacements, true)])
+    : mappedOther;
 }
 
 export function revealProjectionSets(

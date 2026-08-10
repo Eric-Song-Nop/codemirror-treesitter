@@ -23,6 +23,7 @@ import {
   type LeafAnalysisRecord,
   type LiveMdDescriptor,
   liveMdDescriptorKey,
+  liveMdDescriptorEffectRanges,
   liveMdDescriptorRanges,
   liveMdDescriptorsKey,
   liveMdStableKeyParts,
@@ -771,7 +772,7 @@ function analysisEffectRange(
   let from = sourceRange.from;
   let to = sourceRange.to;
   for (let descriptor of [...analysis.structuralEffects, ...analysis.descriptors]) {
-    for (let range of liveMdDescriptorRanges(descriptor)) {
+    for (let range of liveMdDescriptorEffectRanges(descriptor)) {
       from = Math.min(from, range.from + sourceRange.from);
       to = Math.max(to, range.to + sourceRange.from);
     }
@@ -816,11 +817,21 @@ function revealDescriptorRanges(
 ): readonly DocRange[] {
   switch (descriptor.kind) {
     case "image":
+      return liveMdDescriptorEffectRanges(descriptor).map((range) =>
+        offsetRangeForReveal(range, sourceRange),
+      );
     case "latex":
+      return [offsetRangeForReveal(descriptor.formula.replacementRange, sourceRange)];
     case "table":
+      return [offsetRangeForReveal(descriptor.replacementRange, sourceRange)];
     case "codeFence":
+      return [
+        ...(descriptor.replacementRange ? [descriptor.replacementRange] : []),
+        descriptor.openingDelimiterRange,
+        ...(descriptor.closingDelimiterRange ? [descriptor.closingDelimiterRange] : []),
+      ].map((range) => offsetRangeForReveal(range, sourceRange));
     case "linkMark":
-      return liveMdDescriptorRanges(descriptor).map((range) =>
+      return [descriptor.range, descriptor.sourceRange].map((range) =>
         offsetRangeForReveal(range, sourceRange),
       );
     case "listMarker":

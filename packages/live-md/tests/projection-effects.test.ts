@@ -25,6 +25,7 @@ import { projectLeaf, projectLeafRecords } from "../src/core/projection/project-
 import { type LiveMdBuild, type LiveMdRenderStatus } from "../src/core/projection/types.js";
 import {
   joinProjectionSets,
+  mapProjectionSets,
   projectionSetsFromLayer,
 } from "../src/core/runtime/projection-state.js";
 import { type MarkdownTable, TablePreviewWidget } from "../src/core/widgets.js";
@@ -55,6 +56,7 @@ describe("LiveMD projection effects", () => {
         { from: 7, to: 8 },
       ],
       range: { from: 0, to: 20 },
+      replacementRange: { block: true, from: 0, to: 20 },
       table: {
         alignments: ["left"],
         header: ["Alpha"],
@@ -223,6 +225,100 @@ describe("LiveMD projection effects", () => {
     expect(atomicRanges(build, mergedAtomicRanges)).toEqual(atomicRanges(build));
   });
 
+  it("maps exact replacement boundaries without changing block layout sides", () => {
+    let blockBuild = testBuild("abc");
+    addReplace(blockBuild, 0, 3, new TestWidget("block"), true);
+    let blockProjection = finishProjectionLayers(blockBuild);
+    let blockDecoration = onlyDecoration(blockProjection.direct.destructiveDecorations);
+
+    expect(blockDecoration.spec).toMatchObject({
+      block: true,
+      inclusiveEnd: true,
+      inclusiveStart: true,
+    });
+
+    let transaction = blockBuild.state.update({
+      changes: [
+        { from: 0, insert: "<" },
+        { from: 3, insert: ">" },
+      ],
+    });
+    let mapped = mapProjectionSets(
+      projectionSetsFromLayer(blockProjection.direct),
+      transaction.changes,
+      [],
+    );
+
+    expect(
+      decorationRanges({ ...blockBuild, state: transaction.state }, joinProjectionSets(mapped)),
+    ).toEqual([{ className: undefined, from: 1, to: 4, widget: "TestWidget" }]);
+
+    let inlineBuild = testBuild("abc");
+    addReplace(inlineBuild, 0, 3, new TestWidget("inline"));
+    let inlineDecoration = onlyDecoration(
+      finishProjectionLayers(inlineBuild).surface.destructiveDecorations,
+    );
+    expect(inlineDecoration.spec).toMatchObject({
+      block: false,
+      inclusiveEnd: false,
+      inclusiveStart: false,
+    });
+  });
+
+  it("maps custom feature block replacement boundaries outside pending insertions", () => {
+    let doc = "# Feature";
+    let build = testBuild(doc);
+    projectLeafRecords(build, [
+      leafRecord(doc, [
+        {
+          effect: {
+            atomic: true,
+            block: true,
+            kind: "replace",
+            range: { from: 0, to: doc.length },
+            widget: { key: "test-feature", widget: new TestWidget("feature") },
+          },
+          feature: "test-feature",
+          kind: "feature",
+        },
+      ]),
+    ]);
+    let direct = projectionSetsFromLayer(finishProjectionLayers(build).direct);
+    let transaction = build.state.update({
+      changes: [
+        { from: 0, insert: "<" },
+        { from: doc.length, insert: ">" },
+      ],
+    });
+
+    let mapped = mapProjectionSets(direct, transaction.changes, []);
+
+    expect(
+      decorationRanges({ ...build, state: transaction.state }, joinProjectionSets(mapped)),
+    ).toEqual([{ className: undefined, from: 1, to: doc.length + 1, widget: "TestWidget" }]);
+    expect(atomicRanges({ ...build, state: transaction.state }, mapped.atomicRanges)).toEqual([
+      { from: 1, to: doc.length + 1 },
+    ]);
+  });
+
+  it("keeps independently requested atomic range mapping semantics", () => {
+    let build = testBuild("abc");
+    addAtom(build, 0, 3);
+    let direct = projectionSetsFromLayer(finishProjectionLayers(build).direct);
+    let transaction = build.state.update({
+      changes: [
+        { from: 0, insert: "<" },
+        { from: 3, insert: ">" },
+      ],
+    });
+
+    let mapped = mapProjectionSets(direct, transaction.changes, []);
+
+    expect(atomicRanges({ ...build, state: transaction.state }, mapped.atomicRanges)).toEqual([
+      { from: 1, to: 5 },
+    ]);
+  });
+
   it("keeps interactive link marks in the visible surface layer", () => {
     let build = testBuild("[docs](https://example.com) and [plain]()");
     addMark(build, 1, 5, liveMdLinkMark("https://example.com", null));
@@ -387,6 +483,15 @@ function decorationRanges(
   return ranges;
 }
 
+function onlyDecoration(decorations: DecorationSet) {
+  let values: Decoration[] = [];
+  decorations.between(0, Number.MAX_SAFE_INTEGER, (_from, _to, value) => {
+    values.push(value);
+  });
+  expect(values).toHaveLength(1);
+  return values[0]!;
+}
+
 function linkHrefRanges(build: LiveMdBuild, decorations: DecorationSet) {
   let ranges: Array<{ from: number; href: string; to: number }> = [];
   decorations.between(0, build.state.doc.length, (from, to, value) => {
@@ -461,6 +566,7 @@ function tableRecord(
         kind: "table",
         pipeRanges: pipes,
         range: { from: 0, to: doc.length },
+        replacementRange: { block: true, from: 0, to: doc.length },
         table: {
           alignments: ["default", "default"],
           header: ["A", "B"],

@@ -7,6 +7,7 @@ import {
 } from "@codemirror-treesitter/language";
 import {
   type LiveMdDescriptor,
+  type LiveMdReplacementRange,
   type LiveMdTableAlignment,
   type LiveMdTableCellModel,
   type LiveMdTableModel,
@@ -69,15 +70,19 @@ export function analyzeMarkdownTableAnalysis(
   );
   if (!table) return tableAnalysisFromSource(doc, range, inlineRenderSession);
 
+  let tableRange = nodeRange(table.node);
+  let lineRanges = tableLineRanges(doc, tableRange);
+
   return {
     descriptor: {
       delimiterRowRange: table.delimiterRow ? nodeRange(table.delimiterRow) : null,
       kind: "table",
       pipeRanges: sortedNodes(table.pipes.values()).map(nodeRange),
-      range: nodeRange(table.node),
+      range: tableRange,
+      replacementRange: tableReplacementRange(doc, tableRange, lineRanges),
       table:
         readTableFromCaptures(doc, table, inlineRenderSession) ??
-        readTableFromSource(doc, nodeRange(table.node), inlineRenderSession),
+        readTableFromSource(doc, tableRange, inlineRenderSession),
     },
     inlineRanges: tableInlineRanges(doc, table),
   };
@@ -105,6 +110,7 @@ function tableAnalysisFromSource(
       kind: "table",
       pipeRanges: sourcePipeRanges(doc, lineRanges),
       range,
+      replacementRange: tableReplacementRange(doc, range, lineRanges),
       table,
     },
     inlineRanges: sourceTableInlineRanges(doc, lineRanges),
@@ -308,9 +314,23 @@ function tableLineRanges(doc: Text, range: DocRange) {
   for (let lineNumber = firstLine.number; lineNumber <= lastLine.number; lineNumber++) {
     let line = doc.line(lineNumber);
     let text = doc.sliceString(line.from, line.to);
-    if (text.trim()) lines.push({ from: line.from, to: line.to });
+    if (sourcePipeOffsets(text).length) lines.push({ from: line.from, to: line.to });
   }
   return lines;
+}
+
+function tableReplacementRange(
+  doc: Text,
+  sourceRange: DocRange,
+  lineRanges: readonly DocRange[],
+): LiveMdReplacementRange {
+  let firstLine = lineRanges[0] ?? doc.lineAt(sourceRange.from);
+  let lastLine = lineRanges.at(-1) ?? firstLine;
+  return {
+    block: true,
+    from: Math.max(sourceRange.from, firstLine.from),
+    to: lastLine.to,
+  };
 }
 
 function sourceTableInlineRanges(doc: Text, lines: readonly DocRange[]) {

@@ -13,6 +13,7 @@ const dropboxAccessToken =
 const dropboxRoot =
   process.env.LOCAL_MD_WORKSPACE_DROPBOX_ROOT || process.env.OPENDAL_DROPBOX_ROOT || "";
 const shareRelayOrigin = process.env.VITE_LOCAL_MD_SHARE_RELAY_ORIGIN || "";
+const liveMdBoundariesOnly = process.env.LOCAL_MD_WORKSPACE_SMOKE_LIVE_MD_BOUNDARIES_ONLY == "1";
 
 let chromePath = findChromePath();
 if (!chromePath) {
@@ -28,47 +29,64 @@ let chrome = execFile(chromePath, [
   `--user-data-dir=${userDataDir}`,
   "--no-default-browser-check",
   "--no-first-run",
-  "about:blank",
+  liveMdBoundariesOnly ? SMOKE_URL : "about:blank",
 ]);
 
 try {
+  if (liveMdBoundariesOnly) console.log("Starting focused LiveMD preview boundary smoke.");
   let browserWs = await waitForDevToolsEndpoint(chrome);
-  let client = await createCdpClient(browserWs);
-  let { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
-  let { sessionId } = await client.send("Target.attachToTarget", {
-    flatten: true,
-    targetId,
-  });
+  let client;
+  let sessionId;
+  if (liveMdBoundariesOnly) {
+    client = await createCdpClient(await waitForPageDevToolsEndpoint(browserWs));
+    console.log("Focused smoke connected to Chromium's page target.");
+  } else {
+    client = await createCdpClient(browserWs);
+    let { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
+    ({ sessionId } = await client.send("Target.attachToTarget", {
+      flatten: true,
+      targetId,
+    }));
+  }
 
   await client.send("Page.enable", {}, sessionId);
   await client.send("Runtime.enable", {}, sessionId);
-  await installMockFileSystemAccess(client, sessionId);
+  if (!liveMdBoundariesOnly) await installMockFileSystemAccess(client, sessionId);
 
-  await navigate(client, sessionId, SMOKE_URL);
-  await assertGitHubRepositoryLink(client, sessionId);
-  await assertLocalWorkspaceFlow(client, sessionId);
-  await assertOwnerReconnectSharedFileFlow(client);
-  await assertOwnerExternalConflictFlow(client);
-  await assertInitialDropboxUi(client, sessionId);
-  await assertNoDropboxConfigFields(client, sessionId);
+  if (liveMdBoundariesOnly) {
+    await waitForLoadedPage(client, sessionId, SMOKE_URL);
+    console.log("Focused smoke loaded the test page.");
+    await mountFocusedLiveMdEditor(client, sessionId);
+    console.log("Focused smoke found LiveMD; running boundary assertions.");
+    await assertLiveMdPreviewBoundaries(client, sessionId);
+    console.log(`LiveMD preview boundary UI smoke passed at ${SMOKE_URL}`);
+  } else {
+    await navigate(client, sessionId, SMOKE_URL);
+    await assertGitHubRepositoryLink(client, sessionId);
+    await assertLocalWorkspaceFlow(client, sessionId);
+    await assertOwnerReconnectSharedFileFlow(client);
+    await assertOwnerExternalConflictFlow(client);
+    await assertInitialDropboxUi(client, sessionId);
+    await assertNoDropboxConfigFields(client, sessionId);
 
-  await client.evaluate(
-    `
-      localStorage.setItem(${JSON.stringify(DROPBOX_CONFIG_KEY)}, JSON.stringify({
-        appKey: "stored-app-key",
-        root: "notes/smoke"
-      }));
-    `,
-    sessionId,
-  );
-  await navigate(client, sessionId, SMOKE_URL);
-  await assertSavedDropboxConfigUi(client, sessionId);
-  await assertNoDropboxConfigFields(client, sessionId);
-  await assertRealDropboxWorkspaceFlow(client, sessionId);
-  await assertMockDropboxWorkspaceFlow(client, sessionId);
+    await client.evaluate(
+      `
+        localStorage.setItem(${JSON.stringify(DROPBOX_CONFIG_KEY)}, JSON.stringify({
+          appKey: "stored-app-key",
+          root: "notes/smoke"
+        }));
+      `,
+      sessionId,
+    );
+    await navigate(client, sessionId, SMOKE_URL);
+    await assertSavedDropboxConfigUi(client, sessionId);
+    await assertNoDropboxConfigFields(client, sessionId);
+    await assertRealDropboxWorkspaceFlow(client, sessionId);
+    await assertMockDropboxWorkspaceFlow(client, sessionId);
 
-  await client.send("Browser.close");
-  console.log(`Grove workspace UI smoke passed at ${SMOKE_URL}`);
+    await client.send("Browser.close");
+    console.log(`Grove workspace UI smoke passed at ${SMOKE_URL}`);
+  }
 } finally {
   if (!chrome.killed) chrome.kill("SIGTERM");
   await rm(userDataDir, {
@@ -79,9 +97,34 @@ try {
   });
 }
 
+async function mountFocusedLiveMdEditor(client, sessionId) {
+  await client.waitForPredicate(`Boolean(customElements.get("live-md-editor"))`, sessionId, 20_000);
+  await client.evaluate(
+    `
+      (async () => {
+        let editor = document.createElement("live-md-editor");
+        editor.style.display = "block";
+        editor.style.height = "720px";
+        document.body.replaceChildren(editor);
+        await editor.ready;
+      })()
+    `,
+    sessionId,
+  );
+}
+
 async function navigate(client, sessionId, url) {
   await client.send("Page.navigate", { url }, sessionId);
   await client.waitForEvent("Page.loadEventFired", sessionId);
+  await waitForSettledUi();
+}
+
+async function waitForLoadedPage(client, sessionId, url) {
+  await client.waitForPredicate(
+    `location.href == ${JSON.stringify(url)} && document.readyState == "complete"`,
+    sessionId,
+    20_000,
+  );
   await waitForSettledUi();
 }
 
@@ -273,6 +316,15 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
     );
   }
 
+  await assertLiveMdPreviewBoundaries(client, sessionId);
+
+  await setLiveMdSmokeDocument(client, sessionId, nextValue);
+  await client.waitForPredicate(
+    `window.__localMdSmokeFiles?.get("smoke-local.md") == ${JSON.stringify(nextValue)}`,
+    sessionId,
+    3_000,
+  );
+
   await assertSharedFileGuestEdit(client, sessionId, {
     expectedInitialValue: nextValue,
     nextValue: "# smoke local\n\nEdited by shared-file UI smoke.\n",
@@ -288,6 +340,205 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
   await assertSharedFileLifecycle(client, sessionId, {
     expectedValue: "# smoke local\n\nEdited by shared-file UI smoke.\n",
   });
+}
+
+async function assertLiveMdPreviewBoundaries(client, sessionId) {
+  const unclosedMermaid = "```mermaid\ngraph TD\n  A --> B";
+  await setLiveMdSmokeDocument(client, sessionId, unclosedMermaid);
+
+  for (let index = 0; index < 3; index += 1) {
+    let before = await liveMdPreviewState(client, sessionId);
+    await pressEditorKey(client, sessionId, "Enter");
+    let after = await liveMdPreviewState(client, sessionId);
+    let trailing = after.value.slice(unclosedMermaid.length);
+    if (
+      !after.value.startsWith(unclosedMermaid) ||
+      !/^(?:\n[\t ]*)+$/u.test(trailing) ||
+      lineFeedCount(after.value) != lineFeedCount(before.value) + 1 ||
+      after.lineCount != before.lineCount + 1 ||
+      after.widgets.includes(".cm-md-mermaid")
+    ) {
+      throw new Error(
+        `unclosed Mermaid Enter ${index + 1} was not preserved as an editable line: ${JSON.stringify(
+          { after, before, trailing },
+        )}`,
+      );
+    }
+  }
+
+  await assertPreviewLowerEdgeEditing(client, sessionId, {
+    label: "closed Mermaid",
+    source: "```mermaid\ngraph TD\n  A --> B\n```",
+    widget: ".cm-md-mermaid",
+  });
+  await assertPreviewLowerEdgeEditing(client, sessionId, {
+    label: "block image",
+    source: "![dot](image.png)",
+    widget: ".cm-md-image-preview",
+  });
+}
+
+function lineFeedCount(value) {
+  return Array.from(value).filter((character) => character == "\n").length;
+}
+
+async function assertPreviewLowerEdgeEditing(client, sessionId, { label, source, widget }) {
+  let fixture = `${source}\n\nAFTER`;
+  await setLiveMdSmokeDocument(client, sessionId, fixture);
+  await client.waitForPredicate(
+    `Boolean(document.querySelector("live-md-editor")?.shadowRoot?.querySelector(${JSON.stringify(
+      widget,
+    )}))`,
+    sessionId,
+  );
+
+  let before = await liveMdPreviewState(client, sessionId);
+  await clickLiveMdWidget(client, sessionId, widget, "lower");
+  await pressEditorKey(client, sessionId, "Enter");
+
+  let afterEnter = `${source}\n\n\nAFTER`;
+  await assertLiveMdPreviewState(client, sessionId, {
+    expectedLineCount: before.lineCount + 1,
+    expectedValue: afterEnter,
+    requiredWidget: widget,
+    label: `${label} lower-edge Enter`,
+  });
+
+  await pressEditorKey(client, sessionId, "Backspace");
+  await assertLiveMdPreviewState(client, sessionId, {
+    expectedLineCount: before.lineCount,
+    expectedValue: fixture,
+    requiredWidget: widget,
+    label: `${label} lower-edge Backspace`,
+  });
+}
+
+async function setLiveMdSmokeDocument(client, sessionId, value) {
+  await client.evaluate(
+    `
+      (() => {
+        let editor = document.querySelector("live-md-editor");
+        if (!editor) throw new Error("live-md-editor was not found.");
+        editor.value = ${JSON.stringify(value)};
+        editor.setSelectionRange(editor.value.length, editor.value.length);
+        editor.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
+        editor.focus();
+      })()
+    `,
+    sessionId,
+  );
+  await waitForSettledUi();
+}
+
+async function clickLiveMdWidget(client, sessionId, selector, edge) {
+  let target = await client.evaluate(
+    `
+      (() => {
+        let widget = document
+          .querySelector("live-md-editor")
+          ?.shadowRoot?.querySelector(${JSON.stringify(selector)});
+        if (!widget) return null;
+        let rect = widget.getBoundingClientRect();
+        return {
+          x: Math.floor(rect.left + rect.width / 2),
+          y: Math.floor(rect.top + rect.height * ${edge == "lower" ? 0.85 : 0.15})
+        };
+      })()
+    `,
+    sessionId,
+  );
+  if (!target) throw new Error(`LiveMD widget was not found: ${selector}`);
+
+  await client.send(
+    "Input.dispatchMouseEvent",
+    {
+      type: "mouseMoved",
+      x: target.x,
+      y: target.y,
+    },
+    sessionId,
+  );
+  await client.send(
+    "Input.dispatchMouseEvent",
+    {
+      button: "left",
+      clickCount: 1,
+      type: "mousePressed",
+      x: target.x,
+      y: target.y,
+    },
+    sessionId,
+  );
+  await client.send(
+    "Input.dispatchMouseEvent",
+    {
+      button: "left",
+      clickCount: 1,
+      type: "mouseReleased",
+      x: target.x,
+      y: target.y,
+    },
+    sessionId,
+  );
+  await waitForSettledUi(100);
+}
+
+async function pressEditorKey(client, sessionId, key) {
+  let keySpec =
+    key == "Enter"
+      ? { code: "Enter", key: "Enter", nativeVirtualKeyCode: 13, windowsVirtualKeyCode: 13 }
+      : { code: "Backspace", key: "Backspace", nativeVirtualKeyCode: 8, windowsVirtualKeyCode: 8 };
+  await client.send("Input.dispatchKeyEvent", { ...keySpec, type: "rawKeyDown" }, sessionId);
+  await client.send("Input.dispatchKeyEvent", { ...keySpec, type: "keyUp" }, sessionId);
+  await waitForSettledUi(100);
+}
+
+async function assertLiveMdPreviewState(
+  client,
+  sessionId,
+  { expectedLineCount, expectedValue, forbiddenWidget, label, requiredWidget },
+) {
+  let state = await liveMdPreviewState(client, sessionId);
+  let requiredWidgetFound = requiredWidget ? state.widgets.includes(requiredWidget) : true;
+  let forbiddenWidgetFound = forbiddenWidget ? state.widgets.includes(forbiddenWidget) : false;
+  if (
+    state.value != expectedValue ||
+    state.lineCount != expectedLineCount ||
+    !requiredWidgetFound ||
+    forbiddenWidgetFound
+  ) {
+    throw new Error(
+      `${label} did not preserve the user-visible preview boundary: ${JSON.stringify({
+        ...state,
+        expectedLineCount,
+        expectedValue,
+        forbiddenWidget,
+        requiredWidget,
+      })}`,
+    );
+  }
+}
+
+async function liveMdPreviewState(client, sessionId) {
+  return client.evaluate(
+    `
+      (() => {
+        let editor = document.querySelector("live-md-editor");
+        let root = editor?.shadowRoot;
+        return {
+          lineCount: root?.querySelectorAll(".cm-line").length ?? 0,
+          lineText: Array.from(root?.querySelectorAll(".cm-line") ?? []).map(
+            (line) => line.textContent
+          ),
+          value: editor?.value ?? null,
+          widgets: [".cm-md-mermaid", ".cm-md-image-preview"].filter((selector) =>
+            root?.querySelector(selector)
+          )
+        };
+      })()
+    `,
+    sessionId,
+  );
 }
 
 async function assertOwnerReconnectSharedFileFlow(client) {
@@ -1828,6 +2079,23 @@ function waitForDevToolsEndpoint(child) {
       reject(new Error(`Chromium exited before DevTools was ready: ${code}`));
     });
   });
+}
+
+async function waitForPageDevToolsEndpoint(browserWs) {
+  let endpoint = new URL(browserWs);
+  endpoint.protocol = "http:";
+  endpoint.pathname = "/json/list";
+  endpoint.search = "";
+  let started = Date.now();
+  while (Date.now() - started < 10_000) {
+    let targets = await fetch(endpoint).then((response) => response.json());
+    let page = targets.find(
+      (target) => target.type == "page" && typeof target.webSocketDebuggerUrl == "string",
+    );
+    if (page) return page.webSocketDebuggerUrl;
+    await waitForSettledUi(50);
+  }
+  throw new Error("Timed out waiting for Chromium's page target.");
 }
 
 function waitForSettledUi(delay = 350) {
