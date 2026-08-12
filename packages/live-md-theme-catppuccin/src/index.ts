@@ -45,7 +45,7 @@ function catppuccinLiveMdVariables(colors: CatppuccinColors): LiveMdThemeColorVa
     "--live-md-muted": colors.overlay2,
     "--live-md-ordered-marker": colors.mauve,
     "--live-md-rule": colors.surface1,
-    "--live-md-selection": `${colors.surface1}80`,
+    "--live-md-selection": `color-mix(in srgb, ${colors.blue} 20%, transparent)`,
     "--live-md-surface": colors.mantle,
     "--live-md-surface-error": `${colors.red}14`,
     "--live-md-surface-error-border": colors.red,
@@ -81,7 +81,6 @@ export const catppuccinMacchiatoLiveMdTheme = createLiveMdTheme({
     "--live-md-heading-rest": catppuccinMacchiatoColors.text,
     "--live-md-inline-code-bg": catppuccinMacchiatoColors.surface0,
     "--live-md-inline-code-text": catppuccinMacchiatoColors.peach,
-    "--live-md-selection": catppuccinMacchiatoColors.surface1,
     "--live-md-surface-error": `${catppuccinMacchiatoColors.red}1a`,
   },
 });

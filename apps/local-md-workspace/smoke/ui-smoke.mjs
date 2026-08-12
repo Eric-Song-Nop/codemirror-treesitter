@@ -33,7 +33,7 @@ let chrome = execFile(chromePath, [
 ]);
 
 try {
-  if (liveMdBoundariesOnly) console.log("Starting focused LiveMD preview boundary smoke.");
+  if (liveMdBoundariesOnly) console.log("Starting focused LiveMD browser regression smoke.");
   let browserWs = await waitForDevToolsEndpoint(chrome);
   let client;
   let sessionId;
@@ -57,9 +57,9 @@ try {
     await waitForLoadedPage(client, sessionId, SMOKE_URL);
     console.log("Focused smoke loaded the test page.");
     await mountFocusedLiveMdEditor(client, sessionId);
-    console.log("Focused smoke found LiveMD; running boundary assertions.");
-    await assertLiveMdPreviewBoundaries(client, sessionId);
-    console.log(`LiveMD preview boundary UI smoke passed at ${SMOKE_URL}`);
+    console.log("Focused smoke found LiveMD; running browser regression assertions.");
+    await assertLiveMdUiRegressions(client, sessionId);
+    console.log(`LiveMD browser regression smoke passed at ${SMOKE_URL}`);
   } else {
     await navigate(client, sessionId, SMOKE_URL);
     await assertGitHubRepositoryLink(client, sessionId);
@@ -316,7 +316,7 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
     );
   }
 
-  await assertLiveMdPreviewBoundaries(client, sessionId);
+  await assertLiveMdUiRegressions(client, sessionId);
 
   await setLiveMdSmokeDocument(client, sessionId, nextValue);
   await client.waitForPredicate(
@@ -340,6 +340,11 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
   await assertSharedFileLifecycle(client, sessionId, {
     expectedValue: "# smoke local\n\nEdited by shared-file UI smoke.\n",
   });
+}
+
+async function assertLiveMdUiRegressions(client, sessionId) {
+  await assertLiveMdPreviewBoundaries(client, sessionId);
+  await assertLiveMdSelectionVisibility(client, sessionId);
 }
 
 async function assertLiveMdPreviewBoundaries(client, sessionId) {
@@ -376,6 +381,189 @@ async function assertLiveMdPreviewBoundaries(client, sessionId) {
     source: "![dot](image.png)",
     widget: ".cm-md-image-preview",
   });
+}
+
+async function assertLiveMdSelectionVisibility(client, sessionId) {
+  let fixture = [
+    "before",
+    "",
+    "```ts",
+    "const selected = true;",
+    "```",
+    "",
+    "```mermaid",
+    "graph TD",
+    "  A --> B",
+    "```",
+    "",
+    "after",
+  ].join("\n");
+  await setLiveMdSmokeDocument(client, sessionId, fixture);
+
+  let state = await client.evaluate(
+    `
+      (async () => {
+        let fixture = ${JSON.stringify(fixture)};
+        let editor = document.querySelector("live-md-editor");
+        let root = editor?.shadowRoot;
+        let view = editor?.view;
+        if (!editor || !root || !view) throw new Error("live-md-editor was not ready.");
+
+        let from = fixture.indexOf("selected");
+        let to = fixture.indexOf("after") + "after".length;
+        editor.setSelectionRange(from, to);
+        editor.focus();
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve))
+        );
+
+        let selectionLayer = root.querySelector(".cm-selectionLayer");
+        let cursorLayer = root.querySelector(".cm-cursorLayer");
+        let codeLine = Array.from(root.querySelectorAll(".cm-md-code-line")).find((line) =>
+          line.textContent.includes("selected")
+        );
+        let mermaid = root.querySelector(".cm-md-mermaid");
+        let selectionRects = Array.from(root.querySelectorAll(".cm-selectionBackground"))
+          .map((node) => node.getBoundingClientRect())
+          .filter((rect) => rect.width > 0 && rect.height > 0);
+        let overlaps = (target) => {
+          if (!target) return false;
+          let rect = target.getBoundingClientRect();
+          return selectionRects.some(
+            (selection) =>
+              Math.min(selection.right, rect.right) > Math.max(selection.left, rect.left) &&
+              Math.min(selection.bottom, rect.bottom) > Math.max(selection.top, rect.top)
+          );
+        };
+
+        globalThis.__liveMdSmokeCopy = null;
+        view.contentDOM.addEventListener(
+          "copy",
+          (event) => {
+            globalThis.__liveMdSmokeCopy = {
+              seen: true,
+              text: event.clipboardData?.getData("text/plain") ?? null
+            };
+          },
+          { once: true }
+        );
+
+        let codeRect = codeLine?.getBoundingClientRect();
+        let codeSelection = codeRect
+          ? selectionRects.find(
+              (selection) =>
+                Math.min(selection.right, codeRect.right) >
+                  Math.max(selection.left, codeRect.left) &&
+                Math.min(selection.bottom, codeRect.bottom) >
+                  Math.max(selection.top, codeRect.top)
+            )
+          : null;
+        let clickPoint = codeRect && codeSelection
+          ? {
+              x: Math.floor(
+                (Math.max(codeSelection.left, codeRect.left) +
+                  Math.min(codeSelection.right, codeRect.right)) /
+                  2
+              ),
+              y: Math.floor(
+                (Math.max(codeSelection.top, codeRect.top) +
+                  Math.min(codeSelection.bottom, codeRect.bottom)) /
+                  2
+              )
+            }
+          : null;
+
+        return {
+          codeSelected: overlaps(codeLine),
+          clickPoint,
+          cursorLayerZIndex: Number(getComputedStyle(cursorLayer).zIndex),
+          expectedText: fixture.slice(from, to),
+          mermaidSelected: overlaps(mermaid),
+          pointerEvents: getComputedStyle(selectionLayer).pointerEvents,
+          selectionLayerZIndex: Number(getComputedStyle(selectionLayer).zIndex)
+        };
+      })()
+    `,
+    sessionId,
+  );
+
+  let modifier = process.platform == "darwin" ? 4 : 2;
+  await client.send(
+    "Input.dispatchKeyEvent",
+    {
+      code: "KeyC",
+      key: "c",
+      modifiers: modifier,
+      nativeVirtualKeyCode: 67,
+      commands: ["Copy"],
+      type: "keyDown",
+      windowsVirtualKeyCode: 67,
+    },
+    sessionId,
+  );
+  await client.send(
+    "Input.dispatchKeyEvent",
+    {
+      code: "KeyC",
+      key: "c",
+      modifiers: modifier,
+      nativeVirtualKeyCode: 67,
+      type: "keyUp",
+      windowsVirtualKeyCode: 67,
+    },
+    sessionId,
+  );
+  await client.waitForPredicate(`Boolean(globalThis.__liveMdSmokeCopy?.seen)`, sessionId);
+  let copyState = await client.evaluate(`globalThis.__liveMdSmokeCopy`, sessionId);
+
+  if (
+    !state.codeSelected ||
+    !state.mermaidSelected ||
+    state.selectionLayerZIndex <= 0 ||
+    state.cursorLayerZIndex <= state.selectionLayerZIndex ||
+    state.pointerEvents != "none" ||
+    !state.clickPoint ||
+    copyState.text != state.expectedText
+  ) {
+    throw new Error(
+      `LiveMD selection was obscured by preview content: ${JSON.stringify({ copyState, state })}`,
+    );
+  }
+
+  await dispatchCdpClick(client, sessionId, state.clickPoint);
+  let clickState = await client.evaluate(
+    `
+      (() => {
+        let editor = document.querySelector("live-md-editor");
+        let root = editor?.shadowRoot;
+        let codeLine = Array.from(root?.querySelectorAll(".cm-md-code-line") ?? []).find((line) =>
+          line.textContent.includes("selected")
+        );
+        let selection = editor?.view?.state.selection.main;
+        let hit = root?.elementFromPoint(${state.clickPoint.x}, ${state.clickPoint.y});
+        return {
+          collapsed: Boolean(selection?.empty),
+          hitSelectionLayer: Boolean(hit?.closest?.(".cm-selectionLayer")),
+          selectionHead: selection?.head ?? null,
+          selectionInsideCodeLine:
+            Boolean(codeLine) &&
+            Boolean(selection?.empty) &&
+            selection.head >= ${fixture.indexOf("const selected")} &&
+            selection.head <= ${fixture.indexOf("const selected") + "const selected = true;".length}
+        };
+      })()
+    `,
+    sessionId,
+  );
+  if (
+    !clickState.collapsed ||
+    clickState.hitSelectionLayer ||
+    !clickState.selectionInsideCodeLine
+  ) {
+    throw new Error(
+      `LiveMD selection overlay intercepted pointer input: ${JSON.stringify(clickState)}`,
+    );
+  }
 }
 
 function lineFeedCount(value) {
@@ -449,6 +637,10 @@ async function clickLiveMdWidget(client, sessionId, selector, edge) {
   );
   if (!target) throw new Error(`LiveMD widget was not found: ${selector}`);
 
+  await dispatchCdpClick(client, sessionId, target);
+}
+
+async function dispatchCdpClick(client, sessionId, target) {
   await client.send(
     "Input.dispatchMouseEvent",
     {

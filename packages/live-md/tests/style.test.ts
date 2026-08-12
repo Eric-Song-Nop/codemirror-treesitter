@@ -19,6 +19,15 @@ describe("public LiveMD stylesheet", () => {
     expect(css).toContain("padding-bottom: calc(8px + 0.55em)");
   });
 
+  it("keeps drawn selections above opaque preview surfaces without intercepting input", async () => {
+    let css = await readFile(join(liveMdSourceRoot, "style.css"), "utf8");
+    let selectionLayer = cssRule(css, ".live-md-codemirror > .cm-scroller > .cm-selectionLayer");
+
+    expect(selectionLayer).toContain("z-index: 1 !important");
+    expect(selectionLayer).toContain("pointer-events: none");
+    expect(css).toMatch(/\.live-md-codemirror \.cm-dropCursor\s*\{\s*z-index: 2;\s*\}/u);
+  });
+
   for (let { name, selector } of [
     { name: "Mermaid", selector: ".live-md-codemirror .cm-md-mermaid" },
     { name: "block LaTeX", selector: ".live-md-codemirror .cm-md-latex-display" },

@@ -45,7 +45,7 @@ function gruvboxLiveMdVariables(colors: GruvboxColors): LiveMdThemeColorVariable
     "--live-md-muted": colors.fg4,
     "--live-md-ordered-marker": colors.yellow,
     "--live-md-rule": colors.bg3,
-    "--live-md-selection": colors.selection,
+    "--live-md-selection": `color-mix(in srgb, ${colors.green} 20%, transparent)`,
     "--live-md-surface": colors.bg1,
     "--live-md-surface-error": `color-mix(in srgb, ${colors.red} 12%, ${colors.bg0})`,
     "--live-md-surface-error-border": colors.red,

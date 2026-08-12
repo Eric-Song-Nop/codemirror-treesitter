@@ -141,12 +141,13 @@ The UI smoke requires a Chromium/Chrome binary. Set `CHROME_PATH` if it is not
 discoverable. Real Dropbox storage checks additionally require
 `LOCAL_MD_WORKSPACE_DROPBOX_ACCESS_TOKEN` or `OPENDAL_DROPBOX_ACCESS_TOKEN`.
 
-To run only the real-browser LiveMD preview-boundary regression against an
-already running page that registers `<live-md-editor>`, set both the page URL
-and the focused-mode flag:
+To run only the real-browser LiveMD preview-boundary and selection regressions
+against an already running page that registers `<live-md-editor>`, set both the
+page URL and the focused-mode flag. Run the smoke script directly so Vite Task's
+clean environment does not discard these focused-mode variables:
 
 ```bash
 LOCAL_MD_WORKSPACE_SMOKE_URL=http://127.0.0.1:5174/ \
 LOCAL_MD_WORKSPACE_SMOKE_LIVE_MD_BOUNDARIES_ONLY=1 \
-vp run local-md-workspace#smoke:ui
+node apps/local-md-workspace/smoke/ui-smoke.mjs
 ```

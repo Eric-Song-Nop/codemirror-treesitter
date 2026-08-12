@@ -138,6 +138,15 @@
   background: var(--live-md-selection) !important;
 }
 
+.live-md-codemirror > .cm-scroller > .cm-selectionLayer {
+  z-index: 1 !important;
+  pointer-events: none;
+}
+
+.live-md-codemirror .cm-dropCursor {
+  z-index: 2;
+}
+
 .live-md-codemirror .cm-md-active-line {
   background: linear-gradient(90deg, var(--live-md-active-line), transparent 38%);
 }
