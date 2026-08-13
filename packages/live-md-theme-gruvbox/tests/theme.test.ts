@@ -18,4 +18,13 @@ describe("Gruvbox LiveMD themes", () => {
     expect(gruvboxDarkLiveMdTheme.variables["--live-md-bg"]).toBe("#282828");
     expect(gruvboxLightLiveMdTheme.variables["--live-md-bg"]).toBe("#fbf1c7");
   });
+
+  it("uses translucent selection overlays above preview content", () => {
+    expect(gruvboxDarkLiveMdTheme.variables["--live-md-selection"]).toBe(
+      "color-mix(in srgb, #b8bb26 20%, transparent)",
+    );
+    expect(gruvboxLightLiveMdTheme.variables["--live-md-selection"]).toBe(
+      "color-mix(in srgb, #79740e 20%, transparent)",
+    );
+  });
 });

@@ -15,6 +15,7 @@ import { history, redo, undo } from "@codemirror-treesitter/commands";
 import { EditorView, type DecorationSet } from "@codemirror/view";
 import {
   ensureSyntaxTree,
+  forceParsing,
   HighlightStyle,
   syntaxHighlighting,
   syntaxHighlighters,
@@ -146,9 +147,7 @@ describe("LiveMD analysis snapshot", () => {
         to: editFrom + "alpha | 1".length,
       },
     });
-    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
-
-    view.dispatch(transaction);
+    dispatchParsedTransaction(view, transaction);
     await __testFlushLiveMdAnalysis(view);
 
     expect(canonicalAnalysis(view.state, __testLiveMdAnalysis(view))).toEqual(
@@ -970,9 +969,7 @@ describe("LiveMD analysis snapshot", () => {
         to: editFrom + "alpha | 1".length,
       },
     });
-    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
-
-    view.dispatch(transaction);
+    dispatchParsedTransaction(view, transaction);
     await __testFlushLiveMdAnalysis(view);
 
     let transitioned = __testLiveMdAnalysis(view);
@@ -1009,8 +1006,7 @@ describe("LiveMD analysis snapshot", () => {
     let beforeRecord = recordBySource(view.state, before, "second **two**");
 
     let transaction = view.state.update({ changes: { from: 0, insert: "intro\n\n" } });
-    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
-    view.dispatch(transaction);
+    dispatchParsedTransaction(view, transaction);
     await __testFlushLiveMdAnalysis(view);
 
     let after = __testLiveMdAnalysis(view);
@@ -1166,7 +1162,7 @@ describe("LiveMD analysis snapshot", () => {
       let view = await markdownAnalysisView(doc, "paragraph 10");
 
       try {
-        expect(ensureSyntaxTree(view.state, view.state.doc.length, 5_000)).toBeTruthy();
+        expect(forceParsing(view, view.state.doc.length, 5_000)).toBe(true);
         let { pending } = await dispatchScheduledLocalEdit(
           view,
           {
@@ -1230,7 +1226,7 @@ describe("LiveMD analysis snapshot", () => {
       let view = await markdownAnalysisView(doc, "nested item line 25");
 
       try {
-        expect(ensureSyntaxTree(view.state, view.state.doc.length, 5_000)).toBeTruthy();
+        expect(forceParsing(view, view.state.doc.length, 5_000)).toBe(true);
         let { pending } = await dispatchScheduledLocalEdit(
           view,
           {
@@ -1254,7 +1250,7 @@ describe("LiveMD analysis snapshot", () => {
       let view = await markdownAnalysisView(doc, "tail");
 
       try {
-        expect(ensureSyntaxTree(view.state, view.state.doc.length, 5_000)).toBeTruthy();
+        expect(forceParsing(view, view.state.doc.length, 5_000)).toBe(true);
         let { after, pending } = await dispatchScheduledLocalEdit(
           view,
           {
@@ -2123,9 +2119,7 @@ describe("LiveMD analysis snapshot", () => {
     let transaction = view.state.update({
       changes: { from: editFrom, insert: " with more detail" },
     });
-    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
-
-    view.dispatch(transaction);
+    dispatchParsedTransaction(view, transaction);
     await __testFlushLiveMdAnalysis(view);
 
     let afterLineText = "- [ ] todo with more detail";
@@ -2162,9 +2156,7 @@ describe("LiveMD analysis snapshot", () => {
     let transaction = view.state.update({
       changes: { from: editFrom, insert: "x", to: editFrom + 1 },
     });
-    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
-
-    view.dispatch(transaction);
+    dispatchParsedTransaction(view, transaction);
     await __testFlushLiveMdAnalysis(view);
 
     let after = __testLiveMdAnalysis(view);
@@ -2192,8 +2184,7 @@ describe("LiveMD analysis snapshot", () => {
     let transaction = view.state.update({
       changes: { from: blank, insert: "\n", to: blank + 2 },
     });
-    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
-    view.dispatch(transaction);
+    dispatchParsedTransaction(view, transaction);
     await __testFlushLiveMdAnalysis(view);
 
     let after = __testLiveMdAnalysis(view);
@@ -2214,8 +2205,7 @@ describe("LiveMD analysis snapshot", () => {
     let transaction = view.state.update({
       changes: { from: lineBreak + 1, insert: "\n" },
     });
-    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
-    view.dispatch(transaction);
+    dispatchParsedTransaction(view, transaction);
     await __testFlushLiveMdAnalysis(view);
 
     let after = __testLiveMdAnalysis(view);
@@ -2250,8 +2240,7 @@ describe("LiveMD analysis snapshot", () => {
         ],
       }),
     });
-    ensureSyntaxTree(view.state, doc.length, 5_000);
-    view.dispatch({});
+    expect(forceParsing(view, doc.length, 5_000)).toBe(true);
     let before = __testLiveMdAnalysis(view);
 
     parseCalls = 0;
@@ -3374,7 +3363,7 @@ describe("LiveMD analysis snapshot", () => {
         codeFenceLanguagesField,
       ],
     });
-    ensureSyntaxTree(state, doc.length, 5_000);
+    state = completedState(state);
 
     let analysis = __testBuildLiveMdAnalysis(state);
 
@@ -3438,7 +3427,7 @@ describe("LiveMD analysis snapshot", () => {
         codeFenceLanguagesField,
       ],
     });
-    ensureSyntaxTree(state, doc.length, 5_000);
+    state = completedState(state);
 
     let analysis = __testBuildLiveMdAnalysis(state);
 
@@ -3487,7 +3476,7 @@ describe("LiveMD analysis snapshot", () => {
         codeFenceLanguagesField,
       ],
     });
-    ensureSyntaxTree(state, doc.length, 5_000);
+    state = completedState(state);
 
     expect(() => __testBuildLiveMdAnalysis(state)).toThrow("inline wrap failed");
     expect(created).toBe(1);
@@ -4157,8 +4146,7 @@ describe("LiveMD analysis snapshot", () => {
         to: doc.length,
       },
     });
-    ensureSyntaxTree(transaction.state, transaction.state.doc.length, 5_000);
-    view.dispatch(transaction);
+    dispatchParsedTransaction(view, transaction);
     await __testFlushLiveMdAnalysis(view);
 
     let after = __testLiveMdAnalysis(view);
@@ -4232,7 +4220,7 @@ async function markdownAnalysisState(doc: string, selectionText = "", extensions
       liveMdAnalysis,
     ],
   });
-  ensureSyntaxTree(state, doc.length, 5_000);
+  state = completedState(state);
   return state.update({ selection: { anchor: selection } }).state;
 }
 
@@ -4251,9 +4239,18 @@ async function markdownAnalysisView(doc: string, selectionText = "", extensions:
       ],
     }),
   });
-  ensureSyntaxTree(view.state, doc.length, 5_000);
-  view.dispatch({});
+  expect(forceParsing(view, doc.length, 5_000)).toBe(true);
   return view;
+}
+
+function completedState(state: EditorState) {
+  expect(ensureSyntaxTree(state, state.doc.length, 5_000)).not.toBeNull();
+  return state.update({}).state;
+}
+
+function dispatchParsedTransaction(view: EditorView, transaction: Transaction) {
+  view.dispatch(transaction);
+  expect(forceParsing(view, view.state.doc.length, 5_000)).toBe(true);
 }
 
 async function trackedHtmlCodeFenceLanguages() {
@@ -4328,7 +4325,7 @@ async function expectCoalescedPendingCommitMatchesOracles(
   if (!base.semantic) throw new Error(`${label}: expected semantic cache before coalesced edits`);
   if (!pending.pending) throw new Error(`${label}: expected coalesced pending state`);
   let changes = pending.pending.changes;
-  ensureSyntaxTree(view.state, view.state.doc.length, 5_000);
+  expect(forceParsing(view, view.state.doc.length, 5_000)).toBe(true);
 
   await __testFlushLiveMdAnalysis(view);
 

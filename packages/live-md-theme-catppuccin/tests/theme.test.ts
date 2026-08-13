@@ -18,4 +18,13 @@ describe("Catppuccin LiveMD themes", () => {
     expect(catppuccinLatteLiveMdTheme.variables["--live-md-bg"]).toBe("#eff1f5");
     expect(catppuccinMacchiatoLiveMdTheme.variables["--live-md-bg"]).toBe("#24273a");
   });
+
+  it("uses translucent selection overlays above preview content", () => {
+    expect(catppuccinLatteLiveMdTheme.variables["--live-md-selection"]).toBe(
+      "color-mix(in srgb, #1e66f5 20%, transparent)",
+    );
+    expect(catppuccinMacchiatoLiveMdTheme.variables["--live-md-selection"]).toBe(
+      "color-mix(in srgb, #8aadf4 20%, transparent)",
+    );
+  });
 });

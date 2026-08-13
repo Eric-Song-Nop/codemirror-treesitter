@@ -389,13 +389,14 @@ describe("LiveMD active source islands", () => {
     editor.destroy();
   });
 
-  it("turns a full-line image preview back into source when clicked", async () => {
+  it("turns a full-line image preview back into source when its upper half is clicked", async () => {
     let doc = "![Alt](image.png)\n\nnext";
     let editor = await mountEditor(doc, { selection: doc.indexOf("next") });
     let preview = editor.view.dom.querySelector<HTMLElement>(".cm-md-image-preview");
 
     expect(preview).toBeTruthy();
-    preview!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    preview!.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+    preview!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, clientY: 25 }));
 
     expect(__testLiveMdAnalysis(editor.view).activeSourceRanges).toEqual([
       { from: 0, to: "![Alt](image.png)".length },
@@ -403,6 +404,36 @@ describe("LiveMD active source islands", () => {
     expect(editor.view.dom.querySelector(".cm-md-image-preview")).toBeNull();
     editor.destroy();
   });
+
+  for (let { clientX, edge } of [
+    { clientX: 25, edge: "left" },
+    { clientX: 75, edge: "right" },
+  ] as const) {
+    it(`selects the ${edge} source boundary of an inline image preview`, async () => {
+      let image = "![Alt](image.png)";
+      let doc = `before ${image} after\n\nnext`;
+      let imageFrom = doc.indexOf(image);
+      let editor = await mountEditor(doc, { selection: doc.indexOf("next") });
+      let preview = editor.view.dom.querySelector<HTMLElement>(".cm-md-image-preview");
+
+      expect(preview).toBeTruthy();
+      preview!.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+      preview!.dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          button: 0,
+          clientX,
+          clientY: 25,
+        }),
+      );
+
+      expect(editor.view.state.selection.main.head).toBe(
+        edge == "left" ? imageFrom : imageFrom + image.length,
+      );
+      expect(editor.view.dom.querySelector(".cm-md-image-preview")).toBeNull();
+      editor.destroy();
+    });
+  }
 
   it("tracks every cursor leaf in a multi-cursor selection", async () => {
     let doc = "*one*\n\n*two*\n\n*three*";

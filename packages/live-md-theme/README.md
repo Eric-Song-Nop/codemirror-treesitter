@@ -12,6 +12,9 @@ Reusable LiveMD presentation theme contract. This package owns the public
 - Provide helpers to set and clear theme variables on host elements.
 - Avoid importing CodeMirror editor themes or the LiveMD runtime.
 
+`--live-md-selection` is drawn as an overlay above rendered preview content, so
+themes should provide a translucent color that keeps text and diagrams legible.
+
 ## Public Entry
 
 ```ts

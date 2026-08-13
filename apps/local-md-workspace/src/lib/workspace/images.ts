@@ -34,12 +34,12 @@ export function insertImageMarkdown(
   let from = position ?? selection.from;
   let to = position ?? selection.to;
   let markdown = assets.map(imageAssetMarkdown).join("\n\n");
-  let insert = blockInsertText(view.state.doc, from, to, markdown);
+  let { insert, selectionOffset } = blockInsertText(view.state.doc, from, to, markdown);
 
   view.dispatch({
     changes: { from, insert, to },
     scrollIntoView: true,
-    selection: { anchor: from + insert.length },
+    selection: { anchor: from + selectionOffset },
     userEvent: "input.image",
   });
   view.focus();
@@ -98,5 +98,8 @@ function blockInsertText(
   let prefix = from == 0 || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
   let suffix =
     to == doc.length || after.startsWith("\n\n") ? "" : after.startsWith("\n") ? "\n" : "\n\n";
-  return `${prefix}${markdown}${suffix}`;
+  return {
+    insert: `${prefix}${markdown}${suffix}`,
+    selectionOffset: prefix.length + markdown.length,
+  };
 }

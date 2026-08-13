@@ -37,18 +37,33 @@ export type LiveMdProjectionLayers = {
 const visibleSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-active" });
 const hiddenSyntax = Decoration.mark({ class: "cm-md-syntax cm-md-syntax-hidden" });
 const projectionOwnerKeys = Symbol("liveMdProjectionOwnerKeys");
+const projectionReplacementBoundary = Symbol("liveMdProjectionReplacementBoundary");
 
 class AtomicRange extends RangeValue {
-  constructor(readonly ownerKeys: readonly LiveMdEffectOwnerKey[] = []) {
+  constructor(
+    readonly ownerKeys: readonly LiveMdEffectOwnerKey[] = [],
+    readonly replacementBoundary = false,
+  ) {
     super();
+    if (replacementBoundary) {
+      // Keep insertions at either edge outside a replacement-owned atomic
+      // range, matching the exact mapping of its replacement decoration.
+      this.startSide = 1;
+      this.endSide = -1;
+    }
   }
 
   eq(other: RangeValue) {
-    return other instanceof AtomicRange && sameArrayItems(this.ownerKeys, other.ownerKeys);
+    return (
+      other instanceof AtomicRange &&
+      other.replacementBoundary == this.replacementBoundary &&
+      sameArrayItems(this.ownerKeys, other.ownerKeys)
+    );
   }
 }
 
 const atomicRangeValue = new AtomicRange();
+const replacementAtomicRangeValue = new AtomicRange([], true);
 
 export function createLiveMdBuild(config: LiveMdBuildConfig): LiveMdBuild {
   return {
@@ -202,7 +217,15 @@ export function finishProjectionLayers(build: LiveMdBuild): LiveMdProjectionLaye
           layer.destructive,
           Decoration.replace(
             withProjectionOwnerKeys(
-              { block: effect.block ?? false, widget: effect.widget },
+              withProjectionReplacementBoundary({
+                block: effect.block ?? false,
+                // CodeMirror uses inclusive block sides to avoid creating
+                // phantom text lines around a block widget. LiveMD maps the
+                // exact replacement boundary itself in mapProjectionSets.
+                inclusiveEnd: effect.block ?? false,
+                inclusiveStart: effect.block ?? false,
+                widget: effect.widget,
+              }),
               effect.ownerKeys,
             ),
           ).range(effect.from, effect.to),
@@ -267,8 +290,16 @@ export function finishAtomicRanges(
 ) {
   let builder = new RangeSetBuilder<RangeValue>();
   let atomicRanges = collectAtomicRanges(build, layer);
-  for (let { from, ownerKeys, to } of atomicRanges) {
-    builder.add(from, to, ownerKeys.length ? new AtomicRange(ownerKeys) : atomicRangeValue);
+  for (let { from, ownerKeys, replacementBoundary, to } of atomicRanges) {
+    builder.add(
+      from,
+      to,
+      ownerKeys.length
+        ? new AtomicRange(ownerKeys, replacementBoundary)
+        : replacementBoundary
+          ? replacementAtomicRangeValue
+          : atomicRangeValue,
+    );
   }
   return builder.finish();
 }
@@ -296,37 +327,56 @@ function collectLineClasses(build: LiveMdBuild) {
 }
 
 function collectAtomicRanges(build: LiveMdBuild, layer: "direct" | "surface" | "all") {
-  let atomicRanges = new Map<string, DocRange & { ownerKeys: Set<LiveMdEffectOwnerKey> }>();
+  let atomicRanges = new Map<
+    string,
+    DocRange & { ownerKeys: Set<LiveMdEffectOwnerKey>; replacementBoundary: boolean }
+  >();
   for (let effect of build.effects) {
     if (effect.kind == "atomic" && layer != "surface") {
-      collectAtomicRange(atomicRanges, effect.from, effect.to, effect.ownerKeys);
+      collectAtomicRange(atomicRanges, effect.from, effect.to, effect.ownerKeys, false);
     }
     if (
       effect.kind == "replace" &&
       effect.atomic &&
       (layer == "all" || (isDirectLayoutEffect(build, effect) ? "direct" : "surface") == layer)
     ) {
-      collectAtomicRange(atomicRanges, effect.from, effect.to, effect.ownerKeys);
+      collectAtomicRange(atomicRanges, effect.from, effect.to, effect.ownerKeys, true);
     }
   }
   return Array.from(atomicRanges.values())
     .map((range) => ({
       from: range.from,
       ownerKeys: [...range.ownerKeys].sort(),
+      replacementBoundary: range.replacementBoundary,
       to: range.to,
     }))
-    .sort((left, right) => left.from - right.from || left.to - right.to);
+    .sort(
+      (left, right) =>
+        left.from - right.from ||
+        Number(left.replacementBoundary) - Number(right.replacementBoundary) ||
+        left.to - right.to,
+    );
 }
 
 function collectAtomicRange(
-  ranges: Map<string, DocRange & { ownerKeys: Set<LiveMdEffectOwnerKey> }>,
+  ranges: Map<
+    string,
+    DocRange & { ownerKeys: Set<LiveMdEffectOwnerKey>; replacementBoundary: boolean }
+  >,
   from: number,
   to: number,
   ownerKeys: readonly LiveMdEffectOwnerKey[] | undefined,
+  replacementBoundary: boolean,
 ) {
   let key = `${from}:${to}`;
   let range = ranges.get(key);
-  if (!range) ranges.set(key, (range = { from, ownerKeys: new Set(), to }));
+  if (!range) {
+    ranges.set(key, (range = { from, ownerKeys: new Set(), replacementBoundary, to }));
+  } else {
+    // A separately requested atomic range keeps its established mapping
+    // semantics even when it happens to coincide with a replacement.
+    range.replacementBoundary &&= replacementBoundary;
+  }
   for (let ownerKey of ownerKeys ?? []) range.ownerKeys.add(ownerKey);
 }
 
@@ -383,6 +433,13 @@ export function liveMdProjectionValueOwnerKeys(value: RangeValue): readonly Live
   return [];
 }
 
+export function isLiveMdReplacementDecoration(value: RangeValue): value is Decoration {
+  return (
+    value instanceof Decoration &&
+    (value.spec as ProjectionReplacementSpec)[projectionReplacementBoundary] === true
+  );
+}
+
 function withProjectionOwnerKeys<T extends object>(
   spec: T,
   ownerKeys: readonly LiveMdEffectOwnerKey[] | undefined,
@@ -395,12 +452,24 @@ function withProjectionOwnerKeys<T extends object>(
   return spec;
 }
 
+function withProjectionReplacementBoundary<T extends object>(spec: T): T {
+  Object.defineProperty(spec, projectionReplacementBoundary, {
+    enumerable: false,
+    value: true,
+  });
+  return spec;
+}
+
 function sortedOwnerKeys(ownerKeys: readonly LiveMdEffectOwnerKey[] | undefined) {
   return ownerKeys?.length ? [...ownerKeys].sort() : [];
 }
 
 type ProjectionOwnerSpec = {
   [projectionOwnerKeys]?: readonly LiveMdEffectOwnerKey[];
+};
+
+type ProjectionReplacementSpec = {
+  [projectionReplacementBoundary]?: true;
 };
 
 function sameArrayItems<T>(left: readonly T[], right: readonly T[]) {

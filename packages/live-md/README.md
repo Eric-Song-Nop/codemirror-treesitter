@@ -210,6 +210,11 @@ editor state or selection data; analysis is intentionally selection-independent.
 Feature identity and `analyze(...)` configuration participate in semantic cache
 keys, so `setConfig(...)` invalidates stale feature records through the normal
 analysis path.
+Replacement descriptor ranges must contain only the source bytes owned by the
+widget. In particular, leave surrounding line separators, container prefixes,
+and trailing blank lines outside the range. The `block` option controls layout,
+not source ownership; insertions at either replacement boundary remain editable
+outside the widget, including when `atomic` is enabled.
 Blank lines are ordinary editable document text. In a normal paragraph,
 `Enter` and `Shift+Enter` both insert one newline. Their behavior differs only
 inside structural Markdown contexts: `Enter` keeps list, task-list, and

@@ -57,9 +57,12 @@ export type LiveMdTableModel = {
   rowCells?: readonly (readonly LiveMdTableCellModel[])[];
 };
 
+/** Exact document bytes owned by a replacement decoration. */
+export type LiveMdReplacementRange = DocRange & { block: boolean };
+
 export type LiveMdLatexFormulaDescriptor = {
   displayMode: boolean;
-  replacementRange: DocRange & { block: boolean };
+  replacementRange: LiveMdReplacementRange;
   source: string;
   tex: string;
 };
@@ -115,6 +118,7 @@ export type LiveMdDescriptor =
       kind: "table";
       pipeRanges: readonly DocRange[];
       range: DocRange;
+      replacementRange: LiveMdReplacementRange;
       table: LiveMdTableModel | null;
     }
   | {
@@ -125,6 +129,7 @@ export type LiveMdDescriptor =
       mermaidSource: string | null;
       openingDelimiterRange: DocRange;
       range: DocRange;
+      replacementRange: LiveMdReplacementRange | null;
     }
   | {
       effect: LiveMdFeatureDescriptor;
@@ -229,6 +234,7 @@ export function offsetLiveMdDescriptor(
           : null,
         pipeRanges: descriptor.pipeRanges.map((range) => offsetRange(range, offset)),
         range: offsetRange(descriptor.range, offset),
+        replacementRange: offsetLiveMdReplacementRange(descriptor.replacementRange, offset),
       };
     case "codeFence":
       return {
@@ -239,6 +245,9 @@ export function offsetLiveMdDescriptor(
         contentRange: descriptor.contentRange ? offsetRange(descriptor.contentRange, offset) : null,
         openingDelimiterRange: offsetRange(descriptor.openingDelimiterRange, offset),
         range: offsetRange(descriptor.range, offset),
+        replacementRange: descriptor.replacementRange
+          ? offsetLiveMdReplacementRange(descriptor.replacementRange, offset)
+          : null,
       };
     case "feature":
       return {
@@ -277,12 +286,55 @@ export function liveMdDescriptorRanges(descriptor: LiveMdDescriptor): DocRange[]
     case "table":
       return [
         descriptor.range,
+        descriptor.replacementRange,
         ...descriptor.pipeRanges,
         ...(descriptor.delimiterRowRange ? [descriptor.delimiterRowRange] : []),
       ];
     case "codeFence":
       return [
         descriptor.range,
+        ...(descriptor.replacementRange ? [descriptor.replacementRange] : []),
+        descriptor.openingDelimiterRange,
+        ...(descriptor.closingDelimiterRange ? [descriptor.closingDelimiterRange] : []),
+        ...(descriptor.contentRange ? [descriptor.contentRange] : []),
+      ];
+    case "feature":
+      return liveMdFeatureDescriptorRanges(descriptor.effect);
+  }
+}
+
+/**
+ * Ranges that projection can actually decorate. Parser ownership ranges are
+ * deliberately excluded so cache invalidation doesn't inherit AST envelopes.
+ */
+export function liveMdDescriptorEffectRanges(descriptor: LiveMdDescriptor): DocRange[] {
+  switch (descriptor.kind) {
+    case "lineClass":
+    case "syntax":
+    case "textMark":
+    case "listMarker":
+    case "taskMarker":
+      return [descriptor.range];
+    case "linkMark":
+      return [descriptor.range, descriptor.sourceRange];
+    case "image":
+      return [
+        descriptor.range,
+        descriptor.lineRange,
+        ...(descriptor.descriptionRange ? [descriptor.descriptionRange] : []),
+        ...(descriptor.destinationRange ? [descriptor.destinationRange] : []),
+      ];
+    case "latex":
+      return [descriptor.formula.replacementRange];
+    case "table":
+      return [
+        descriptor.replacementRange,
+        ...descriptor.pipeRanges,
+        ...(descriptor.delimiterRowRange ? [descriptor.delimiterRowRange] : []),
+      ];
+    case "codeFence":
+      return [
+        ...(descriptor.replacementRange ? [descriptor.replacementRange] : []),
         descriptor.openingDelimiterRange,
         ...(descriptor.closingDelimiterRange ? [descriptor.closingDelimiterRange] : []),
         ...(descriptor.contentRange ? [descriptor.contentRange] : []),
@@ -335,6 +387,7 @@ export function liveMdDescriptorKey(descriptor: LiveMdDescriptor) {
       return liveMdStableKeyParts(
         "table",
         rangeKey(descriptor.range),
+        replacementRangeKey(descriptor.replacementRange),
         optionalRangeKey(descriptor.delimiterRowRange),
         descriptorsRangeKey(descriptor.pipeRanges),
         liveMdTableShapeKey(descriptor.table),
@@ -346,6 +399,7 @@ export function liveMdDescriptorKey(descriptor: LiveMdDescriptor) {
         rangeKey(descriptor.openingDelimiterRange),
         optionalRangeKey(descriptor.closingDelimiterRange),
         optionalRangeKey(descriptor.contentRange),
+        optionalReplacementRangeKey(descriptor.replacementRange),
         descriptor.language,
         descriptor.mermaidSource,
       );
@@ -468,6 +522,14 @@ function optionalRangeKey(range: DocRange | null) {
   return range ? rangeKey(range) : "";
 }
 
+function replacementRangeKey(range: LiveMdReplacementRange) {
+  return liveMdStableKeyParts(rangeKey(range), range.block);
+}
+
+function optionalReplacementRangeKey(range: LiveMdReplacementRange | null) {
+  return range ? replacementRangeKey(range) : "";
+}
+
 function offsetLiveMdFeatureDescriptor(
   descriptor: LiveMdFeatureDescriptor,
   offset: number,
@@ -488,4 +550,11 @@ function liveMdFeatureDescriptorRanges(descriptor: LiveMdFeatureDescriptor): Doc
 
 function offsetRange(range: DocRange, offset: number): DocRange {
   return { from: range.from + offset, to: range.to + offset };
+}
+
+function offsetLiveMdReplacementRange(
+  range: LiveMdReplacementRange,
+  offset: number,
+): LiveMdReplacementRange {
+  return { ...offsetRange(range, offset), block: range.block };
 }

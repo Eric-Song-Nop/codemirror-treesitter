@@ -462,13 +462,14 @@ function projectTable(
   active: boolean,
   renderStatus: LiveMdRenderStatus,
 ): readonly LiveMdEffectSpec[] {
+  let replacement = descriptor.replacementRange;
   if (descriptor.table && !tableTouchesActiveLine(renderStatus, descriptor, active)) {
     return [
       {
-        block: true,
-        from: descriptor.range.from,
+        block: replacement.block,
+        from: replacement.from,
         kind: "replace",
-        to: descriptor.range.to,
+        to: replacement.to,
         widget: { kind: "tablePreview", table: descriptor.table },
       },
     ];
@@ -477,9 +478,9 @@ function projectTable(
   let specs: LiveMdEffectSpec[] = [
     {
       className: "cm-md-table-line",
-      from: descriptor.range.from,
+      from: replacement.from,
       kind: "lineClass",
-      to: descriptor.range.to,
+      to: replacement.to,
     },
   ];
 
@@ -504,13 +505,18 @@ function projectCodeFence(
   active: boolean,
   renderStatus: LiveMdRenderStatus,
 ): readonly LiveMdEffectSpec[] {
-  if (descriptor.mermaidSource && !isEditableSource(active, renderStatus)) {
+  if (
+    descriptor.mermaidSource &&
+    descriptor.replacementRange &&
+    !isEditableSource(active, renderStatus)
+  ) {
+    let replacement = descriptor.replacementRange;
     return [
       {
-        block: true,
-        from: descriptor.range.from,
+        block: replacement.block,
+        from: replacement.from,
         kind: "replace",
-        to: descriptor.range.to,
+        to: replacement.to,
         widget: { kind: "mermaid", source: descriptor.mermaidSource },
       },
     ];
@@ -595,7 +601,7 @@ function inactiveTableReplacementRanges(
       descriptor.table &&
       !tableTouchesActiveLine(renderStatus, descriptor, active)
     ) {
-      ranges.push(descriptor.range);
+      ranges.push(descriptor.replacementRange);
     }
   }
   return ranges;
@@ -632,18 +638,16 @@ function tableTouchesActiveLine(
   descriptor: Extract<LiveMdDescriptor, { kind: "table" }>,
   active: boolean,
 ) {
-  if (
-    active ||
-    rangeTouchesActiveSource(renderStatus, descriptor.range.from, descriptor.range.to)
-  ) {
+  let replacement = descriptor.replacementRange;
+  if (active || rangeTouchesActiveSource(renderStatus, replacement.from, replacement.to)) {
     return true;
   }
   if (renderStatus.sourceIslandMode) return false;
-  if (rangeTouchesActiveLine(renderStatus, descriptor.range.from, descriptor.range.to)) return true;
+  if (rangeTouchesActiveLine(renderStatus, replacement.from, replacement.to)) return true;
   if (descriptor.table?.rows.length) return false;
 
-  let end = Math.min(descriptor.range.to, renderStatus.doc.length);
-  let lastLine = renderStatus.doc.lineAt(Math.max(descriptor.range.from, end - 1));
+  let end = Math.min(replacement.to, renderStatus.doc.length);
+  let lastLine = renderStatus.doc.lineAt(Math.max(replacement.from, end - 1));
   let nextLineNumber = lastLine.number + 1;
   if (!renderStatus.activeLines.has(nextLineNumber) || nextLineNumber > renderStatus.doc.lines) {
     return false;

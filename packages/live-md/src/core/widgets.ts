@@ -172,24 +172,12 @@ export class MermaidWidget extends WidgetType {
     element.className = "cm-md-mermaid";
     element.dataset.source = this.source;
     element.style.minHeight = `${this.estimatedHeight}px`;
-    element.tabIndex = 0;
-    element.setAttribute("role", "button");
-    element.setAttribute("aria-label", "Edit Mermaid diagram");
-    element.addEventListener("mousedown", (event) => {
-      event.preventDefault();
-    });
-    element.addEventListener("click", () => {
-      view.dispatch({
-        selection: { anchor: view.posAtDOM(element) },
-        scrollIntoView: true,
-        userEvent: "select.mermaidPreview",
-      });
-      view.focus();
-    });
+    bindPreviewBoundarySelection(element, view, "select.mermaidPreview", { block: true });
     renderMermaidInto(
       element,
       this.renderHandle ?? ephemeralMermaidRenderHandle(this.source),
       this.heights,
+      view,
     );
     return element;
   }
@@ -273,20 +261,7 @@ export class ImagePreviewWidget extends WidgetType {
   toDOM(view: EditorView) {
     let figure = document.createElement("figure");
     figure.className = "cm-md-image-preview";
-    figure.tabIndex = 0;
-    figure.setAttribute("role", "button");
-    figure.setAttribute("aria-label", "Edit Markdown image");
-    figure.addEventListener("mousedown", (event) => {
-      event.preventDefault();
-    });
-    figure.addEventListener("click", () => {
-      view.dispatch({
-        selection: { anchor: view.posAtDOM(figure) },
-        scrollIntoView: true,
-        userEvent: "select.imagePreview",
-      });
-      view.focus();
-    });
+    bindPreviewBoundarySelection(figure, view, "select.imagePreview", { block: this.block });
 
     let image = document.createElement("img");
     image.alt = this.alt;
@@ -300,6 +275,7 @@ export class ImagePreviewWidget extends WidgetType {
         this.heightKey,
         measuredElementHeight(figure) ?? image.naturalHeight,
       );
+      if (figure.isConnected) requestWidgetMeasure(view);
     });
     figure.append(image);
 
@@ -357,31 +333,23 @@ export class TablePreviewWidget extends WidgetType {
   toDOM(view: EditorView) {
     let wrapper = document.createElement("div");
     wrapper.className = "cm-md-table-preview";
-    wrapper.tabIndex = 0;
-    wrapper.setAttribute("role", "button");
-    wrapper.setAttribute("aria-label", "Edit Markdown table");
-    wrapper.addEventListener("mousedown", (event) => {
-      event.preventDefault();
+    bindPreviewBoundarySelection(wrapper, view, "select.tablePreview", {
+      block: true,
+      preserveShiftClickLink: true,
     });
-    wrapper.addEventListener("click", (event) => {
-      if (event.shiftKey && eventTargetLiveMdLink(event.target)) return;
-      view.dispatch({
-        selection: { anchor: view.posAtDOM(wrapper) },
-        scrollIntoView: true,
-        userEvent: "select.tablePreview",
-      });
-      view.focus();
-    });
+
+    let inlineContext: TableInlineDomContext = {
+      imageSourceResolver: this.imageSourceResolver,
+      linkBaseUrl: this.linkBaseUrl,
+      requestMeasure: () => requestWidgetMeasure(view),
+    };
 
     let table = document.createElement("table");
     let thead = document.createElement("thead");
     let headerRow = document.createElement("tr");
     this.table.header.forEach((cell, index) => {
       let heading = document.createElement("th");
-      appendTableCellContent(heading, this.table.headerCells?.[index] ?? null, cell, {
-        imageSourceResolver: this.imageSourceResolver,
-        linkBaseUrl: this.linkBaseUrl,
-      });
+      appendTableCellContent(heading, this.table.headerCells?.[index] ?? null, cell, inlineContext);
       applyTableAlignment(heading, this.table.alignments[index]);
       headerRow.append(heading);
     });
@@ -393,10 +361,12 @@ export class TablePreviewWidget extends WidgetType {
       let tableRow = document.createElement("tr");
       row.forEach((cell, index) => {
         let value = document.createElement("td");
-        appendTableCellContent(value, this.table.rowCells?.[rowIndex]?.[index] ?? null, cell, {
-          imageSourceResolver: this.imageSourceResolver,
-          linkBaseUrl: this.linkBaseUrl,
-        });
+        appendTableCellContent(
+          value,
+          this.table.rowCells?.[rowIndex]?.[index] ?? null,
+          cell,
+          inlineContext,
+        );
         applyTableAlignment(value, this.table.alignments[index]);
         tableRow.append(value);
       });
@@ -422,6 +392,7 @@ export class TablePreviewWidget extends WidgetType {
 type TableInlineDomContext = {
   imageSourceResolver: LiveMdImageSourceResolver | null;
   linkBaseUrl: string | null;
+  requestMeasure: () => void;
 };
 
 function appendTableCellContent(
@@ -511,6 +482,9 @@ function tableInlineImage(
   if (resolved.width) image.width = resolved.width;
   if (resolved.height) image.height = resolved.height;
   if (title) image.title = title;
+  image.addEventListener("load", () => {
+    if (image.isConnected) context.requestMeasure();
+  });
   return image;
 }
 
@@ -536,6 +510,41 @@ function tableInlineLatex(node: Extract<LiveMdInlineContent[number], { kind: "la
   return element;
 }
 
+function bindPreviewBoundarySelection(
+  element: HTMLElement,
+  view: EditorView,
+  userEvent: string,
+  options: { block: boolean; preserveShiftClickLink?: boolean },
+) {
+  element.addEventListener("mousedown", (event) => {
+    if (event.button != 0) return;
+    if (options.preserveShiftClickLink && event.shiftKey && eventTargetLiveMdLink(event.target)) {
+      return;
+    }
+
+    let parent = element.parentNode;
+    if (!parent) return;
+    let elementIndex = Array.prototype.indexOf.call(parent.childNodes, element) as number;
+    if (elementIndex < 0) return;
+
+    let before = view.posAtDOM(parent, elementIndex);
+    let after = view.posAtDOM(parent, elementIndex + 1);
+    let rect = element.getBoundingClientRect();
+    let firstHalf = options.block
+      ? event.clientY < rect.top + rect.height / 2
+      : event.clientX < rect.left + rect.width / 2;
+    let anchor = firstHalf ? before : after;
+
+    event.preventDefault();
+    view.dispatch({
+      selection: { anchor },
+      scrollIntoView: true,
+      userEvent,
+    });
+    view.focus();
+  });
+}
+
 function eventTargetLiveMdLink(target: EventTarget | null) {
   return target instanceof Element
     ? target.closest<HTMLElement>(".cm-md-link[data-live-md-href]")
@@ -546,6 +555,7 @@ function renderMermaidInto(
   element: HTMLElement,
   handle: LiveMdMermaidRenderHandle,
   heights: LiveMdMeasuredHeights | null,
+  view: EditorView,
 ) {
   let renderToken = String(++mermaidRenderSequence);
   element.dataset.mermaidRenderToken = renderToken;
@@ -562,6 +572,7 @@ function renderMermaidInto(
   void cachedMermaidRenderResult(handle).then((result) => {
     if (!isCurrentMermaidRender(element, renderToken)) return;
     applyMermaidResult(element, result, heights, handle.resultKey);
+    requestWidgetMeasure(view);
   });
 }
 
@@ -707,6 +718,11 @@ function requestMeasureFrame(callback: () => void) {
   } else {
     setTimeout(callback, 0);
   }
+}
+
+function requestWidgetMeasure(view: EditorView) {
+  // EditorView already coalesces measure requests into its next animation frame.
+  view.requestMeasure();
 }
 
 export function replaceWithWidget(from: number, to: number, widget: WidgetType, block = false) {
