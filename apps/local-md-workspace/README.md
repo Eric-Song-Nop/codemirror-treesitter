@@ -80,8 +80,9 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
 - `scripts/dev.mjs`: starts the local Grove relay when needed, then starts the
   frontend with `VITE_LOCAL_MD_SHARE_RELAY_ORIGIN`.
 - `service-worker-precache-plugin.ts` and
-  `scripts/check-production-bundle.mjs`: derive and verify the lazy
-  collaboration bundle closure used by the production service worker.
+  `scripts/check-production-bundle.mjs`: derive and verify the launcher, lazy
+  collaboration, and critical offline asset closures used by the production
+  service worker.
 - `smoke/ui-smoke.mjs`: headless Chrome UI smoke for local, sharing, conflict,
   and Dropbox UI flows.
 
