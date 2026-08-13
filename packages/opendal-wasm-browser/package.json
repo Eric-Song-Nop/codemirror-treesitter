@@ -25,7 +25,7 @@
     "check": "vp check",
     "check:wasm": "RUSTC=\"$(rustup which rustc)\" rustup run stable cargo check --target wasm32-unknown-unknown",
     "smoke:dropbox": "node smoke/dropbox-smoke.mjs",
-    "test": "vp test",
+    "test": "RUSTC=\"$(rustup which rustc)\" rustup run stable cargo test && vp test",
     "validate:dropbox": "node smoke/dropbox-validate.mjs"
   },
   "devDependencies": {

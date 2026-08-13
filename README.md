@@ -518,6 +518,9 @@ vp run -r build
 vp run audit
 ```
 
+The recursive test task includes the OpenDAL browser wrapper's host Rust unit
+regressions as well as the TypeScript test suites.
+
 The root script `vp run ready` runs the full local validation path:
 
 ```bash
