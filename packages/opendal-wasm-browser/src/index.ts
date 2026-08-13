@@ -296,7 +296,11 @@ async function readDropboxText(
   }
 
   return {
-    entry: dropboxEntry(normalizedPath, parseJsonRecord(rawMetadata, "download metadata")),
+    entry: dropboxEntry(
+      normalizedPath,
+      parseJsonRecord(rawMetadata, "download metadata"),
+      "download",
+    ),
     value: await response.text(),
   };
 }
@@ -334,6 +338,7 @@ async function writeDropboxBytes(
   return dropboxEntry(
     normalizedPath,
     requireRecord(await response.json(), "Dropbox upload metadata"),
+    "upload",
   );
 }
 
@@ -358,7 +363,11 @@ function normalizeStoragePath(path: string) {
   return parts.join("/");
 }
 
-function dropboxEntry(path: string, metadata: Record<string, unknown>): OpendalBrowserEntry {
+function dropboxEntry(
+  path: string,
+  metadata: Record<string, unknown>,
+  operation: "download" | "upload",
+): OpendalBrowserEntry {
   return {
     etag: optionalText(metadata.content_hash, "Dropbox metadata.content_hash"),
     isDirectory: false,
@@ -369,8 +378,16 @@ function dropboxEntry(path: string, metadata: Record<string, unknown>): OpendalB
     ),
     path,
     size: optionalNumber(metadata.size, "Dropbox metadata.size"),
-    version: optionalText(metadata.rev, "Dropbox metadata.rev"),
+    version: requireDropboxRevision(metadata.rev, operation),
   };
+}
+
+function requireDropboxRevision(value: unknown, operation: "download" | "upload") {
+  let revision = optionalText(value, "Dropbox metadata.rev")?.trim();
+  if (!revision) {
+    throw new Error(`Dropbox ${operation} response did not include file revision metadata.`);
+  }
+  return revision;
 }
 
 async function dropboxResponseError(response: Response, condition?: "no-clobber" | "revision") {
