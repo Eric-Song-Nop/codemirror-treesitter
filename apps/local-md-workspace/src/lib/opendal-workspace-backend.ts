@@ -148,8 +148,12 @@ export function createOpendalWorkspaceBackend(
     await ensureParentDirectory(path);
     let baseRevision = writeOptions?.baseRevision ?? knownRevisions.get(path);
     let entry = await withOpendalRetry((operator) => {
-      let options = conditionalWriteOptions(operator, baseRevision, writeOptions?.ifNotExists);
-      return operator.writeText(path, value, options);
+      let operatorOptions = conditionalWriteOptions(
+        operator,
+        baseRevision,
+        Boolean(writeOptions?.ifNotExists) || (options.provider == "dropbox" && !baseRevision),
+      );
+      return operator.writeText(path, value, operatorOptions);
     });
 
     if (entry) {
@@ -190,7 +194,18 @@ export function createOpendalWorkspaceBackend(
     }
 
     await ensureParentDirectory(path);
-    let entry = await withOpendalRetry((operator) => operator.writeBytes(path, bytes));
+    let baseRevision = knownRevisions.get(path);
+    let entry = await withOpendalRetry((operator) =>
+      operator.writeBytes(
+        path,
+        bytes,
+        conditionalWriteOptions(
+          operator,
+          baseRevision,
+          options.provider == "dropbox" && !baseRevision,
+        ),
+      ),
+    );
     if (entry) {
       rememberEntry(entry, knownRevisions);
     } else {

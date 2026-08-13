@@ -36,12 +36,14 @@ describe("Dropbox workspace backend", () => {
     let releaseFirstWrite = deferred<void>();
     let writes: string[] = [];
     let operator = fakeOperator({
-      async writeText(_path, value) {
+      capabilities: dropboxFakeCapabilities,
+      async writeText(path, value) {
         writes.push(value);
         if (writes.length == 1) {
           firstWriteStarted.resolve();
           await releaseFirstWrite.promise;
         }
+        return { isDirectory: false, isFile: true, path, version: `rev-${writes.length}` };
       },
     });
     let backend = createDropboxWorkspaceBackend({
@@ -150,6 +152,75 @@ describe("Dropbox workspace backend", () => {
     expect(reads).toEqual(["note.md"]);
     expect(statCalls).toBe(0);
     expect(writes).toEqual([{ options: { ifVersion: "rev-a" }, value: "# update\n" }]);
+  });
+
+  it("uses atomic no-clobber writes when a Dropbox target revision is unknown", async () => {
+    let textWrites: Array<{ options?: OpendalBrowserWriteOptions; path: string }> = [];
+    let byteWrites: Array<{ options?: OpendalBrowserWriteOptions; path: string }> = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          capabilities: () => ({
+            ...fakeCapabilities(),
+            nativeWriteWithIfNotExists: true,
+            nativeWriteWithVersion: true,
+          }),
+          async stat(path) {
+            if (path == "assets") return directoryEntry(path);
+            throw new Error("not_found");
+          },
+          async writeBytes(path, _bytes, options) {
+            byteWrites.push({ options, path });
+            return { isDirectory: false, isFile: true, path, version: "rev-bytes" };
+          },
+          async writeText(path, _value, options) {
+            textWrites.push({ options, path });
+            return { isDirectory: false, isFile: true, path, version: "rev-text" };
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await backend.writeFile("new.md", "# new\n");
+    await backend.writeBytes!("assets/new.png", new Uint8Array([1, 2, 3]));
+
+    expect(textWrites).toEqual([{ options: { ifNotExists: true }, path: "new.md" }]);
+    expect(byteWrites).toEqual([{ options: { ifNotExists: true }, path: "assets/new.png" }]);
+  });
+
+  it("uses the exact known revision for Dropbox binary updates", async () => {
+    let writes: Array<{ options?: OpendalBrowserWriteOptions; path: string }> = [];
+    let backend = createDropboxWorkspaceBackend({
+      createOperator: async () =>
+        fakeOperator({
+          capabilities: () => ({
+            ...fakeCapabilities(),
+            nativeWriteWithIfNotExists: true,
+            nativeWriteWithVersion: true,
+          }),
+          async readBytes() {
+            return new Uint8Array([1]);
+          },
+          async stat(path) {
+            if (path == "assets") return directoryEntry(path);
+            return { isDirectory: false, isFile: true, path, version: "rev-a" };
+          },
+          async writeBytes(path, _bytes, options) {
+            writes.push({ options, path });
+            return { isDirectory: false, isFile: true, path, version: "rev-b" };
+          },
+        }),
+      getAccessToken: async () => token("token"),
+      refreshAccessToken: async () => token("token"),
+    });
+
+    await backend.readBytes!("assets/existing.png");
+    await backend.writeBytes!("assets/existing.png", new Uint8Array([2]));
+
+    expect(writes).toEqual([
+      { options: { ifVersion: "rev-a" }, path: "assets/existing.png" },
+    ]);
   });
 
   it("refreshes an expired token and retries once", async () => {
@@ -347,6 +418,7 @@ describe("Dropbox workspace backend", () => {
     let backend = createDropboxWorkspaceBackend({
       createOperator: async () =>
         fakeOperator({
+          capabilities: dropboxFakeCapabilities,
           async createDir(path) {
             createdDirectories.push(path);
           },
@@ -376,6 +448,7 @@ describe("Dropbox workspace backend", () => {
     let backend = createDropboxWorkspaceBackend({
       createOperator: async () =>
         fakeOperator({
+          capabilities: dropboxFakeCapabilities,
           async createDir(path) {
             createdDirectories.push(path);
           },
@@ -536,6 +609,8 @@ describe("Dropbox workspace backend", () => {
             nativeStat: true,
             nativeWrite: true,
             nativeWriteWithIfMatch: false,
+            nativeWriteWithIfNotExists: true,
+            nativeWriteWithVersion: true,
           }),
           async createDir() {
             createDirCalls += 1;
@@ -605,6 +680,7 @@ function token(accessToken: string) {
 
 function fakeMapOperator(files: Map<string, string | Uint8Array>, operations: string[] = []) {
   return fakeOperator({
+    capabilities: dropboxFakeCapabilities,
     async createDir(path) {
       operations.push(`createDir ${path}`);
     },
@@ -644,10 +720,12 @@ function fakeMapOperator(files: Map<string, string | Uint8Array>, operations: st
     async writeBytes(path, bytes) {
       operations.push(`writeBytes ${path}`);
       files.set(path, new Uint8Array(bytes));
+      return { isDirectory: false, isFile: true, path, version: `rev-${operations.length}` };
     },
     async writeText(path, value) {
       operations.push(`write ${path}`);
       files.set(path, value);
+      return { isDirectory: false, isFile: true, path, version: `rev-${operations.length}` };
     },
   });
 }
@@ -681,6 +759,14 @@ function fakeCapabilities() {
     nativeWriteWithIfMatch: false,
     nativeWriteWithIfNotExists: false,
     nativeWriteWithVersion: false,
+  };
+}
+
+function dropboxFakeCapabilities() {
+  return {
+    ...fakeCapabilities(),
+    nativeWriteWithIfNotExists: true,
+    nativeWriteWithVersion: true,
   };
 }
 
