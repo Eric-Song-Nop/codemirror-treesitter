@@ -67,9 +67,7 @@ assert(precacheMatch, "The built service worker does not declare build precache 
 const precacheUrlValues = JSON.parse(precacheMatch[1]);
 assert(
   Array.isArray(precacheUrlValues) &&
-    precacheUrlValues.every(
-      (url) => typeof url == "string" && String(url).startsWith("/assets/"),
-    ),
+    precacheUrlValues.every((url) => typeof url == "string" && String(url).startsWith("/assets/")),
   "The build precache declaration must contain only same-origin asset URL strings.",
 );
 const precacheUrls = new Set(precacheUrlValues.map((url) => String(url)));

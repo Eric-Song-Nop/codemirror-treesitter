@@ -218,9 +218,7 @@ describe("Dropbox workspace backend", () => {
     await backend.readBytes!("assets/existing.png");
     await backend.writeBytes!("assets/existing.png", new Uint8Array([2]));
 
-    expect(writes).toEqual([
-      { options: { ifVersion: "rev-a" }, path: "assets/existing.png" },
-    ]);
+    expect(writes).toEqual([{ options: { ifVersion: "rev-a" }, path: "assets/existing.png" }]);
   });
 
   it("refreshes an expired token and retries once", async () => {

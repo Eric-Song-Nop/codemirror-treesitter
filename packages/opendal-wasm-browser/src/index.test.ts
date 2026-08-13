@@ -80,16 +80,17 @@ describe("Dropbox browser transport", () => {
   it("rejects a Dropbox download that omits revision metadata", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response("# note\n", {
-          headers: {
-            "Dropbox-API-Result": JSON.stringify({
-              content_hash: "hash-a",
-              server_modified: "2026-07-17T01:02:03Z",
-              size: 7,
-            }),
-          },
-        }),
+      vi.fn(
+        async () =>
+          new Response("# note\n", {
+            headers: {
+              "Dropbox-API-Result": JSON.stringify({
+                content_hash: "hash-a",
+                server_modified: "2026-07-17T01:02:03Z",
+                size: 7,
+              }),
+            },
+          }),
       ),
     );
     let operator = await dropboxOperator();
