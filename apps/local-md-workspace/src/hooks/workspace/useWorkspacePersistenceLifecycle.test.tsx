@@ -103,6 +103,26 @@ describe("useWorkspacePersistenceLifecycle", () => {
     expect(callOrder).toEqual(["collaboration", "source"]);
   });
 
+  it("starts a fresh dirty-unload flush when an earlier lifecycle flush is still pending", async () => {
+    let flushCompleted = createDeferred<void>();
+    let dirtyRef = { current: true };
+    let sourceTask = createTestTask(() => flushCompleted.promise);
+    let collabDocument = createTestDocument();
+    let flushCollabDocument = vi.fn(async () => {});
+
+    await renderLifecycle({ collabDocument, dirtyRef, flushCollabDocument, sourceTask });
+    await act(async () => window.dispatchEvent(new Event("pagehide")));
+
+    let dirtyUnload = new Event("beforeunload", { cancelable: true });
+    await act(async () => window.dispatchEvent(dirtyUnload));
+
+    expect(dirtyUnload.defaultPrevented).toBe(true);
+    expect(flushCollabDocument).toHaveBeenCalledTimes(2);
+    expect(sourceTask.flush).toHaveBeenCalledTimes(2);
+
+    await act(async () => flushCompleted.resolve());
+  });
+
   it("flushes before disposing persistence resources on unmount", async () => {
     let flushCompleted = createDeferred<void>();
     let sourceTask = createTestTask(() => flushCompleted.promise);

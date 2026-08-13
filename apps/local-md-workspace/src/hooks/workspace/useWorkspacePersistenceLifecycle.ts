@@ -57,7 +57,7 @@ export function useWorkspacePersistenceLifecycle<Document extends DisposableDocu
     };
     let handleBeforeUnload = (event: BeforeUnloadEvent) => {
       if (!dirtyRef.current) return;
-      handlePageHide();
+      void flushActivePersistence(true).catch(reportFlushError);
       event.preventDefault();
       event.returnValue = true;
     };
