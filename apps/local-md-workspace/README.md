@@ -161,3 +161,7 @@ LOCAL_MD_WORKSPACE_SMOKE_URL=http://127.0.0.1:5174/ \
 LOCAL_MD_WORKSPACE_SMOKE_LIVE_MD_BOUNDARIES_ONLY=1 \
 node apps/local-md-workspace/smoke/ui-smoke.mjs
 ```
+
+The focused smoke performs a real pointer drag inside a fenced code block and
+checks the final Chromium pixels for a visible selection edge, alongside the
+preview-boundary, copy, and pointer-through assertions.

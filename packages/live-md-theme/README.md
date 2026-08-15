@@ -14,6 +14,8 @@ Reusable LiveMD presentation theme contract. This package owns the public
 
 `--live-md-selection` is drawn as an overlay above rendered preview content, so
 themes should provide a translucent color that keeps text and diagrams legible.
+The runtime adds a one-pixel `--live-md-accent` edge to the drawn selection so
+its exact bounds remain visible over opaque code and preview surfaces.
 
 ## Public Entry
 

@@ -8,6 +8,7 @@ const SMOKE_URL = process.env.LOCAL_MD_WORKSPACE_SMOKE_URL || "http://127.0.0.1:
 const DROPBOX_CONFIG_KEY = "local-md-workspace:dropbox-config";
 const DROPBOX_OAUTH_MESSAGE = "local-md-workspace:dropbox-oauth";
 const GITHUB_REPOSITORY_URL = "https://github.com/Eric-Song-Nop/codemirror-treesitter";
+const MINIMUM_SELECTION_EDGE_CONTRAST = 3;
 const dropboxAccessToken =
   process.env.LOCAL_MD_WORKSPACE_DROPBOX_ACCESS_TOKEN || process.env.OPENDAL_DROPBOX_ACCESS_TOKEN;
 const dropboxRoot =
@@ -389,6 +390,7 @@ async function assertLiveMdSelectionVisibility(client, sessionId) {
     "",
     "```ts",
     "const selected = true;",
+    "const visual =          value;",
     "```",
     "",
     "```mermaid",
@@ -520,6 +522,7 @@ async function assertLiveMdSelectionVisibility(client, sessionId) {
     !state.codeSelected ||
     !state.mermaidSelected ||
     state.selectionLayerZIndex <= 0 ||
+    !Number.isFinite(state.cursorLayerZIndex) ||
     state.cursorLayerZIndex <= state.selectionLayerZIndex ||
     state.pointerEvents != "none" ||
     !state.clickPoint ||
@@ -562,6 +565,102 @@ async function assertLiveMdSelectionVisibility(client, sessionId) {
   ) {
     throw new Error(
       `LiveMD selection overlay intercepted pointer input: ${JSON.stringify(clickState)}`,
+    );
+  }
+
+  await assertLiveMdCodeFenceDragSelection(client, sessionId, fixture);
+}
+
+async function assertLiveMdCodeFenceDragSelection(client, sessionId, fixture) {
+  let spaces = "          ";
+  let from = fixture.indexOf(spaces);
+  let to = from + spaces.length;
+  let drag = await client.evaluate(
+    `
+      (async () => {
+        let editor = document.querySelector("live-md-editor");
+        let view = editor?.view;
+        if (!editor || !view) throw new Error("live-md-editor was not ready.");
+        editor.setSelectionRange(${from}, ${from});
+        editor.focus();
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve))
+        );
+        let start = view.coordsAtPos(${from}, 1);
+        let end = view.coordsAtPos(${to}, -1);
+        if (!start || !end) return null;
+        return {
+          start: { x: start.left, y: (start.top + start.bottom) / 2 },
+          end: { x: end.left, y: (end.top + end.bottom) / 2 }
+        };
+      })()
+    `,
+    sessionId,
+  );
+  if (!drag) throw new Error("LiveMD code-fence drag coordinates were not available.");
+
+  await dispatchCdpDrag(client, sessionId, drag.start, drag.end);
+  let selected = await client.evaluate(
+    `
+      (() => {
+        let editor = document.querySelector("live-md-editor");
+        let root = editor?.shadowRoot;
+        let selection = editor?.view?.state.selection.main;
+        let rect = Array.from(root?.querySelectorAll(".cm-selectionBackground") ?? [])
+          .map((node) => node.getBoundingClientRect())
+          .find((candidate) =>
+            candidate.left <= ${drag.start.x} + 1 &&
+            candidate.right >= ${drag.end.x} - 1 &&
+            candidate.top <= ${drag.start.y} &&
+            candidate.bottom >= ${drag.start.y}
+          );
+        return {
+          from: selection?.from ?? null,
+          probe: rect
+            ? {
+                x: Math.floor((rect.left + rect.right) / 2),
+                y: Math.floor(rect.top) - 1
+              }
+            : null,
+          to: selection?.to ?? null
+        };
+      })()
+    `,
+    sessionId,
+  );
+  if (selected.from != from || selected.to != to || !selected.probe) {
+    throw new Error(
+      `LiveMD pointer drag did not select the code-fence spaces: ${JSON.stringify({
+        expected: { from, to },
+        selected,
+      })}`,
+    );
+  }
+
+  let selectedPixels = await captureScreenshotPixels(client, sessionId, selected.probe);
+  await client.evaluate(
+    `
+      (async () => {
+        let editor = document.querySelector("live-md-editor");
+        editor?.setSelectionRange(${to}, ${to});
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve))
+        );
+      })()
+    `,
+    sessionId,
+  );
+  let unselectedPixels = await captureScreenshotPixels(client, sessionId, selected.probe);
+  let contrast = Math.max(
+    ...selectedPixels.map((pixel, index) => pixelContrast(pixel, unselectedPixels[index])),
+  );
+  if (contrast < MINIMUM_SELECTION_EDGE_CONTRAST) {
+    throw new Error(
+      `LiveMD code-fence selection was too faint in the final Chromium pixels: ${JSON.stringify({
+        contrast,
+        selectedPixels,
+        unselectedPixels,
+      })}`,
     );
   }
 }
@@ -673,6 +772,97 @@ async function dispatchCdpClick(client, sessionId, target) {
     sessionId,
   );
   await waitForSettledUi(100);
+}
+
+async function dispatchCdpDrag(client, sessionId, start, end) {
+  await client.send(
+    "Input.dispatchMouseEvent",
+    { type: "mouseMoved", x: start.x, y: start.y },
+    sessionId,
+  );
+  await client.send(
+    "Input.dispatchMouseEvent",
+    {
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+      type: "mousePressed",
+      x: start.x,
+      y: start.y,
+    },
+    sessionId,
+  );
+  await client.send(
+    "Input.dispatchMouseEvent",
+    { button: "left", buttons: 1, type: "mouseMoved", x: end.x, y: end.y },
+    sessionId,
+  );
+  await client.send(
+    "Input.dispatchMouseEvent",
+    {
+      button: "left",
+      clickCount: 1,
+      type: "mouseReleased",
+      x: end.x,
+      y: end.y,
+    },
+    sessionId,
+  );
+  await waitForSettledUi(100);
+}
+
+async function captureScreenshotPixels(client, sessionId, point) {
+  let pagePoint = await client.evaluate(
+    `({ x: ${point.x} + scrollX, y: ${point.y} + scrollY })`,
+    sessionId,
+  );
+  let { data } = await client.send(
+    "Page.captureScreenshot",
+    {
+      captureBeyondViewport: false,
+      clip: { height: 4, scale: 1, width: 1, x: pagePoint.x, y: pagePoint.y },
+      format: "png",
+      fromSurface: true,
+    },
+    sessionId,
+  );
+  return client.evaluate(
+    `
+      (async () => {
+        let image = new Image();
+        image.src = "data:image/png;base64,${data}";
+        await image.decode();
+        let canvas = document.createElement("canvas");
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        let context = canvas.getContext("2d", { willReadFrequently: true });
+        context.drawImage(image, 0, 0);
+        let pixels = [];
+        for (let y = 0; y < image.naturalHeight; y++) {
+          pixels.push(Array.from(context.getImageData(0, y, 1, 1).data.slice(0, 3)));
+        }
+        return pixels;
+      })()
+    `,
+    sessionId,
+  );
+}
+
+function pixelContrast(left, right) {
+  let leftLuminance = pixelLuminance(left);
+  let rightLuminance = pixelLuminance(right);
+  return (
+    (Math.max(leftLuminance, rightLuminance) + 0.05) /
+    (Math.min(leftLuminance, rightLuminance) + 0.05)
+  );
+}
+
+function pixelLuminance(pixel) {
+  let [red, green, blue] = pixel.map((channel) => {
+    let value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
 
 async function pressEditorKey(client, sessionId, key) {

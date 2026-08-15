@@ -138,6 +138,10 @@
   background: var(--live-md-selection) !important;
 }
 
+.live-md-codemirror .cm-selectionBackground {
+  box-shadow: inset 0 0 0 1px var(--live-md-accent);
+}
+
 .live-md-codemirror > .cm-scroller > .cm-selectionLayer {
   z-index: 1 !important;
   pointer-events: none;
