@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { VersionVector, type LoroDoc } from "loro-crdt";
+import type { LoroDoc, VersionVector } from "loro-crdt";
 import {
   ShareRelayConnection,
   type ShareRelayConnectionState,
   type ShareRelayStatus,
 } from "@/lib/collaboration/share-relay-connection";
 import type { RelayShareSession } from "@/lib/collaboration/share-relay-client";
+import type { SerializedCollabVersionVector } from "@/lib/collaboration/collab-browser-store";
 
 type UseSharedFileConnectionOptions = {
   canConnect: boolean;
@@ -13,6 +14,7 @@ type UseSharedFileConnectionOptions = {
   doc: LoroDoc;
   joining: boolean;
   relayOrigin: string;
+  refreshSession: (signal: AbortSignal) => Promise<RelayShareSession>;
   session: RelayShareSession | null;
   sessionErrorMessage: string;
   sessionKey: string;
@@ -27,6 +29,7 @@ export function useSharedFileConnection({
   doc,
   joining,
   relayOrigin,
+  refreshSession,
   session,
   sessionErrorMessage,
   sessionKey,
@@ -36,17 +39,23 @@ export function useSharedFileConnection({
   let [displayName, setDisplayName] = useState(defaultSharedFileDisplayName);
   let [connectionState, setConnectionState] = useState<ShareRelayConnectionState>("connecting");
   let [shareStatus, setShareStatus] = useState<ShareRelayStatus | null>(null);
-  let [latestLocalVersion, setLatestLocalVersion] = useState<VersionVector | null>(null);
-  let [hostSavedVersion, setHostSavedVersion] = useState<VersionVector | null>(null);
+  let [latestLocalVersion, setLatestLocalVersion] = useState<SerializedCollabVersionVector | null>(
+    null,
+  );
+  let [hostSavedVersion, setHostSavedVersion] = useState<SerializedCollabVersionVector | null>(
+    null,
+  );
   let [lastHostSavedAt, setLastHostSavedAt] = useState<number | null>(null);
   let [errorMessage, setErrorMessage] = useState("");
   let connectionRef = useRef<ShareRelayConnection | null>(null);
+  let refreshSessionRef = useRef(refreshSession);
+  refreshSessionRef.current = refreshSession;
 
   useEffect(
     () =>
       doc.subscribeLocalUpdates((bytes) => {
         connectionRef.current?.enqueueDocumentUpdate(bytes);
-        setLatestLocalVersion(doc.oplogVersion());
+        setLatestLocalVersion(serializeDocVersion(doc));
       }),
     [doc],
   );
@@ -107,6 +116,9 @@ export function useSharedFileConnection({
       clientId: getOrCreateSharedFileClientId(),
       doc,
       onConnectionState: setConnectionState,
+      onDocumentImported: () => {
+        setLatestLocalVersion(serializeDocVersion(doc));
+      },
       onError: setErrorMessage,
       onHostSaveAck: (payload) => {
         let ack = parseHostSaveAck(payload);
@@ -117,6 +129,12 @@ export function useSharedFileConnection({
       onShareStatus: (status) => {
         setShareStatus(status);
         if (status.displayName) setDisplayName(status.displayName);
+      },
+      refreshSessionToken: async (signal) => {
+        let refreshed = await refreshSessionRef.current(signal);
+        signal.throwIfAborted();
+        setErrorMessage("");
+        return refreshed.sessionToken;
       },
       relayOrigin,
       sessionToken: session.sessionToken,
@@ -178,7 +196,7 @@ function parseHostSaveAck(payload: Uint8Array) {
 
 function parseVersionVector(value: unknown) {
   if (!Array.isArray(value)) return null;
-  let version = new Map<`${number}`, number>();
+  let version: SerializedCollabVersionVector = [];
   for (let entry of value) {
     if (!Array.isArray(entry) || entry.length != 2) return null;
     let [peer, counter] = entry;
@@ -191,9 +209,22 @@ function parseVersionVector(value: unknown) {
     ) {
       return null;
     }
-    version.set(peer as `${number}`, counter);
+    version.push([peer as `${number}`, counter]);
   }
-  return new VersionVector(version);
+  return version;
+}
+
+function serializeDocVersion(doc: LoroDoc) {
+  let version = doc.oplogVersion();
+  try {
+    return serializeVersionVector(version);
+  } finally {
+    version.free();
+  }
+}
+
+function serializeVersionVector(version: VersionVector): SerializedCollabVersionVector {
+  return [...version.toJSON()].map(([peer, counter]) => [String(peer) as `${number}`, counter]);
 }
 
 function getOrCreateSharedFileClientId() {

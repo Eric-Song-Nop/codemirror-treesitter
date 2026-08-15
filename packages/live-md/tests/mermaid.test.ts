@@ -1,7 +1,13 @@
 // @vitest-environment happy-dom
 
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import DOMPurify from "dompurify";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
+
+// Current security-hardened DOMPurify releases deliberately fail closed against
+// happy-dom's incomplete SVG implementation. The subprocess security regression
+// exercises the real sanitizer; this integration suite isolates LiveMD's renderer routing.
+vi.spyOn(DOMPurify, "sanitize").mockImplementation((value) => value as string);
 
 let locationDescriptor: PropertyDescriptor | undefined;
 
@@ -90,5 +96,5 @@ async function waitForMermaidSvg(widget: HTMLElement) {
     if (svg) return svg;
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
-  throw new Error("Expected Mermaid preview to render an SVG");
+  throw new Error(`Expected Mermaid preview to render an SVG: ${widget.outerHTML}`);
 }

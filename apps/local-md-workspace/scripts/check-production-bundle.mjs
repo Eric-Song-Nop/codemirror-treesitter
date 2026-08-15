@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -6,6 +6,20 @@ const appDirectory = path.resolve(fileURLToPath(new URL("..", import.meta.url)))
 const distDirectory = path.join(appDirectory, "dist");
 const manifest = JSON.parse(
   await readFile(path.join(distDirectory, ".vite", "manifest.json"), "utf8"),
+);
+const assetsDirectory = path.join(distDirectory, "assets");
+const assetNames = await readdir(assetsDirectory);
+const grammarAssets = assetNames.filter(
+  (name) => name.startsWith("tree-sitter-") && name.endsWith(".wasm"),
+);
+const grammarBytes = (
+  await Promise.all(grammarAssets.map((name) => stat(path.join(assetsDirectory, name))))
+).reduce((total, asset) => total + asset.size, 0);
+
+assert(
+  grammarAssets.length <= 10 && grammarBytes <= 7 * 1024 * 1024,
+  `The workspace bundle contains ${grammarAssets.length} Tree-sitter grammars (${grammarBytes} bytes); ` +
+    "LiveMD must ship only its focused, demand-loaded grammar set.",
 );
 
 const collaborationRoots = [
@@ -44,29 +58,71 @@ assert(
 
 const serviceWorker = await readFile(path.join(distDirectory, "service-worker.js"), "utf8");
 assert(
-  !serviceWorker.includes("__GROVE_COLLABORATION_PRECACHE__") &&
+  !serviceWorker.includes("__GROVE_BUILD_PRECACHE__") &&
     !serviceWorker.includes("__GROVE_SHELL_CACHE_KEY__"),
   "The built service worker still contains an uninjected build placeholder.",
 );
-const precacheMatch = serviceWorker.match(/const COLLABORATION_PRECACHE_URLS = (\[[\s\S]*?\]);/);
-assert(precacheMatch, "The built service worker does not declare collaboration precache URLs.");
+const precacheMatch = serviceWorker.match(/const BUILD_PRECACHE_URLS = (\[[\s\S]*?\]);/);
+assert(precacheMatch, "The built service worker does not declare build precache URLs.");
 const precacheUrlValues = JSON.parse(precacheMatch[1]);
 assert(
-  Array.isArray(precacheUrlValues) && precacheUrlValues.every((url) => typeof url == "string"),
-  "The collaboration precache declaration must contain only URL strings.",
+  Array.isArray(precacheUrlValues) &&
+    precacheUrlValues.every((url) => typeof url == "string" && String(url).startsWith("/assets/")),
+  "The build precache declaration must contain only same-origin asset URL strings.",
 );
 const precacheUrls = new Set(precacheUrlValues.map((url) => String(url)));
+assert(
+  precacheUrls.size == precacheUrlValues.length,
+  "The build precache declaration contains duplicate URLs.",
+);
 
-for (const value of collaborationUrls) {
+for (const value of new Set([...initialUrls, ...collaborationUrls])) {
   const url = String(value);
   assert(precacheUrls.has(url), `The service worker does not precache ${url}.`);
 }
+
+const requiredOfflineAssets = [
+  [/^web-tree-sitter-.*\.wasm$/, "Tree-sitter runtime"],
+  [/^tree-sitter-markdown-(?!inline-).*\.wasm$/, "Markdown parser"],
+  [/^tree-sitter-markdown-inline-.*\.wasm$/, "Markdown inline parser"],
+];
+for (const [pattern, label] of requiredOfflineAssets) {
+  const matches = assetNames.filter((name) => pattern.test(name));
+  assert(matches.length == 1, `Expected exactly one ${label} asset, found ${matches.length}.`);
+  assert(
+    precacheUrls.has(`/assets/${matches[0]}`),
+    `The ${label} is missing from the offline precache manifest.`,
+  );
+}
+
+const highlightQueryKeys = Object.keys(manifest).filter((key) =>
+  /^highlights-.*\.js$/.test(path.basename(manifest[key].file ?? "")),
+);
+const highlightQueryUrls = collectManifestUrls(collectStaticManifestClosure(highlightQueryKeys));
+for (const name of assetNames.filter((name) => /^highlights-.*\.js$/.test(name))) {
+  highlightQueryUrls.add(`/assets/${name}`);
+}
+for (const value of highlightQueryUrls) {
+  const url = String(value);
+  assert(precacheUrls.has(url), `The highlight-query closure is missing ${url}.`);
+}
+
+const eagerlyCachedCodeFenceGrammars = assetNames
+  .filter(
+    (name) =>
+      name.startsWith("tree-sitter-") &&
+      name.endsWith(".wasm") &&
+      !/^tree-sitter-markdown(?:-inline)?-/.test(name),
+  )
+  .map((name) => `/assets/${name}`)
+  .filter((url) => precacheUrls.has(url));
+assert(
+  eagerlyCachedCodeFenceGrammars.length == 0,
+  `Demand-loaded code-fence grammars must not be precached: ${eagerlyCachedCodeFenceGrammars.join(", ")}`,
+);
+
 for (const value of precacheUrls) {
   const url = String(value);
-  assert(
-    !/\/tree-sitter[^/]*\.wasm(?:\?|$)/.test(url),
-    `The collaboration precache unexpectedly contains Tree-sitter grammar ${url}.`,
-  );
   await stat(path.join(distDirectory, url.replace(/^\//, "")));
 }
 
@@ -76,7 +132,7 @@ assert(!/loro(?:_wasm)?/i.test(indexHtml), "index.html eagerly references Loro."
 const initialJavaScriptBytes = await totalJavaScriptBytes(initialUrls);
 console.log(
   `Production bundle contract passed: ${initialJavaScriptBytes.toLocaleString()} initial JS bytes; ` +
-    `${precacheUrls.size} collaboration assets cached.`,
+    `${precacheUrls.size} offline assets cached.`,
 );
 
 function collectStaticManifestClosure(seedKeys) {

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Plugin } from "vite-plus";
 
-const collaborationPrecachePlaceholder = "/* __GROVE_COLLABORATION_PRECACHE__ */";
+const buildPrecachePlaceholder = "/* __GROVE_BUILD_PRECACHE__ */";
 const shellCacheKeyPlaceholder = "__GROVE_SHELL_CACHE_KEY__";
 
 const collaborationRootSuffixes = [
@@ -10,6 +10,12 @@ const collaborationRootSuffixes = [
   "/src/lib/collaboration/markdown-document-runtime.ts",
   "/src/lib/collaboration/share-relay-connection.ts",
 ];
+const criticalWorkspaceAssetPatterns = [
+  [/(?:^|\/)web-tree-sitter-[^/]+\.wasm$/, "Tree-sitter runtime"],
+  [/(?:^|\/)tree-sitter-markdown-(?!inline-)[^/]+\.wasm$/, "Markdown parser"],
+  [/(?:^|\/)tree-sitter-markdown-inline-[^/]+\.wasm$/, "Markdown inline parser"],
+] as const;
+const highlightQueryChunkPattern = /(?:^|\/)highlights-[^/]+\.js$/;
 
 type BuildChunk = {
   fileName: string;
@@ -46,13 +52,13 @@ export function serviceWorkerPrecachePlugin(serviceWorkerPath: string): Plugin {
       let urls: string[];
 
       try {
-        urls = collectCollaborationPrecacheUrls(chunks);
+        urls = collectWorkspacePrecacheUrls(chunks, Object.keys(bundle));
       } catch (error) {
         this.error(error instanceof Error ? error.message : String(error));
       }
 
       let serviceWorker = readFileSync(serviceWorkerPath, "utf8");
-      requireSinglePlaceholder(serviceWorker, collaborationPrecachePlaceholder);
+      requireSinglePlaceholder(serviceWorker, buildPrecachePlaceholder);
       requireSinglePlaceholder(serviceWorker, shellCacheKeyPlaceholder);
 
       let injectedUrls = urls.map((url) => JSON.stringify(url)).join(",\n  ");
@@ -65,7 +71,7 @@ export function serviceWorkerPrecachePlugin(serviceWorkerPath: string): Plugin {
         type: "asset",
         fileName: "service-worker.js",
         source: serviceWorker
-          .replace(collaborationPrecachePlaceholder, injectedUrls)
+          .replace(buildPrecachePlaceholder, injectedUrls)
           .replace(shellCacheKeyPlaceholder, cacheKey),
       });
     },
@@ -134,6 +140,83 @@ export function collectCollaborationPrecacheUrls(chunks: BuildChunk[]) {
   }
 
   return Array.from(urls).sort();
+}
+
+export function collectWorkspacePrecacheUrls(
+  chunks: BuildChunk[],
+  bundleFileNames: readonly string[],
+) {
+  let chunksByFileName = new Map(chunks.map((chunk) => [chunk.fileName, chunk]));
+  let urls = new Set(collectCollaborationPrecacheUrls(chunks));
+
+  collectChunkPrecacheUrls(
+    chunks.filter((chunk) => chunk.isEntry),
+    chunksByFileName,
+    urls,
+  );
+  collectChunkPrecacheUrls(
+    chunks.filter((chunk) => highlightQueryChunkPattern.test(chunk.fileName)),
+    chunksByFileName,
+    urls,
+  );
+
+  for (let [pattern, label] of criticalWorkspaceAssetPatterns) {
+    urls.add(toRootUrl(requireSingleBundleFile(bundleFileNames, pattern, label)));
+  }
+
+  let eagerCodeFenceGrammars = Array.from(urls).filter(isDemandLoadedGrammarUrl);
+  if (eagerCodeFenceGrammars.length) {
+    throw new Error(
+      `Demand-loaded code-fence grammars entered the offline precache: ${eagerCodeFenceGrammars.join(", ")}`,
+    );
+  }
+
+  return Array.from(urls).sort();
+}
+
+function collectChunkPrecacheUrls(
+  seeds: BuildChunk[],
+  chunksByFileName: ReadonlyMap<string, BuildChunk>,
+  urls: Set<string>,
+) {
+  let visited = new Set<string>();
+  let pending = [...seeds];
+  while (pending.length) {
+    let chunk = pending.pop();
+    if (!chunk || visited.has(chunk.fileName)) continue;
+    visited.add(chunk.fileName);
+    urls.add(toRootUrl(chunk.fileName));
+    for (let asset of chunk.viteMetadata?.importedAssets ?? []) {
+      let url = toRootUrl(asset);
+      if (!isDemandLoadedGrammarUrl(url)) urls.add(url);
+    }
+    for (let css of chunk.viteMetadata?.importedCss ?? []) urls.add(toRootUrl(css));
+    for (let importedFile of chunk.imports) {
+      let importedChunk = chunksByFileName.get(importedFile);
+      if (importedChunk) pending.push(importedChunk);
+    }
+  }
+}
+
+function requireSingleBundleFile(
+  bundleFileNames: readonly string[],
+  pattern: RegExp,
+  label: string,
+) {
+  let matches = bundleFileNames.filter((fileName) => pattern.test(fileName));
+  if (matches.length != 1) {
+    throw new Error(`Expected exactly one ${label} asset, found ${matches.length}.`);
+  }
+  return matches[0];
+}
+
+function isDemandLoadedGrammarUrl(url: string) {
+  let name = url.split("/").at(-1) ?? "";
+  return (
+    name.startsWith("tree-sitter-") &&
+    name.endsWith(".wasm") &&
+    !/^tree-sitter-markdown(?:-inline)?-/.test(name)
+  );
 }
 
 function collectStaticChunkFiles(

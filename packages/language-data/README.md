@@ -45,22 +45,33 @@ const markdown = languages.find((language) => language.name == "Markdown");
 const support = await markdown?.load();
 ```
 
-LiveMD uses the explicit Markdown parser service when it needs to keep block
-and inline parsing separate:
+LiveMD uses the focused `./live-md` entry when it needs to keep block and
+inline parsing separate without pulling the full language registry (and all of
+its grammar asset references) into an application build:
 
 ```ts
-import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
+import {
+  loadLiveMdCodeFenceLanguage,
+  loadMarkdownParserService,
+} from "@codemirror-treesitter/language-data/live-md";
 
 const { blockLanguage, blockParser, inlineParser, inlineRanges } =
   await loadMarkdownParserService();
+
+const typescript = await loadLiveMdCodeFenceLanguage("ts");
 ```
 
-The root entry point is `src/index.ts`.
+The root entry point is `src/index.ts`; `src/live-md.ts` is the focused
+Markdown and code-fence entry. Code-fence grammars are fetched and compiled
+individually when their aliases are requested, and failed loads remain
+retryable.
 
 ## Source Layout
 
 - `src/index.ts`: language registry, metadata, loaders, language data, and
   mixed-language setup.
+- `src/live-md.ts`: standalone Markdown service and the small, alias-aware set
+  of code-fence grammar loaders used by LiveMD.
 - `src/markdown-inline-ranges.ts`: lazy Markdown inline range traversal and the
   eager compatibility collector used by the explicit parser service.
 - `src/assets.d.ts`: Vite import declarations for WASM and raw query assets.
@@ -69,6 +80,8 @@ The root entry point is `src/index.ts`.
 - `tests/language-data.test.ts`: language metadata and loader coverage.
 - `tests/markdown-inline-ranges.test.ts`: Markdown inline cursor traversal,
   bounded-range, laziness, cleanup, and legacy-query parity coverage.
+- `tests/live-md-entry.test.ts`: focused entry, alias loading, and parser
+  service coverage.
 
 ## Asset Model
 

@@ -1,4 +1,3 @@
-import type { VersionVector } from "loro-crdt";
 import { hostSecretStorageKey, type OwnerShareRecord } from "@/lib/collaboration/share-storage";
 import type { ShareRelayStatus } from "@/lib/collaboration/share-relay-connection";
 import type { ActiveOwnerShareRecord } from "@/lib/workspace/types";
@@ -26,10 +25,6 @@ export function readHostSecret(record: OwnerShareRecord) {
   } catch {
     return null;
   }
-}
-
-export function serializeVersionVector(version: VersionVector) {
-  return [...version.toJSON()].map(([peer, counter]) => [String(peer), counter]);
 }
 
 export function getOrCreateOwnerShareClientId() {

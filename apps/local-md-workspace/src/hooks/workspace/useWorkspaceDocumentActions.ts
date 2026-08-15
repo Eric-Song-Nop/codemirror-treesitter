@@ -1,5 +1,5 @@
 import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
-import type { VersionVector } from "loro-crdt";
+import type { SerializedCollabVersionVector } from "@/lib/collaboration/collab-browser-store";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { useWorkspaceSaveActions } from "@/hooks/workspace/useWorkspaceSaveActions";
 import {
@@ -78,7 +78,7 @@ type UseWorkspaceDocumentActionsOptions = {
     backend: WorkspaceBackend,
     path: string,
     value: string,
-    savedVersion: VersionVector,
+    savedVersion: SerializedCollabVersionVector,
   ) => void;
   setActiveShareRecord: Dispatch<SetStateAction<ActiveOwnerShareRecord | null>>;
   setBusy: (busy: boolean) => void;

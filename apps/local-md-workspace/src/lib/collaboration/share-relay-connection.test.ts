@@ -1,4 +1,4 @@
-import { LoroDoc } from "loro-crdt";
+import { LoroDoc, VersionVector } from "loro-crdt";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   ShareRelayConnection,
@@ -17,6 +17,35 @@ afterEach(() => {
 });
 
 describe("shared file relay connection helpers", () => {
+  it("releases temporary and retained version vectors across the connection lifecycle", () => {
+    vi.stubGlobal("navigator", { onLine: true });
+    vi.stubGlobal("window", globalThis);
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    let free = vi.spyOn(VersionVector.prototype, "free");
+    let doc = new LoroDoc();
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc,
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+
+    connection.connect();
+    let socket = mockSockets[0]!;
+    socket.open();
+    expect(free).toHaveBeenCalledTimes(1);
+
+    socket.receive(JSON.stringify({ type: "sync-ready", versionVector: [] }));
+    expect(free).toHaveBeenCalledTimes(2);
+
+    connection.pause();
+    connection.close();
+    expect(free).toHaveBeenCalledTimes(3);
+
+    doc.free();
+  });
+
   it("parses share status frames", () => {
     let payload = new TextEncoder().encode(
       JSON.stringify({
@@ -180,6 +209,83 @@ describe("shared file relay connection helpers", () => {
     connection.close();
   });
 
+  it("splits a queued flush into relay-compatible batches", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { onLine: true });
+    vi.stubGlobal("window", globalThis);
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc: new LoroDoc(),
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+    connection.connect();
+    let socket = mockSockets[0]!;
+    socket.open();
+    socket.receive(JSON.stringify({ type: "sync-ready", versionVector: [] }));
+
+    for (let index = 0; index < 130; index++) {
+      connection.enqueueHostSaveAck(new Uint8Array([index >> 8, index & 0xff]));
+    }
+    connection.flushNow();
+
+    let batches = sentHostSaveAckBatches(socket);
+    expect(batches.map((batch) => batch.length)).toEqual([64, 64, 2]);
+    expect(batches.flat().map((message) => message.kind)).toEqual(
+      Array(130).fill(RelayWireKind.HostSaveAck),
+    );
+
+    connection.close();
+  });
+
+  it("retains the unsent tail when a later relay batch send fails", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { onLine: true });
+    vi.stubGlobal("window", globalThis);
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc: new LoroDoc(),
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+    connection.connect();
+    let firstSocket = mockSockets[0]!;
+    firstSocket.open();
+    firstSocket.receive(JSON.stringify({ type: "sync-ready", versionVector: [] }));
+
+    for (let index = 0; index < 130; index++) {
+      connection.enqueueHostSaveAck(new Uint8Array([index >> 8, index & 0xff]));
+    }
+    firstSocket.failBinarySendAt = 3;
+    connection.flushNow();
+
+    expect(sentHostSaveAckBatches(firstSocket).map((batch) => batch.length)).toEqual([64]);
+
+    connection.connect();
+    let retrySocket = mockSockets[1]!;
+    retrySocket.open();
+    retrySocket.receive(JSON.stringify({ type: "sync-ready", versionVector: [] }));
+    connection.flushNow();
+
+    let delivered = [
+      ...sentHostSaveAckBatches(firstSocket).flat(),
+      ...sentHostSaveAckBatches(retrySocket).flat(),
+    ];
+    expect(delivered).toHaveLength(130);
+    expect(delivered.map((message) => (message.payload[0]! << 8) | message.payload[1]!)).toEqual(
+      Array.from({ length: 130 }, (_, index) => index),
+    );
+    expect(sentHostSaveAckBatches(retrySocket).map((batch) => batch.length)).toEqual([64, 2]);
+
+    connection.close();
+  });
+
   it("flushes queued relay messages before closing", () => {
     vi.useFakeTimers();
     vi.stubGlobal("navigator", { onLine: true });
@@ -302,9 +408,19 @@ describe("shared file relay connection helpers", () => {
 });
 
 function sentMessages(socket: MockWebSocket) {
+  return sentBatches(socket).flat();
+}
+
+function sentBatches(socket: MockWebSocket) {
   return socket.sent
     .filter((item): item is Uint8Array => item instanceof Uint8Array)
-    .flatMap((frame) => decodeRelayWireFrame(frame));
+    .map((frame) => decodeRelayWireFrame(frame));
+}
+
+function sentHostSaveAckBatches(socket: MockWebSocket) {
+  return sentBatches(socket)
+    .map((batch) => batch.filter((message) => message.kind == RelayWireKind.HostSaveAck))
+    .filter((batch) => batch.length > 0);
 }
 
 class MockWebSocket extends EventTarget {
@@ -313,8 +429,10 @@ class MockWebSocket extends EventTarget {
   static readonly OPEN = 1;
 
   binaryType: BinaryType = "arraybuffer";
+  failBinarySendAt: number | null = null;
   readonly sent: Array<string | Uint8Array> = [];
   readyState = MockWebSocket.CONNECTING;
+  private binarySendCount = 0;
 
   constructor(readonly url: string) {
     super();
@@ -340,7 +458,11 @@ class MockWebSocket extends EventTarget {
   send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
     if (typeof data == "string") {
       this.sent.push(data);
-    } else if (ArrayBuffer.isView(data)) {
+      return;
+    }
+    this.binarySendCount++;
+    if (this.binarySendCount == this.failBinarySendAt) throw new Error("injected send failure");
+    if (ArrayBuffer.isView(data)) {
       this.sent.push(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
     } else if (data instanceof ArrayBuffer) {
       this.sent.push(new Uint8Array(data));

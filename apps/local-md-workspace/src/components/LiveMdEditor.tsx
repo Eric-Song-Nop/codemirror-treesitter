@@ -18,6 +18,7 @@ import {
   catppuccinMacchiatoLiveMdTheme,
 } from "@codemirror-treesitter/live-md-theme-catppuccin";
 import { githubLightLiveMdTheme } from "@codemirror-treesitter/live-md-theme-github";
+import { useLiveMdPreload } from "@/lib/live-md-preload";
 import { useTheme, type Theme } from "@/theme";
 
 type LiveMdEditorProps = {
@@ -32,7 +33,12 @@ type LiveMdEditorProps = {
 const emptyLiveMdEditorConfig: LiveMdConfig = {};
 const emptyLiveMdEditorPlugins: NonNullable<LiveMdConfig["plugins"]> = [];
 
-export function LiveMdEditor({
+export function LiveMdEditor({ ...props }: LiveMdEditorProps) {
+  let { generation } = useLiveMdPreload();
+  return <LiveMdEditorGeneration key={generation} {...props} />;
+}
+
+function LiveMdEditorGeneration({
   documentKey,
   config = emptyLiveMdEditorConfig,
   initialValue,

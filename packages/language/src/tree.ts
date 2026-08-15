@@ -177,15 +177,88 @@ export interface IterateSpec {
   leave?: (node: SyntaxNode) => void;
 }
 
+type NativeTreeResource = {
+  deleted: boolean;
+  references: number;
+  tree: TSTree;
+};
+
+const nativeTreeResources = new WeakMap<TSTree, NativeTreeResource>();
+const wrappedTreeResources = new WeakMap<Tree, NativeTreeResource>();
+const disposedWrappedTrees = new WeakSet<Tree>();
+const nativeTreeFinalizer =
+  typeof FinalizationRegistry == "undefined"
+    ? null
+    : new FinalizationRegistry<NativeTreeResource>((resource) => releaseNativeTree(resource));
+
+function retainNativeTree(owner: Tree, tree: TSTree) {
+  if (typeof tree.delete != "function") return;
+  let resource = nativeTreeResources.get(tree);
+  if (!resource) {
+    resource = { deleted: false, references: 0, tree };
+    nativeTreeResources.set(tree, resource);
+  }
+  resource.references++;
+  wrappedTreeResources.set(owner, resource);
+  nativeTreeFinalizer?.register(owner, resource, owner);
+}
+
+function releaseNativeTree(resource: NativeTreeResource) {
+  resource.references--;
+  if (!resource.references && !resource.deleted) {
+    resource.deleted = true;
+    resource.tree.delete();
+  }
+}
+
+/** @internal Release one wrapped-tree reference. */
+export function disposeTree(tree: Tree) {
+  if (disposedWrappedTrees.has(tree)) return;
+  disposedWrappedTrees.add(tree);
+  nativeTreeFinalizer?.unregister(tree);
+  let resource = wrappedTreeResources.get(tree);
+  if (resource) releaseNativeTree(resource);
+}
+
+function disposeTreeGraph(tree: Tree) {
+  let pending = [tree];
+  let visited = new Set<Tree>();
+  while (pending.length) {
+    let current = pending.pop()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (let nested of current.nested) pending.push(nested.tree);
+    disposeTree(current);
+  }
+}
+
+/** @internal Force-release an unpublished native tree. */
+export function disposeNativeTree(tree: TSTree) {
+  if (typeof tree.delete != "function") return;
+  let resource = nativeTreeResources.get(tree);
+  if (resource) {
+    if (!resource.deleted) {
+      resource.deleted = true;
+      tree.delete();
+    }
+  } else {
+    tree.delete();
+  }
+}
+
 export class Tree {
   static empty = new Tree(null, null, 0);
+  readonly rootNodeId: number | null;
 
   constructor(
     readonly tree: TSTree | null,
     readonly config: TreeConfig | null,
     readonly length: number,
     readonly nested: readonly NestedTree[] = [],
-  ) {}
+  ) {
+    if (tree) retainNativeTree(this, tree);
+    this.rootNodeId = tree?.rootNode?.id ?? null;
+  }
 
   get type() {
     return this.topNode.type;
@@ -205,8 +278,20 @@ export class Tree {
 
   cursorAt(pos: number, side: -1 | 0 | 1 = 0) {
     let cursor = this.cursor();
-    if (cursor) cursor.moveTo(pos, side);
+    if (cursor) {
+      try {
+        cursor.moveTo(pos, side);
+      } catch (error) {
+        cursor.delete();
+        throw error;
+      }
+    }
     return cursor;
+  }
+
+  /** Release this tree graph's native references. Calling this twice is safe. */
+  delete() {
+    disposeTreeGraph(this);
   }
 
   resolve(pos: number, side: -1 | 0 | 1 = 0) {
@@ -265,32 +350,10 @@ export class Tree {
         if (start >= from && (includeTo ? start <= to : start < to)) emitNested(entry);
       }
     };
-    let visit = (cursor: TreeCursor) => {
-      let node = cursor.node;
-      if (node.to < from || node.from > to) return;
-      if (spec.enter?.(node) === false) return;
-      let pos = node.from;
-      let child = cursor.copy();
-      try {
-        if (firstIteratedCursorChild(child, from)) {
-          do {
-            if (child.from > to) break;
-            emitNestedIn(pos, Math.min(child.from, node.to), false);
-            visit(child);
-            emitNestedIn(child.from, child.to, false);
-            pos = child.to;
-          } while (child.nextSibling());
-        }
-      } finally {
-        child.delete();
-      }
-      emitNestedIn(pos, node.to, false);
-      spec.leave?.(node);
-    };
     let cursor = this.cursor();
     if (cursor) {
       try {
-        visit(cursor);
+        iterateTreeCursor(cursor, from, to, spec, emitNestedIn);
       } finally {
         cursor.delete();
       }
@@ -310,13 +373,72 @@ export class Tree {
   }
 }
 
-function firstIteratedCursorChild(cursor: TreeCursor, from: number): boolean {
+function enterFirstIteratedCursorChild(cursor: TreeCursor, from: number, to: number): boolean {
   let index = cursorSearchIndex(cursor, from, -1);
   if (!cursor.firstChildForIndex(index)) return false;
   while (cursor.to < from) {
-    if (!cursor.nextSibling()) return false;
+    if (!cursor.nextSibling()) {
+      cursor.parent();
+      return false;
+    }
+  }
+  if (cursor.from > to) {
+    cursor.parent();
+    return false;
   }
   return true;
+}
+
+type TreeIterationFrame = {
+  childrenStarted: boolean;
+  node: SyntaxNode;
+  pos: number;
+};
+
+function iterateTreeCursor(
+  cursor: TreeCursor,
+  from: number,
+  to: number,
+  spec: IterateSpec,
+  emitNestedIn: (from: number, to: number, includeTo?: boolean) => void,
+) {
+  let frames: TreeIterationFrame[] = [];
+  let enterCurrent = () => {
+    let node = cursor.node;
+    if (node.to < from || node.from > to || spec.enter?.(node) === false) return false;
+    frames.push({ childrenStarted: false, node, pos: node.from });
+    return true;
+  };
+  let advanceAfterChild = (parent: TreeIterationFrame) => {
+    for (;;) {
+      emitNestedIn(cursor.from, cursor.to, false);
+      parent.pos = cursor.to;
+      if (!cursor.nextSibling() || cursor.from > to) {
+        cursor.parent();
+        return false;
+      }
+      emitNestedIn(parent.pos, Math.min(cursor.from, parent.node.to), false);
+      if (enterCurrent()) return true;
+    }
+  };
+
+  if (!enterCurrent()) return;
+  while (frames.length) {
+    let frame = frames.at(-1)!;
+    if (!frame.childrenStarted) {
+      frame.childrenStarted = true;
+      if (enterFirstIteratedCursorChild(cursor, from, to)) {
+        emitNestedIn(frame.pos, Math.min(cursor.from, frame.node.to), false);
+        if (enterCurrent() || advanceAfterChild(frame)) continue;
+      }
+    }
+
+    emitNestedIn(frame.pos, frame.node.to, false);
+    spec.leave?.(frame.node);
+    frames.pop();
+    let parent = frames.at(-1);
+    if (parent && advanceAfterChild(parent)) continue;
+  }
 }
 
 function nestedStart(nest: NestedTree | { range: DocRange }) {
@@ -373,7 +495,9 @@ export class SyntaxNode {
       this.node.type,
       this.node.typeId,
       this.node.isNamed,
-      this.node.parent == null,
+      this.tree.rootNodeId == null
+        ? this.node.parent == null
+        : this.node.id == this.tree.rootNodeId,
       this.node.isError || this.node.isMissing,
     );
   }
@@ -658,20 +782,25 @@ export class SyntaxNode {
 
     let cursor = this.cursor();
     let result: SyntaxNode[] = [];
-    if (!cursor?.firstChild()) return result;
+    if (!cursor) return result;
 
-    if (before != null) {
-      for (;;) {
-        if (cursor.type.is(before)) break;
+    try {
+      if (!cursor.firstChild()) return result;
+      if (before != null) {
+        for (;;) {
+          if (cursor.type.is(before)) break;
+          if (!cursor.nextSibling()) return result;
+        }
         if (!cursor.nextSibling()) return result;
       }
-      if (!cursor.nextSibling()) return result;
-    }
 
-    for (;;) {
-      if (after != null && cursor.type.is(after)) return result;
-      if (cursor.type.is(type)) result.push(cursor.node);
-      if (!cursor.nextSibling()) return after == null ? result : [];
+      for (;;) {
+        if (after != null && cursor.type.is(after)) return result;
+        if (cursor.type.is(type)) result.push(cursor.node);
+        if (!cursor.nextSibling()) return after == null ? result : [];
+      }
+    } finally {
+      cursor.delete();
     }
   }
 
@@ -750,6 +879,8 @@ export class SyntaxNode {
 export type SyntaxNodeRef = SyntaxNode;
 
 export class TreeCursor {
+  private deleted = false;
+
   constructor(
     private readonly ownerTree: Tree,
     private readonly cursor: TSTreeCursor,
@@ -850,7 +981,10 @@ export class TreeCursor {
   }
 
   delete() {
-    this.cursor.delete();
+    if (!this.deleted) {
+      this.deleted = true;
+      this.cursor.delete();
+    }
   }
 
   firstChild() {
@@ -891,14 +1025,14 @@ export class TreeCursor {
 
   enter(pos: number, side: -1 | 0 | 1 = 0) {
     let start = this.copyCursor();
-    let index = cursorSearchIndex(this, pos, side);
-    if (this.cursor.gotoFirstChildForIndex(index) && rangeContains(this, pos, side)) {
+    try {
+      let index = cursorSearchIndex(this, pos, side);
+      if (this.cursor.gotoFirstChildForIndex(index) && rangeContains(this, pos, side)) return true;
+      this.cursor.resetTo(start);
+      return false;
+    } finally {
       start.delete();
-      return true;
     }
-    this.cursor.resetTo(start);
-    start.delete();
-    return false;
   }
 
   nextSibling() {
@@ -925,13 +1059,15 @@ export class TreeCursor {
     if (!this.resetToRoot()) return this;
     for (;;) {
       let start = this.copyCursor();
-      let index = cursorSearchIndex(this, pos, side);
-      if (!this.cursor.gotoFirstChildForIndex(index) || !rangeContains(this, pos, side)) {
-        this.cursor.resetTo(start);
+      try {
+        let index = cursorSearchIndex(this, pos, side);
+        if (!this.cursor.gotoFirstChildForIndex(index) || !rangeContains(this, pos, side)) {
+          this.cursor.resetTo(start);
+          return this;
+        }
+      } finally {
         start.delete();
-        return this;
       }
-      start.delete();
     }
   }
 
@@ -978,19 +1114,35 @@ function iterateSyntaxCursor(
   enter: (node: SyntaxNodeRef) => boolean | void,
   leave?: (node: SyntaxNodeRef) => void,
 ) {
-  let node = cursor.node;
-  if (enter(node) === false) return;
-  let child = cursor.copy();
-  try {
-    if (child.firstChild()) {
-      do {
-        iterateSyntaxCursor(child, enter, leave);
-      } while (child.nextSibling());
+  let frames: Array<{ childrenStarted: boolean; node: SyntaxNode }> = [];
+  let enterCurrent = () => {
+    let node = cursor.node;
+    if (enter(node) === false) return false;
+    frames.push({ childrenStarted: false, node });
+    return true;
+  };
+  let advanceAfterChild = () => {
+    for (;;) {
+      if (!cursor.nextSibling()) {
+        cursor.parent();
+        return false;
+      }
+      if (enterCurrent()) return true;
     }
-  } finally {
-    child.delete();
+  };
+
+  if (!enterCurrent()) return;
+  while (frames.length) {
+    let frame = frames.at(-1)!;
+    if (!frame.childrenStarted) {
+      frame.childrenStarted = true;
+      if (cursor.firstChild() && (enterCurrent() || advanceAfterChild())) continue;
+    }
+
+    leave?.(frame.node);
+    frames.pop();
+    if (frames.length && advanceAfterChild()) continue;
   }
-  leave?.(node);
 }
 
 export function pointAfterText(start: Point, text: string): Point {

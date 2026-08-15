@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LiveMdConfig } from "@codemirror-treesitter/live-md";
 import { liveMdLoroCollaborationPlugin } from "@codemirror-treesitter/live-md-loro";
 import { AlertCircleIcon, CloudIcon, RefreshCwIcon, WifiIcon, WifiOffIcon } from "lucide-react";
-import { LoroDoc, UndoManager, type VersionVector } from "loro-crdt";
+import { LoroDoc, UndoManager } from "loro-crdt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
@@ -18,7 +18,8 @@ import { parseShareLink, type ShareLinkParts } from "@/lib/collaboration/share-i
 import { useSharedFileConnection } from "@/hooks/shared/useSharedFileConnection";
 import { useSharedFileSession } from "@/hooks/shared/useSharedFileSession";
 import { translateKnownMessage, useI18n, type TFunction, type Locale } from "@/lib/i18n";
-import { useLiveMdPreloadError } from "@/lib/live-md-preload";
+import { useLiveMdPreload } from "@/lib/live-md-preload";
+import type { SerializedCollabVersionVector } from "@/lib/collaboration/collab-browser-store";
 
 type SharedFileRoute =
   | {
@@ -35,16 +36,68 @@ type SharedFileEditorProps = {
 };
 
 export function SharedFileEditor({ href = window.location.href }: SharedFileEditorProps) {
+  let [runtime, setRuntime] = useState<{ doc: LoroDoc; undoManager: UndoManager } | null>(null);
+
+  useEffect(() => {
+    let doc = new LoroDoc();
+    let undoManager: UndoManager;
+    try {
+      undoManager = new UndoManager(doc, {});
+    } catch (error) {
+      doc.free();
+      throw error;
+    }
+    let disposed = false;
+    setRuntime({ doc, undoManager });
+    return () => {
+      // Let nested editor and relay effects detach before releasing their shared native handles.
+      // The next StrictMode setup creates a fresh pair before this queued cleanup runs.
+      queueMicrotask(() => {
+        if (disposed) return;
+        disposed = true;
+        undoManager.free();
+        doc.free();
+      });
+    };
+  }, []);
+
+  if (!runtime) {
+    return (
+      <main
+        aria-busy="true"
+        className="grid h-svh min-h-0 place-items-center bg-background p-6 text-foreground"
+      >
+        <Spinner className="size-10" />
+      </main>
+    );
+  }
+
+  return (
+    <SharedFileEditorRuntime doc={runtime.doc} href={href} undoManager={runtime.undoManager} />
+  );
+}
+
+function SharedFileEditorRuntime({
+  doc,
+  href,
+  undoManager,
+}: {
+  doc: LoroDoc;
+  href: string;
+  undoManager: UndoManager;
+}) {
   let { locale, t } = useI18n();
-  let liveMdPreloadError = useLiveMdPreloadError();
+  let {
+    error: liveMdPreloadError,
+    retry: retryLiveMdPreload,
+    retrying: liveMdPreloadRetrying,
+  } = useLiveMdPreload();
   let route = useMemo(() => sharedFileRouteFromHref(href), [href]);
   let relayOrigin = useMemo(() => configuredShareRelayOrigin(), []);
   let shareId = route.kind == "share" ? route.parts.shareId : "";
   let guestSecret = route.kind == "share" ? route.parts.guestSecret : "";
   let invalidRouteMessage = route.kind == "invalid" ? route.message : "";
   let canJoinSharedFile = route.kind == "share" && Boolean(relayOrigin);
-  let [doc] = useState(() => new LoroDoc());
-  let [undoManager] = useState(() => new UndoManager(doc, {}));
   let liveMdConfig = useMemo<LiveMdConfig>(
     () => ({ plugins: [liveMdLoroCollaborationPlugin({ doc, undoManager })] }),
     [doc, undoManager],
@@ -64,6 +117,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
     doc,
     joining: sharedSession.isJoining,
     relayOrigin,
+    refreshSession: sharedSession.refreshSession,
     session: sharedSession.session,
     sessionErrorMessage: sharedSession.errorMessage,
     sessionKey: sharedSession.guestSecretToken,
@@ -84,6 +138,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
   let saveStatus = guestSaveStatus({
     hostSavedVersion: sharedConnection.hostSavedVersion,
     latestLocalVersion: sharedConnection.latestLocalVersion,
+    pendingHostSave: sharedConnection.shareStatus?.pendingHostSave ?? false,
     t,
   });
   let saveStatusTitle =
@@ -97,6 +152,9 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
       ? t("shared.title")
       : sharedConnection.displayName;
   let visibleErrorMessage = sharedConnection.errorMessage || liveMdPreloadError;
+  let retryingVisibleError = sharedConnection.errorMessage
+    ? joiningSharedFile
+    : liveMdPreloadRetrying;
 
   return (
     <TooltipProvider>
@@ -141,15 +199,20 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
           <div className="flex shrink-0 items-center gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
             <AlertCircleIcon className="size-4 shrink-0" />
             <div className="min-w-0 flex-1">{translateKnownMessage(visibleErrorMessage, t)}</div>
-            {sharedConnection.errorMessage && route.kind == "share" && (
+            {((sharedConnection.errorMessage && route.kind == "share") ||
+              (!sharedConnection.errorMessage && liveMdPreloadError)) && (
               <Button
-                disabled={joiningSharedFile}
+                disabled={retryingVisibleError}
                 size="sm"
                 variant="outline"
-                onClick={retrySharedFileConnection}
+                onClick={
+                  sharedConnection.errorMessage
+                    ? retrySharedFileConnection
+                    : () => void retryLiveMdPreload()
+                }
               >
                 <PendingButtonContent
-                  pending={joiningSharedFile}
+                  pending={retryingVisibleError}
                   pendingLabel={t("actions.connecting")}
                 >
                   <>
@@ -216,17 +279,19 @@ function connectionStatusLabel(state: ShareRelayConnectionState, t: TFunction) {
   return t("shared.connection.offline");
 }
 
-function guestSaveStatus({
+export function guestSaveStatus({
   hostSavedVersion,
   latestLocalVersion,
+  pendingHostSave,
   t,
 }: {
-  hostSavedVersion: VersionVector | null;
-  latestLocalVersion: VersionVector | null;
+  hostSavedVersion: SerializedCollabVersionVector | null;
+  latestLocalVersion: SerializedCollabVersionVector | null;
+  pendingHostSave: boolean;
   t: TFunction;
 }) {
   if (!latestLocalVersion) return "";
-  if (hostSavedVersion && versionCovers(hostSavedVersion, latestLocalVersion)) {
+  if (!pendingHostSave && hostSavedVersion && versionCovers(hostSavedVersion, latestLocalVersion)) {
     return t("shared.savedToHost");
   }
   return t("shared.waitingForHost");
@@ -247,7 +312,7 @@ function formatPeerCount(count: number, t: TFunction) {
       });
 }
 
-function versionCovers(saved: VersionVector, local: VersionVector) {
-  let comparison = saved.compare(local);
-  return comparison == 0 || comparison == 1;
+function versionCovers(saved: SerializedCollabVersionVector, local: SerializedCollabVersionVector) {
+  let savedCounters = new Map(saved);
+  return local.every(([peer, counter]) => (savedCounters.get(peer) ?? 0) >= counter);
 }

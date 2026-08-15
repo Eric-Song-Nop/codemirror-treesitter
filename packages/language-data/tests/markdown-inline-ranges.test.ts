@@ -45,7 +45,7 @@ async function parseMarkdown(doc: string) {
 }
 
 function deleteTree(tree: Tree) {
-  tree.tree?.delete();
+  tree.delete();
 }
 
 function countCursorOperations() {

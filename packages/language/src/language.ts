@@ -30,6 +30,8 @@ import {
   SyntaxNode,
   Tree,
   type TreeConfig,
+  disposeNativeTree,
+  disposeTree,
   pointAfterText,
 } from "./tree.js";
 import { NestedTreeMatcher, type NestedTreeMatcherStats } from "./nested-tree-matcher.js";
@@ -119,11 +121,79 @@ export interface NestedParserSource {
 
 let parserInit: Promise<void> | null = null;
 let queryCache = new WeakMap<TreeSitterParser, Map<string, TSQuery>>();
+const maxCachedQueriesPerParser = 64;
+const editedTreeOwnership = new WeakMap<Tree, Set<Tree>>();
+const parserQueries = new WeakMap<TreeSitterParser, Set<TSQuery>>();
+type NativeQueryResource = { deleteNative: () => void; deleted: boolean };
+const managedQueryResources = new WeakMap<TSQuery, NativeQueryResource>();
+const nativeQueryFinalizer =
+  typeof FinalizationRegistry == "undefined"
+    ? null
+    : new FinalizationRegistry<NativeQueryResource>((resource) => disposeNativeQuery(resource));
+
+function queryResources(parser: TreeSitterParser) {
+  let queries = parserQueries.get(parser);
+  if (!queries) {
+    queries = new Set();
+    parserQueries.set(parser, queries);
+  }
+  return queries;
+}
+
+function createQuery(parser: TreeSitterParser, source: string) {
+  let query = manageQuery(new TSQuery(parser.language!, source));
+  queryResources(parser).add(query);
+  return query;
+}
+
+function manageQuery(query: TSQuery) {
+  let resource = { deleteNative: query.delete.bind(query), deleted: false };
+  let managed!: TSQuery;
+  let deleteOverride: unknown;
+  let hasDeleteOverride = false;
+  let deleteManaged = () => {
+    nativeQueryFinalizer?.unregister(managed);
+    disposeNativeQuery(resource);
+  };
+  managed = new Proxy(query, {
+    get(target, property, receiver) {
+      if (property == "delete" && hasDeleteOverride) return deleteOverride;
+      if (property == "delete") return deleteManaged;
+      return Reflect.get(target, property, receiver) as unknown;
+    },
+    set(target, property, value) {
+      if (property == "delete") {
+        deleteOverride = value;
+        hasDeleteOverride = true;
+        return true;
+      }
+      return Reflect.set(target, property, value, target);
+    },
+  });
+  managedQueryResources.set(managed, resource);
+  nativeQueryFinalizer?.register(managed, resource, managed);
+  return managed;
+}
+
+function disposeNativeQuery(resource: NativeQueryResource) {
+  if (resource.deleted) return;
+  resource.deleted = true;
+  resource.deleteNative();
+}
+
+export function __testManagedQuery(query: TSQuery) {
+  return managedQueryResources.has(query);
+}
+
+function disposeQueries(queries: Set<TSQuery>) {
+  for (let query of queries) query.delete();
+  queries.clear();
+}
 
 export class TreeSitterParser implements TreeConfig {
   private readonly typeCache = new Map<string, NodeType>();
+  private highlightQueryValue: TSQuery | null | undefined;
   readonly styleTags: ReadonlyMap<string, readonly Tag[]>;
-  readonly highlightQuery: TSQuery | null;
 
   private constructor(
     readonly language: TSLanguage | null,
@@ -140,19 +210,42 @@ export class TreeSitterParser implements TreeConfig {
         value instanceof Tag ? [value] : Array.from(value),
       ]),
     );
-    this.highlightQuery =
-      language && highlightQuerySource ? new TSQuery(language, highlightQuerySource) : null;
+    queryResources(this);
+    this.highlightQueryValue =
+      language && highlightQuerySource ? createQuery(this, highlightQuerySource) : null;
+  }
+
+  get highlightQuery() {
+    if (this.highlightQueryValue === undefined) {
+      this.highlightQueryValue =
+        this.language && this.highlightQuerySource
+          ? createQuery(this, this.highlightQuerySource)
+          : null;
+    }
+    return this.highlightQueryValue;
   }
 
   createParser() {
     if (!this.language) throw new RangeError("Skipping parsers can not parse directly");
     let parser = new TSParser();
-    parser.setLanguage(this.language);
-    return parser;
+    try {
+      parser.setLanguage(this.language);
+      return parser;
+    } catch (error) {
+      parser.delete();
+      throw error;
+    }
   }
 
   static async init(options?: Parameters<typeof TSParser.init>[0]) {
-    return (parserInit ??= TSParser.init(options));
+    if (!parserInit) {
+      let current = TSParser.init(options);
+      parserInit = current;
+      void current.catch(() => {
+        if (parserInit === current) parserInit = null;
+      });
+    }
+    return parserInit;
   }
 
   static async load(wasm: string | Uint8Array, config: TreeSitterParserConfig = {}) {
@@ -185,32 +278,26 @@ export class TreeSitterParser implements TreeConfig {
   }
 
   configure(config: TreeSitterParserConfig = {}) {
+    let mergedStyles: Record<string, readonly Tag[]> = Object.fromEntries(this.styleTags.entries());
+    for (let [name, value] of Object.entries(config.styleTags ?? {})) {
+      mergedStyles[name] = value instanceof Tag ? [value] : Array.from(value);
+    }
     return new TreeSitterParser(
       this.language,
       config.props ? this.props.concat(config.props) : this.props,
-      Object.fromEntries(this.styleTags.entries()) as Record<string, readonly Tag[]>,
+      mergedStyles,
       config.highlightQuery ?? this.highlightQuerySource,
       config.nested ? this.nestedParsers.concat(config.nested) : this.nestedParsers,
       this.skipUntil,
       config.implicitFinalNewline ?? this.implicitFinalNewline,
-    ).withStyleTags(config.styleTags);
+    );
   }
 
-  private withStyleTags(styleTags?: Record<string, Tag | readonly Tag[]>) {
-    if (!styleTags) return this;
-    let merged: Record<string, readonly Tag[]> = Object.fromEntries(this.styleTags.entries());
-    for (let [name, value] of Object.entries(styleTags)) {
-      merged[name] = value instanceof Tag ? [value] : Array.from(value);
-    }
-    return new TreeSitterParser(
-      this.language,
-      this.props,
-      merged,
-      this.highlightQuerySource,
-      this.nestedParsers,
-      this.skipUntil,
-      this.implicitFinalNewline,
-    );
+  /** Delete compiled queries. They are recreated lazily when next requested. */
+  clearQueryCache() {
+    disposeQueries(queryResources(this));
+    queryCache.delete(this);
+    this.highlightQueryValue = this.language && this.highlightQuerySource ? undefined : null;
   }
 
   highlightTags(tree: Tree, from: number, to: number): Map<number, readonly Tag[]> | null {
@@ -278,8 +365,21 @@ export class TreeSitterParser implements TreeConfig {
     let oldParsedTree: TSTree | null = wrappedOldTree
       ? wrappedOldTree.tree
       : (oldTree as TSTree | null);
-    let parsed = this.parseWith(this.createParser(), doc, oldParsedTree);
-    return parsed ? (this.wrapTree(parsed, doc, wrappedOldTree) ?? Tree.empty) : Tree.empty;
+    let nativeParser = this.createParser();
+    let parsed: TSTree | null = null;
+    let wrapped: Tree | null = null;
+    try {
+      parsed = this.parseWith(nativeParser, doc, oldParsedTree);
+      if (!parsed) return Tree.empty;
+      wrapped = this.wrapTree(parsed, doc, wrappedOldTree);
+      if (!wrapped) disposeNativeTree(parsed);
+      return wrapped ?? Tree.empty;
+    } catch (error) {
+      if (parsed && !wrapped) disposeNativeTree(parsed);
+      throw error;
+    } finally {
+      nativeParser.delete();
+    }
   }
 
   parseWith(
@@ -322,20 +422,25 @@ export class TreeSitterParser implements TreeConfig {
 
   editTree(tree: TSTree, changes: ChangeDesc, oldDoc: Text, newDoc: Text): TSTree {
     let edited = tree.copy();
-    changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-      let startPosition = pointAt(newDoc, fromB);
-      edited.edit(
-        new Edit({
-          startIndex: fromB,
-          oldEndIndex: fromB + (toA - fromA),
-          newEndIndex: toB,
-          startPosition,
-          oldEndPosition: pointAfterText(startPosition, oldDoc.sliceString(fromA, toA)),
-          newEndPosition: pointAt(newDoc, toB),
-        }),
-      );
-    });
-    return edited;
+    try {
+      changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+        let startPosition = pointAt(newDoc, fromB);
+        edited.edit(
+          new Edit({
+            startIndex: fromB,
+            oldEndIndex: fromB + (toA - fromA),
+            newEndIndex: toB,
+            startPosition,
+            oldEndPosition: pointAfterText(startPosition, oldDoc.sliceString(fromA, toA)),
+            newEndPosition: pointAt(newDoc, toB),
+          }),
+        );
+      });
+      return edited;
+    } catch (error) {
+      disposeNativeTree(edited);
+      throw error;
+    }
   }
 
   editWrappedTree(tree: Tree, changes: ChangeDesc, oldDoc: Text, newDoc: Text): Tree {
@@ -343,11 +448,14 @@ export class TreeSitterParser implements TreeConfig {
     if (this.shouldAppendFinalNewline(oldDoc) != this.shouldAppendFinalNewline(newDoc)) {
       return Tree.empty;
     }
-    let nested = tree.nested
-      .map((nest): NestedTree | null => {
-        if (!nest.tree.tree) return null;
+    let nested: NestedTree[] = [];
+    let ownedTrees = new Set<Tree>();
+    let editedNativeTree: TSTree | null = null;
+    try {
+      for (let nest of tree.nested) {
+        if (!nest.tree.tree) continue;
         let ranges = normalizeRanges(nest.ranges.map((range) => editRange(changes, range)));
-        if (!ranges.length) return null;
+        if (!ranges.length) continue;
         // Editing a native tree cannot remove an included-range component. Keep
         // the mapped ranges for matching, but force a fresh nested parse when a
         // component collapsed or merged during the edit.
@@ -355,10 +463,22 @@ export class TreeSitterParser implements TreeConfig {
           ranges.length == nest.ranges.length
             ? (nest.parser as TreeSitterParser).editWrappedTree(nest.tree, changes, oldDoc, newDoc)
             : Tree.empty;
-        return { parser: nest.parser, tree: edited, ranges };
-      })
-      .filter((value): value is NestedTree => value != null);
-    return new Tree(this.editTree(tree.tree, changes, oldDoc, newDoc), this, newDoc.length, nested);
+        nested.push({ parser: nest.parser, tree: edited, ranges });
+        let nestedOwnership = editedTreeOwnership.get(edited);
+        if (nestedOwnership) for (let owned of nestedOwnership) ownedTrees.add(owned);
+      }
+      editedNativeTree = this.editTree(tree.tree, changes, oldDoc, newDoc);
+      let editedTree = new Tree(editedNativeTree, this, newDoc.length, nested);
+      ownedTrees.add(editedTree);
+      editedTreeOwnership.set(editedTree, ownedTrees);
+      return editedTree;
+    } catch (error) {
+      if (editedNativeTree) disposeNativeTree(editedNativeTree);
+      for (let nest of nested) {
+        if (editedTreeOwnership.has(nest.tree)) disposeWrappedTree(nest.tree);
+      }
+      throw error;
+    }
   }
 
   private shouldAppendFinalNewline(doc: Text) {
@@ -371,11 +491,26 @@ export function compileTreeSitterQuery(parser: TreeSitterParser, source: string)
   let parserCache = queryCache.get(parser);
   if (!parserCache) queryCache.set(parser, (parserCache = new Map()));
   let query = parserCache.get(source);
-  if (!query) {
-    query = new TSQuery(parser.language, source);
+  if (query) {
+    parserCache.delete(source);
     parserCache.set(source, query);
   }
+  if (!query) {
+    query = createQuery(parser, source);
+    parserCache.set(source, query);
+    if (parserCache.size > maxCachedQueriesPerParser) {
+      let oldestSource = parserCache.keys().next().value as string;
+      let evicted = parserCache.get(oldestSource)!;
+      parserCache.delete(oldestSource);
+      queryResources(parser).delete(evicted);
+      evicted.delete();
+    }
+  }
   return query;
+}
+
+export function __testCachedQueryCount(parser: TreeSitterParser) {
+  return queryCache.get(parser)?.size ?? 0;
 }
 
 export function queryTreeCaptures(
@@ -673,11 +808,37 @@ interface NestedBuildFrame {
   task: NestedBuildTask | null;
 }
 
+function cloneWrappedTree(root: Tree) {
+  type CloneFrame = { nested: NestedTree[]; next: number; source: Tree };
+  let frames: CloneFrame[] = [{ nested: [], next: 0, source: root }];
+  for (;;) {
+    let frame = frames[frames.length - 1]!;
+    if (frame.next < frame.source.nested.length) {
+      let child = frame.source.nested[frame.next++]!;
+      frames.push({ nested: [], next: 0, source: child.tree });
+      continue;
+    }
+
+    let cloned = new Tree(
+      frame.source.tree,
+      frame.source.config,
+      frame.source.length,
+      frame.nested,
+    );
+    frames.pop();
+    let parent = frames[frames.length - 1];
+    if (!parent) return cloned;
+    let sourceChild = parent.source.nested[parent.next - 1]!;
+    parent.nested.push({ ...sourceChild, tree: cloned });
+  }
+}
+
 class NestedTreeBuild {
   private readonly frames: NestedBuildFrame[];
   private readonly nativeParsers: Map<TreeSitterParser, TSParser>;
   private readonly ownsNativeParsers: boolean;
   private readonly ownedTrees = new Set<TSTree>();
+  private readonly ownedWrappedTrees = new Set<Tree>();
   private result: Tree | null = null;
   private cancelled = false;
 
@@ -708,11 +869,13 @@ class NestedTreeBuild {
           frame.sourceIndex >= frame.parser.nestedParsers.length
         ) {
           let completed = new Tree(frame.nativeTree, frame.parser, this.doc.length, frame.nested);
+          disposeTree(frame.outer);
           this.frames.pop();
           let parent = this.frames[this.frames.length - 1];
           if (!parent) {
             this.result = completed;
             this.ownedTrees.clear();
+            this.ownedWrappedTrees.clear();
             if (this.ownsNativeParsers) disposeParsers(this.nativeParsers);
             return completed;
           }
@@ -765,7 +928,9 @@ class NestedTreeBuild {
             this.changedRanges &&
             !this.changedRanges.touches(ranges)
           ) {
-            frame.nested.push(oldMatch.tree);
+            let cloned = cloneWrappedTree(oldMatch.tree.tree);
+            this.ownedWrappedTrees.add(cloned);
+            frame.nested.push({ ...oldMatch.tree, tree: cloned });
             continue;
           }
           frame.task = {
@@ -784,7 +949,11 @@ class NestedTreeBuild {
         }
       }
     } catch (error) {
-      this.cancel();
+      try {
+        this.cancel();
+      } catch {
+        // Keep the parse/source failure as the primary error.
+      }
       throw error;
     }
     return this.result;
@@ -793,17 +962,31 @@ class NestedTreeBuild {
   cancel() {
     if (this.cancelled || this.result) return;
     this.cancelled = true;
-    for (let frame of this.frames) frame.groups?.return(undefined);
+    let failures: unknown[] = [];
+    let attempt = (callback: () => void) => {
+      try {
+        callback();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    for (let frame of this.frames) {
+      attempt(() => frame.groups?.return(undefined));
+      attempt(() => disposeTree(frame.outer));
+    }
     let active = this.frames[this.frames.length - 1]?.task;
     if (active) {
       let parser = this.nativeParsers.get(active.parser) as
         | (TSParser & { reset?: () => void })
         | undefined;
-      parser?.reset?.();
+      attempt(() => parser?.reset?.());
     }
     this.frames.length = 0;
-    disposeTrees(this.ownedTrees);
-    if (this.ownsNativeParsers) disposeParsers(this.nativeParsers);
+    for (let tree of this.ownedWrappedTrees) attempt(() => tree.delete());
+    this.ownedWrappedTrees.clear();
+    attempt(() => disposeTrees(this.ownedTrees));
+    if (this.ownsNativeParsers) attempt(() => disposeParsers(this.nativeParsers));
+    if (failures.length) throw failures[0];
   }
 
   private createFrame(
@@ -831,8 +1014,41 @@ function disposeParsers(parsers: Map<TreeSitterParser, TSParser>) {
 }
 
 function disposeTrees(trees: Set<TSTree>) {
-  for (let tree of trees) tree.delete();
+  for (let tree of trees) disposeNativeTree(tree);
   trees.clear();
+}
+
+function disposeWrappedTree(tree: Tree, retained: Tree | null = null) {
+  let retainedTrees = new Set<Tree>();
+  if (retained) {
+    let pending = [retained];
+    while (pending.length) {
+      let current = pending.pop()!;
+      if (retainedTrees.has(current)) continue;
+      retainedTrees.add(current);
+      for (let nest of current.nested) pending.push(nest.tree);
+    }
+  }
+
+  let ownedTrees = editedTreeOwnership.get(tree);
+  if (ownedTrees) {
+    for (let owned of ownedTrees) if (!retainedTrees.has(owned)) disposeTree(owned);
+    return;
+  }
+
+  let pending = [tree];
+  let visited = new Set<Tree>();
+  while (pending.length) {
+    let current = pending.pop()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (let nest of current.nested) pending.push(nest.tree);
+    if (!retainedTrees.has(current)) disposeTree(current);
+  }
+}
+
+export function __testDisposeWrappedTree(tree: Tree) {
+  disposeWrappedTree(tree);
 }
 
 class ChangedRangeIndex {
@@ -1082,7 +1298,11 @@ function computeSyntaxTreeChangedRanges(transaction: Transaction): readonly DocR
     transaction.startState.doc,
     transaction.state.doc,
   );
-  return normalizeRanges(collectChangedRanges(editedOldTree, newTree));
+  try {
+    return normalizeRanges(collectChangedRanges(editedOldTree, newTree));
+  } finally {
+    if (editedOldTree != oldTree) disposeWrappedTree(editedOldTree);
+  }
 }
 
 export function forceParsing(view: EditorView, upto = view.viewport.to, timeout = 100): boolean {
@@ -1130,6 +1350,36 @@ export class DocInput {
   }
 }
 
+type NativeParserResource = {
+  deleted: boolean;
+  nestedParsers: Map<TreeSitterParser, TSParser>;
+  parser: TSParser;
+};
+
+const parseContextParserResources = new WeakMap<object, NativeParserResource>();
+const parseContextParserFinalizer =
+  typeof FinalizationRegistry == "undefined"
+    ? null
+    : new FinalizationRegistry<NativeParserResource>((resource) => disposeParser(resource));
+
+function registerParseContextParser(
+  context: object,
+  parser: TSParser,
+  nestedParsers: Map<TreeSitterParser, TSParser>,
+) {
+  let resource = { deleted: false, nestedParsers, parser };
+  parseContextParserResources.set(context, resource);
+  parseContextParserFinalizer?.register(context, resource, context);
+}
+
+function disposeParser(resource: NativeParserResource) {
+  disposeParsers(resource.nestedParsers);
+  if (!resource.deleted) {
+    resource.deleted = true;
+    resource.parser.delete();
+  }
+}
+
 class ParseContext {
   private readonly tsParser: TSParser;
   private readonly nestedTSParsers = new Map<TreeSitterParser, TSParser>();
@@ -1138,7 +1388,9 @@ class ParseContext {
   private pendingTreeOwned = false;
   private treeBuild: NestedTreeBuild | null = null;
   private changedRanges: ChangedRangeIndex | null = null;
+  private oldTreeOwned = false;
   private skipped: { from: number; to: number }[] = [];
+  private destroyed = false;
   scheduleOn: Promise<unknown> | null = null;
 
   private constructor(
@@ -1148,6 +1400,9 @@ class ParseContext {
     public viewport: { from: number; to: number },
   ) {
     this.tsParser = parser.createParser();
+    if (parser instanceof TreeSitterParser) {
+      registerParseContextParser(this, this.tsParser, this.nestedTSParsers);
+    }
   }
 
   static create(parser: TreeSitterParser, state: EditorState) {
@@ -1158,6 +1413,7 @@ class ParseContext {
   }
 
   work(timeout?: number | (() => boolean)) {
+    if (this.destroyed) throw new RangeError("This parse context has been destroyed");
     if (this.isDone(this.state.doc.length) && this.tree != Tree.empty) return true;
     let endTime = typeof timeout == "number" ? Date.now() + timeout : 0;
     let shouldStop =
@@ -1203,14 +1459,16 @@ class ParseContext {
         this.pendingTree = null;
         this.pendingTreeOwned = false;
         this.treeBuild = null;
-        this.oldTree = null;
+        this.disposeOldTree(tree);
         disposeParsers(this.nestedTSParsers);
         return true;
       });
     } catch (error) {
-      this.treeBuild?.cancel();
-      this.treeBuild = null;
-      disposeParsers(this.nestedTSParsers);
+      try {
+        this.cancelPendingWork();
+      } catch {
+        // Preserve the parse failure after attempting every cleanup path.
+      }
       throw error;
     }
   }
@@ -1236,11 +1494,13 @@ class ParseContext {
       .filter((range) => range.from < range.to);
     let scheduleOn = this.scheduleOn;
     this.cancelPendingWork();
+    this.disposeOldTree();
     let cx = new ParseContext(this.parser, newState, Tree.empty, {
       from: viewport.from,
       to: viewport.to,
     });
     cx.oldTree = oldTree;
+    cx.oldTreeOwned = editedTreeOwnership.has(oldTree);
     cx.changedRanges = ChangedRangeIndex.fromChanges(changes);
     cx.scheduleOn = scheduleOn;
     cx.skipped = skipped;
@@ -1261,8 +1521,12 @@ class ParseContext {
   }
 
   reset() {
-    this.treeBuild?.cancel();
-    this.treeBuild = null;
+    let failure: unknown;
+    try {
+      this.cancelPendingWork();
+    } catch (error) {
+      failure = error;
+    }
     this.skipped = [];
     this.changedRanges = null;
     if (this.tree.tree) {
@@ -1271,20 +1535,59 @@ class ParseContext {
       this.pendingTreeOwned = false;
       this.tree = Tree.empty;
     }
-    disposeParsers(this.nestedTSParsers);
+    if (failure !== undefined) throw failure;
   }
 
   /** @internal */
   cancelPendingWork() {
-    this.treeBuild?.cancel();
+    let build = this.treeBuild;
     this.treeBuild = null;
-    disposeParsers(this.nestedTSParsers);
+    let failures: unknown[] = [];
+    let attempt = (callback: () => void) => {
+      try {
+        callback();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    attempt(() => build?.cancel());
+    attempt(() => disposeParsers(this.nestedTSParsers));
     if (this.parser instanceof TreeSitterParser) {
-      this.tsParser.reset();
-      if (this.pendingTreeOwned) this.pendingTree?.delete();
+      attempt(() => this.tsParser.reset());
+      if (this.pendingTreeOwned && this.pendingTree) {
+        attempt(() => disposeNativeTree(this.pendingTree!));
+      }
     }
     this.pendingTree = null;
     this.pendingTreeOwned = false;
+    if (failures.length) throw failures[0];
+  }
+
+  destroy() {
+    if (this.destroyed) return;
+    let failures: unknown[] = [];
+    let attempt = (callback: () => void) => {
+      try {
+        callback();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    attempt(() => this.cancelPendingWork());
+    attempt(() => this.disposeOldTree());
+    this.destroyed = true;
+    let resource = parseContextParserResources.get(this);
+    if (resource) {
+      parseContextParserFinalizer?.unregister(this);
+      attempt(() => disposeParser(resource));
+    }
+    if (failures.length) throw failures[0];
+  }
+
+  private disposeOldTree(retained: Tree | null = null) {
+    if (this.oldTreeOwned && this.oldTree) disposeWrappedTree(this.oldTree, retained);
+    this.oldTree = null;
+    this.oldTreeOwned = false;
   }
 
   skipUntilInView(from: number, to: number) {
@@ -1352,7 +1655,9 @@ class LanguageState {
 Language.state = StateField.define<LanguageState>({
   create: (state) => LanguageState.init(state),
   update(value, tr) {
-    for (let effect of tr.effects) if (effect.is(Language.setState)) return effect.value;
+    for (let effect of tr.effects) {
+      if (effect.is(Language.setState)) return effect.value;
+    }
     if (tr.startState.facet(language) != tr.state.facet(language)) {
       value.context.cancelPendingWork();
       return LanguageState.init(tr.state);

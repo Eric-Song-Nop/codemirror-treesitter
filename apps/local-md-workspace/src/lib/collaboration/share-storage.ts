@@ -141,6 +141,8 @@ export async function createOwnerShare({
     workspaceId: sourceRef.workspaceNamespace,
   };
 
+  saveHostSecret(hostSecretRef, credentials.hostSecret, hostSecretStore);
+  await writeOwnerShareRecord(backend, record);
   await createRelayShare(relayOrigin, {
     displayName: record.displayName,
     expiresAt: record.expiresAt,
@@ -149,8 +151,6 @@ export async function createOwnerShare({
     shareId: record.shareId,
     snapshot: document.doc.export({ mode: "snapshot" }),
   });
-  saveHostSecret(hostSecretRef, credentials.hostSecret, hostSecretStore);
-  await writeOwnerShareRecord(backend, record);
   return {
     link: buildShareLink(baseUrl, credentials),
     record,

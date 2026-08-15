@@ -2,11 +2,16 @@ import { describe, expect, it } from "vite-plus/test";
 import { WireKind, encodeWireBatch, encodeWireMessage } from "./protocol.ts";
 import {
   estimatedDecodedBase64Bytes,
+  maxBinaryByteBurst,
+  maxBinaryBytesPerMinute,
   maxBatchMessages,
   maxDocumentUpdateBytes,
   maxFrameBytes,
+  maxHostSaveAckPayloadBytes,
   maxPresencePayloadBytes,
   maxSnapshotBytes,
+  maxUpdateFrameBurst,
+  maxUpdateFramesPerMinute,
   validateWireFrameLimits,
 } from "./share-limits.ts";
 
@@ -26,6 +31,17 @@ describe("shared relay safety limits", () => {
         { kind: WireKind.Doc, payload: new Uint8Array(32) },
       ]),
     ).toEqual({ ok: true });
+  });
+
+  it("keeps the binary byte bucket large enough for the existing document update allowance", () => {
+    let maximumDocumentFrameBytes = maxDocumentUpdateBytes + 1;
+
+    expect(maxBinaryByteBurst).toBeGreaterThanOrEqual(
+      maxUpdateFrameBurst * maximumDocumentFrameBytes,
+    );
+    expect(maxBinaryBytesPerMinute).toBeGreaterThanOrEqual(
+      maxUpdateFramesPerMinute * maximumDocumentFrameBytes,
+    );
   });
 
   it("rejects oversized frames, batches, and payloads", () => {
@@ -73,5 +89,13 @@ describe("shared relay safety limits", () => {
       closeCode: 1009,
       ok: false,
     });
+  });
+
+  it("rejects host save acknowledgements larger than 16 KiB", () => {
+    let payload = new Uint8Array(maxHostSaveAckPayloadBytes + 1);
+
+    expect(
+      validateWireFrameLimits(payload.byteLength + 1, [{ kind: WireKind.HostSaveAck, payload }]),
+    ).toMatchObject({ closeCode: 1009, ok: false });
   });
 });

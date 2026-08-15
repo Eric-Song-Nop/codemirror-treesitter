@@ -2,6 +2,7 @@
 
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { __testFlushLiveMdAnalysis } from "../src/core/decorations.js";
 import {
   createLiveMdEditor,
   liveMdLinkBehavior,
@@ -98,6 +99,7 @@ describe("LiveMD plugins", () => {
       markdown: { features: [headingClassFeature("cm-md-config-second")] },
       plugins: [second],
     });
+    await __testFlushLiveMdAnalysis(editor.view);
 
     expect(parent.querySelector(".cm-md-config-first")).toBeNull();
     expect(parent.querySelector(".cm-md-config-second")).toBeTruthy();
@@ -175,6 +177,7 @@ describe("LiveMD plugins", () => {
       markdown: { features: [headingClassFeature("cm-md-markdown-second")] },
       plugins,
     });
+    await __testFlushLiveMdAnalysis(editor.view);
 
     expect(parent.querySelector(".cm-md-markdown-first")).toBeNull();
     expect(parent.querySelector(".cm-md-markdown-second")).toBeTruthy();
@@ -248,6 +251,7 @@ describe("LiveMD plugins", () => {
     editor.setConfig({
       markdown: { features: [headingClassFeature("cm-md-set-markdown-second")] },
     });
+    await __testFlushLiveMdAnalysis(editor.view);
 
     expect(parent.querySelector(".cm-md-set-markdown-first")).toBeNull();
     expect(parent.querySelector(".cm-md-set-markdown-second")).toBeTruthy();

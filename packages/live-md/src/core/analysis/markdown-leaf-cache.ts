@@ -44,6 +44,8 @@ import {
 
 export type LeafAnalysisCacheTrace = LiveMdLeafAnalysisTrace;
 
+type LeafAnalysisYieldCheck = (madeProgress?: boolean) => void;
+
 export type LeafAnalysisCacheTransition = {
   cache: LeafAnalysisCache;
   changedRecordIds?: readonly number[];
@@ -67,7 +69,7 @@ export type LeafAnalysisCacheLocalTransitionInput = {
   resume?: LeafAnalysisResumeState | null;
   revision?: number;
   syntaxChangedRanges?: readonly DocRange[];
-  yieldCheck?: () => void;
+  yieldCheck?: LeafAnalysisYieldCheck;
 };
 
 export type LeafAnalysisMappedOldRecord = {
@@ -115,6 +117,8 @@ export type LeafAnalysisResumeState = {
   trace: LeafAnalysisCacheTrace;
   /** Next unit index to process. */
   unitIndex: number;
+  /** Sorted analysis units for this snapshot, retained across scheduled turns. */
+  units: readonly MarkdownLeafAnalysisUnit[];
   usedOldIds: Set<number>;
 };
 
@@ -363,17 +367,19 @@ export function buildFreshLeafAnalysisCache(input: {
   revision?: number;
   snapshot: MarkdownBlockSnapshot;
   startCacheId?: number;
-  yieldCheck?: () => void;
+  yieldCheck?: LeafAnalysisYieldCheck;
 }): LeafAnalysisCacheTransition {
   let resume = resumeStateFor(input.resume, "fresh", input.revision);
   let snapshot = resume?.snapshot ?? input.snapshot;
   let nextCacheId = resume?.nextCacheId ?? input.startCacheId ?? 1;
   let trace = resume?.trace ?? emptyLeafAnalysisCacheTrace();
-  let units = markdownLeafAnalysisUnits(
-    input.analysisInput.state.doc,
-    snapshot,
-    input.analysisInput.renderKeyContext?.featuresEpoch,
-  );
+  let units =
+    resume?.units ??
+    markdownLeafAnalysisUnits(
+      input.analysisInput.state.doc,
+      snapshot,
+      input.analysisInput.renderKeyContext?.featuresEpoch,
+    );
   if (!resume) {
     trace.recordsVisited = units.length;
     trace.leavesCollected = units.length;
@@ -392,12 +398,12 @@ export function buildFreshLeafAnalysisCache(input: {
       revision: input.revision ?? -1,
       snapshot,
       trace,
+      units,
     });
   let completed = false;
   try {
     for (let index = resumeState.unitIndex; index < units.length; index++) {
       updateLeafAnalysisResumeProgress(resumeState, index, nextCacheId, inlineSession);
-      if (index % 32 == 0) checkpointLeafAnalysisResume(input.yieldCheck, resumeState);
       let unit = units[index]!;
       trace.recordsAnalyzed++;
       records.push(
@@ -409,6 +415,7 @@ export function buildFreshLeafAnalysisCache(input: {
         ),
       );
       updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
+      checkpointCompletedLeafAnalysisBatch(input.yieldCheck, resumeState, units.length);
     }
     completed = true;
   } catch (error) {
@@ -445,15 +452,17 @@ export function transitionLeafAnalysisCache(input: {
   resume?: LeafAnalysisResumeState | null;
   revision?: number;
   snapshot: MarkdownBlockSnapshot;
-  yieldCheck?: () => void;
+  yieldCheck?: LeafAnalysisYieldCheck;
 }): LeafAnalysisCacheTransition {
   let resume = resumeStateFor(input.resume, "transition", input.revision);
   let snapshot = resume?.snapshot ?? input.snapshot;
-  let units = markdownLeafAnalysisUnits(
-    input.analysisInput.state.doc,
-    snapshot,
-    input.analysisInput.renderKeyContext?.featuresEpoch,
-  );
+  let units =
+    resume?.units ??
+    markdownLeafAnalysisUnits(
+      input.analysisInput.state.doc,
+      snapshot,
+      input.analysisInput.renderKeyContext?.featuresEpoch,
+    );
   let trace = resume?.trace ?? emptyLeafAnalysisCacheTrace();
   let oldCandidateRecords =
     resume?.oldCandidateRecords ?? materializeLeafAnalysisCacheRecords(input.oldCache, trace);
@@ -480,6 +489,7 @@ export function transitionLeafAnalysisCache(input: {
       revision: input.revision ?? -1,
       snapshot,
       trace,
+      units,
       usedOldIds,
     });
   let completed = false;
@@ -487,7 +497,6 @@ export function transitionLeafAnalysisCache(input: {
   try {
     for (let index = resumeState.unitIndex; index < units.length; index++) {
       updateLeafAnalysisResumeProgress(resumeState, index, nextCacheId, inlineSession);
-      if (index % 32 == 0) checkpointLeafAnalysisResume(input.yieldCheck, resumeState);
       let unit = units[index]!;
       let reused = reusableOldRecord(
         input.oldDoc,
@@ -509,6 +518,7 @@ export function transitionLeafAnalysisCache(input: {
             ),
           );
           updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
+          checkpointCompletedLeafAnalysisBatch(input.yieldCheck, resumeState, units.length);
           continue;
         }
         trace.recordsReused++;
@@ -521,6 +531,7 @@ export function transitionLeafAnalysisCache(input: {
           ),
         );
         updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
+        checkpointCompletedLeafAnalysisBatch(input.yieldCheck, resumeState, units.length);
         continue;
       }
 
@@ -534,6 +545,7 @@ export function transitionLeafAnalysisCache(input: {
         ),
       );
       updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
+      checkpointCompletedLeafAnalysisBatch(input.yieldCheck, resumeState, units.length);
     }
     completed = true;
   } catch (error) {
@@ -576,11 +588,13 @@ export function transitionLeafAnalysisCacheLocal(
   }
 
   let snapshot = resume?.snapshot ?? local!.snapshot;
-  let units = markdownLeafAnalysisUnits(
-    input.analysisInput.state.doc,
-    snapshot,
-    input.analysisInput.renderKeyContext?.featuresEpoch,
-  );
+  let units =
+    resume?.units ??
+    markdownLeafAnalysisUnits(
+      input.analysisInput.state.doc,
+      snapshot,
+      input.analysisInput.renderKeyContext?.featuresEpoch,
+    );
   let trace = resume?.trace ?? local!.trace;
   let oldChangedRanges = resume?.oldChangedRanges ?? changedOldRanges(input.changes);
   let localWindows =
@@ -636,6 +650,7 @@ export function transitionLeafAnalysisCacheLocal(
       revision: input.revision ?? -1,
       snapshot,
       trace,
+      units,
       usedOldIds,
     });
   let completed = false;
@@ -643,7 +658,6 @@ export function transitionLeafAnalysisCacheLocal(
   try {
     for (let index = resumeState.unitIndex; index < units.length; index++) {
       updateLeafAnalysisResumeProgress(resumeState, index, nextCacheId, inlineSession);
-      if (index % 32 == 0) checkpointLeafAnalysisResume(input.yieldCheck, resumeState);
       let unit = units[index]!;
       let reused = reusableOldRecord(
         input.oldDoc,
@@ -666,6 +680,7 @@ export function transitionLeafAnalysisCacheLocal(
           localRecords.push(record);
           changedRecords.push(record);
           updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
+          checkpointCompletedLeafAnalysisBatch(input.yieldCheck, resumeState, units.length);
           continue;
         }
         trace.recordsReused++;
@@ -678,6 +693,7 @@ export function transitionLeafAnalysisCacheLocal(
           ),
         );
         updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
+        checkpointCompletedLeafAnalysisBatch(input.yieldCheck, resumeState, units.length);
         continue;
       }
 
@@ -691,6 +707,7 @@ export function transitionLeafAnalysisCacheLocal(
       localRecords.push(record);
       changedRecords.push(record);
       updateLeafAnalysisResumeProgress(resumeState, index + 1, nextCacheId, inlineSession);
+      checkpointCompletedLeafAnalysisBatch(input.yieldCheck, resumeState, units.length);
     }
     completed = true;
   } catch (error) {
@@ -792,6 +809,7 @@ function createLeafAnalysisResumeState(input: {
   revision: number;
   snapshot: MarkdownBlockSnapshot;
   trace: LeafAnalysisCacheTrace;
+  units: readonly MarkdownLeafAnalysisUnit[];
   usedOldIds?: Set<number>;
 }): LeafAnalysisResumeState {
   return {
@@ -809,6 +827,7 @@ function createLeafAnalysisResumeState(input: {
     snapshot: input.snapshot,
     trace: input.trace,
     unitIndex: 0,
+    units: input.units,
     usedOldIds: input.usedOldIds ?? new Set(),
   };
 }
@@ -825,16 +844,27 @@ function updateLeafAnalysisResumeProgress(
 }
 
 function checkpointLeafAnalysisResume(
-  yieldCheck: (() => void) | undefined,
+  yieldCheck: LeafAnalysisYieldCheck | undefined,
   resumeState: LeafAnalysisResumeState,
+  madeProgress = false,
 ) {
   try {
-    yieldCheck?.();
+    yieldCheck?.(madeProgress);
   } catch (error) {
     if (isObject(error)) {
       (error as LeafAnalysisYieldError)[leafAnalysisResumeStateKey] = resumeState;
     }
     throw error;
+  }
+}
+
+function checkpointCompletedLeafAnalysisBatch(
+  yieldCheck: LeafAnalysisYieldCheck | undefined,
+  resumeState: LeafAnalysisResumeState,
+  unitCount: number,
+) {
+  if (resumeState.unitIndex % 32 == 0 && resumeState.unitIndex < unitCount) {
+    checkpointLeafAnalysisResume(yieldCheck, resumeState, true);
   }
 }
 
@@ -853,7 +883,7 @@ function isObject(value: unknown): value is object {
 function mappedOldRecordCandidates(
   records: readonly LeafAnalysisRecord[],
   changes: ChangeDesc,
-  yieldCheck?: () => void,
+  yieldCheck?: LeafAnalysisYieldCheck,
   trace?: LeafAnalysisCacheTrace,
 ): ReadonlyMap<string, readonly MappedOldRecord[]> {
   let candidates = new Map<string, MappedOldRecord[]>();

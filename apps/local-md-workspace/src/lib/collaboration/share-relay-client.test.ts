@@ -31,7 +31,10 @@ describe("shared file relay client", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("https://relay.example/api/shares");
     expect(calls[0]!.init?.method).toBe("POST");
-    expect(calls[0]!.init?.headers).toEqual({ "Content-Type": "application/json" });
+    expect(calls[0]!.init?.headers).toEqual({
+      "Content-Type": "application/json",
+      "Idempotency-Key": "share-id",
+    });
     expect(JSON.parse(calls[0]!.body)).toEqual({
       displayName: "note.md",
       expiresAt: Date.UTC(2026, 5, 13),
@@ -61,6 +64,27 @@ describe("shared file relay client", () => {
     await expect(
       createRelayShare("https://relay.example", relayRequest(), fetchImpl),
     ).rejects.toThrow("Could not create shared file (409).");
+  });
+
+  it("replays the same idempotent create after a lost response", async () => {
+    let calls: Array<{ body: string; idempotencyKey: string | null }> = [];
+    let attempt = 0;
+    let fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      let headers = new Headers(init?.headers);
+      calls.push({
+        body: requestBody(init?.body),
+        idempotencyKey: headers.get("Idempotency-Key"),
+      });
+      if (attempt++ == 0) throw new TypeError("response lost");
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    let request = relayRequest();
+
+    await createRelayShare("https://relay.example", request, fetchImpl);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual(calls[1]);
+    expect(calls[0]!.idempotencyKey).toBe(request.shareId);
   });
 
   it("creates guest sessions without putting secrets in the URL", async () => {

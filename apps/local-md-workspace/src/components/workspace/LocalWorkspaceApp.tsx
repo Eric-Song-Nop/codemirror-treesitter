@@ -38,7 +38,7 @@ import {
   type WorkspaceBackend,
 } from "@/lib/workspace-backend";
 import { useI18n } from "@/lib/i18n";
-import { useLiveMdPreloadError } from "@/lib/live-md-preload";
+import { useLiveMdPreload } from "@/lib/live-md-preload";
 import { defaultSidebarOpen, isMobileSidebarViewport } from "@/lib/workspace/constants";
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
 import { errorToMessage } from "@/lib/workspace/errors";
@@ -64,7 +64,11 @@ const emptyLiveMdPlugins: NonNullable<LiveMdConfig["plugins"]> = [];
 
 export function LocalWorkspaceApp() {
   let { locale, t, toggleLocale } = useI18n();
-  let liveMdPreloadError = useLiveMdPreloadError();
+  let {
+    error: liveMdPreloadError,
+    retry: retryLiveMdPreload,
+    retrying: liveMdPreloadRetrying,
+  } = useLiveMdPreload();
   let [workspaceBackend, setWorkspaceBackend] = useState<WorkspaceBackend | null>(null);
   let [storedLocalWorkspace, setStoredLocalWorkspace] = useState<StoredLocalWorkspaceRecord | null>(
     null,
@@ -156,6 +160,7 @@ export function LocalWorkspaceApp() {
     autoSaveTaskRef,
     collabDocumentRef,
     collabSyncCleanupRef,
+    dirtyRef,
     flushCollabDocument: flushCollabDocumentPersistence,
     setErrorMessage,
   });
@@ -595,10 +600,16 @@ export function LocalWorkspaceApp() {
           />
 
           <WorkspaceErrorBanner
-            busy={busy}
+            busy={busy || liveMdPreloadRetrying}
             message={visibleErrorMessage}
-            retryPath={errorMessage ? retryLoadPath : null}
-            onRetry={() => void retryUnavailableCollabFile()}
+            retryPath={errorMessage ? retryLoadPath : liveMdPreloadError ? "live-md" : null}
+            onRetry={() => {
+              if (!errorMessage && liveMdPreloadError) {
+                void retryLiveMdPreload();
+              } else {
+                void retryUnavailableCollabFile();
+              }
+            }}
           />
 
           <WorkspaceEditorPane

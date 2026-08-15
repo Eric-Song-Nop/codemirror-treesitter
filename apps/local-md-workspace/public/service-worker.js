@@ -9,8 +9,8 @@ const DB_VERSION = 1;
 const DB_STORE_NAME = "workspace";
 const DRAFT_KEY_PREFIX = "single-file-draft:";
 const LAST_DRAFT_KEY = "single-file-draft:last";
-const COLLABORATION_PRECACHE_URLS = [
-  /* __GROVE_COLLABORATION_PRECACHE__ */
+const BUILD_PRECACHE_URLS = [
+  /* __GROVE_BUILD_PRECACHE__ */
 ];
 
 const APP_SHELL_URLS = [
@@ -21,7 +21,7 @@ const APP_SHELL_URLS = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
-  ...COLLABORATION_PRECACHE_URLS,
+  ...BUILD_PRECACHE_URLS,
 ];
 
 const CACHEABLE_DESTINATIONS = new Set([
@@ -107,7 +107,11 @@ async function cacheAppShell() {
   if (!index) return;
 
   let assetUrls = appShellAssetUrls(await index.text());
-  await Promise.all(assetUrls.map((url) => cache.add(url).catch(() => undefined)));
+  await Promise.all(
+    assetUrls
+      .filter((url) => !BUILD_PRECACHE_URLS.includes(url))
+      .map((url) => cache.add(url).catch(() => undefined)),
+  );
 }
 
 async function staleWhileRevalidate(request, event) {

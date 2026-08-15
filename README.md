@@ -257,20 +257,20 @@ import "@codemirror-treesitter/live-md/style.css";
 
 ### Properties
 
-| Property         | Type                 | Description                                                       |
-| ---------------- | -------------------- | ----------------------------------------------------------------- |
-| `value`          | `string`             | Current Markdown content, read/write.                             |
-| `defaultValue`   | `string`             | Initial content, read/write.                                      |
-| `persistKey`     | `string \| null`     | `localStorage` key, read/write.                                   |
-| `placeholder`    | `string`             | Placeholder text, read/write.                                     |
-| `readOnly`       | `boolean`            | Whether the editor is read-only, read/write.                      |
-| `dirty`          | `boolean`            | Whether content has changed since `markClean()`.                  |
-| `selectionStart` | `number`             | Selection anchor position, read/write.                            |
-| `selectionEnd`   | `number`             | Selection head position, read/write.                              |
-| `view`           | `EditorView \| null` | The underlying CodeMirror `EditorView` instance.                  |
-| `config`         | `LiveMdConfig`       | JavaScript-only Markdown feature and host plugin configuration.   |
-| `extensions`     | `Extension`          | Optional direct CodeMirror extensions configured from JavaScript. |
-| `ready`          | `Promise<void>`      | Resolves after Markdown and code-fence languages are loaded.      |
+| Property         | Type                 | Description                                                              |
+| ---------------- | -------------------- | ------------------------------------------------------------------------ |
+| `value`          | `string`             | Current Markdown content, read/write.                                    |
+| `defaultValue`   | `string`             | Initial content, read/write.                                             |
+| `persistKey`     | `string \| null`     | `localStorage` key, read/write.                                          |
+| `placeholder`    | `string`             | Placeholder text, read/write.                                            |
+| `readOnly`       | `boolean`            | Whether the editor is read-only, read/write.                             |
+| `dirty`          | `boolean`            | Whether content has changed since `markClean()`.                         |
+| `selectionStart` | `number`             | Selection anchor position, read/write.                                   |
+| `selectionEnd`   | `number`             | Selection head position, read/write.                                     |
+| `view`           | `EditorView \| null` | The underlying CodeMirror `EditorView` instance.                         |
+| `config`         | `LiveMdConfig`       | JavaScript-only Markdown feature and host plugin configuration.          |
+| `extensions`     | `Extension`          | Optional direct CodeMirror extensions configured from JavaScript.        |
+| `ready`          | `Promise<void>`      | Resolves after Markdown support is ready; fence grammars load on demand. |
 
 ### Methods
 
@@ -420,8 +420,10 @@ import { liveMdLoroCollaborationPlugin } from "@codemirror-treesitter/live-md-lo
 import { LoroDoc } from "loro-crdt";
 
 const doc = new LoroDoc();
-doc.getText("markdown").insert(0, "# Shared document");
+const text = doc.getText("markdown");
+text.insert(0, "# Shared document");
 doc.commit();
+text.free();
 
 createLiveMdEditor({
   parent: document.body,
@@ -442,7 +444,10 @@ document.body.append(editor);
 ```
 
 The collaboration helper also supports custom Loro text containers, presence
-through `EphemeralStore`, and optional Loro undo managers.
+through `EphemeralStore`, and optional Loro undo managers. String text keys use
+short-lived handles owned by the adapter. Handles returned by custom getters or
+the low-level text helper exports remain caller-owned and must stay valid while
+the editor uses them.
 
 ## Implementation Notes
 
@@ -512,6 +517,9 @@ vp run -r test
 vp run -r build
 vp run audit
 ```
+
+The recursive test task includes the OpenDAL browser wrapper's host Rust unit
+regressions as well as the TypeScript test suites.
 
 The root script `vp run ready` runs the full local validation path:
 

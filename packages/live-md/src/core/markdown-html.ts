@@ -9,7 +9,7 @@ import {
 import {
   loadMarkdownParserService,
   type MarkdownParserService,
-} from "@codemirror-treesitter/language-data";
+} from "@codemirror-treesitter/language-data/live-md";
 import { liveMdThemeVariableNames } from "@codemirror-treesitter/live-md-theme";
 import { withLiveMdParserTree } from "./languages.js";
 import {

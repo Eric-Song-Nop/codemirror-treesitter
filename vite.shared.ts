@@ -9,6 +9,10 @@ export const workspaceAliases = {
     .pathname,
   "@codemirror-treesitter/language": new URL("packages/language/src/index.ts", import.meta.url)
     .pathname,
+  "@codemirror-treesitter/language-data/live-md": new URL(
+    "packages/language-data/src/live-md.ts",
+    import.meta.url,
+  ).pathname,
   "@codemirror-treesitter/language-data": new URL(
     "packages/language-data/src/index.ts",
     import.meta.url,

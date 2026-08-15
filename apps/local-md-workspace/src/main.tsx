@@ -4,7 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { defineLiveMdEditor, prepareLiveMd } from "@codemirror-treesitter/live-md";
 import { App } from "./App";
 import "./index.css";
-import { LiveMdPreloadErrorProvider, liveMdPreloadErrorMessage } from "./lib/live-md-preload";
+import { LiveMdPreloadErrorProvider } from "./lib/live-md-preload";
 import { registerAppServiceWorker } from "./lib/pwa";
 import { queryClient } from "./lib/query-client";
 import {
@@ -20,10 +20,6 @@ let initialTheme = loadStoredTheme() ?? defaultTheme;
 applyThemeToDocument(initialTheme);
 
 defineLiveMdEditor();
-let liveMdPreloadStatus = prepareLiveMd().then(
-  () => "",
-  (error: unknown) => liveMdPreloadErrorMessage(error),
-);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -31,7 +27,7 @@ createRoot(document.getElementById("root")!).render(
       <ThemeProvider initialTheme={initialTheme}>
         <ThemeDocumentSync />
         <ThemeStorageSync />
-        <LiveMdPreloadErrorProvider preloadStatus={liveMdPreloadStatus}>
+        <LiveMdPreloadErrorProvider preload={prepareLiveMd}>
           <App />
         </LiveMdPreloadErrorProvider>
       </ThemeProvider>

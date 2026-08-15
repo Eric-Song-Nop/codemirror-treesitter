@@ -27,9 +27,10 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Provide the `liveMarkdown(...)` extension for live Markdown editing.
 - Define and register `<live-md-editor>` through `defineLiveMdEditor(...)` and
   the side-effect `./register` entry.
-- Load block-only Markdown language support, an explicit Markdown inline parser
-  service, and a focused set of code-fence languages from
-  `@codemirror-treesitter/language-data`.
+- Load block-only Markdown language support and an explicit Markdown inline
+  parser service from the focused `@codemirror-treesitter/language-data/live-md`
+  entry. Code-fence grammars load only when the document encounters a supported
+  fence alias; hosts may still explicitly preload the full focused set.
 - Render Markdown documents to sanitized HTML through
   `renderMarkdownToHtml(...)` using explicit block parsing followed by
   leaf-local inline parsing with the Tree-sitter Markdown grammars.
@@ -227,6 +228,8 @@ LiveMD analysis/export layer instead of depending on the generic nested
 Markdown language entry. Pass
 `{ codeFences: true }` when a host also wants to preload the bundled
 code-fence language parsers during startup.
+Rejected preload attempts are not cached permanently; callers may invoke
+`prepareLiveMd()` again after a transient asset or network failure.
 
 `renderMarkdownToHtml(markdown, options?)` converts Markdown source to escaped
 HTML with the package Tree-sitter Markdown parser. Hosts can pass the same
@@ -378,13 +381,13 @@ Cloudflare-specific code, and concrete theme packages.
   changed-leaf discovery: local changed leaves match the full-walk oracle, and
   ordinary edits stay local. Its `sourceHash` is diagnostic only; exact source
   text is used for the oracle so hash collisions cannot hide changed leaves.
-  Direct incremental projection, range-local production analysis, and
-  input-to-paint latency reduction remain future work. PR78 uses `renderKey`
-  with source identity plus renderer, resolver, and highlighter epochs for the
-  synchronous render cache covering image sources, KaTeX, table previews,
-  Mermaid render requests, and code fence highlights. `cacheId` is deliberately
-  excluded from render cache keys so record identity churn does not invalidate
-  unchanged render work.
+  Semantic work is scheduled in bounded units, and search reuses committed or
+  pending semantic records while reparsing only dirty inline hosts. Direct
+  incremental projection remains future work. Render caches use bounded LRU
+  storage keyed by source identity plus renderer, resolver, and highlighter
+  epochs for image sources, KaTeX, table previews, Mermaid render requests, and
+  code fence highlights. `cacheId` is deliberately excluded from render cache
+  keys so record identity churn does not invalidate unchanged render work.
 
 ## Validation
 

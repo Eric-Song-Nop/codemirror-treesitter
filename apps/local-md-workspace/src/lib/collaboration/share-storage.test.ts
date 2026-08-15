@@ -144,7 +144,7 @@ describe("owner shared file metadata", () => {
     );
   });
 
-  it("does not write owner browser metadata when relay creation fails", async () => {
+  it("retains owner management credentials when the relay creation outcome is unknown", async () => {
     let backend = createMemoryBackend([["note.md", "# First\n"]]);
     let document = await openMarkdownCollabDocument(backend, "note.md");
     let hostSecrets = new Map<string, string>();
@@ -170,8 +170,41 @@ describe("owner shared file metadata", () => {
     ).rejects.toThrow("relay unavailable");
 
     expect(hasLiveMdFiles(backend)).toBe(false);
-    expect(window.localStorage.getItem(ownerShareRecordPath("missing-share-id"))).toBeNull();
-    expect(hostSecrets.size).toBe(0);
+    expect(hostSecrets.size).toBe(1);
+    let [hostSecretKey] = hostSecrets.keys();
+    let shareId = hostSecretKey!.slice(hostSecretStorageKey("").length);
+    await expect(readOwnerShareRecord(backend, shareId)).resolves.toMatchObject({
+      hostSecretRef: hostSecretKey,
+      shareId,
+    });
+  });
+
+  it("persists owner management credentials before creating the remote share", async () => {
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let relayCalled = false;
+
+    await expect(
+      createOwnerShare({
+        backend,
+        baseUrl: "https://example.test/workspace",
+        createRelayShare: async () => {
+          relayCalled = true;
+        },
+        document,
+        expiration: "7d",
+        file: { kind: "file", name: "note.md", path: "note.md" },
+        hostSecretStore: {
+          setItem() {
+            throw new Error("quota exceeded");
+          },
+        },
+        now: Date.UTC(2026, 5, 6),
+        relayOrigin: "https://relay.example",
+      }),
+    ).rejects.toThrow("Browser storage is required to host a shared file.");
+
+    expect(relayCalled).toBe(false);
   });
 
   it("creates owner-host shares for writable remote sources", async () => {

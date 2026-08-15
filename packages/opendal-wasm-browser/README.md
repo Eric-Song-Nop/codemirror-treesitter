@@ -330,13 +330,16 @@ command.
 Package-local validation:
 
 ```bash
-vp check packages/opendal-wasm-browser
-RUSTC="$(rustup which rustc)" rustup run stable cargo check --manifest-path packages/opendal-wasm-browser/Cargo.toml --target wasm32-unknown-unknown
-vp pack
+vp run @codemirror-treesitter/opendal-wasm-browser#test
+vp run @codemirror-treesitter/opendal-wasm-browser#check:wasm
+vp run @codemirror-treesitter/opendal-wasm-browser#build
 vp run @codemirror-treesitter/opendal-wasm-browser#auth:dropbox-token
 vp run @codemirror-treesitter/opendal-wasm-browser#validate:dropbox
 vp run @codemirror-treesitter/opendal-wasm-browser#smoke:dropbox
 ```
+
+The package `test` task runs the host Rust unit tests before the TypeScript
+Vitest suite. The `check:wasm` task separately verifies the wasm32 target.
 
 Repository-level validation can be checked with:
 

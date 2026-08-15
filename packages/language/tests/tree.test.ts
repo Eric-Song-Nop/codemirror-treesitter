@@ -682,6 +682,40 @@ describe("tree-sitter tree wrapper", () => {
     expect(events).toEqual([">array", ">number", ">number", "<number", "<array"]);
   });
 
+  it("iterates deeply nested syntax without using the JavaScript call stack", async () => {
+    let depth = 5_000;
+    let doc = `${"(".repeat(depth)}value${")".repeat(depth)};\n`;
+    let state = await javascriptState(doc);
+    let tree = ensureSyntaxTree(state, doc.length, 20_000)!;
+    let treeEntered = 0;
+    let treeLeft = 0;
+
+    tree.iterate({
+      enter() {
+        treeEntered++;
+      },
+      leave() {
+        treeLeft++;
+      },
+    });
+
+    let nodeEntered = 0;
+    let nodeLeft = 0;
+    tree.topNode.iterate(
+      () => {
+        nodeEntered++;
+      },
+      () => {
+        nodeLeft++;
+      },
+    );
+
+    expect(treeEntered).toBeGreaterThan(depth);
+    expect(treeLeft).toBe(treeEntered);
+    expect(nodeEntered).toBe(treeEntered);
+    expect(nodeLeft).toBe(nodeEntered);
+  });
+
   it("skips setext heading subtrees during cursor iteration", async () => {
     let doc = "Title\n=====\n\nParagraph\n";
     let state = await markdownState(doc);
@@ -715,6 +749,8 @@ describe("tree-sitter tree wrapper", () => {
       .join("\n")
       .concat("\n");
     let state = await markdownState(doc);
+    let tree = ensureSyntaxTree(state, state.doc.length, 5_000);
+    expect(tree).not.toBeNull();
     let copyDescriptor = Object.getOwnPropertyDescriptor(TreeCursor.prototype, "copy")!;
     let originalCopy = copyDescriptor.value as (this: TreeCursor) => TreeCursor;
     let createdCopies = 0;
@@ -735,7 +771,7 @@ describe("tree-sitter tree wrapper", () => {
       return copied;
     };
     try {
-      let cursor = syntaxTree(state).cursor()!;
+      let cursor = tree!.cursor()!;
       try {
         let visited = 0;
         cursor.iterate((node) => {
@@ -1028,6 +1064,8 @@ describe("tree-sitter tree wrapper", () => {
     let doc =
       "<main><script>let first = 1;</script><p>text</p><script>let second = 2;</script></main>";
     let { state, javascript } = await mixedHtmlState(doc);
+    expect(ensureSyntaxTree(state, state.doc.length, 5_000)).not.toBeNull();
+    state = state.update({}).state;
     let first = doc.indexOf("first");
     let second = doc.indexOf("second");
     let firstRange = { from: doc.indexOf("let first"), to: doc.indexOf("</script>") };

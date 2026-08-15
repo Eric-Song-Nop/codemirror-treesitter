@@ -4,7 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { queryTreeMatches, syntaxTree } from "@codemirror-treesitter/language";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { createLiveMdEditor } from "../src/core/editor.js";
-import { loadMarkdownExtension } from "../src/core/languages.js";
+import { codeFenceLanguagesField, loadMarkdownExtension } from "../src/core/languages.js";
 import codeFenceQuerySource from "./queries/code-fence.scm?raw";
 
 let locationDescriptor: PropertyDescriptor | undefined;
@@ -25,6 +25,23 @@ afterEach(() => {
 });
 
 describe("code fence at end of document", () => {
+  it("loads no code grammar for plain Markdown and loads a newly encountered fence on demand", async () => {
+    let parent = document.createElement("div");
+    document.body.append(parent);
+    let editor = createLiveMdEditor({ parent, doc: "plain Markdown", focus: false });
+
+    await editor.ready;
+    expect(editor.view.state.field(codeFenceLanguagesField).size).toBe(0);
+
+    editor.setValue("```python\nprint('ready')\n```\n");
+    await waitForCodeFenceLanguage(editor, "python");
+
+    let languages = editor.view.state.field(codeFenceLanguagesField);
+    expect(languages.has("python")).toBe(true);
+    expect(languages.has("typescript")).toBe(false);
+    editor.destroy();
+  });
+
   it("tree-sitter should include closing delimiter for code fence at EOF", async () => {
     let markdown = await loadMarkdownExtension();
 
@@ -141,6 +158,17 @@ describe("code fence at end of document", () => {
     expect(closingLine.classList.contains("cm-md-code-line")).toBe(false);
   });
 });
+
+async function waitForCodeFenceLanguage(
+  editor: ReturnType<typeof createLiveMdEditor>,
+  language: string,
+) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (editor.view.state.field(codeFenceLanguagesField).has(language)) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error(`Timed out loading ${language}`);
+}
 
 function codeFenceSnapshots(tree: ReturnType<typeof syntaxTree>) {
   return queryTreeMatches(tree, codeFenceQuerySource, { includeNested: false }).map((match) => ({

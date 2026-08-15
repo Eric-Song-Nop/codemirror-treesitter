@@ -25,6 +25,7 @@ struct OpendalBrowserOperatorConfig {
 #[serde(deny_unknown_fields)]
 struct OpendalBrowserWriteOptions {
     if_match: Option<String>,
+    #[serde(default)]
     if_not_exists: bool,
 }
 
@@ -473,4 +474,19 @@ fn to_js_value(value: impl Serialize) -> Result<JsValue, JsValue> {
 
 fn js_error(error: impl ToString) -> JsValue {
     JsValue::from_str(&error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OpendalBrowserWriteOptions;
+
+    #[test]
+    fn omitted_if_not_exists_defaults_to_false() {
+        let options: OpendalBrowserWriteOptions =
+            serde_json::from_value(serde_json::json!({ "ifMatch": "revision-1" }))
+                .expect("legacy ifMatch-only options must remain valid");
+
+        assert_eq!(options.if_match.as_deref(), Some("revision-1"));
+        assert!(!options.if_not_exists);
+    }
 }

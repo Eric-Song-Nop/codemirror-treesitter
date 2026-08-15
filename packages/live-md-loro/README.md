@@ -62,6 +62,18 @@ document. Prefer `liveMdLoroCollaborationPlugin(...)` when configuring LiveMD
 through `LiveMdConfig`; use `liveMdLoroCollaboration(...)` when a host needs a
 plain CodeMirror extension.
 
+String keys use package-owned, short-lived `LoroText` handles. The collaboration
+adapter releases each handle after `loro-codemirror` consumes it synchronously,
+including when one extension value is reused by multiple editor views. A custom
+getter has a different ownership contract: its returned handle remains entirely
+caller-owned, may be requested repeatedly, and must stay valid while the editor
+uses it. The package never calls `free()` on a custom getter result.
+
+The exported `createLiveMdLoroTextGetter(...)` and `getLiveMdLoroText(...)`
+helpers are low-level accessors rather than collaboration-owned adapters. Their
+returned native `LoroText` handles are caller-owned and should be freed after
+use.
+
 ## Web Component Usage
 
 ```ts
@@ -98,6 +110,9 @@ editing.
 - `src/index.ts` is intentionally small: it wraps `LoroExtensions`, resolves
   the LiveMD text container, exports undo/redo, and drains the initial
   dispatch guard when editor and Loro content already match.
+- String-key collaboration getters release every fresh native `LoroText`
+  wrapper after its synchronous upstream use. Custom getter results remain
+  caller-owned and are never freed by this package.
 - Presence is passed through as a `loro-codemirror` ephemeral store plus user
   metadata; this package does not own any network transport.
 

@@ -2,23 +2,28 @@ import {
   estimatedDecodedBase64Bytes,
   isShareExpirationWithinLimit,
   maxSnapshotBytes,
+  shareRetentionMs,
 } from "./share-limits.ts";
 
 export type ShareRole = "guest" | "host";
 
 export type ShareRecord = {
+  createRequestDigest?: string;
   createdAt: number;
   displayName: string;
   expiresAt: number | null;
   guestSecretHash: string;
   hostSecretHash: string;
+  idempotencyKey?: string;
   revokedAt?: number;
   schemaVersion: 1;
   shareId: string;
+  snapshotDigest?: string;
 };
 
 export type ShareSessionRecord = {
   clientId: string;
+  createdAt?: number;
   expiresAt: number;
   role: ShareRole;
   secretHash: string;
@@ -50,7 +55,7 @@ export type RevokeShareRequest = {
 
 export const shareSchemaVersion = 1;
 export const shareSessionTtlMs = 12 * 60 * 60 * 1000;
-export const shareRetentionMs = 7 * 24 * 60 * 60 * 1000;
+export { shareRetentionMs };
 
 const base64UrlPattern = /^[A-Za-z0-9_-]+$/;
 const shareIdLength = 22;

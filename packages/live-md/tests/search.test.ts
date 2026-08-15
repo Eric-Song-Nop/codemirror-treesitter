@@ -1,9 +1,10 @@
-import { EditorState } from "@codemirror/state";
+import { EditorState, StateEffect } from "@codemirror/state";
 import { SearchQuery, getSearchQuery, setSearchQuery } from "@codemirror/search";
 import { ensureSyntaxTree } from "@codemirror-treesitter/language";
 import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
 import { describe, expect, it } from "vite-plus/test";
 import { liveMarkdown } from "../src/core/extension.js";
+import { __testLiveMdAnalysis, liveMdAnalysis } from "../src/core/decorations.js";
 import {
   liveMdMarkdownParserServiceFacet,
   loadMarkdownExtension,
@@ -92,6 +93,156 @@ describe("LiveMD Markdown search", () => {
     expect(counts.createParser).toBe(1);
     expect(counts.deleteParser).toBe(1);
   });
+
+  it("reuses scheduled semantics instead of synchronously parsing 10,000 inline hosts", async () => {
+    let doc = Array.from({ length: 10_000 }, () => "*target*").join("\n\n");
+    let counts = { createParser: 0, deleteParser: 0, inlineRanges: 0, parseWith: 0 };
+    let service = countSearchParserService(await loadMarkdownParserService(), counts);
+    let state = EditorState.create({
+      doc,
+      extensions: [
+        service.blockLanguage.extension,
+        liveMdMarkdownParserServiceFacet.of(service),
+        liveMdSearch,
+      ],
+    });
+    ensureSyntaxTree(state, doc.length, 30_000);
+    state = state.update({}).state;
+    state = state.update({ effects: StateEffect.appendConfig.of(liveMdAnalysis) }).state;
+    expect(__testLiveMdAnalysis({ state }).pending).toBeNull();
+    expect(__testLiveMdAnalysis({ state }).semantic).not.toBeNull();
+    counts.createParser = counts.deleteParser = counts.inlineRanges = counts.parseWith = 0;
+    state = state.update({
+      effects: setSearchQuery.of(new SearchQuery({ search: "target" })),
+    }).state;
+
+    expect(collectMatches(state, getSearchQuery(state))).toHaveLength(10_000);
+    expect(counts.inlineRanges).toBeLessThanOrEqual(32);
+    expect(counts.parseWith).toBe(0);
+    expect(counts.createParser).toBe(0);
+  }, 60_000);
+
+  it("maps pending semantics and parses only the edited inline host", async () => {
+    let doc = Array.from({ length: 10_000 }, () => "*target*").join("\n\n");
+    let counts = { createParser: 0, deleteParser: 0, inlineRanges: 0, parseWith: 0 };
+    let service = countSearchParserService(await loadMarkdownParserService(), counts);
+    let state = EditorState.create({
+      doc,
+      extensions: [
+        service.blockLanguage.extension,
+        liveMdMarkdownParserServiceFacet.of(service),
+        liveMdSearch,
+      ],
+    });
+    ensureSyntaxTree(state, doc.length, 30_000);
+    state = state.update({}).state;
+    state = state.update({ effects: StateEffect.appendConfig.of(liveMdAnalysis) }).state;
+    state = state.update({ changes: { from: doc.length, insert: "x" } }).state;
+    expect(__testLiveMdAnalysis({ state }).pending).not.toBeNull();
+    counts.createParser = counts.deleteParser = counts.inlineRanges = counts.parseWith = 0;
+    state = state.update({
+      effects: setSearchQuery.of(new SearchQuery({ search: "target" })),
+    }).state;
+
+    expect(__testLiveMdAnalysis({ state }).pending).not.toBeNull();
+    expect(collectMatches(state, getSearchQuery(state))).toHaveLength(10_000);
+    expectRangeVisible(state, state.doc.toString(), "*", false);
+    expect(counts.parseWith).toBeLessThanOrEqual(1);
+    expect(counts.createParser).toBeLessThanOrEqual(1);
+  }, 60_000);
+
+  it("keeps many pending edits off the synchronous search path", async () => {
+    let doc = Array.from({ length: 10_000 }, () => "*target*").join("\n\n");
+    let counts = { createParser: 0, deleteParser: 0, inlineRanges: 0, parseWith: 0 };
+    let service = countSearchParserService(await loadMarkdownParserService(), counts);
+    let state = EditorState.create({
+      doc,
+      extensions: [
+        service.blockLanguage.extension,
+        liveMdMarkdownParserServiceFacet.of(service),
+        liveMdSearch,
+      ],
+    });
+    ensureSyntaxTree(state, doc.length, 30_000);
+    state = state.update({}).state;
+    state = state.update({ effects: StateEffect.appendConfig.of(liveMdAnalysis) }).state;
+    state = state.update({
+      effects: setSearchQuery.of(new SearchQuery({ search: "target" })),
+    }).state;
+    counts.createParser = counts.deleteParser = counts.inlineRanges = counts.parseWith = 0;
+    state = state.update({
+      changes: Array.from({ length: 128 }, (_, index) => ({
+        from: index * 700,
+        insert: "x",
+      })),
+    }).state;
+    expect(__testLiveMdAnalysis({ state }).pending).not.toBeNull();
+    ensureSyntaxTree(state, state.doc.length, 30_000);
+
+    expect(collectMatches(state, getSearchQuery(state))).toHaveLength(10_000);
+    expect(counts.parseWith).toBe(0);
+    expect(counts.createParser).toBe(0);
+  }, 60_000);
+
+  it("does not synchronously reparse the document before the first scheduled commit", async () => {
+    let doc = Array.from({ length: 10_000 }, () => "*target*").join("\n\n");
+    let counts = { createParser: 0, deleteParser: 0, inlineRanges: 0, parseWith: 0 };
+    let service = countSearchParserService(await loadMarkdownParserService(), counts);
+    let state = EditorState.create({
+      doc,
+      extensions: [
+        service.blockLanguage.extension,
+        liveMdMarkdownParserServiceFacet.of(service),
+        liveMdSearch,
+        liveMdAnalysis,
+      ],
+    });
+    ensureSyntaxTree(state, doc.length, 30_000);
+    state = state.update({}).state;
+    expect(__testLiveMdAnalysis({ state }).pending).not.toBeNull();
+    counts.createParser = counts.deleteParser = counts.inlineRanges = counts.parseWith = 0;
+    state = state.update({
+      effects: setSearchQuery.of(new SearchQuery({ search: "target" })),
+    }).state;
+
+    expect(collectMatches(state, getSearchQuery(state))).toHaveLength(10_000);
+    expect(counts.parseWith).toBe(0);
+    expect(counts.createParser).toBe(0);
+  }, 60_000);
+
+  it("preserves rendered-source visibility when using committed semantics", async () => {
+    let doc = [
+      "# Title",
+      "",
+      "Text with *emphasis* and [Label](https://hidden.example).",
+      "![Alt text](image.png)",
+      "<https://visible.example>",
+    ].join("\n");
+    let counts = { createParser: 0, deleteParser: 0, inlineRanges: 0, parseWith: 0 };
+    let service = countSearchParserService(await loadMarkdownParserService(), counts);
+    let state = EditorState.create({
+      doc,
+      extensions: [
+        service.blockLanguage.extension,
+        liveMdMarkdownParserServiceFacet.of(service),
+        liveMdSearch,
+      ],
+    });
+    ensureSyntaxTree(state, doc.length, 5_000);
+    state = state.update({}).state;
+    state = state.update({ effects: StateEffect.appendConfig.of(liveMdAnalysis) }).state;
+    counts.createParser = counts.deleteParser = counts.inlineRanges = counts.parseWith = 0;
+
+    expectRangeVisible(state, doc, "emphasis", true);
+    expectRangeVisible(state, doc, "Label", true);
+    expectRangeVisible(state, doc, "Alt text", true);
+    expectRangeVisible(state, doc, "https://visible.example", true);
+    expectRangeVisible(state, doc, "*", false);
+    expectRangeVisible(state, doc, "https://hidden.example", false);
+    expectRangeVisible(state, doc, "image.png", false);
+    expectRangeVisible(state, doc, "<", false);
+    expect(counts.parseWith).toBe(0);
+  });
 });
 
 async function markdownState(doc: string) {
@@ -123,7 +274,7 @@ function collectMatches(state: EditorState, query: SearchQuery) {
 
 function countSearchParserService(
   service: LiveMdMarkdownParserService,
-  counts: { createParser: number; deleteParser: number; inlineRanges: number },
+  counts: { createParser: number; deleteParser: number; inlineRanges: number; parseWith?: number },
 ): LiveMdMarkdownParserService {
   let inlineParser = Object.create(
     service.inlineParser,
@@ -138,6 +289,10 @@ function countSearchParserService(
       deleteParser();
     };
     return parser;
+  };
+  inlineParser.parseWith = (...args) => {
+    if (counts.parseWith != null) counts.parseWith++;
+    return service.inlineParser.parseWith(...args);
   };
   return {
     ...service,
