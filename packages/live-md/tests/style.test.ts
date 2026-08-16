@@ -22,9 +22,11 @@ describe("public LiveMD stylesheet", () => {
   it("keeps drawn selections above opaque preview surfaces without intercepting input", async () => {
     let css = await readFile(join(liveMdSourceRoot, "style.css"), "utf8");
     let selectionLayer = cssRule(css, ".live-md-codemirror > .cm-scroller > .cm-selectionLayer");
+    let selection = cssRule(css, ".live-md-codemirror .cm-selectionBackground");
 
     expect(selectionLayer).toContain("z-index: 1 !important");
     expect(selectionLayer).toContain("pointer-events: none");
+    expect(selection).toContain("box-shadow: inset 0 0 0 1px var(--live-md-accent)");
     expect(css).toMatch(/\.live-md-codemirror \.cm-dropCursor\s*\{\s*z-index: 2;\s*\}/u);
   });
 
