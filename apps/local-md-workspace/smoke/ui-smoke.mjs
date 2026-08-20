@@ -372,15 +372,28 @@ async function assertLiveMdPreviewBoundaries(client, sessionId) {
     }
   }
 
-  await assertPreviewLowerEdgeEditing(client, sessionId, {
+  await assertPreviewSurfaceReveal(client, sessionId, {
+    content: ".cm-md-mermaid svg",
     label: "closed Mermaid",
     source: "```mermaid\ngraph TD\n  A --> B\n```",
     widget: ".cm-md-mermaid",
   });
-  await assertPreviewLowerEdgeEditing(client, sessionId, {
+  await assertPreviewSurfaceReveal(client, sessionId, {
+    content: ".cm-md-image-preview img",
     label: "block image",
     source: "![dot](image.png)",
     widget: ".cm-md-image-preview",
+  });
+  await assertPreviewSurfaceReveal(client, sessionId, {
+    content: ".cm-md-table-preview tbody tr:last-child td:last-child",
+    label: "table",
+    source: "| Name | Value |\n| --- | --- |\n| alpha | 1 |",
+    widget: ".cm-md-table-preview",
+  });
+  await assertPreviewFollowingBlankLineEditing(client, sessionId, {
+    label: "closed Mermaid",
+    source: "```mermaid\ngraph TD\n  A --> B\n```",
+    widget: ".cm-md-mermaid",
   });
 }
 
@@ -669,8 +682,48 @@ function lineFeedCount(value) {
   return Array.from(value).filter((character) => character == "\n").length;
 }
 
-async function assertPreviewLowerEdgeEditing(client, sessionId, { label, source, widget }) {
+async function assertPreviewSurfaceReveal(client, sessionId, { content, label, source, widget }) {
   let fixture = `${source}\n\nAFTER`;
+  for (let point of [
+    { label: "upper-left", selector: widget, xRatio: 0.15, yRatio: 0.15 },
+    { label: "lower-right", selector: widget, xRatio: 0.85, yRatio: 0.85 },
+    { label: "rendered content", selector: content, xRatio: 0.5, yRatio: 0.5 },
+  ]) {
+    await setLiveMdSmokeDocument(client, sessionId, fixture);
+    await client.waitForPredicate(
+      `Boolean(document.querySelector("live-md-editor")?.shadowRoot?.querySelector(${JSON.stringify(
+        point.selector,
+      )}))`,
+      sessionId,
+    );
+
+    await clickLiveMdWidget(client, sessionId, point.selector, point);
+    await assertLiveMdPreviewState(client, sessionId, {
+      expectedLineCount: lineFeedCount(fixture) + 1,
+      expectedValue: fixture,
+      forbiddenWidget: widget,
+      label: `${label} ${point.label} click`,
+    });
+
+    let selection = await client.evaluate(
+      `document.querySelector("live-md-editor")?.view?.state.selection.main.toJSON() ?? null`,
+      sessionId,
+    );
+    if (!selection || selection.anchor < 0 || selection.anchor > source.length) {
+      throw new Error(
+        `${label} ${point.label} click did not select its source: ${JSON.stringify(selection)}`,
+      );
+    }
+  }
+}
+
+async function assertPreviewFollowingBlankLineEditing(
+  client,
+  sessionId,
+  { label, source, widget },
+) {
+  let fixture = `${source}\n\nAFTER`;
+  let blankLinePosition = source.length + 1;
   await setLiveMdSmokeDocument(client, sessionId, fixture);
   await client.waitForPredicate(
     `Boolean(document.querySelector("live-md-editor")?.shadowRoot?.querySelector(${JSON.stringify(
@@ -680,15 +733,27 @@ async function assertPreviewLowerEdgeEditing(client, sessionId, { label, source,
   );
 
   let before = await liveMdPreviewState(client, sessionId);
-  await clickLiveMdWidget(client, sessionId, widget, "lower");
-  await pressEditorKey(client, sessionId, "Enter");
+  await clickLiveMdLine(client, sessionId, blankLinePosition, 0.85);
+  let selection = await client.evaluate(
+    `document.querySelector("live-md-editor")?.view?.state.selection.main.head ?? null`,
+    sessionId,
+  );
+  if (selection != blankLinePosition) {
+    throw new Error(
+      `${label} following blank line was not selectable from its right side: ${JSON.stringify({
+        blankLinePosition,
+        selection,
+      })}`,
+    );
+  }
 
+  await pressEditorKey(client, sessionId, "Enter");
   let afterEnter = `${source}\n\n\nAFTER`;
   await assertLiveMdPreviewState(client, sessionId, {
     expectedLineCount: before.lineCount + 1,
     expectedValue: afterEnter,
     requiredWidget: widget,
-    label: `${label} lower-edge Enter`,
+    label: `${label} following-line Enter`,
   });
 
   await pressEditorKey(client, sessionId, "Backspace");
@@ -696,7 +761,7 @@ async function assertPreviewLowerEdgeEditing(client, sessionId, { label, source,
     expectedLineCount: before.lineCount,
     expectedValue: fixture,
     requiredWidget: widget,
-    label: `${label} lower-edge Backspace`,
+    label: `${label} following-line Backspace`,
   });
 }
 
@@ -717,7 +782,7 @@ async function setLiveMdSmokeDocument(client, sessionId, value) {
   await waitForSettledUi();
 }
 
-async function clickLiveMdWidget(client, sessionId, selector, edge) {
+async function clickLiveMdWidget(client, sessionId, selector, { xRatio, yRatio }) {
   let target = await client.evaluate(
     `
       (() => {
@@ -727,14 +792,40 @@ async function clickLiveMdWidget(client, sessionId, selector, edge) {
         if (!widget) return null;
         let rect = widget.getBoundingClientRect();
         return {
-          x: Math.floor(rect.left + rect.width / 2),
-          y: Math.floor(rect.top + rect.height * ${edge == "lower" ? 0.85 : 0.15})
+          x: Math.floor(rect.left + rect.width * ${xRatio}),
+          y: Math.floor(rect.top + rect.height * ${yRatio})
         };
       })()
     `,
     sessionId,
   );
   if (!target) throw new Error(`LiveMD widget was not found: ${selector}`);
+
+  await dispatchCdpClick(client, sessionId, target);
+}
+
+async function clickLiveMdLine(client, sessionId, position, xRatio) {
+  let target = await client.evaluate(
+    `
+      (() => {
+        let editor = document.querySelector("live-md-editor");
+        let root = editor?.shadowRoot;
+        let line = Array.from(root?.querySelectorAll(".cm-line") ?? []).find(
+          (candidate) => editor?.view?.posAtDOM(candidate, 0) == ${position}
+        );
+        let scroller = root?.querySelector(".cm-scroller");
+        if (!line || !scroller) return null;
+        let lineRect = line.getBoundingClientRect();
+        let scrollerRect = scroller.getBoundingClientRect();
+        return {
+          x: Math.floor(scrollerRect.left + scrollerRect.width * ${xRatio}),
+          y: Math.floor(lineRect.top + lineRect.height / 2)
+        };
+      })()
+    `,
+    sessionId,
+  );
+  if (!target) throw new Error(`LiveMD line was not found at ${position}`);
 
   await dispatchCdpClick(client, sessionId, target);
 }
@@ -913,9 +1004,11 @@ async function liveMdPreviewState(client, sessionId) {
             (line) => line.textContent
           ),
           value: editor?.value ?? null,
-          widgets: [".cm-md-mermaid", ".cm-md-image-preview"].filter((selector) =>
-            root?.querySelector(selector)
-          )
+          widgets: [
+            ".cm-md-mermaid",
+            ".cm-md-image-preview",
+            ".cm-md-table-preview"
+          ].filter((selector) => root?.querySelector(selector))
         };
       })()
     `,

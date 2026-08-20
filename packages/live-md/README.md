@@ -370,6 +370,9 @@ Cloudflare-specific code, and concrete theme packages.
   `createInitialMarkdown(...)`.
 - The custom element installs package CSS into Shadow DOM; hosts can also import
   `./style.css` for bundler-visible styling.
+- Clicking anywhere on an inactive Mermaid, table, or full-line image preview
+  reveals that block's Markdown source. A following blank line remains a
+  separate editable line across the editor width.
 - The runtime performs a full block walk when needed, but Markdown behavior
   flows through an immutable leaf semantic cache before projection.
   Unchanged leaf records can retain `cacheId` and analysis object identity after
