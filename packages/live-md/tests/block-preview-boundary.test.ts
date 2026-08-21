@@ -36,6 +36,8 @@ const closedBlockPreviews: BlockPreviewCase[] = [
 
 const trailingLineFeeds = [0, 1, 2, 8] as const;
 
+const clickableBlockPreviews = closedBlockPreviews.filter((block) => block.name != "block LaTeX");
+
 type ContainerBoundaryCase = {
   hasEmptyQuoteMarker: boolean;
   hasListMarker: boolean;
@@ -94,6 +96,34 @@ afterEach(() => {
 });
 
 describe("block preview replacement boundaries", { timeout: 20_000 }, () => {
+  for (let block of clickableBlockPreviews) {
+    for (let { clientY, region } of [
+      { clientY: 25, region: "upper" },
+      { clientY: 75, region: "lower" },
+    ] as const) {
+      it(`reveals ${block.name} source from its ${region} half`, async () => {
+        let doc = `${block.source}\n\nnext`;
+        let editor = await mountEditor(doc, doc.indexOf("next"));
+        let preview = editor.view.dom.querySelector<HTMLElement>(block.selector);
+
+        expect(preview, block.name).toBeTruthy();
+        preview!.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+        preview!.dispatchEvent(
+          new MouseEvent("mousedown", {
+            bubbles: true,
+            button: 0,
+            cancelable: true,
+            clientY,
+          }),
+        );
+
+        expect(editor.view.state.selection.main.head, block.name).toBe(0);
+        expect(editor.view.dom.querySelector(block.selector), block.name).toBeNull();
+        editor.destroy();
+      });
+    }
+  }
+
   for (let block of closedBlockPreviews) {
     for (let lineFeeds of trailingLineFeeds) {
       it(`keeps ${lineFeeds} trailing line feeds outside the ${block.name} preview`, async () => {

@@ -162,6 +162,8 @@ LOCAL_MD_WORKSPACE_SMOKE_LIVE_MD_BOUNDARIES_ONLY=1 \
 node apps/local-md-workspace/smoke/ui-smoke.mjs
 ```
 
-The focused smoke performs a real pointer drag inside a fenced code block and
-checks the final Chromium pixels for a visible selection edge, alongside the
-preview-boundary, copy, and pointer-through assertions.
+The focused smoke checks that Mermaid, image, and table previews reveal their
+source from across the rendered surface while the following blank line remains
+editable from its full width. It also performs a real pointer drag inside a
+fenced code block and checks the final Chromium pixels for a visible selection
+edge, alongside the copy and pointer-through assertions.

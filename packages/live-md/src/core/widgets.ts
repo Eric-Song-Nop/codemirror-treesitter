@@ -528,12 +528,12 @@ function bindPreviewBoundarySelection(
     if (elementIndex < 0) return;
 
     let before = view.posAtDOM(parent, elementIndex);
-    let after = view.posAtDOM(parent, elementIndex + 1);
-    let rect = element.getBoundingClientRect();
-    let firstHalf = options.block
-      ? event.clientY < rect.top + rect.height / 2
-      : event.clientX < rect.left + rect.width / 2;
-    let anchor = firstHalf ? before : after;
+    let anchor = before;
+    if (!options.block) {
+      let after = view.posAtDOM(parent, elementIndex + 1);
+      let rect = element.getBoundingClientRect();
+      anchor = event.clientX < rect.left + rect.width / 2 ? before : after;
+    }
 
     event.preventDefault();
     view.dispatch({
