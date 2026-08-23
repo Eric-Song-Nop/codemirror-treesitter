@@ -1,20 +1,23 @@
 # Browser Agent Implementation Plan
 
-This document is the implementation contract for adding a browser-resident
-Markdown Agent to Grove's Local MD Workspace. The Agent orchestration, tools,
-state, and UI run in the web application. Model inference may use a remote API
-with a user-provided API key.
+This document records the implementation and delivery contract for Grove's
+browser-resident Markdown Agent. The Agent orchestration, tools, conversation
+state, and UI run in Local MD Workspace. Model inference is the only remote
+part: the browser calls OpenAI directly with a user-provided API key.
 
 The work is delivered as a GitHub stacked-PR series. Each PR must remain useful,
 reviewable, and tested when checked out on top of its declared base branch.
 
 ## Product Decisions
 
-- Use Vercel AI SDK Core as the first Agent runtime.
-- Start with the OpenAI provider and a user-provided API key.
-- Keep the API key in page memory only. Provider and model choices may be
-  persisted, but the key, Authorization header, and provider response bodies
-  must not enter browser storage or logs.
+- Use Vercel AI SDK Core's `ToolLoopAgent` as the first Agent runtime, behind a
+  provider-neutral local facade.
+- Start with the OpenAI provider, default to `gpt-5.4-mini`, and allow the user
+  to enter another OpenAI model ID.
+- Keep the API key and model choice in page memory only. The key,
+  `Authorization` header, and provider response bodies must not enter
+  `localStorage`, `sessionStorage`, IndexedDB, URLs, telemetry, or logs. The
+  provider origin is fixed to `https://api.openai.com/v1`.
 - Run the MVP Agent on the browser main thread. Remote streaming and workspace
   I/O are asynchronous; a Worker becomes relevant only for local inference or
   a CPU-heavy long-lived index.
@@ -38,13 +41,15 @@ reviewable, and tested when checked out on top of its declared base branch.
 The MVP includes:
 
 - an Agent panel in the workspace route;
-- in-memory OpenAI API-key and model configuration;
+- in-memory OpenAI API-key and model configuration with a fixed provider
+  origin;
 - streamed assistant text and summarized tool activity;
 - Stop and New chat actions;
 - workspace context, Markdown listing, reading, and bounded search;
 - reading the unsaved active document from CodeMirror/Loro memory;
 - version-bound exact replacements in the current document;
-- structured conflict, truncation, unavailable, and provider errors;
+- structured conflict, truncation, unavailable, provider, and cancellation
+  states;
 - normal Loro undo, browser persistence, BroadcastChannel, Grove Relay, and
   OpenDAL autosave behavior;
 - English and Simplified Chinese UI;
@@ -63,15 +68,15 @@ The MVP excludes:
 ## Architecture
 
 ```text
-WorkspaceAgentPanel
+WorkspaceAgentFeature / WorkspaceAgentPanel
         |
         v
 useWorkspaceAgent
-- messages / streaming / cancellation / run budgets
+- messages / animation-frame-batched streaming / cancellation
         |
         v (dynamic import)
 AI SDK adapter
-- ToolLoopAgent / OpenAI provider / schemas
+- ToolLoopAgent / OpenAI provider / schemas / run budgets
         |
         v
 WorkspaceAgentHost
@@ -86,8 +91,12 @@ WorkspaceAgentHost
               --> LiveMD input / autosave / OpenDAL materialization
 ```
 
-The Agent UI and SDK adapter never receive a raw OpenDAL operator,
-`FileSystemHandle`, OAuth token, or mutable `LoroDoc` handle.
+The Agent panel, conversation controller, and SDK adapter never receive a raw
+OpenDAL operator, `FileSystemHandle`, storage OAuth token, or mutable `LoroDoc`
+handle. The workspace host owns those application capabilities. Workspace paths
+and Markdown returned by tools are treated as untrusted model input. The SDK
+adapter is a demand-loaded production chunk rather than part of the launcher
+static closure.
 
 ## Tool Contract
 
@@ -114,6 +123,7 @@ type ActiveDocumentVersion = {
   documentId: string;
   path: string;
   documentGeneration: number;
+  targetGeneration: number;
   editVersion: number;
   contentHash: string;
 };
@@ -134,9 +144,16 @@ one CodeMirror transaction. Missing, ambiguous, overlapping, stale, or oversized
 edits produce a structured result and no partial write.
 
 Immediately before dispatch, in one synchronous call stack, the host validates
-workspace identity, document ID, path, document generation, edit version,
-content hash, editor/Loro agreement, and cancellation state. A conflict lets the
-Agent reread and retry at most twice.
+workspace identity, document ID, path, document and target generations, edit
+version, content hash, editor/Loro agreement, the captured `EditorView`, and
+cancellation state. A conflict lets the Agent reread and retry at most twice.
+
+The write is a single `EditorView.dispatch` transaction tagged
+`input.agent`. It deliberately does not mutate a separate Agent Loro peer. The
+existing `loro-codemirror` binding turns that transaction into an ordinary
+local operation on the main Loro peer, so normal undo, pending-update storage,
+cross-tab broadcast, Grove Relay, and source autosave continue through their
+existing paths.
 
 ## Initial Budgets
 
@@ -145,16 +162,22 @@ measurements:
 
 | Budget                       |       Initial value |
 | ---------------------------- | ------------------: |
+| Catalog depth                |                  32 |
+| Catalog directories/files    |          500 / 2000 |
+| List page default/maximum    |            50 / 200 |
 | Read window                  | 64 KiB or 400 lines |
 | Search files                 |                 200 |
 | Search input                 |               5 MiB |
 | Per-file search              |             512 KiB |
 | Search matches               |                 100 |
+| Search snippet               |      240 characters |
 | Local/cloud read concurrency |               4 / 2 |
 | Minimum literal query        |        2 characters |
 | Replacements per write       |                  32 |
+| Edited document output       |             256 KiB |
 | Agent steps per run          |                  12 |
 | Stale retries                |                   2 |
+| Default run timeout          |             120 sec |
 
 Search is literal substring matching in the MVP. It reports scanned files,
 bytes, matches, partial failures, and the budget that truncated a result. The
@@ -166,72 +189,83 @@ active document's unsaved value overrides its storage observation.
 
 - Branch: `feat/markdown-agent`
 - Base: `main`
-- Persist this plan.
-- Add SDK-independent contracts, limits, catalog traversal, read, and search.
-- Add active-document read override and run-scoped scan caching.
-- Add active-document read override and bounded concurrent scanning.
-- Add unit tests for recursion, filtering, ordering, budgets, partial failures,
-  and cancellation.
+- Pull request: [#114](https://github.com/Eric-Song-Nop/codemirror-treesitter/pull/114)
+- Persists this plan and adds SDK-independent contracts, limits, catalog
+  traversal, active-document read override, bounded concurrent search, and
+  focused tests.
 
 ### PR 2: Versioned current-document edit bridge
 
 - Branch: `feat/markdown-agent-edit`
 - Base: `feat/markdown-agent`
-- Add compound active-document version tokens.
-- Add exact-replacement resolution and validation.
-- Dispatch one `input.agent` CodeMirror transaction.
-- Verify immediate LiveMD updates, normal undo, local Loro updates, and stale
+- Pull request: [#115](https://github.com/Eric-Song-Nop/codemirror-treesitter/pull/115)
+- Adds compound active-document version tokens, exact replacement validation,
+  and one `input.agent` CodeMirror transaction.
+- Verifies immediate LiveMD updates, normal undo, local Loro updates, and stale
   rejection without adding a second persistence or relay path.
 
 ### PR 3: Browser AI SDK runtime
 
 - Branch: `feat/markdown-agent-runtime`
 - Base: `feat/markdown-agent-edit`
-- Add `ai`, `@ai-sdk/openai`, and schema validation dependencies.
-- Add the provider-neutral runtime facade, AI SDK adapter, tool schemas, OpenAI
-  BYOK configuration, instructions, run budgets, cancellation, and tool-call
-  deduplication.
-- Add a scripted/fake model test for search, read, conflict, reread, edit, and
-  final response.
+- Pull request: [#116](https://github.com/Eric-Song-Nop/codemirror-treesitter/pull/116)
+- Adds `ai`, `@ai-sdk/openai`, schema validation, the provider-neutral runtime
+  facade, tool schemas, OpenAI BYOK, instructions, budgets, cancellation, and
+  tool-call deduplication.
+- Uses a scripted fake model to cover search, read, conflict, reread, edit, and
+  final response without a provider key.
 
 ### PR 4: Agent panel and BYOK flow
 
 - Branch: `feat/markdown-agent-ui`
 - Base: `feat/markdown-agent-runtime`
-- Add the header entry point, responsive Agent panel, messages, tool activity,
-  API-key/model settings, Send, Stop, and New chat.
-- Bind a run to its starting workspace document and cancel it on panel close,
-  document switch, or workspace replacement.
-- Add English/Chinese strings, keyboard behavior, focus restoration, and live
-  status announcements.
+- Pull request: [#117](https://github.com/Eric-Song-Nop/codemirror-treesitter/pull/117)
+- Adds the header entry point, responsive Agent panel, messages, safe summarized
+  tool activity, in-memory API-key/model settings, Send, Stop, and New chat.
+- Binds a run to its starting workspace document and cancels it on panel close,
+  document switch, workspace replacement, or standalone-file transition.
+- Adds English/Chinese strings, keyboard and IME behavior, focus management,
+  modal semantics, and live status announcements.
 
 ### PR 5: Integration, bundle, and release contract
 
 - Branch: `test/markdown-agent-integration`
 - Base: `feat/markdown-agent-ui`
-- Add real-browser fake-model coverage.
-- Cover IndexedDB reload, cross-tab BroadcastChannel, owner/guest Relay,
-  autosave, cancellation, and stale races.
-- Assert that AI SDK/provider code stays out of the initial bundle.
+- Connect a scripted AI SDK model to the real workspace host,
+  LiveMD/CodeMirror, main Loro peer, and browser pending-update persistence.
+- Verify that an Agent edit emits one local Loro update and survives document
+  reopen, while a scope switch fails closed without an update.
+- Assert from the production Vite manifest that the AI SDK/OpenAI runtime entry
+  emits as a lazy JavaScript chunk outside the launcher static closure. Exercise
+  that rule with a synthetic-manifest regression without requiring the optional
+  Agent chunk in the offline precache.
 - Finish app/root documentation and agent-facing repository notes.
 
 ## Required Validation
 
-Each PR runs its focused tests. The top of the stack must pass:
+Each PR runs its focused tests. Run this complete matrix at the top of the
+stack:
 
 ```bash
 vp check
 vp run local-md-workspace#i18n:check
 vp run local-md-workspace#test
 vp run local-md-workspace#build
+vp run local-md-workspace#bundle:check
+vp run local-md-workspace#smoke:agent
 vp run local-md-workspace#smoke:ui
 vp run grove-relay#test
 vp run @codemirror-treesitter/live-md-loro#test
 vp run -r test
 ```
 
-At least one manual or non-PR-blocking browser smoke uses a real user-provided
-provider key without printing or persisting it.
+The focused `smoke:agent` task is the browser Agent gate. The broader `smoke:ui`
+also executes those Agent assertions before continuing through the app's
+unrelated workspace, collaboration, Dropbox, and LiveMD browser regressions.
+
+A real-provider smoke remains manual and non-PR-blocking because it requires a
+user-provided key. It must never print or persist that key. Deterministic CI and
+local integration tests use AI SDK's fake language model instead.
 
 ## Definition of Done
 
@@ -245,5 +279,7 @@ provider key without printing or persisting it.
 - Stop prevents any later tool execution; an already-dispatched edit remains.
 - The API key is page-memory-only and absent from URLs, logs, and browser
   persistence.
-- The AI SDK runtime remains a lazy chunk.
+- The AI SDK/OpenAI runtime remains a lazy chunk outside the launcher static
+  closure. Offline precaching of that optional chunk is not required, and
+  remote inference always requires network access.
 - Existing workspace, collaboration, PWA, and LiveMD behavior has no regression.

@@ -11,6 +11,7 @@ import {
 import type { ActiveDocumentSource, SingleFileSource } from "@/lib/workspace/types";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
+import { workspaceNamespace } from "@/lib/workspace/source-identity";
 
 type MutableRef<T> = {
   current: T;
@@ -109,7 +110,7 @@ export function createWorkspaceAgentRunHost(
           document.path != binding.path ||
           document.metadata.docId != binding.documentId ||
           document.metadata.path != binding.path ||
-          document.metadata.workspaceId != binding.workspaceId ||
+          document.metadata.workspaceId != binding.documentWorkspaceId ||
           input.activeDocumentGenerationRef.current != binding.documentGeneration ||
           input.documentTargetGenerationRef.current != binding.targetGeneration ||
           editor !== binding.editor ||
@@ -141,6 +142,7 @@ function captureActiveEditorBinding(input: WorkspaceAgentHostRefs, runtime: Work
   let editor = input.editorElementRef.current;
   let view = editor?.view ?? null;
   let workspaceId = runtime.identity.id;
+  let documentWorkspaceId = workspaceNamespace(runtime.identity);
   if (
     input.workspaceRuntimeRef.current !== runtime ||
     input.selectedFileSourceRef.current !== runtime ||
@@ -152,7 +154,7 @@ function captureActiveEditorBinding(input: WorkspaceAgentHostRefs, runtime: Work
     file.path != document.path ||
     document.docId != document.metadata.docId ||
     document.path != document.metadata.path ||
-    workspaceId != document.metadata.workspaceId
+    documentWorkspaceId != document.metadata.workspaceId
   ) {
     return null;
   }
@@ -161,6 +163,7 @@ function captureActiveEditorBinding(input: WorkspaceAgentHostRefs, runtime: Work
     document,
     documentGeneration: input.activeDocumentGenerationRef.current,
     documentId: document.docId,
+    documentWorkspaceId,
     editor,
     path: file.path,
     runtime,

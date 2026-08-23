@@ -278,7 +278,7 @@ function collabDocument(): CollabDocumentState {
     metadata: {
       docId: "doc:notes/draft.md",
       path: "notes/draft.md",
-      workspaceId: "local:test",
+      workspaceId: "local:local:test",
     },
     path: "notes/draft.md",
     value: "# Draft\n",

@@ -36,7 +36,8 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   `beautiful-mermaid`; optional collaboration uses `loro-crdt` and
   `loro-codemirror`; `apps/local-md-workspace` uses React 19, shadcn/radix UI,
   i18next/react-i18next, the browser File System Access API, Dropbox OAuth
-  PKCE, the OpenDAL browser WASM wrapper, and Grove shared-file relay clients;
+  PKCE, the OpenDAL browser WASM wrapper, Grove shared-file relay clients, and a
+  lazy Vercel AI SDK/OpenAI browser Agent with user-provided credentials;
   `apps/grove-relay` and `apps/collab-editor` use Cloudflare Workers, Durable
   Objects, WebSockets, Wrangler, and `@cloudflare/vite-plugin`.
 
@@ -83,8 +84,9 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `apps/basic-editor`: Minimal `<live-md-editor>` smoke app.
 - `apps/local-md-workspace`: Grove React shadcn/radix local-first Markdown
   workspace using LiveMD, the browser File System Access API, optional Dropbox
-  storage through OpenDAL WASM, local image asset handling, and optional Grove
-  shared-file collaboration through `apps/grove-relay`.
+  storage through OpenDAL WASM, local image asset handling, a browser-resident
+  OpenAI BYOK Agent, and optional Grove shared-file collaboration through
+  `apps/grove-relay`.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, WebSocket Loro sync, share lifecycle APIs, and Wrangler deploy
   config.
@@ -117,6 +119,16 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Dropbox workspace access belongs in `apps/local-md-workspace` and
   `packages/opendal-wasm-browser`. Do not put Dropbox OAuth, relay hosting, or
   File System Access API assumptions into core editor packages.
+- Browser Agent code and AI SDK dependencies belong in
+  `apps/local-md-workspace`. Keep the SDK behind its dynamic runtime adapter;
+  do not add model-provider assumptions or credentials to editor packages.
+- Agent credentials must remain in page memory and must not enter storage,
+  URLs, telemetry, or logs. Keep the provider origin fixed unless a separate
+  reviewed provider adapter deliberately expands that boundary.
+- Agent writes are current-workspace-document-only. Dispatch them through the
+  active CodeMirror view so `loro-codemirror`, ordinary undo, collaboration,
+  and source persistence remain authoritative; do not mutate storage or a
+  second Loro peer as an Agent shortcut.
 - `packages/opendal-wasm-browser` is private and experimental. Its generated
   `pkg/` output must be rebuilt with the package WASM task when Rust wrapper
   code changes.
@@ -140,8 +152,10 @@ Useful task selectors:
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
 vp run local-md-workspace#dev
+vp run local-md-workspace#bundle:check
 vp run local-md-workspace#i18n:check
 vp run local-md-workspace#test
+vp run local-md-workspace#smoke:agent
 vp run local-md-workspace#smoke:ui
 vp run grove-relay#dev
 vp run grove-relay#test

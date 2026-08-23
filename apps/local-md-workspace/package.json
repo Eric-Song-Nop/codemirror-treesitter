@@ -11,6 +11,7 @@
     "i18n:check": "node scripts/check-i18n.mjs",
     "test": "vp test",
     "preview": "vp preview",
+    "smoke:agent": "node smoke/ui-smoke.mjs --agent-only",
     "smoke:ui": "node smoke/ui-smoke.mjs"
   },
   "dependencies": {
