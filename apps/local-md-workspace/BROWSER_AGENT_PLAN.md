@@ -231,6 +231,7 @@ active document's unsaved value overrides its storage observation.
 
 - Branch: `test/markdown-agent-integration`
 - Base: `feat/markdown-agent-ui`
+- Pull request: [#118](https://github.com/Eric-Song-Nop/codemirror-treesitter/pull/118)
 - Connect a scripted AI SDK model to the real workspace host,
   LiveMD/CodeMirror, main Loro peer, and browser pending-update persistence.
 - Verify that an Agent edit emits one local Loro update and survives document
