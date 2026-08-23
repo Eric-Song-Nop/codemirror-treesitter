@@ -1,4 +1,4 @@
-import type { WorkspaceBackend } from "./workspace-backend.ts";
+import type { WorkspaceIdentity } from "./workspace-runtime/types.ts";
 
 export type DropboxWorkspaceSession = {
   expiresAt: number;
@@ -12,13 +12,13 @@ export type WorkspaceProviderStatus = {
 };
 
 export function createWorkspaceProviderStatus(
-  backend: WorkspaceBackend | null,
+  identity: WorkspaceIdentity | null,
   dropboxSession: DropboxWorkspaceSession | null,
   now = Date.now(),
 ): WorkspaceProviderStatus | null {
-  if (!backend) return null;
+  if (!identity) return null;
 
-  if (backend.kind == "local") {
+  if (identity.kind == "local") {
     return {
       icon: "folder",
       label: "Local folder",
@@ -26,7 +26,7 @@ export function createWorkspaceProviderStatus(
     };
   }
 
-  if (backend.kind == "opendal-dropbox") {
+  if (identity.kind == "opendal-dropbox") {
     let expiry = dropboxTokenExpiryStatus(dropboxSession?.expiresAt, now);
     return {
       icon: "cloud",

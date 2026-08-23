@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { completeDropboxRedirectOAuthIfPresent } from "@/lib/dropbox-oauth";
 import { takeDropboxRedirectDraft, type DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
-import { createLocalWorkspaceBackend, queryReadWritePermission } from "@/lib/file-system";
+import { queryReadWritePermission } from "@/lib/file-system";
 import {
   clearSharedMarkdownDraftLaunchParams,
   readSharedMarkdownDraftLaunch,
@@ -11,14 +11,16 @@ import { defaultSidebarOpen } from "@/lib/workspace/constants";
 import { isDropboxRedirectCallbackWindow } from "@/lib/workspace/dropbox-config";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { loadWorkspaceSelectedPath } from "@/lib/workspace/state";
-import type { OpendalWorkspaceIdentity } from "@/lib/opendal-workspace-backend";
+import type { OpendalWorkspaceIdentity } from "@/lib/opendal-workspace-identity";
 import {
   loadStoredLocalWorkspaceRecord,
   type StoredDropboxWorkspaceConfig,
   type StoredLocalWorkspaceRecord,
   type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
-import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import type { MarkdownFileNode } from "@/lib/workspace-tree";
+import { createBrowserLocalWorkspaceRuntime } from "@/lib/workspace-runtime/browser-local-runtime";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 type MutableRef<T> = {
   current: T;
@@ -35,7 +37,7 @@ type UseWorkspaceStartupOptions = {
   browserSupported: boolean;
   clearDropboxAccessToken: () => void;
   loadTree: (
-    backend: WorkspaceBackend,
+    runtime: WorkspaceRuntime,
     nextSelectedPath?: null | string,
     options?: { saveBeforeSelect?: boolean },
   ) => Promise<void>;
@@ -59,11 +61,11 @@ type UseWorkspaceStartupOptions = {
   setRetryLoadPath: (path: string | null) => void;
   setSidebarOpen: (open: boolean) => void;
   setStoredLocalWorkspace: (record: StoredLocalWorkspaceRecord | null) => void;
-  setWorkspaceBackend: (backend: WorkspaceBackend) => void;
+  replaceWorkspaceRuntime: (runtime: WorkspaceRuntime) => Promise<void>;
   storedDropboxConfig: StoredDropboxWorkspaceConfig | null;
   storedLocalWorkspace: StoredLocalWorkspaceRecord | null;
   storedWorkspaceKind: StoredWorkspaceKind | null;
-  workspaceBackend: WorkspaceBackend | null;
+  workspaceRuntime: WorkspaceRuntime | null;
 };
 
 export function useWorkspaceStartup({
@@ -82,11 +84,11 @@ export function useWorkspaceStartup({
   setRetryLoadPath,
   setSidebarOpen,
   setStoredLocalWorkspace,
-  setWorkspaceBackend,
+  replaceWorkspaceRuntime,
   storedDropboxConfig,
   storedLocalWorkspace,
   storedWorkspaceKind,
-  workspaceBackend,
+  workspaceRuntime,
 }: UseWorkspaceStartupOptions) {
   let dropboxAutoRestoreAttemptedRef = useRef(false);
   let dropboxRedirectCompletionRef = useRef<
@@ -214,7 +216,7 @@ export function useWorkspaceStartup({
       setLocalRestoreChecked(true);
       return;
     }
-    if (workspaceBackend) {
+    if (workspaceRuntime) {
       setLocalRestoreChecked(true);
       return;
     }
@@ -238,11 +240,20 @@ export function useWorkspaceStartup({
         }
         if (canceled) return;
 
-        let backend = createLocalWorkspaceBackend(record.handle, record.id);
+        let runtime = await createBrowserLocalWorkspaceRuntime({
+          handle: record.handle,
+          workspaceId: record.id,
+        });
         clearDropboxAccessToken();
-        setWorkspaceBackend(backend);
+        if (canceled) {
+          await runtime.dispose();
+          return;
+        }
+        await replaceWorkspaceRuntime(runtime);
         setSidebarOpen(defaultSidebarOpen());
-        await loadTree(backend, loadWorkspaceSelectedPath(backend), { saveBeforeSelect: false });
+        await loadTree(runtime, loadWorkspaceSelectedPath(runtime.identity), {
+          saveBeforeSelect: false,
+        });
       } catch (error) {
         if (!canceled) setErrorMessage(errorToMessage(error));
       } finally {
@@ -264,11 +275,11 @@ export function useWorkspaceStartup({
     setRestoreChecking,
     setSidebarOpen,
     setStoredLocalWorkspace,
-    setWorkspaceBackend,
+    replaceWorkspaceRuntime,
     storedDropboxConfig,
     storedWorkspaceKind,
     sharedDraftLaunchChecked,
-    workspaceBackend,
+    workspaceRuntime,
   ]);
 
   useEffect(() => {
@@ -281,7 +292,7 @@ export function useWorkspaceStartup({
       return;
     }
     if (
-      workspaceBackend ||
+      workspaceRuntime ||
       !storedDropboxConfig ||
       (storedWorkspaceKind && storedWorkspaceKind != "dropbox") ||
       (!storedWorkspaceKind && storedLocalWorkspace)
@@ -305,7 +316,7 @@ export function useWorkspaceStartup({
     storedDropboxConfig,
     storedLocalWorkspace,
     storedWorkspaceKind,
-    workspaceBackend,
+    workspaceRuntime,
   ]);
 
   useEffect(() => {
@@ -313,7 +324,7 @@ export function useWorkspaceStartup({
       !localRestoreChecked ||
       !dropboxAutoRestoreChecked ||
       dropboxRedirectPendingRef.current ||
-      workspaceBackend ||
+      workspaceRuntime ||
       selectedFile
     ) {
       return;
@@ -331,6 +342,6 @@ export function useWorkspaceStartup({
     openSingleFileDraft,
     selectedFile,
     selectedFileRef,
-    workspaceBackend,
+    workspaceRuntime,
   ]);
 }

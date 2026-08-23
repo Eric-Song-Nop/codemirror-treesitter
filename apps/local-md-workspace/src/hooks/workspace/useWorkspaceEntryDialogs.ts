@@ -1,22 +1,20 @@
 import { useCallback, useState } from "react";
 import type { FileTreeCreateKind, FileTreeDeleteTarget } from "@/components/FileTree";
 import type { TFunction } from "@/lib/i18n";
+import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
 import { errorToMessage } from "@/lib/workspace/errors";
 import {
   defaultNewFilePath,
   defaultNewFolderPath,
   isPathInsideDirectory,
   pathAfterDirectoryRename,
-  renameWorkspaceDirectory,
 } from "@/lib/workspace/paths";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
 import type { FileDialogMode, SingleFileSource, SourceAutoSaveTask } from "@/lib/workspace/types";
 import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
-import type {
-  MarkdownDirectoryNode,
-  MarkdownFileNode,
-  WorkspaceBackend,
-} from "@/lib/workspace-backend";
+import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace-tree";
+import type { SourceRevision, WorkspacePathMutationResult } from "@/lib/storage/types";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 type MutableRef<T> = {
   current: T;
@@ -25,10 +23,12 @@ type MutableRef<T> = {
 type UseWorkspaceEntryDialogsOptions = {
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   beginDocumentTransition: (path?: string) => void;
-  clearActiveDocument: () => void;
+  clearActiveDocument: () => Promise<void>;
+  closeActiveDocumentSession: () => Promise<void>;
+  collabDocumentRef: MutableRef<CollabDocumentState | null>;
   documentTargetGenerationRef: MutableRef<number>;
   loadTree: (
-    backend: WorkspaceBackend,
+    runtime: WorkspaceRuntime,
     nextSelectedPath?: null | string,
     options?: { saveBeforeSelect?: boolean },
   ) => Promise<void>;
@@ -43,13 +43,15 @@ type UseWorkspaceEntryDialogsOptions = {
   t: TFunction;
   tree: MarkdownDirectoryNode | null;
   treeSelection: FileTreeDeleteTarget | null;
-  workspaceBackend: WorkspaceBackend | null;
+  workspaceRuntime: WorkspaceRuntime | null;
 };
 
 export function useWorkspaceEntryDialogs({
   autoSaveTaskRef,
   beginDocumentTransition,
   clearActiveDocument,
+  closeActiveDocumentSession,
+  collabDocumentRef,
   documentTargetGenerationRef,
   loadTree,
   saveCurrentFile,
@@ -63,7 +65,7 @@ export function useWorkspaceEntryDialogs({
   t,
   tree,
   treeSelection,
-  workspaceBackend,
+  workspaceRuntime,
 }: UseWorkspaceEntryDialogsOptions) {
   let [fileDialogMode, setFileDialogMode] = useState<FileDialogMode | null>(null);
   let [fileDialogTarget, setFileDialogTarget] = useState<FileTreeDeleteTarget | null>(null);
@@ -115,22 +117,38 @@ export function useWorkspaceEntryDialogs({
 
   let submitFileDialog = useCallback(
     async (value: string) => {
-      if (!workspaceBackend || !fileDialogMode) return;
+      if (!workspaceRuntime || !fileDialogMode) return;
       documentTargetGenerationRef.current += 1;
       if (!(await saveCurrentFile())) return;
 
       setFileDialogError("");
       setBusy(true);
       setRetryLoadPath(null);
+      let currentTarget = fileDialogTarget;
+      let currentWorkspacePath = singleFileSourceRef.current
+        ? null
+        : (selectedFileRef.current?.path ?? null);
+      let closesActiveSession =
+        fileDialogMode == "rename" &&
+        Boolean(
+          currentTarget &&
+          currentWorkspacePath &&
+          entryContainsPath(currentTarget, currentWorkspacePath),
+        );
+      let reopenPath = currentWorkspacePath;
+      let revision =
+        currentTarget?.kind == "file" && currentTarget.path == currentWorkspacePath
+          ? activeDocumentRevision(collabDocumentRef.current)
+          : undefined;
       try {
-        let currentTarget = fileDialogTarget;
+        if (closesActiveSession) await closeActiveDocumentSession();
         let nextPath =
           fileDialogMode == "create"
-            ? await workspaceBackend.createFile(value)
+            ? await workspaceRuntime.entries.create(value)
             : currentTarget?.kind == "file"
-              ? await workspaceBackend.renameFile(currentTarget.path, value)
+              ? await renameWorkspaceEntry(workspaceRuntime, currentTarget, value, revision)
               : currentTarget?.kind == "directory"
-                ? await renameWorkspaceDirectory(workspaceBackend, currentTarget.path, value)
+                ? await renameWorkspaceEntry(workspaceRuntime, currentTarget, value)
                 : null;
         let nextSelectedPath =
           currentTarget?.kind == "directory" && nextPath
@@ -140,19 +158,20 @@ export function useWorkspaceEntryDialogs({
                 nextPath,
               )
             : nextPath;
+        if (closesActiveSession) reopenPath = nextSelectedPath;
 
         setFileDialogMode(null);
         setFileDialogTarget(null);
-        let currentWorkspacePath = singleFileSourceRef.current
-          ? null
-          : (selectedFileRef.current?.path ?? null);
         if (nextSelectedPath && currentWorkspacePath != nextSelectedPath) {
           beginDocumentTransition(nextSelectedPath);
         }
-        await loadTree(workspaceBackend, nextSelectedPath ?? currentWorkspacePath, {
+        await loadTree(workspaceRuntime, nextSelectedPath ?? currentWorkspacePath, {
           saveBeforeSelect: false,
         });
       } catch (error) {
+        if (closesActiveSession && reopenPath) {
+          await loadTree(workspaceRuntime, reopenPath, { saveBeforeSelect: false }).catch(() => {});
+        }
         setFileDialogError(errorToMessage(error));
       } finally {
         setBusy(false);
@@ -160,6 +179,8 @@ export function useWorkspaceEntryDialogs({
     },
     [
       beginDocumentTransition,
+      closeActiveDocumentSession,
+      collabDocumentRef,
       documentTargetGenerationRef,
       fileDialogMode,
       fileDialogTarget,
@@ -169,7 +190,7 @@ export function useWorkspaceEntryDialogs({
       setBusy,
       setRetryLoadPath,
       singleFileSourceRef,
-      workspaceBackend,
+      workspaceRuntime,
     ],
   );
 
@@ -186,45 +207,42 @@ export function useWorkspaceEntryDialogs({
   }, []);
 
   let deleteWorkspaceEntry = useCallback(async () => {
-    let backend = workspaceBackend;
+    let runtime = workspaceRuntime;
     let target = deleteTarget;
-    if (!backend || !target) return;
+    if (!runtime || !target) return;
     documentTargetGenerationRef.current += 1;
     if (!(await saveCurrentFile())) return;
 
+    let activePath = singleFileSourceRef.current ? null : (selectedFileRef.current?.path ?? null);
+    let deletesActiveDocument = Boolean(activePath && entryContainsPath(target, activePath));
     setBusy(true);
     setErrorMessage("");
     setRetryLoadPath(null);
     autoSaveTaskRef.current?.task.cancel();
     saveOperationRef.current += 1;
+    let revision =
+      target.kind == "file" && target.path == activePath
+        ? activeDocumentRevision(collabDocumentRef.current)
+        : undefined;
     try {
-      let nextSelectedPath = singleFileSourceRef.current
-        ? null
-        : (selectedFileRef.current?.path ?? null);
-      let deletedActiveWorkspaceDocument = false;
-      if (target.kind == "directory") {
-        if (!backend.deleteDirectory) throw new Error("This workspace cannot delete folders.");
-        await backend.deleteDirectory(target.path);
-        if (nextSelectedPath && isPathInsideDirectory(nextSelectedPath, target.path)) {
-          nextSelectedPath = null;
-          deletedActiveWorkspaceDocument = !singleFileSourceRef.current;
-        }
-      } else {
-        await backend.deleteFile(target.path);
-        if (nextSelectedPath == target.path) {
-          nextSelectedPath = null;
-          deletedActiveWorkspaceDocument = !singleFileSourceRef.current;
-        }
-      }
+      if (deletesActiveDocument) await closeActiveDocumentSession();
+      assertEntryMutationApplied(
+        await runtime.entries.delete({ kind: target.kind, path: target.path, revision }),
+        target.path,
+      );
+      let nextSelectedPath = deletesActiveDocument ? null : activePath;
 
       setDeleteTarget(null);
-      if (deletedActiveWorkspaceDocument) {
-        let selectedPathContext = workspaceSelectedPathContext(backend);
+      if (deletesActiveDocument) {
+        let selectedPathContext = workspaceSelectedPathContext(runtime.identity);
         if (selectedPathContext) clearStoredWorkspaceSelectedPath(selectedPathContext);
-        clearActiveDocument();
+        await clearActiveDocument();
       }
-      await loadTree(backend, nextSelectedPath, { saveBeforeSelect: false });
+      await loadTree(runtime, nextSelectedPath, { saveBeforeSelect: false });
     } catch (error) {
+      if (deletesActiveDocument && activePath) {
+        await loadTree(runtime, activePath, { saveBeforeSelect: false }).catch(() => {});
+      }
       setErrorMessage(errorToMessage(error));
       setRetryLoadPath(null);
     } finally {
@@ -232,6 +250,8 @@ export function useWorkspaceEntryDialogs({
     }
   }, [
     clearActiveDocument,
+    closeActiveDocumentSession,
+    collabDocumentRef,
     autoSaveTaskRef,
     deleteTarget,
     documentTargetGenerationRef,
@@ -243,7 +263,7 @@ export function useWorkspaceEntryDialogs({
     setErrorMessage,
     setRetryLoadPath,
     singleFileSourceRef,
-    workspaceBackend,
+    workspaceRuntime,
   ]);
 
   return {
@@ -260,4 +280,38 @@ export function useWorkspaceEntryDialogs({
     setFileDialogValue,
     submitFileDialog,
   };
+}
+
+async function renameWorkspaceEntry(
+  runtime: WorkspaceRuntime,
+  target: FileTreeDeleteTarget,
+  rawName: string,
+  revision?: SourceRevision,
+) {
+  let renamed = await runtime.entries.rename({
+    kind: target.kind,
+    path: target.path,
+    rawName,
+    revision,
+  });
+  assertEntryMutationApplied(renamed.result, target.path);
+  return renamed.path;
+}
+
+function entryContainsPath(target: FileTreeDeleteTarget, path: string) {
+  return target.kind == "directory"
+    ? isPathInsideDirectory(path, target.path)
+    : path == target.path;
+}
+
+function activeDocumentRevision(document: CollabDocumentState | null) {
+  return document?.source.kind == "present" ? document.source.baseline.revision : undefined;
+}
+
+function assertEntryMutationApplied(result: WorkspacePathMutationResult, path: string) {
+  if (result.status == "applied") return;
+  if (result.status == "conflict") {
+    throw new Error(`Workspace mutation conflict for ${path}: ${result.reason}.`);
+  }
+  throw new Error(`Workspace mutation for ${path} ended with ${result.status}; refresh required.`);
 }

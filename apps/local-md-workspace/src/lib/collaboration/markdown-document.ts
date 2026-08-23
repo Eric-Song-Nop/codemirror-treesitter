@@ -97,6 +97,18 @@ export async function ingestExternalMarkdownEdit(
   return requireMarkdownDocumentRuntime().ingestExternalMarkdownEdit(...args);
 }
 
+export async function ingestExternalMarkdownObservation(
+  ...args: Parameters<MarkdownDocumentRuntime["ingestExternalMarkdownObservation"]>
+) {
+  return requireMarkdownDocumentRuntime().ingestExternalMarkdownObservation(...args);
+}
+
+export async function resolveCollabRecoveryUseExternal(
+  ...args: Parameters<MarkdownDocumentRuntime["resolveCollabRecoveryUseExternal"]>
+) {
+  return requireMarkdownDocumentRuntime().resolveCollabRecoveryUseExternal(...args);
+}
+
 async function loadMarkdownDocumentRuntime() {
   if (loadedRuntime) return loadedRuntime;
   runtimeRequest ??= import("./markdown-document-runtime.ts");

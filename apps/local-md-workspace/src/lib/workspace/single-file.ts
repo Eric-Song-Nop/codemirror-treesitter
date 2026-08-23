@@ -9,29 +9,17 @@ import {
   saveSingleFileDraft,
   type SingleFileDraft,
 } from "@/lib/single-file-draft-store";
-import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import type { MarkdownFileNode } from "@/lib/workspace-tree";
+import type { StandaloneDocumentSource } from "@/lib/workspace/types";
 
-export function createSingleFileDraftBackend(draft: SingleFileDraft): WorkspaceBackend {
-  let file = singleFileMarkdownNode(draft.name);
+export function createSingleFileDraftSource(draft: SingleFileDraft): StandaloneDocumentSource {
   return {
     id: `draft:${draft.id}`,
-    kind: "local",
-    name: "Draft",
-    createFile: unsupportedSingleFileOperation,
-    deleteFile: unsupportedSingleFileVoidOperation,
+    kind: "standalone",
     async readFile() {
       return (await loadSingleFileDraft(draft.id))?.value ?? draft.value;
     },
-    async readTree() {
-      return {
-        children: [file],
-        kind: "directory",
-        name: "Draft",
-        path: "",
-      };
-    },
-    renameFile: unsupportedSingleFileRenameOperation,
-    async writeFile(_path, value) {
+    async writeFile(value) {
       let current = await loadSingleFileDraft(draft.id);
       let now = Date.now();
       await saveSingleFileDraft({
@@ -46,25 +34,13 @@ export function createSingleFileDraftBackend(draft: SingleFileDraft): WorkspaceB
   };
 }
 
-export function createLocalFileBackend(handle: AccessFileHandle): WorkspaceBackend {
+export function createLocalFileSource(handle: AccessFileHandle): StandaloneDocumentSource {
   let file = singleFileMarkdownNode(handle.name || "Untitled.md");
   return {
     id: `local-file:${file.name}`,
-    kind: "local",
-    name: "Local file",
-    createFile: unsupportedSingleFileOperation,
-    deleteFile: unsupportedSingleFileVoidOperation,
+    kind: "standalone",
     readFile: () => readAccessFileHandle(handle),
-    async readTree() {
-      return {
-        children: [file],
-        kind: "directory",
-        name: "Local file",
-        path: "",
-      };
-    },
-    renameFile: unsupportedSingleFileRenameOperation,
-    writeFile: (_path, value) => writeAccessFileHandle(handle, value),
+    writeFile: (value) => writeAccessFileHandle(handle, value),
   };
 }
 
@@ -80,16 +56,4 @@ export function singleFileMarkdownNode(pathOrName: string): MarkdownFileNode {
 export function markdownDownloadFileName(fileName: string) {
   let trimmed = fileName.trim() || "Untitled.md";
   return /\.md$/i.test(trimmed) || /\.markdown$/i.test(trimmed) ? trimmed : `${trimmed}.md`;
-}
-
-async function unsupportedSingleFileOperation(): Promise<string | null> {
-  throw new Error("This document is not a workspace.");
-}
-
-async function unsupportedSingleFileRenameOperation(): Promise<string> {
-  throw new Error("This document is not a workspace.");
-}
-
-async function unsupportedSingleFileVoidOperation(): Promise<void> {
-  throw new Error("This document is not a workspace.");
 }

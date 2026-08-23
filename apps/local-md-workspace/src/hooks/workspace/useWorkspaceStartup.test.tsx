@@ -3,7 +3,7 @@
 import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { WorkspaceBackend } from "@/lib/workspace-backend";
+import { createMemoryWorkspaceRuntime } from "@/test/memory-workspace-runtime";
 
 const dropboxOAuthMocks = vi.hoisted(() => ({
   completeRedirect: vi.fn(),
@@ -104,17 +104,10 @@ function createStartupOptions() {
     name: "open.md",
     path: "open.md",
   };
-  let workspaceBackend: WorkspaceBackend = {
+  let workspaceRuntime = createMemoryWorkspaceRuntime([], {
     id: "local:test",
-    kind: "local",
     name: "test",
-    createFile: async () => null,
-    deleteFile: async () => {},
-    readFile: async () => "",
-    readTree: async () => ({ children: [], kind: "directory", name: "test", path: "" }),
-    renameFile: async (_path, rawName) => rawName,
-    writeFile: async () => {},
-  };
+  });
 
   return {
     browserSupported: false,
@@ -132,11 +125,11 @@ function createStartupOptions() {
     setRetryLoadPath: vi.fn(),
     setSidebarOpen: vi.fn(),
     setStoredLocalWorkspace: vi.fn(),
-    setWorkspaceBackend: vi.fn(),
+    replaceWorkspaceRuntime: vi.fn(async () => {}),
     storedDropboxConfig: null,
     storedLocalWorkspace: null,
     storedWorkspaceKind: null,
-    workspaceBackend,
+    workspaceRuntime,
   };
 }
 

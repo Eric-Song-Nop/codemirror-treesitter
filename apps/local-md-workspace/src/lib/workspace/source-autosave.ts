@@ -1,4 +1,4 @@
-import type { WorkspaceBackend } from "@/lib/workspace-backend";
+import { isWorkspaceDocumentSource, type ActiveDocumentSource } from "@/lib/workspace/types";
 
 export type SourceAutoSaveKey = "cloud" | "local";
 
@@ -7,12 +7,10 @@ export type SourceAutoSaveTiming = {
   maxWaitMs: number;
 };
 
-export function sourceAutoSaveKey(backend: WorkspaceBackend | null | undefined): SourceAutoSaveKey {
-  return backend?.kind == "opendal-dropbox" ||
-    backend?.kind == "opendal-gdrive" ||
-    backend?.kind == "opendal-onedrive"
-    ? "cloud"
-    : "local";
+export function sourceAutoSaveKey(
+  source: ActiveDocumentSource | null | undefined,
+): SourceAutoSaveKey {
+  return isWorkspaceDocumentSource(source) && source.identity.kind != "local" ? "cloud" : "local";
 }
 
 export function sourceAutoSaveTiming(key: SourceAutoSaveKey): SourceAutoSaveTiming {

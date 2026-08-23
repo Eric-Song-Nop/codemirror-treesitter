@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
-  createLocalWorkspaceBackend,
+  ensureReadWritePermission,
+  findWorkspaceFilePathForHandle,
+  pickWorkspaceDirectory,
+  queryReadWritePermission,
   readAccessFileHandle,
   saveMarkdownFileAs,
+  supportsDirectoryPicker,
   supportsSaveFilePicker,
   writeAccessFileHandle,
   type AccessDirectoryHandle,
@@ -12,292 +16,57 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("local workspace backend", () => {
-  it("creates empty folders from trailing-slash paths", async () => {
-    let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
+describe("workspace host handles", () => {
+  it("detects and opens the directory picker with write access", async () => {
+    let handle = new MemoryDirectoryHandle("Workspace");
+    let showDirectoryPicker = vi.fn(async () => handle);
+    vi.stubGlobal("window", { showDirectoryPicker });
 
-    await expect(backend.createFile("notes/daily/")).resolves.toBeNull();
-
-    await expect(backend.readTree()).resolves.toMatchObject({
-      children: [
-        {
-          children: [],
-          childrenLoaded: false,
-          kind: "directory",
-          name: "notes",
-          path: "notes",
-        },
-      ],
-      kind: "directory",
-      name: "Workspace",
-      path: "",
-    });
-    await expect(backend.listEntries!("notes")).resolves.toEqual([
-      { isDirectory: true, isFile: false, path: "notes/daily" },
-    ]);
+    expect(supportsDirectoryPicker()).toBe(true);
+    await expect(pickWorkspaceDirectory()).resolves.toBe(handle);
+    expect(showDirectoryPicker).toHaveBeenCalledWith({ mode: "readwrite" });
   });
 
-  it("creates parent folders for nested file paths", async () => {
-    let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
+  it("queries and requests read-write permission", async () => {
+    let handle = new MemoryDirectoryHandle("Workspace");
+    handle.permission = "prompt";
 
-    await expect(backend.createFile("notes/daily/today")).resolves.toBe("notes/daily/today.md");
-    await expect(backend.readFile("notes/daily/today.md")).resolves.toBe("# today\n");
-
-    await expect(backend.readTree()).resolves.toMatchObject({
-      children: [
-        {
-          children: [],
-          childrenLoaded: false,
-          kind: "directory",
-          name: "notes",
-          path: "notes",
-        },
-      ],
-    });
-    await expect(backend.listEntries!("notes")).resolves.toEqual([
-      { isDirectory: true, isFile: false, path: "notes/daily" },
-    ]);
-    await expect(backend.listEntries!("notes/daily")).resolves.toEqual([
-      { isDirectory: false, isFile: true, path: "notes/daily/today.md" },
-    ]);
+    await expect(queryReadWritePermission(handle)).resolves.toBe("prompt");
+    await expect(ensureReadWritePermission(handle)).resolves.toBe(true);
+    expect(handle.requestedPermission).toEqual({ mode: "readwrite" });
   });
 
-  it("keeps legacy .livemd files hidden from the Markdown tree", async () => {
+  it("finds only visible Markdown handles in the selected workspace", async () => {
     let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
+    let notes = await root.getDirectoryHandle("notes", { create: true });
+    let today = await notes.getFileHandle("today.md", { create: true });
+    await notes.getFileHandle("image.png", { create: true });
+    let git = await root.getDirectoryHandle(".git", { create: true });
+    let hidden = await git.getFileHandle("hidden.md", { create: true });
+    let liveMd = await root.getDirectoryHandle(".livemd", { create: true });
+    let internal = await liveMd.getFileHandle("internal.md", { create: true });
 
-    await backend.createFile("notes/today.md");
-    await backend.createDirectory!(".livemd/docs");
-    await backend.writeTextFile!(".livemd/manifest.json", "{}\n");
-    await backend.writeBytes!(".livemd/docs/doc.snapshot.b64", new Uint8Array([1, 2, 3]));
-
-    await expect(backend.readTextFile!(".livemd/manifest.json")).resolves.toBe("{}\n");
-    await expect(backend.readBytes!(".livemd/docs/doc.snapshot.b64")).resolves.toEqual(
-      new Uint8Array([1, 2, 3]),
-    );
-    await expect(backend.stat!(".livemd/docs/doc.snapshot.b64")).resolves.toMatchObject({
-      exists: true,
-      isFile: true,
-      path: ".livemd/docs/doc.snapshot.b64",
-      size: 3,
-    });
-    await expect(backend.readTree()).resolves.toMatchObject({
-      children: [
-        {
-          children: [],
-          childrenLoaded: false,
-          kind: "directory",
-          name: "notes",
-          path: "notes",
-        },
-      ],
-    });
-    await expect(backend.listEntries!("notes")).resolves.toEqual([
-      { isDirectory: false, isFile: true, path: "notes/today.md" },
-    ]);
+    await expect(findWorkspaceFilePathForHandle(root, today)).resolves.toBe("notes/today.md");
+    await expect(findWorkspaceFilePathForHandle(root, hidden)).resolves.toBeNull();
+    await expect(findWorkspaceFilePathForHandle(root, internal)).resolves.toBeNull();
   });
 
-  it("skips dependency, build, and VCS folders while reading the Markdown tree", async () => {
-    let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
-
-    await backend.createFile("notes/today.md");
-    await backend.createFile("node_modules/pkg/README.md");
-    await backend.createFile(".git/hooks/pre-commit.md");
-    await backend.createFile("dist/generated.md");
-
-    await expect(backend.readTree()).resolves.toMatchObject({
-      children: [
-        {
-          children: [],
-          childrenLoaded: false,
-          kind: "directory",
-          name: "notes",
-          path: "notes",
-        },
-      ],
-    });
-    await expect(backend.listEntries!("notes")).resolves.toEqual([
-      { isDirectory: false, isFile: true, path: "notes/today.md" },
-    ]);
-  });
-
-  it("finds a visible Markdown file path from a browser file handle", async () => {
-    let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
-
-    await backend.createFile("notes/today.md");
-    await backend.createFile("notes/other.md");
-    let notes = await root.getDirectoryHandle("notes");
-    let handle = await notes.getFileHandle("today.md");
-
-    await expect(backend.findFilePathForHandle!(handle)).resolves.toBe("notes/today.md");
-  });
-
-  it("does not match file handles outside the current workspace", async () => {
+  it("does not match an equivalent name from another workspace", async () => {
     let root = new MemoryDirectoryHandle("Workspace");
     let outside = new MemoryDirectoryHandle("Outside");
-    let backend = createLocalWorkspaceBackend(root);
+    await root.getFileHandle("today.md", { create: true });
+    let outsideHandle = await outside.getFileHandle("today.md", { create: true });
 
-    await backend.createFile("today.md");
-    await outside.getFileHandle("today.md", { create: true });
-    let outsideHandle = await outside.getFileHandle("today.md");
-
-    await expect(backend.findFilePathForHandle!(outsideHandle)).resolves.toBeNull();
-  });
-
-  it("deletes folders recursively", async () => {
-    let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
-
-    await backend.createFile("notes/daily/today.md");
-    expect(backend.deleteDirectory).toBeDefined();
-    await expect(backend.deleteDirectory!("notes")).resolves.toBeUndefined();
-
-    await expect(backend.readTree()).resolves.toMatchObject({
-      children: [],
-      kind: "directory",
-      name: "Workspace",
-      path: "",
-    });
-  });
-
-  it("renames folders recursively", async () => {
-    let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
-
-    await backend.createFile("notes/daily/today.md");
-    expect(backend.renameDirectory).toBeDefined();
-    await expect(backend.renameDirectory!("notes", "docs")).resolves.toBe("docs");
-
-    await expect(backend.readFile("docs/daily/today.md")).resolves.toBe("# today\n");
-    await expect(backend.readTree()).resolves.toMatchObject({
-      children: [
-        {
-          children: [],
-          childrenLoaded: false,
-          kind: "directory",
-          name: "docs",
-          path: "docs",
-        },
-      ],
-      kind: "directory",
-      name: "Workspace",
-      path: "",
-    });
-    await expect(backend.listEntries!("docs")).resolves.toEqual([
-      { isDirectory: true, isFile: false, path: "docs/daily" },
-    ]);
-  });
-
-  it("rolls back and can retry a cross-directory file rename when source deletion fails", async () => {
-    let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
-    await backend.createFile("notes/draft.md");
-    await backend.createDirectory!("archive");
-    let notes = await root.getDirectoryHandle("notes");
-    let sourceError = new Error("source file deletion failed");
-    notes.failNextRemoveEntry("draft.md", sourceError);
-
-    await expect(backend.renameEntry!("notes/draft.md", "archive/published.md")).rejects.toBe(
-      sourceError,
-    );
-    await expect(backend.stat!("notes/draft.md")).resolves.toMatchObject({ exists: true });
-    await expect(backend.stat!("archive/published.md")).resolves.toMatchObject({ exists: false });
-
-    await expect(
-      backend.renameEntry!("notes/draft.md", "archive/published.md"),
-    ).resolves.toBeUndefined();
-    await expect(backend.stat!("notes/draft.md")).resolves.toMatchObject({ exists: false });
-    await expect(backend.readFile("archive/published.md")).resolves.toBe("# draft\n");
-  });
-
-  it("rolls back and can retry a cross-directory folder rename when source deletion fails", async () => {
-    let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
-    await backend.createFile("notes/daily/today.md");
-    await backend.createDirectory!("archive");
-    let notes = await root.getDirectoryHandle("notes");
-    let sourceError = new Error("source directory deletion failed");
-    notes.failNextRemoveEntry("daily", sourceError);
-
-    await expect(backend.renameEntry!("notes/daily", "archive/daily")).rejects.toBe(sourceError);
-    await expect(backend.stat!("notes/daily")).resolves.toMatchObject({ exists: true });
-    await expect(backend.stat!("archive/daily")).resolves.toMatchObject({ exists: false });
-
-    await expect(backend.renameEntry!("notes/daily", "archive/daily")).resolves.toBeUndefined();
-    await expect(backend.stat!("notes/daily")).resolves.toMatchObject({ exists: false });
-    await expect(backend.readFile("archive/daily/today.md")).resolves.toBe("# today\n");
-  });
-
-  it("rolls back and can retry a file rename when source deletion fails", async () => {
-    let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
-    await backend.createFile("notes/draft.md");
-    let notes = await root.getDirectoryHandle("notes");
-    let sourceError = new Error("source file deletion failed");
-    notes.failNextRemoveEntry("draft.md", sourceError);
-
-    await expect(backend.renameFile("notes/draft.md", "published.md")).rejects.toBe(sourceError);
-    await expect(backend.stat!("notes/draft.md")).resolves.toMatchObject({ exists: true });
-    await expect(backend.stat!("notes/published.md")).resolves.toMatchObject({ exists: false });
-
-    await expect(backend.renameFile("notes/draft.md", "published.md")).resolves.toBe(
-      "notes/published.md",
-    );
-    await expect(backend.stat!("notes/draft.md")).resolves.toMatchObject({ exists: false });
-    await expect(backend.readFile("notes/published.md")).resolves.toBe("# draft\n");
-  });
-
-  it("rolls back and can retry a folder rename when source deletion fails", async () => {
-    let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
-    await backend.createFile("notes/daily/today.md");
-    let notes = await root.getDirectoryHandle("notes");
-    let sourceError = new Error("source directory deletion failed");
-    notes.failNextRemoveEntry("daily", sourceError);
-
-    await expect(backend.renameDirectory!("notes/daily", "archive")).rejects.toBe(sourceError);
-    await expect(backend.stat!("notes/daily")).resolves.toMatchObject({ exists: true });
-    await expect(backend.stat!("notes/archive")).resolves.toMatchObject({ exists: false });
-
-    await expect(backend.renameDirectory!("notes/daily", "archive")).resolves.toBe("notes/archive");
-    await expect(backend.stat!("notes/daily")).resolves.toMatchObject({ exists: false });
-    await expect(backend.readFile("notes/archive/today.md")).resolves.toBe("# today\n");
-  });
-
-  it("reports both rename and rollback failures", async () => {
-    let root = new MemoryDirectoryHandle("Workspace");
-    let backend = createLocalWorkspaceBackend(root);
-    await backend.createFile("notes/draft.md");
-    let notes = await root.getDirectoryHandle("notes");
-    let sourceError = new Error("source file deletion failed");
-    let rollbackError = new Error("target cleanup failed");
-    notes.failNextRemoveEntry("draft.md", sourceError);
-    notes.failNextRemoveEntry("published.md", rollbackError);
-
-    let failure = await backend
-      .renameFile("notes/draft.md", "published.md")
-      .catch((error) => error);
-
-    expect(failure).toBeInstanceOf(AggregateError);
-    expect((failure as AggregateError).errors).toEqual([sourceError, rollbackError]);
-    expect((failure as AggregateError).cause).toBe(sourceError);
-    await expect(backend.stat!("notes/draft.md")).resolves.toMatchObject({ exists: true });
-    await expect(backend.stat!("notes/published.md")).resolves.toMatchObject({ exists: true });
+    await expect(findWorkspaceFilePathForHandle(root, outsideHandle)).resolves.toBeNull();
   });
 });
 
-describe("single file access handles", () => {
+describe("standalone file handles", () => {
   it("detects Save As picker support", () => {
     vi.stubGlobal("window", {});
-
     expect(supportsSaveFilePicker()).toBe(false);
 
     vi.stubGlobal("window", { showSaveFilePicker: vi.fn() });
-
     expect(supportsSaveFilePicker()).toBe(true);
   });
 
@@ -310,14 +79,11 @@ describe("single file access handles", () => {
     await expect(saveMarkdownFileAs({ suggestedName: "draft", value: "# Draft\n" })).resolves.toBe(
       handle,
     );
-
     expect(showSaveFilePicker).toHaveBeenCalledWith({
       suggestedName: "draft.md",
       types: [
         {
-          accept: {
-            "text/markdown": [".md", ".markdown"],
-          },
+          accept: { "text/markdown": [".md", ".markdown"] },
           description: "Markdown",
         },
       ],
@@ -325,14 +91,33 @@ describe("single file access handles", () => {
     await expect(readAccessFileHandle(handle)).resolves.toBe("# Draft\n");
   });
 
-  it("reads and writes access file handles", async () => {
+  it("reads and writes a standalone access handle", async () => {
     let files = new Map([["notes.md", "# Old\n"]]);
     let handle = new MemoryFileHandle("notes.md", files);
 
     await expect(readAccessFileHandle(handle)).resolves.toBe("# Old\n");
     await writeAccessFileHandle(handle, "# New\n");
-
     await expect(readAccessFileHandle(handle)).resolves.toBe("# New\n");
+  });
+
+  it("aborts a standalone write when the stream write fails", async () => {
+    let failure = new Error("disk full");
+    let abort = vi.fn(async () => {});
+    let handle = {
+      kind: "file" as const,
+      name: "notes.md",
+      createWritable: async () => ({
+        abort,
+        close: async () => {},
+        write: async () => {
+          throw failure;
+        },
+      }),
+      getFile: async () => new File([], "notes.md"),
+    };
+
+    await expect(writeAccessFileHandle(handle, "# New\n")).rejects.toBe(failure);
+    expect(abort).toHaveBeenCalledOnce();
   });
 });
 
@@ -341,7 +126,7 @@ class MemoryFileHandle {
 
   constructor(
     public name: string,
-    private files: Map<string, string>,
+    private readonly files: Map<string, string>,
   ) {}
 
   async createWritable() {
@@ -380,9 +165,10 @@ class MemoryFileHandle {
 
 class MemoryDirectoryHandle implements AccessDirectoryHandle {
   kind = "directory" as const;
-  private directories = new Map<string, MemoryDirectoryHandle>();
-  private files = new Map<string, string>();
-  private removeEntryFailures = new Map<string, Error[]>();
+  permission: PermissionState = "granted";
+  requestedPermission: { mode?: "read" | "readwrite" } | null = null;
+  private readonly directories = new Map<string, MemoryDirectoryHandle>();
+  private readonly files = new Map<string, string>();
 
   constructor(public name: string) {}
 
@@ -405,45 +191,22 @@ class MemoryDirectoryHandle implements AccessDirectoryHandle {
   }
 
   async queryPermission() {
-    return "granted" as const;
+    return this.permission;
   }
 
-  failNextRemoveEntry(name: string, error: Error) {
-    let failures = this.removeEntryFailures.get(name) ?? [];
-    failures.push(error);
-    this.removeEntryFailures.set(name, failures);
-  }
-
-  async removeEntry(name: string, options: { recursive?: boolean } = {}) {
-    let failures = this.removeEntryFailures.get(name);
-    if (failures?.length) {
-      let error = failures.shift()!;
-      if (!failures.length) this.removeEntryFailures.delete(name);
-      throw error;
-    }
-
-    if (this.files.delete(name)) return;
-    let directory = this.directories.get(name);
-    if (directory) {
-      if (!options.recursive && !directory.isEmpty()) {
-        throw new DOMException("Directory is not empty.", "InvalidModificationError");
-      }
-      this.directories.delete(name);
-      return;
-    }
+  async removeEntry(name: string) {
+    if (this.files.delete(name) || this.directories.delete(name)) return;
     throw new DOMException("Entry not found.", "NotFoundError");
   }
 
-  async requestPermission() {
-    return "granted" as const;
+  async requestPermission(descriptor?: { mode?: "read" | "readwrite" }) {
+    this.requestedPermission = descriptor ?? null;
+    this.permission = "granted";
+    return this.permission;
   }
 
   async *values() {
     for (let directory of this.directories.values()) yield directory;
     for (let name of this.files.keys()) yield new MemoryFileHandle(name, this.files);
-  }
-
-  private isEmpty() {
-    return this.directories.size == 0 && this.files.size == 0;
   }
 }

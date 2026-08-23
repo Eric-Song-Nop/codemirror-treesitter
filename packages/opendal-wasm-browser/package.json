@@ -2,7 +2,7 @@
   "name": "@codemirror-treesitter/opendal-wasm-browser",
   "version": "0.0.0",
   "private": true,
-  "description": "Experimental browser WASM wrapper for OpenDAL-backed cloud workspace storage",
+  "description": "Experimental browser WASM wrapper for OpenDAL-backed local and cloud workspace storage",
   "license": "MIT",
   "files": [
     "dist",

@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace-backend";
+import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace-tree";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { githubRepositoryUrl } from "@/lib/workspace/constants";

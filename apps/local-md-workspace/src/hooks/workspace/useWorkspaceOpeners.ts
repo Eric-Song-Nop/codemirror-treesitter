@@ -2,7 +2,6 @@ import { useCallback } from "react";
 import type { DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
 import {
   type AccessDirectoryHandle,
-  createLocalWorkspaceBackend,
   ensureReadWritePermission,
   pickWorkspaceDirectory,
   supportsDirectoryPicker,
@@ -15,7 +14,8 @@ import type {
   StoredDropboxWorkspaceConfig,
   StoredLocalWorkspaceRecord,
 } from "@/lib/workspace-store";
-import type { WorkspaceBackend } from "@/lib/workspace-backend";
+import { createBrowserLocalWorkspaceRuntime } from "@/lib/workspace-runtime/browser-local-runtime";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 type MutableRef<T> = {
   current: T;
@@ -23,18 +23,18 @@ type MutableRef<T> = {
 
 type UseWorkspaceOpenersOptions = {
   clearDropboxAccessToken: () => void;
-  createDropboxBackend: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceBackend>;
+  createDropboxRuntime: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceRuntime>;
   documentTargetGenerationRef: MutableRef<number>;
   folderAccessUnavailableMessage: string;
   loadTree: (
-    backend: WorkspaceBackend,
+    runtime: WorkspaceRuntime,
     nextSelectedPath?: null | string,
     options?: { saveBeforeSelect?: boolean },
   ) => Promise<void>;
-  refreshWorkspaceForCurrentEditor: (backend: WorkspaceBackend) => Promise<void>;
+  refreshWorkspaceForCurrentEditor: (runtime: WorkspaceRuntime) => Promise<void>;
   rememberWorkspaceHandle: (handle: AccessDirectoryHandle) => Promise<StoredLocalWorkspaceRecord>;
   restoreCloudRedirectEditorDraft: (
-    backend: WorkspaceBackend,
+    runtime: WorkspaceRuntime,
     draft: DropboxRedirectDraft,
   ) => boolean;
   saveCurrentFile: () => Promise<boolean>;
@@ -43,15 +43,15 @@ type UseWorkspaceOpenersOptions = {
   setErrorMessage: (message: string) => void;
   setRetryLoadPath: (path: string | null) => void;
   setSidebarOpen: (open: boolean) => void;
-  setWorkspaceBackend: (backend: WorkspaceBackend) => void;
+  replaceWorkspaceRuntime: (runtime: WorkspaceRuntime) => Promise<void>;
   storedDropboxConfig: StoredDropboxWorkspaceConfig | null;
   storedLocalWorkspace: StoredLocalWorkspaceRecord | null;
-  workspaceBackend: WorkspaceBackend | null;
+  workspaceRuntime: WorkspaceRuntime | null;
 };
 
 export function useWorkspaceOpeners({
   clearDropboxAccessToken,
-  createDropboxBackend,
+  createDropboxRuntime,
   documentTargetGenerationRef,
   folderAccessUnavailableMessage,
   loadTree,
@@ -64,10 +64,10 @@ export function useWorkspaceOpeners({
   setErrorMessage,
   setRetryLoadPath,
   setSidebarOpen,
-  setWorkspaceBackend,
+  replaceWorkspaceRuntime,
   storedDropboxConfig,
   storedLocalWorkspace,
-  workspaceBackend,
+  workspaceRuntime,
 }: UseWorkspaceOpenersOptions) {
   let openWorkspace = useCallback(async () => {
     setErrorMessage("");
@@ -88,11 +88,11 @@ export function useWorkspaceOpeners({
         return;
       }
       let record = await rememberWorkspaceHandle(handle);
-      let backend = createLocalWorkspaceBackend(handle, record.id);
+      let runtime = await createBrowserLocalWorkspaceRuntime({ handle, workspaceId: record.id });
       clearDropboxAccessToken();
-      setWorkspaceBackend(backend);
+      await replaceWorkspaceRuntime(runtime);
       setSidebarOpen(defaultSidebarOpen());
-      await loadTree(backend, loadWorkspaceSelectedPath(backend));
+      await loadTree(runtime, loadWorkspaceSelectedPath(runtime.identity));
     } catch (error) {
       if (!isAbortError(error)) setErrorMessage(errorToMessage(error));
     } finally {
@@ -109,7 +109,7 @@ export function useWorkspaceOpeners({
     setErrorMessage,
     setRetryLoadPath,
     setSidebarOpen,
-    setWorkspaceBackend,
+    replaceWorkspaceRuntime,
   ]);
 
   let openDropboxWorkspace = useCallback(
@@ -129,17 +129,17 @@ export function useWorkspaceOpeners({
       setDropboxConnecting(true);
 
       try {
-        let backend = await createDropboxBackend(config);
-        setWorkspaceBackend(backend);
+        let runtime = await createDropboxRuntime(config);
+        await replaceWorkspaceRuntime(runtime);
         setSidebarOpen(defaultSidebarOpen());
         await loadTree(
-          backend,
-          options.restoreDraft?.selectedPath ?? loadWorkspaceSelectedPath(backend),
+          runtime,
+          options.restoreDraft?.selectedPath ?? loadWorkspaceSelectedPath(runtime.identity),
           {
             saveBeforeSelect: false,
           },
         );
-        if (options.restoreDraft) restoreCloudRedirectEditorDraft(backend, options.restoreDraft);
+        if (options.restoreDraft) restoreCloudRedirectEditorDraft(runtime, options.restoreDraft);
         return true;
       } catch (error) {
         setErrorMessage(errorToMessage(error));
@@ -151,7 +151,7 @@ export function useWorkspaceOpeners({
       }
     },
     [
-      createDropboxBackend,
+      createDropboxRuntime,
       documentTargetGenerationRef,
       loadTree,
       restoreCloudRedirectEditorDraft,
@@ -161,7 +161,7 @@ export function useWorkspaceOpeners({
       setErrorMessage,
       setRetryLoadPath,
       setSidebarOpen,
-      setWorkspaceBackend,
+      replaceWorkspaceRuntime,
     ],
   );
 
@@ -179,14 +179,16 @@ export function useWorkspaceOpeners({
         return;
       }
 
-      let backend = createLocalWorkspaceBackend(
-        storedLocalWorkspace.handle,
-        storedLocalWorkspace.id,
-      );
+      let runtime = await createBrowserLocalWorkspaceRuntime({
+        handle: storedLocalWorkspace.handle,
+        workspaceId: storedLocalWorkspace.id,
+      });
       clearDropboxAccessToken();
-      setWorkspaceBackend(backend);
+      await replaceWorkspaceRuntime(runtime);
       setSidebarOpen(defaultSidebarOpen());
-      await loadTree(backend, loadWorkspaceSelectedPath(backend), { saveBeforeSelect: false });
+      await loadTree(runtime, loadWorkspaceSelectedPath(runtime.identity), {
+        saveBeforeSelect: false,
+      });
     } catch (error) {
       setErrorMessage(errorToMessage(error));
       setRetryLoadPath(null);
@@ -201,7 +203,7 @@ export function useWorkspaceOpeners({
     setErrorMessage,
     setRetryLoadPath,
     setSidebarOpen,
-    setWorkspaceBackend,
+    replaceWorkspaceRuntime,
     storedLocalWorkspace,
   ]);
 
@@ -222,7 +224,7 @@ export function useWorkspaceOpeners({
   }, [openDropboxWorkspace, setErrorMessage, setRetryLoadPath, storedDropboxConfig]);
 
   let refreshWorkspace = useCallback(async () => {
-    if (!workspaceBackend) return;
+    if (!workspaceRuntime) return;
 
     documentTargetGenerationRef.current += 1;
     if (!(await saveCurrentFile())) return;
@@ -230,7 +232,7 @@ export function useWorkspaceOpeners({
     setErrorMessage("");
     setRetryLoadPath(null);
     try {
-      await refreshWorkspaceForCurrentEditor(workspaceBackend);
+      await refreshWorkspaceForCurrentEditor(workspaceRuntime);
     } catch (error) {
       setErrorMessage(errorToMessage(error));
       setRetryLoadPath(null);
@@ -244,7 +246,7 @@ export function useWorkspaceOpeners({
     setBusy,
     setErrorMessage,
     setRetryLoadPath,
-    workspaceBackend,
+    workspaceRuntime,
   ]);
 
   return {

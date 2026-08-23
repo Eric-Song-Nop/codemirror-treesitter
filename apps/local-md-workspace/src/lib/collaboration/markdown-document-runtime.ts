@@ -3,7 +3,13 @@ import type { LiveMdConfig } from "@codemirror-treesitter/live-md";
 import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import type { Frontiers } from "loro-crdt";
 import { createDebouncedTask, type DebouncedTask } from "@/lib/scheduling/debounced-task";
-import type { WorkspaceBackend } from "@/lib/workspace-backend";
+import type { SourceObservation } from "@/lib/storage/types";
+import type {
+  DocumentSourceState,
+  WorkspaceIdentity,
+  WorkspaceRuntime,
+  WorkspaceTextSnapshot,
+} from "@/lib/workspace-runtime/types";
 import {
   documentSourceAliasRefs,
   documentSourceDocumentIdInput,
@@ -44,6 +50,7 @@ export type CollabDocumentState = {
   pendingUpdates: Uint8Array[];
   persistence: Promise<void>;
   snapshotFlush: DebouncedTask;
+  source: DocumentSourceState;
   sourceState: CollabSourceState;
   undoManager: UndoManager;
   value: string;
@@ -55,6 +62,9 @@ export type CollabExternalEditResolution = {
 };
 
 export type CollabSourceState =
+  | {
+      kind: "blocked";
+    }
   | {
       kind: "needs-write";
     }
@@ -85,6 +95,10 @@ export type MaterializeCollabDocumentResult = {
 type AcknowledgeCollabDocumentSourceSavedOptions = {
   externalEdit?: CollabExternalEditResolution;
   frontiers?: SerializedCollabFrontier[];
+  source?: {
+    contentHash: string;
+    revision: import("@/lib/storage/types").SourceRevision;
+  };
   versionVector?: SerializedCollabVersionVector;
 };
 
@@ -98,6 +112,7 @@ type SourceImportOutcome = {
   externalEdit?: CollabExternalEditResolution;
   metadata: BrowserCollabDocumentMetadata;
   sourceState: CollabSourceState;
+  source: DocumentSourceState;
   update: Uint8Array | null;
   value: string;
 };
@@ -108,19 +123,23 @@ type StoredCollabDocumentCandidate = BrowserCollabDocumentState & {
   snapshot: Uint8Array;
 };
 
+export type CollabDocumentSource = Pick<WorkspaceRuntime, "documents" | "identity">;
+
 export async function openMarkdownCollabDocument(
-  backend: WorkspaceBackend,
+  backend: CollabDocumentSource,
   path: string,
   options: OpenMarkdownCollabDocumentOptions = {},
 ): Promise<CollabDocumentState> {
-  let sourceRef = documentSourceRef(backend, path);
+  let identity = backend.identity;
+  let sourceRef = documentSourceRef(identity, path);
   let docId = await createDocumentIdForSourceRef(sourceRef);
   let workspaceId = sourceRef.workspaceNamespace;
-  let stored = await loadStoredCollabDocumentCandidate(backend, path, sourceRef, docId);
+  let stored = await loadStoredCollabDocumentCandidate(identity, path, sourceRef, docId);
   let doc = new LoroDoc();
   let undoManager: UndoManager | null = null;
   let externalEdit: CollabExternalEditResolution | undefined;
   let sourceState: CollabSourceState = { kind: "synced" };
+  let source: DocumentSourceState;
   let metadata: BrowserCollabDocumentMetadata;
 
   try {
@@ -129,14 +148,21 @@ export async function openMarkdownCollabDocument(
       doc.import(stored.snapshot);
       if (stored.updates.length) doc.importBatch(stored.updates);
       if (options.reconcileExternalEdits ?? true) {
-        let result = await reconcileExternalMarkdownEdit(backend, metadata, doc);
+        let observation = await observeCollabSource(backend, path);
+        let result = await reconcileExternalMarkdownObservation(observation, metadata, doc);
         externalEdit = result.externalEdit;
         metadata = result.metadata;
+        source = result.source;
         sourceState = result.sourceState;
+      } else {
+        source = sourceStateFromMetadata(metadata);
       }
       if (stored.migratedFromAlias) await compactDocumentSnapshot(metadata, doc);
     } else {
-      let initialValue = await backend.readFile(path);
+      let observation = await observeCollabSource(backend, path);
+      if (observation.state == "missing") throw new Error(`${path} does not exist.`);
+      if (observation.state == "unavailable") throw observation.error;
+      let initialValue = observation.value.value;
       let text = doc.getText(textKey);
       try {
         if (initialValue) text.insert(0, initialValue);
@@ -147,10 +173,12 @@ export async function openMarkdownCollabDocument(
       metadata = {
         docId,
         path,
+        ...sourceMetadataFields(observation.value),
         workspaceId,
         ...currentDocumentMaterializationFields(doc, initialValue),
       };
       await compactDocumentSnapshot(metadata, doc);
+      source = presentSourceState(observation.value);
     }
 
     let ownedUndoManager = new UndoManager(doc, {});
@@ -208,6 +236,7 @@ export async function openMarkdownCollabDocument(
       pendingUpdates,
       persistence: Promise.resolve(),
       snapshotFlush,
+      source,
       sourceState,
       undoManager: ownedUndoManager,
       value,
@@ -221,7 +250,7 @@ export async function openMarkdownCollabDocument(
 }
 
 async function loadStoredCollabDocumentCandidate(
-  backend: WorkspaceBackend,
+  backend: WorkspaceIdentity,
   path: string,
   sourceRef: DocumentSourceRef,
   docId: string,
@@ -286,7 +315,7 @@ export function collabDocumentNeedsSourceWrite(state: CollabDocumentState) {
 }
 
 export async function saveCollabDocumentSnapshot(
-  _backend: WorkspaceBackend,
+  _backend: CollabDocumentSource,
   state: CollabDocumentState,
 ) {
   state.snapshotFlush.cancel();
@@ -317,7 +346,7 @@ async function writeCollabDocumentSnapshot(state: CollabDocumentState) {
 }
 
 export async function savePendingCollabDocumentUpdates(
-  _backend: WorkspaceBackend,
+  _backend: CollabDocumentSource,
   state: CollabDocumentState,
 ) {
   if (!state.pendingUpdates.length) return;
@@ -365,29 +394,53 @@ async function appendPendingCollabDocumentUpdates(state: CollabDocumentState) {
 }
 
 export async function materializeCollabDocument(
-  backend: WorkspaceBackend,
+  backend: CollabDocumentSource,
   state: CollabDocumentState,
 ): Promise<MaterializeCollabDocumentResult> {
   let sourceImport = await ingestExternalMarkdownEdit(backend, state);
   let materialization = captureCollabDocumentMaterialization(state);
   await saveCollabDocumentSnapshot(backend, state);
-  await backend.writeFile(state.path, materialization.value);
+  if (state.source.kind != "present") {
+    throw new Error(`The source for ${state.path} must be reconciled before materialization.`);
+  }
+  let result = await backend.documents.commit({
+    condition: { kind: "if-unchanged", revision: state.source.baseline.revision },
+    path: state.path,
+    value: materialization.value,
+  });
+  if (result.status != "committed") {
+    throw new Error(`Workspace materialization for ${state.path} ended with ${result.status}.`);
+  }
+  let committed = await backend.documents.observe(state.path);
+  if (committed.state != "present" || committed.value.value != materialization.value) {
+    throw new Error(`Workspace materialization for ${state.path} could not be verified.`);
+  }
   await acknowledgeCollabDocumentSourceSaved(backend, state, materialization.value, {
     externalEdit: sourceImport?.externalEdit,
     frontiers: materialization.frontiers,
+    source: {
+      contentHash: committed.value.contentHash,
+      revision: committed.value.revision,
+    },
     versionVector: materialization.versionVector,
   });
   return { externalEdit: sourceImport?.externalEdit };
 }
 
 export async function acknowledgeCollabDocumentSourceSaved(
-  _backend: WorkspaceBackend,
+  _backend: CollabDocumentSource,
   state: CollabDocumentState,
   value = getCollabDocumentValue(state),
   options: AcknowledgeCollabDocumentSourceSavedOptions = {},
 ) {
   state.metadata = {
     ...state.metadata,
+    ...(options.source
+      ? {
+          sourceContentHash: options.source.contentHash,
+          sourceRevision: options.source.revision,
+        }
+      : null),
     ...sourceCheckpointFields(
       value,
       options.frontiers ?? serializeFrontiers(state.doc.frontiers()),
@@ -398,6 +451,9 @@ export async function acknowledgeCollabDocumentSourceSaved(
   state.cleanValue = value;
   state.externalEdit = options.externalEdit;
   state.sourceState = { kind: "synced" };
+  if (options.source) {
+    state.source = { baseline: options.source, kind: "present" };
+  }
   state.value = value;
 }
 
@@ -414,12 +470,20 @@ export function captureCollabDocumentMaterialization(
 }
 
 export async function ingestExternalMarkdownEdit(
-  backend: WorkspaceBackend,
+  source: CollabDocumentSource,
   state: CollabDocumentState,
-  sourceValue?: string,
 ): Promise<CollabSourceImportResult | null> {
-  let outcome = await importExternalMarkdownEdit(backend, state.metadata, state.doc, sourceValue);
+  let observation = await observeCollabSource(source, state.path);
+  return ingestExternalMarkdownObservation(state, observation);
+}
+
+export async function ingestExternalMarkdownObservation(
+  state: CollabDocumentState,
+  observation: SourceObservation<WorkspaceTextSnapshot>,
+): Promise<CollabSourceImportResult | null> {
+  let outcome = await importExternalMarkdownObservation(observation, state.metadata, state.doc);
   state.metadata = outcome.metadata;
+  state.source = outcome.source;
   state.sourceState = outcome.sourceState;
   state.value = outcome.value;
 
@@ -433,33 +497,58 @@ export async function ingestExternalMarkdownEdit(
   };
 }
 
-async function reconcileExternalMarkdownEdit(
-  backend: WorkspaceBackend,
+async function reconcileExternalMarkdownObservation(
+  observation: SourceObservation<WorkspaceTextSnapshot>,
   metadata: BrowserCollabDocumentMetadata,
   doc: LoroDoc,
 ): Promise<{
   externalEdit?: CollabExternalEditResolution;
   metadata: BrowserCollabDocumentMetadata;
+  source: DocumentSourceState;
   sourceState: CollabSourceState;
 }> {
-  let outcome = await importExternalMarkdownEdit(backend, metadata, doc);
+  let outcome = await importExternalMarkdownObservation(observation, metadata, doc);
   if (outcome.metadata != metadata || outcome.externalEdit) {
     await compactDocumentSnapshot(outcome.metadata, doc);
   }
   return {
     externalEdit: outcome.externalEdit,
     metadata: outcome.metadata,
+    source: outcome.source,
     sourceState: outcome.sourceState,
   };
 }
 
-async function importExternalMarkdownEdit(
-  backend: WorkspaceBackend,
+async function importExternalMarkdownObservation(
+  observation: SourceObservation<WorkspaceTextSnapshot>,
   metadata: BrowserCollabDocumentMetadata,
   doc: LoroDoc,
-  sourceValue?: string,
 ): Promise<SourceImportOutcome> {
-  let visibleValue = sourceValue ?? (await backend.readFile(metadata.path));
+  if (observation.state == "missing") {
+    return {
+      metadata,
+      source: { kind: "missing", lastPresent: baselineFromMetadata(metadata) },
+      sourceState: { kind: "blocked" },
+      update: null,
+      value: readMarkdownText(doc),
+    };
+  }
+  if (observation.state == "unavailable") {
+    return {
+      metadata,
+      source: {
+        error: observation.error,
+        kind: "unavailable",
+        lastPresent: baselineFromMetadata(metadata),
+      },
+      sourceState: { kind: "blocked" },
+      update: null,
+      value: readMarkdownText(doc),
+    };
+  }
+
+  let snapshot = observation.value;
+  let visibleValue = snapshot.value;
   let visibleHash = hashMarkdownText(visibleValue);
   let currentValue = readMarkdownText(doc);
   let currentHash = hashMarkdownText(currentValue);
@@ -469,7 +558,9 @@ async function importExternalMarkdownEdit(
       metadata: {
         ...metadata,
         ...currentDocumentMaterializationFields(doc, visibleValue),
+        ...sourceMetadataFields(snapshot),
       },
+      source: presentSourceState(snapshot),
       sourceState: { kind: "synced" },
       update: null,
       value: currentValue,
@@ -478,7 +569,8 @@ async function importExternalMarkdownEdit(
 
   if (visibleHash == metadata.materializedHash) {
     return {
-      metadata,
+      metadata: { ...metadata, ...sourceMetadataFields(snapshot) },
+      source: presentSourceState(snapshot),
       sourceState: sourceStateForSourceValue(currentValue, visibleValue),
       update: null,
       value: currentValue,
@@ -502,12 +594,14 @@ async function importExternalMarkdownEdit(
               serializeFrontiers(fork.frontiers()),
               serializeCurrentVersion(fork),
             ),
+            ...sourceMetadataFields(snapshot),
           };
           if (update.byteLength) doc.import(update);
           let value = readMarkdownText(doc);
           return {
             externalEdit: { kind: "imported", path: metadata.path },
             metadata: nextMetadata,
+            source: presentSourceState(snapshot),
             sourceState: sourceStateForSourceValue(value, visibleValue),
             update: update.byteLength ? new Uint8Array(update) : null,
             value,
@@ -539,7 +633,9 @@ async function importExternalMarkdownEdit(
         metadata: {
           ...metadata,
           ...currentDocumentMaterializationFields(doc, visibleValue),
+          ...sourceMetadataFields(snapshot),
         },
+        source: presentSourceState(snapshot),
         sourceState: { kind: "synced" },
         update: update.byteLength ? new Uint8Array(update) : null,
         value: readMarkdownText(doc),
@@ -549,23 +645,99 @@ async function importExternalMarkdownEdit(
     }
   }
 
-  let fromVersion = doc.oplogVersion();
-  try {
-    replaceMarkdownText(doc, visibleValue);
-    let update = doc.export({ mode: "update", from: fromVersion });
-    return {
-      externalEdit: { kind: "imported", path: metadata.path },
-      metadata: {
-        ...metadata,
-        ...currentDocumentMaterializationFields(doc, visibleValue),
+  return {
+    metadata,
+    source: {
+      incoming: snapshot,
+      kind: "recovery-required",
+      lastPresent: baselineFromMetadata(metadata) ?? {
+        contentHash: `legacy:${metadata.materializedHash}`,
+        revision: {
+          kind: "fingerprint",
+          validation: "observed",
+          value: `legacy-checkpoint:${metadata.materializedHash}`,
+        },
       },
-      sourceState: { kind: "synced" },
-      update: update.byteLength ? new Uint8Array(update) : null,
-      value: visibleValue,
+    },
+    sourceState: { kind: "blocked" },
+    update: null,
+    value: currentValue,
+  };
+}
+
+export async function resolveCollabRecoveryUseExternal(
+  state: CollabDocumentState,
+  snapshot: WorkspaceTextSnapshot,
+  confirmedIncomingRevision: import("@/lib/storage/types").SourceRevision,
+) {
+  if (state.source.kind != "recovery-required") {
+    throw new Error("The document is not awaiting external-source recovery.");
+  }
+  if (!sameSourceRevision(snapshot.revision, confirmedIncomingRevision)) {
+    return { status: "incoming-changed" as const };
+  }
+
+  let fromVersion = state.doc.oplogVersion();
+  try {
+    replaceMarkdownText(state.doc, snapshot.value);
+    let update = state.doc.export({ mode: "update", from: fromVersion });
+    state.metadata = {
+      ...state.metadata,
+      ...currentDocumentMaterializationFields(state.doc, snapshot.value),
+      ...sourceMetadataFields(snapshot),
     };
+    state.source = presentSourceState(snapshot);
+    state.sourceState = { kind: "synced" };
+    state.cleanValue = snapshot.value;
+    state.value = snapshot.value;
+    state.externalEdit = { kind: "imported", path: state.path };
+    if (update.byteLength) state.pendingUpdates.push(new Uint8Array(update));
+    await compactDocumentSnapshot(state.metadata, state.doc);
+    return { status: "applied" as const, update: new Uint8Array(update) };
   } finally {
     fromVersion.free();
   }
+}
+
+function observeCollabSource(
+  source: CollabDocumentSource,
+  path: string,
+): Promise<SourceObservation<WorkspaceTextSnapshot>> {
+  return source.documents.observe(path);
+}
+
+function sourceMetadataFields(snapshot: WorkspaceTextSnapshot) {
+  return {
+    sourceContentHash: snapshot.contentHash,
+    sourceRevision: snapshot.revision,
+  };
+}
+
+function presentSourceState(snapshot: WorkspaceTextSnapshot): DocumentSourceState {
+  return {
+    baseline: { contentHash: snapshot.contentHash, revision: snapshot.revision },
+    kind: "present",
+  };
+}
+
+function sourceStateFromMetadata(metadata: BrowserCollabDocumentMetadata): DocumentSourceState {
+  let baseline = baselineFromMetadata(metadata);
+  return baseline ? { baseline, kind: "present" } : { kind: "missing" };
+}
+
+function baselineFromMetadata(metadata: BrowserCollabDocumentMetadata) {
+  return metadata.sourceContentHash && metadata.sourceRevision
+    ? { contentHash: metadata.sourceContentHash, revision: metadata.sourceRevision }
+    : undefined;
+}
+
+function sameSourceRevision(
+  left: import("@/lib/storage/types").SourceRevision,
+  right: import("@/lib/storage/types").SourceRevision,
+) {
+  return (
+    left.kind == right.kind && left.validation == right.validation && left.value == right.value
+  );
 }
 
 function sourceCheckpointFromMetadata(metadata: BrowserCollabDocumentMetadata): SourceCheckpoint {

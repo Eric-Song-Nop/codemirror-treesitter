@@ -1,3 +1,5 @@
+import type { SourceRevision } from "../storage/types.ts";
+
 const dbName = "local-md-workspace-collab";
 const dbVersion = 1;
 const documentStoreName = "documents";
@@ -14,6 +16,8 @@ export type BrowserCollabDocumentMetadata = {
   materializedValue: string;
   materializedVersionVector: SerializedCollabVersionVector;
   path: string;
+  sourceContentHash?: string;
+  sourceRevision?: SourceRevision;
   workspaceId: string;
 };
 
@@ -235,8 +239,22 @@ function metadataFromRecord(record: StoredDocumentRecord): BrowserCollabDocument
     materializedValue: record.materializedValue,
     materializedVersionVector: record.materializedVersionVector,
     path: record.path,
+    sourceContentHash:
+      typeof record.sourceContentHash == "string" ? record.sourceContentHash : undefined,
+    sourceRevision: isSourceRevision(record.sourceRevision) ? record.sourceRevision : undefined,
     workspaceId: record.workspaceId,
   };
+}
+
+function isSourceRevision(value: unknown): value is SourceRevision {
+  if (!value || typeof value != "object") return false;
+  let revision = value as Partial<SourceRevision>;
+  return (
+    typeof revision.value == "string" &&
+    ((revision.kind == "etag" || revision.kind == "version") && revision.validation == "atomic"
+      ? true
+      : revision.kind == "fingerprint" && revision.validation == "observed")
+  );
 }
 
 function isSerializedFrontiers(value: unknown): value is SerializedCollabFrontier[] {

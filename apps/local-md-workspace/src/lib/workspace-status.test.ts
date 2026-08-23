@@ -4,7 +4,7 @@ import {
   dropboxRootLabel,
   dropboxTokenExpiryStatus,
 } from "./workspace-status.ts";
-import type { WorkspaceBackend } from "./workspace-backend.ts";
+import type { WorkspaceIdentity } from "./workspace-runtime/types.ts";
 
 describe("workspace provider status", () => {
   it("describes a local workspace", () => {
@@ -53,21 +53,10 @@ describe("workspace provider status", () => {
   });
 });
 
-function backend(kind: WorkspaceBackend["kind"]): WorkspaceBackend {
+function backend(kind: WorkspaceIdentity["kind"]): WorkspaceIdentity {
   return {
-    createFile: async () => "",
-    deleteFile: async () => {},
     id: kind,
     kind,
     name: kind,
-    readFile: async () => "",
-    readTree: async () => ({
-      children: [],
-      kind: "directory",
-      name: kind,
-      path: "",
-    }),
-    renameFile: async () => "",
-    writeFile: async () => {},
   };
 }

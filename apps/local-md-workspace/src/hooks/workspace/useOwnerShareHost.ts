@@ -18,9 +18,9 @@ import {
   readHostSecret,
 } from "@/lib/workspace/share-host";
 import type { ActiveOwnerShareRecord, SaveState } from "@/lib/workspace/types";
-import type { WorkspaceBackend } from "@/lib/workspace-backend";
 import type { DocumentSession } from "@/lib/workspace/document-session";
 import { documentSourceRef, sameDocumentSourceRef } from "@/lib/workspace/source-identity";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 type MutableRef<T> = {
   current: T;
@@ -71,14 +71,14 @@ export function useOwnerShareHost({
 
   let sendHostSaveAck = useCallback(
     (
-      backend: WorkspaceBackend,
+      runtime: WorkspaceRuntime,
       path: string,
       value: string,
       savedVersion: SerializedCollabVersionVector,
     ) => {
       let record = shareHostRecordRef.current;
       let connection = shareHostConnectionRef.current;
-      if (!record || !connection || !isOwnerShareSource(record, backend, path)) return;
+      if (!record || !connection || !isOwnerShareSource(record, runtime, path)) return;
 
       let materializedHash = hashMarkdownText(value);
       connection.enqueueHostSaveAck(
@@ -101,19 +101,19 @@ export function useOwnerShareHost({
   );
 
   let sendHostDocumentUpdate = useCallback(
-    (backend: WorkspaceBackend, path: string, update: Uint8Array | null) => {
+    (runtime: WorkspaceRuntime, path: string, update: Uint8Array | null) => {
       if (!update?.byteLength) return;
       let record = shareHostRecordRef.current;
       let connection = shareHostConnectionRef.current;
-      if (!record || !connection || !isOwnerShareSource(record, backend, path)) return;
+      if (!record || !connection || !isOwnerShareSource(record, runtime, path)) return;
       connection.enqueueDocumentUpdate(update);
     },
     [],
   );
 
-  let isOwnerShareHostPath = useCallback((backend: WorkspaceBackend, path: string) => {
+  let isOwnerShareHostPath = useCallback((runtime: WorkspaceRuntime, path: string) => {
     let record = shareHostRecordRef.current;
-    return record ? isOwnerShareSource(record, backend, path) : false;
+    return record ? isOwnerShareSource(record, runtime, path) : false;
   }, []);
 
   let startOwnerShareHost = useCallback(
@@ -230,6 +230,6 @@ export function useOwnerShareHost({
   };
 }
 
-function isOwnerShareSource(record: OwnerShareRecord, backend: WorkspaceBackend, path: string) {
-  return sameDocumentSourceRef(record.sourceRef, documentSourceRef(backend, path));
+function isOwnerShareSource(record: OwnerShareRecord, runtime: WorkspaceRuntime, path: string) {
+  return sameDocumentSourceRef(record.sourceRef, documentSourceRef(runtime.identity, path));
 }

@@ -10,10 +10,9 @@ import {
   normalizeMarkdownPath,
   normalizeWorkspaceCreateTarget,
   starterMarkdown,
-  writeNewWorkspaceFile,
-} from "./workspace-backend.ts";
+} from "./workspace-tree.ts";
 
-describe("workspace backend path helpers", () => {
+describe("workspace tree and path helpers", () => {
   it("normalizes user-provided Markdown paths", () => {
     expect(normalizeMarkdownPath(" notes\\daily ")).toBe("notes/daily.md");
     expect(normalizeMarkdownPath("notes/README.MD")).toBe("notes/README.MD");
@@ -49,27 +48,6 @@ describe("workspace backend path helpers", () => {
   it("creates starter Markdown from the normalized path", () => {
     expect(starterMarkdown("notes/daily-note.md")).toBe("# daily note\n");
     expect(starterMarkdown("notes/_draft.md")).toBe("# draft\n");
-  });
-
-  it("writes Save As targets with atomic no-clobber semantics", async () => {
-    let writes: unknown[] = [];
-    await writeNewWorkspaceFile(
-      {
-        async writeFile(path, value, options) {
-          writes.push({ options, path, value });
-        },
-      },
-      "notes/new.md",
-      "# saved\n",
-    );
-
-    expect(writes).toEqual([
-      {
-        options: { ifNotExists: true },
-        path: "notes/new.md",
-        value: "# saved\n",
-      },
-    ]);
   });
 
   it("synthesizes a sorted Markdown tree from backend paths", () => {

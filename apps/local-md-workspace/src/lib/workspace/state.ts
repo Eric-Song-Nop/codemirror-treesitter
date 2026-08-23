@@ -5,7 +5,8 @@ import {
   type StoredLocalWorkspaceRecord,
   type StoredWorkspaceSelectedPathContext,
 } from "@/lib/workspace-store";
-import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import type { MarkdownFileNode } from "@/lib/workspace-tree";
+import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
 import type { SaveState, SingleFileSource } from "@/lib/workspace/types";
 
 export function saveStateLabel(
@@ -40,17 +41,17 @@ export function createEphemeralLocalWorkspaceRecord(
 }
 
 export function workspaceSelectedPathContext(
-  backend: WorkspaceBackend,
+  identity: WorkspaceIdentity,
 ): StoredWorkspaceSelectedPathContext | null {
-  if (backend.kind == "local") return { kind: "local", workspaceId: backend.id };
-  if (backend.kind == "opendal-dropbox") return { kind: "dropbox", workspaceId: backend.id };
-  if (backend.kind == "opendal-gdrive") return { kind: "gdrive", workspaceId: backend.id };
-  if (backend.kind == "opendal-onedrive") return { kind: "onedrive", workspaceId: backend.id };
+  if (identity.kind == "local") return { kind: "local", workspaceId: identity.id };
+  if (identity.kind == "opendal-dropbox") return { kind: "dropbox", workspaceId: identity.id };
+  if (identity.kind == "opendal-gdrive") return { kind: "gdrive", workspaceId: identity.id };
+  if (identity.kind == "opendal-onedrive") return { kind: "onedrive", workspaceId: identity.id };
   return null;
 }
 
-export function loadWorkspaceSelectedPath(backend: WorkspaceBackend) {
-  let context = workspaceSelectedPathContext(backend);
+export function loadWorkspaceSelectedPath(identity: WorkspaceIdentity) {
+  let context = workspaceSelectedPathContext(identity);
   return context ? loadStoredWorkspaceSelectedPath(context) : null;
 }
 

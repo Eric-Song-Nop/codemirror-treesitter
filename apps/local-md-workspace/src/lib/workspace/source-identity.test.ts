@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { WorkspaceBackend, WorkspaceBackendKind } from "@/lib/workspace-backend";
+import type { WorkspaceStorageKind } from "@/lib/storage/types";
+import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
 import {
   collabBroadcastChannelName,
   documentSourceAliasRefs,
@@ -10,7 +11,7 @@ import {
   localWorkspaceSourceAliases,
   sameDocumentSourceRef,
   workspaceNamespace,
-  workspaceSourceCapabilities,
+  workspaceCanHostOwnerShare,
   workspaceSourceIdentity,
 } from "./source-identity.ts";
 
@@ -56,24 +57,11 @@ describe("workspace source identity", () => {
     );
   });
 
-  it("marks remote source capabilities without treating share as a backend", () => {
-    let gdrive = workspaceSourceCapabilities(fakeBackend("opendal-gdrive", "gdrive:workspace-1"));
-    let s3 = workspaceSourceCapabilities(fakeBackend("opendal-s3", "s3:workspace-1"));
-
-    expect(gdrive).toMatchObject({
-      canHostOwnerShare: true,
-      canWrite: true,
-      isRemote: true,
-      supportsConditionalWrite: false,
-      supportsRevision: false,
-      supportsStableFileId: false,
-      supportsStat: true,
-    });
-    expect(s3).toMatchObject({
-      canHostOwnerShare: false,
-      canWrite: false,
-      isRemote: true,
-    });
+  it("keeps owner-share policy on workspace identity", () => {
+    expect(workspaceCanHostOwnerShare(fakeBackend("opendal-gdrive", "gdrive:workspace-1"))).toBe(
+      true,
+    );
+    expect(workspaceCanHostOwnerShare(fakeBackend("opendal-s3", "s3:workspace-1"))).toBe(false);
   });
 
   it("carries optional source revision and file id metadata", () => {
@@ -127,32 +115,15 @@ describe("workspace source identity", () => {
 });
 
 function fakeBackend(
-  kind: WorkspaceBackendKind,
+  kind: WorkspaceStorageKind,
   id: string,
   name = "Workspace",
-  sourceAliases: WorkspaceBackend["sourceAliases"] = [],
-): WorkspaceBackend {
+  sourceAliases: WorkspaceIdentity["sourceAliases"] = [],
+): WorkspaceIdentity {
   return {
     id,
     kind,
     name,
     sourceAliases,
-    createFile: async () => null,
-    deleteFile: async () => {},
-    readFile: async () => "",
-    readTree: async () => ({
-      children: [],
-      kind: "directory",
-      name: "Workspace",
-      path: "",
-    }),
-    renameFile: async (_path, rawName) => rawName,
-    stat: async (path) => ({
-      exists: true,
-      isDirectory: false,
-      isFile: true,
-      path,
-    }),
-    writeFile: async () => {},
   };
 }

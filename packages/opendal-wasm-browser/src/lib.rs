@@ -1,7 +1,16 @@
 use opendal::services::{Dropbox, Gdrive, Onedrive, S3};
 use opendal::{Entry, Metadata, Operator};
+#[cfg(target_arch = "wasm32")]
+use opendal::OperatorBuilder;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
+use web_sys::FileSystemDirectoryHandle;
+
+#[cfg(target_arch = "wasm32")]
+mod browser_local;
+
+#[cfg(target_arch = "wasm32")]
+use browser_local::BrowserLocalAccess;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +44,9 @@ struct OpendalBrowserCapabilities {
     native_copy: bool,
     native_create_dir: bool,
     native_delete: bool,
+    native_delete_with_recursive: bool,
     native_list: bool,
+    native_list_with_recursive: bool,
     native_read: bool,
     native_rename: bool,
     native_stat: bool,
@@ -61,15 +72,30 @@ struct OpendalBrowserEntry {
     version: Option<String>,
 }
 
-#[derive(Serialize)]
-struct OpendalBrowserReadTextResult {
-    entry: OpendalBrowserEntry,
-    value: String,
-}
-
 #[wasm_bindgen(js_name = OpendalBrowserOperator)]
 pub struct WasmOpendalBrowserOperator {
     operator: Operator,
+}
+
+#[wasm_bindgen(js_name = openBrowserLocalOperator)]
+#[cfg(target_arch = "wasm32")]
+pub fn open_browser_local_operator(
+    root_handle: FileSystemDirectoryHandle,
+) -> Result<WasmOpendalBrowserOperator, JsValue> {
+    set_panic_hook();
+    Ok(WasmOpendalBrowserOperator {
+        operator: OperatorBuilder::new(BrowserLocalAccess::new(root_handle)).finish(),
+    })
+}
+
+#[wasm_bindgen(js_name = openBrowserLocalOperator)]
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_browser_local_operator(
+    _root_handle: FileSystemDirectoryHandle,
+) -> Result<WasmOpendalBrowserOperator, JsValue> {
+    Err(js_error(
+        "browser-local OpenDAL is available only in WebAssembly builds",
+    ))
 }
 
 #[wasm_bindgen(js_class = OpendalBrowserOperator)]
@@ -208,7 +234,9 @@ impl WasmOpendalBrowserOperator {
             native_copy: cap.copy,
             native_create_dir: cap.create_dir,
             native_delete: cap.delete,
+            native_delete_with_recursive: cap.delete_with_recursive,
             native_list: cap.list,
+            native_list_with_recursive: cap.list_with_recursive,
             native_read: cap.read,
             native_rename: cap.rename,
             native_stat: cap.stat,
@@ -232,31 +260,6 @@ impl WasmOpendalBrowserOperator {
         to_js_value(entries)
     }
 
-    #[wasm_bindgen(js_name = readText)]
-    pub async fn read_text(&self, path: String) -> Result<String, JsValue> {
-        let bytes = self
-            .operator
-            .read(&normalize_file_path(&path)?)
-            .await
-            .map_err(js_error)?;
-        String::from_utf8(bytes.to_vec()).map_err(js_error)
-    }
-
-    #[wasm_bindgen(js_name = readTextWithMetadata)]
-    pub async fn read_text_with_metadata(&self, path: String) -> Result<JsValue, JsValue> {
-        let path = normalize_file_path(&path)?;
-        let reader = self.operator.reader(&path).await.map_err(js_error)?;
-        let bytes = reader.read(..).await.map_err(js_error)?;
-        let metadata = reader.metadata().ok_or_else(|| {
-            js_error("OpenDAL read did not return metadata from the content snapshot.")
-        })?;
-        let value = String::from_utf8(bytes.to_vec()).map_err(js_error)?;
-        to_js_value(OpendalBrowserReadTextResult {
-            entry: metadata_to_payload(path, metadata),
-            value,
-        })
-    }
-
     #[wasm_bindgen(js_name = readBytes)]
     pub async fn read_bytes(&self, path: String) -> Result<Vec<u8>, JsValue> {
         let bytes = self
@@ -267,22 +270,34 @@ impl WasmOpendalBrowserOperator {
         Ok(bytes.to_vec())
     }
 
+    #[wasm_bindgen(js_name = readBytesWithMetadata)]
+    pub async fn read_bytes_with_metadata(&self, path: String) -> Result<JsValue, JsValue> {
+        let path = normalize_file_path(&path)?;
+        let reader = self.operator.reader(&path).await.map_err(js_error)?;
+        let bytes = reader.read(..).await.map_err(js_error)?;
+
+        let result = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &result,
+            &JsValue::from_str("bytes"),
+            &js_sys::Uint8Array::from(bytes.to_vec().as_slice()),
+        )?;
+        if let Some(metadata) = reader.metadata() {
+            js_sys::Reflect::set(
+                &result,
+                &JsValue::from_str("entry"),
+                &to_js_value(metadata_to_payload(path, metadata))?,
+            )?;
+        }
+        Ok(result.into())
+    }
+
     #[wasm_bindgen(js_name = createDir)]
     pub async fn create_dir(&self, path: String) -> Result<(), JsValue> {
         self.operator
             .create_dir(&normalize_dir_path(&path)?)
             .await
             .map_err(js_error)
-    }
-
-    #[wasm_bindgen(js_name = writeText)]
-    pub async fn write_text(
-        &self,
-        path: String,
-        value: String,
-        options: Option<JsValue>,
-    ) -> Result<JsValue, JsValue> {
-        write_operator_bytes(&self.operator, path, value.into_bytes(), options).await
     }
 
     #[wasm_bindgen(js_name = writeBytes)]
@@ -295,9 +310,10 @@ impl WasmOpendalBrowserOperator {
         write_operator_bytes(&self.operator, path, bytes, options).await
     }
 
-    pub async fn delete(&self, path: String) -> Result<(), JsValue> {
+    pub async fn delete(&self, path: String, recursive: Option<bool>) -> Result<(), JsValue> {
         self.operator
-            .delete(&normalize_delete_path(&path)?)
+            .delete_with(&normalize_delete_path(&path)?)
+            .recursive(recursive.unwrap_or(false))
             .await
             .map_err(js_error)
     }
@@ -484,7 +500,7 @@ mod tests {
     fn omitted_if_not_exists_defaults_to_false() {
         let options: OpendalBrowserWriteOptions =
             serde_json::from_value(serde_json::json!({ "ifMatch": "revision-1" }))
-                .expect("legacy ifMatch-only options must remain valid");
+                .expect("ifMatch-only options must remain valid");
 
         assert_eq!(options.if_match.as_deref(), Some("revision-1"));
         assert!(!options.if_not_exists);

@@ -1,48 +1,39 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { basename } from "pathe";
 import { workspaceQueryKeys } from "@/lib/workspace-query-keys";
-import { buildMarkdownDirectoryFromEntries, type WorkspaceBackend } from "@/lib/workspace-backend";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
-export function readWorkspaceTree(queryClient: QueryClient, backend: WorkspaceBackend) {
+export function readWorkspaceTree(queryClient: QueryClient, runtime: WorkspaceRuntime) {
   return queryClient.fetchQuery({
-    queryKey: workspaceQueryKeys.tree(backend),
-    queryFn: () => backend.readTree(),
+    queryKey: workspaceQueryKeys.tree(runtime.identity),
+    queryFn: () => runtime.tree.readTree(),
   });
 }
 
 export async function readWorkspaceDirectory(
   queryClient: QueryClient,
-  backend: WorkspaceBackend,
+  runtime: WorkspaceRuntime,
   path: string,
 ) {
-  if (!backend.listEntries) return null;
-
-  let entries = await queryClient.fetchQuery({
-    queryKey: workspaceQueryKeys.directory(backend, path),
-    queryFn: () => backend.listEntries!(path),
+  return queryClient.fetchQuery({
+    queryKey: workspaceQueryKeys.directory(runtime.identity, path),
+    queryFn: () =>
+      runtime.tree.readDirectory(path, path.split("/").at(-1) ?? runtime.identity.name),
   });
-  return buildMarkdownDirectoryFromEntries(directoryName(path, backend.name), path, entries);
 }
 
 export function readWorkspaceImageBytes(
   queryClient: QueryClient,
-  backend: WorkspaceBackend,
+  runtime: WorkspaceRuntime,
   path: string,
 ) {
-  if (!backend.readBytes) return Promise.resolve(null);
-
   return queryClient.fetchQuery({
-    queryKey: workspaceQueryKeys.image(backend, path),
-    queryFn: () => backend.readBytes!(path),
+    queryKey: workspaceQueryKeys.image(runtime.identity, path),
+    queryFn: () => runtime.assets.read(path),
   });
 }
 
-export function removeWorkspaceImageQueries(queryClient: QueryClient, backend: WorkspaceBackend) {
+export function removeWorkspaceImageQueries(queryClient: QueryClient, runtime: WorkspaceRuntime) {
   queryClient.removeQueries({
-    queryKey: workspaceQueryKeys.images(backend),
+    queryKey: workspaceQueryKeys.images(runtime.identity),
   });
-}
-
-function directoryName(path: string, rootName: string) {
-  return path ? basename(path) : rootName;
 }

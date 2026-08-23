@@ -1,19 +1,23 @@
-import type {
-  WorkspaceBackend,
-  WorkspaceBackendKind,
-  WorkspaceSourceAlias,
-  WorkspaceSourceRevision,
-} from "@/lib/workspace-backend";
+import type { WorkspaceStorageKind } from "@/lib/storage/types";
+import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
+
+export type WorkspaceSourceAlias = NonNullable<WorkspaceIdentity["sourceAliases"]>[number];
+export type WorkspaceSourceRevision = {
+  etag?: string;
+  version?: string;
+};
 
 export type WorkspaceSourceIdentity = {
   displayName: string;
-  kind: WorkspaceBackendKind;
+  kind: WorkspaceStorageKind;
   namespace: string;
   workspaceId: string;
 };
 
+export type WorkspaceIdentitySource = WorkspaceIdentity;
+
 export type DocumentSourceRef = {
-  backendKind: WorkspaceBackendKind;
+  backendKind: WorkspaceStorageKind;
   fileId?: string;
   path: string;
   revision?: WorkspaceSourceRevision;
@@ -21,31 +25,23 @@ export type DocumentSourceRef = {
   workspaceNamespace: string;
 };
 
-export type WorkspaceSourceCapabilities = {
-  canHostOwnerShare: boolean;
-  canWrite: boolean;
-  isRemote: boolean;
-  supportsConditionalWrite: boolean;
-  supportsRevision: boolean;
-  supportsStableFileId: boolean;
-  supportsStat: boolean;
-};
-
 export type DocumentSourceRefExtra = {
   fileId?: string;
   revision?: WorkspaceSourceRevision;
 };
 
-export function workspaceSourceIdentity(backend: WorkspaceBackend): WorkspaceSourceIdentity {
+export function workspaceSourceIdentity(
+  identity: WorkspaceIdentitySource,
+): WorkspaceSourceIdentity {
   return {
-    displayName: backend.name,
-    kind: backend.kind,
-    namespace: workspaceNamespace(backend),
-    workspaceId: backend.id,
+    displayName: identity.name,
+    kind: identity.kind,
+    namespace: workspaceNamespace(identity),
+    workspaceId: identity.id,
   };
 }
 
-export function workspaceNamespace(source: WorkspaceBackend | WorkspaceSourceIdentity) {
+export function workspaceNamespace(source: WorkspaceIdentitySource | WorkspaceSourceIdentity) {
   if ("namespace" in source) return source.namespace;
   return workspaceNamespaceFromParts(source.kind, source.id);
 }
@@ -68,13 +64,13 @@ export function localWorkspaceSourceAliases(
   return alias.namespace == workspaceNamespaceFromParts("local", currentWorkspaceId) ? [] : [alias];
 }
 
-export function workspaceSourceAliases(backend: WorkspaceBackend): WorkspaceSourceAlias[] {
-  let currentNamespace = workspaceNamespace(backend);
+export function workspaceSourceAliases(identity: WorkspaceIdentitySource): WorkspaceSourceAlias[] {
+  let currentNamespace = workspaceNamespace(identity);
   let seen = new Set([currentNamespace]);
   let aliases: WorkspaceSourceAlias[] = [];
 
-  for (let alias of backend.sourceAliases ?? []) {
-    if (alias.kind != backend.kind) continue;
+  for (let alias of identity.sourceAliases ?? []) {
+    if (alias.kind != identity.kind) continue;
     if (!alias.namespace || !alias.workspaceId || seen.has(alias.namespace)) continue;
     seen.add(alias.namespace);
     aliases.push(alias);
@@ -83,34 +79,20 @@ export function workspaceSourceAliases(backend: WorkspaceBackend): WorkspaceSour
   return aliases;
 }
 
-export function workspaceSourceCapabilities(
-  backend: WorkspaceBackend,
-): WorkspaceSourceCapabilities {
-  let canWrite = isWritableSourceKind(backend.kind) && typeof backend.writeFile == "function";
-  let isRemote = isRemoteSourceKind(backend.kind);
-  let supportsStat = typeof backend.stat == "function";
-
-  return {
-    canHostOwnerShare: canWrite && canOwnerHostShareKind(backend.kind),
-    canWrite,
-    isRemote,
-    supportsConditionalWrite: supportsConditionalWriteKind(backend.kind),
-    supportsRevision: supportsStat && supportsRevisionKind(backend.kind),
-    supportsStableFileId: supportsStableFileIdKind(backend.kind),
-    supportsStat,
-  };
+export function workspaceCanHostOwnerShare(identity: WorkspaceIdentitySource) {
+  return identity.kind != "opendal-s3";
 }
 
 export function documentSourceRef(
-  backend: WorkspaceBackend,
+  identity: WorkspaceIdentitySource,
   path: string,
   extra: DocumentSourceRefExtra = {},
 ): DocumentSourceRef {
   return documentSourceRefForWorkspaceSource(
     {
-      kind: backend.kind,
-      namespace: workspaceNamespace(backend),
-      workspaceId: backend.id,
+      kind: identity.kind,
+      namespace: workspaceNamespace(identity),
+      workspaceId: identity.id,
     },
     path,
     extra,
@@ -118,11 +100,11 @@ export function documentSourceRef(
 }
 
 export function documentSourceAliasRefs(
-  backend: WorkspaceBackend,
+  identity: WorkspaceIdentitySource,
   path: string,
   extra: DocumentSourceRefExtra = {},
 ): DocumentSourceRef[] {
-  return workspaceSourceAliases(backend).map((alias) =>
+  return workspaceSourceAliases(identity).map((alias) =>
     documentSourceRefForWorkspaceSource(alias, path, extra),
   );
 }
@@ -159,39 +141,10 @@ export function sameDocumentSourceRef(left: DocumentSourceRef, right: DocumentSo
 }
 
 export function collabBroadcastChannelName(
-  source: WorkspaceBackend | WorkspaceSourceIdentity | DocumentSourceRef,
+  source: WorkspaceIdentitySource | WorkspaceSourceIdentity | DocumentSourceRef,
   docId: string,
 ) {
   return `local-md-workspace:${sourceWorkspaceNamespace(source)}:doc:${docId}`;
-}
-
-function isRemoteSourceKind(kind: WorkspaceBackendKind) {
-  return kind.startsWith("opendal-");
-}
-
-function isWritableSourceKind(kind: WorkspaceBackendKind) {
-  return (
-    kind == "local" ||
-    kind == "opendal-dropbox" ||
-    kind == "opendal-gdrive" ||
-    kind == "opendal-onedrive"
-  );
-}
-
-function canOwnerHostShareKind(kind: WorkspaceBackendKind) {
-  return isWritableSourceKind(kind);
-}
-
-function supportsRevisionKind(kind: WorkspaceBackendKind) {
-  return kind == "opendal-dropbox" || kind == "opendal-onedrive";
-}
-
-function supportsConditionalWriteKind(kind: WorkspaceBackendKind) {
-  return kind == "opendal-onedrive";
-}
-
-function supportsStableFileIdKind(_kind: WorkspaceBackendKind) {
-  return false;
 }
 
 function normalizeSourcePath(path: string) {
@@ -202,7 +155,7 @@ function normalizeSourcePath(path: string) {
     .replace(/\/{2,}/g, "/");
 }
 
-function workspaceNamespaceFromParts(kind: WorkspaceBackendKind, workspaceId: string) {
+function workspaceNamespaceFromParts(kind: WorkspaceStorageKind, workspaceId: string) {
   return `${kind}:${workspaceId}`;
 }
 
@@ -211,7 +164,7 @@ function encodeKeyPart(value: string) {
 }
 
 function sourceWorkspaceNamespace(
-  source: WorkspaceBackend | WorkspaceSourceIdentity | DocumentSourceRef,
+  source: WorkspaceIdentitySource | WorkspaceSourceIdentity | DocumentSourceRef,
 ) {
   if ("workspaceNamespace" in source) return source.workspaceNamespace;
   return workspaceNamespace(source);

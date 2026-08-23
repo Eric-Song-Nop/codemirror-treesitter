@@ -1,4 +1,4 @@
-import type { OpendalWorkspaceIdentity } from "./opendal-workspace-backend.ts";
+import type { OpendalWorkspaceIdentity } from "./opendal-workspace-identity.ts";
 
 export const DROPBOX_AUTHORIZE_URL = "https://www.dropbox.com/oauth2/authorize";
 const DROPBOX_TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";

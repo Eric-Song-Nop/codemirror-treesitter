@@ -1,30 +1,3 @@
-export type WorkspaceBackendKind =
-  | "local"
-  | "opendal-dropbox"
-  | "opendal-gdrive"
-  | "opendal-onedrive"
-  | "opendal-s3";
-
-export type WorkspaceSourceRevision = {
-  etag?: string;
-  version?: string;
-};
-
-export type WorkspaceSourceAlias = {
-  kind: WorkspaceBackendKind;
-  namespace: string;
-  workspaceId: string;
-};
-
-export type WorkspaceWriteOptions = {
-  baseRevision?: WorkspaceSourceRevision;
-  ifNotExists?: boolean;
-};
-
-export type WorkspaceWriteResult = {
-  revision?: WorkspaceSourceRevision;
-};
-
 export type MarkdownFileNode = {
   kind: "file";
   name: string;
@@ -55,46 +28,6 @@ export type WorkspaceEntry = {
   isDirectory: boolean;
   isFile: boolean;
   path: string;
-  revision?: WorkspaceSourceRevision;
-};
-
-export type WorkspaceEntryStat = WorkspaceEntry & {
-  exists: boolean;
-  mtime?: number;
-  size?: number;
-};
-
-export type WorkspaceBackend = {
-  id: string;
-  kind: WorkspaceBackendKind;
-  name: string;
-  sourceAliases?: WorkspaceSourceAlias[];
-  createDirectory?: (path: string) => Promise<void>;
-  createFile(path: string): Promise<string | null>;
-  createImageAsset?: (
-    markdownFilePath: string,
-    imageFile: File,
-  ) => Promise<CreatedWorkspaceImageNode>;
-  deleteEntry?: (path: string, options?: { recursive?: boolean }) => Promise<void>;
-  deleteDirectory?: (path: string) => Promise<void>;
-  deleteFile(path: string): Promise<void>;
-  findFilePathForHandle?: (handle: unknown) => Promise<string | null>;
-  listEntries?: (path: string) => Promise<WorkspaceEntry[]>;
-  readBytes?: (path: string) => Promise<Uint8Array>;
-  readFile(path: string): Promise<string>;
-  readTextFile?: (path: string) => Promise<string>;
-  readTree(): Promise<MarkdownDirectoryNode>;
-  renameEntry?: (from: string, to: string) => Promise<void>;
-  renameDirectory?: (path: string, rawName: string) => Promise<string>;
-  renameFile(path: string, rawName: string): Promise<string>;
-  stat?: (path: string) => Promise<WorkspaceEntryStat>;
-  writeBytes?: (path: string, bytes: Uint8Array) => Promise<void>;
-  writeFile(
-    path: string,
-    value: string,
-    options?: WorkspaceWriteOptions,
-  ): Promise<void | WorkspaceWriteResult>;
-  writeTextFile?: (path: string, value: string) => Promise<void>;
 };
 
 export type WorkspaceCreateTarget =
@@ -196,14 +129,6 @@ export function normalizeWorkspaceDirectoryName(rawName: string) {
 export function starterMarkdown(path: string) {
   let title = path.split("/").at(-1)!.replace(/\.md$/i, "").replace(/[-_]+/g, " ").trim();
   return title ? `# ${title}\n` : "";
-}
-
-export function writeNewWorkspaceFile(
-  backend: Pick<WorkspaceBackend, "writeFile">,
-  path: string,
-  value: string,
-) {
-  return backend.writeFile(path, value, { ifNotExists: true });
 }
 
 export function joinWorkspacePath(parentPath: string, name: string) {

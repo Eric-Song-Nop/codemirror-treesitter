@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -24,14 +24,21 @@ if (!chromePath) {
 }
 
 let userDataDir = await mkdtemp(join(tmpdir(), "local-md-workspace-smoke-"));
-let chrome = execFile(chromePath, [
-  "--headless=new",
-  "--remote-debugging-port=0",
-  `--user-data-dir=${userDataDir}`,
-  "--no-default-browser-check",
-  "--no-first-run",
-  liveMdBoundariesOnly ? SMOKE_URL : "about:blank",
-]);
+let chromeEnvironment = { ...process.env };
+delete chromeEnvironment.DYLD_INSERT_LIBRARIES;
+delete chromeEnvironment.LD_PRELOAD;
+let chrome = spawn(
+  chromePath,
+  [
+    "--headless=new",
+    "--remote-debugging-port=0",
+    `--user-data-dir=${userDataDir}`,
+    "--no-default-browser-check",
+    "--no-first-run",
+    liveMdBoundariesOnly ? SMOKE_URL : "about:blank",
+  ],
+  { env: chromeEnvironment, stdio: ["ignore", "ignore", "pipe"] },
+);
 
 try {
   if (liveMdBoundariesOnly) console.log("Starting focused LiveMD browser regression smoke.");
@@ -277,10 +284,22 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
     sessionId,
   );
 
-  await client.waitForPredicate(
-    `Boolean(document.querySelector("live-md-editor")?.value?.includes("# smoke local"))`,
-    sessionId,
-  );
+  try {
+    await client.waitForPredicate(
+      `Boolean(document.querySelector("live-md-editor")?.value?.includes("# smoke local"))`,
+      sessionId,
+    );
+  } catch (error) {
+    let state = await client.evaluate(
+      `(() => ({
+        body: document.body.innerText,
+        editorValue: document.querySelector("live-md-editor")?.value ?? null,
+        files: Array.from(window.__localMdSmokeFiles?.entries?.() ?? []),
+      }))()`,
+      sessionId,
+    );
+    throw new Error(`${error.message}\n\nLocal create state:\n${JSON.stringify(state, null, 2)}`);
+  }
 
   let nextValue = "# smoke local\\n\\nEdited by local UI smoke.\\n";
   await client.evaluate(
@@ -295,11 +314,23 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
     sessionId,
   );
 
-  await client.waitForPredicate(
-    `window.__localMdSmokeFiles?.get("smoke-local.md") == ${JSON.stringify(nextValue)}`,
-    sessionId,
-    3_000,
-  );
+  try {
+    await client.waitForPredicate(
+      `window.__localMdSmokeFiles?.get("smoke-local.md") == ${JSON.stringify(nextValue)}`,
+      sessionId,
+      3_000,
+    );
+  } catch (error) {
+    let state = await client.evaluate(
+      `(() => ({
+        body: document.body.innerText,
+        editorValue: document.querySelector("live-md-editor")?.value ?? null,
+        files: Array.from(window.__localMdSmokeFiles?.entries?.() ?? []),
+      }))()`,
+      sessionId,
+    );
+    throw new Error(`${error.message}\n\nLocal save state:\n${JSON.stringify(state, null, 2)}`);
+  }
 
   let state = await client.evaluate(
     `
@@ -785,11 +816,15 @@ async function setLiveMdSmokeDocument(client, sessionId, value) {
 async function clickLiveMdWidget(client, sessionId, selector, { xRatio, yRatio }) {
   let target = await client.evaluate(
     `
-      (() => {
+      (async () => {
         let widget = document
           .querySelector("live-md-editor")
           ?.shadowRoot?.querySelector(${JSON.stringify(selector)});
         if (!widget) return null;
+        widget.scrollIntoView({ block: "center", inline: "center" });
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve))
+        );
         let rect = widget.getBoundingClientRect();
         return {
           x: Math.floor(rect.left + rect.width * ${xRatio}),
@@ -1003,6 +1038,10 @@ async function liveMdPreviewState(client, sessionId) {
           lineText: Array.from(root?.querySelectorAll(".cm-line") ?? []).map(
             (line) => line.textContent
           ),
+          saveText: Array.from(document.querySelectorAll("[role=status], [aria-live]"))
+            .map((node) => node.textContent)
+            .filter(Boolean),
+          selection: editor?.view?.state.selection.main.toJSON() ?? null,
           value: editor?.value ?? null,
           widgets: [
             ".cm-md-mermaid",
@@ -1336,7 +1375,12 @@ async function assertMockDropboxWorkspaceFlow(client, sessionId) {
   let nextValue = `# Mock Dropbox UI smoke\\n\\n${fileName}\\n`;
   let sharedValue = `# Mock Dropbox UI smoke\\n\\nShared edit for ${fileName}\\n`;
 
-  await installDropboxOAuthStub(client, sessionId, "mock-dropbox-token");
+  await installDropboxOAuthStub(
+    client,
+    sessionId,
+    "mock-dropbox-token",
+    "dbid:mock-dropbox-account",
+  );
   await installMockDropboxOperator(client, sessionId);
   await navigate(client, sessionId, SMOKE_URL);
   await client.evaluate(
@@ -2144,6 +2188,53 @@ async function installMockFileSystemAccess(client, sessionId) {
             return result;
           }
 
+          function stableLastModified(value) {
+            let bytes = typeof value == "string"
+              ? new TextEncoder().encode(value)
+              : bytesFromBufferSource(value) ?? new Uint8Array();
+            let hash = 2166136261;
+            for (let byte of bytes) {
+              hash ^= byte;
+              hash = Math.imul(hash, 16777619);
+            }
+            return 1_700_000_000_000 + (hash >>> 0);
+          }
+
+          class SmokeWritableFileStream {
+            constructor(files, path) {
+              this.files = files;
+              this.path = path;
+              this.chunks = [];
+            }
+            async abort() {
+              this.chunks = [];
+            }
+            async close() {
+              let value = this.chunks.every((chunk) => typeof chunk == "string")
+                ? this.chunks.join("")
+                : concatBytes(this.chunks);
+              if (this.path.endsWith(".md") && value instanceof Uint8Array) {
+                value = new TextDecoder().decode(value);
+              }
+              this.files.set(this.path, value);
+              persistSmokeFiles(this.files);
+            }
+            async write(data) {
+              if (data && typeof data == "object" && data.type == "write") {
+                data = data.data;
+              }
+              if (typeof data == "string") {
+                this.chunks.push(data);
+              } else if (data instanceof Blob) {
+                this.chunks.push(new Uint8Array(await data.arrayBuffer()));
+              } else {
+                this.chunks.push(
+                  bytesFromBufferSource(data) ?? new TextEncoder().encode(String(data))
+                );
+              }
+            }
+          }
+
           class SmokeFileHandle {
             kind = "file";
             constructor(name, files, path = name) {
@@ -2154,34 +2245,12 @@ async function installMockFileSystemAccess(client, sessionId) {
             async getFile() {
               let value = this.files.get(this.path) ?? "";
               return new File([value], this.name, {
+                lastModified: stableLastModified(value),
                 type: this.name.endsWith(".md") ? "text/markdown" : "application/octet-stream"
               });
             }
             async createWritable() {
-              let chunks = [];
-              return {
-                abort: async () => {
-                  chunks = [];
-                },
-                close: async () => {
-                  this.files.set(
-                    this.path,
-                    chunks.every((chunk) => typeof chunk == "string")
-                      ? chunks.join("")
-                      : concatBytes(chunks)
-                  );
-                  persistSmokeFiles(this.files);
-                },
-                write: async (data) => {
-                  if (typeof data == "string") {
-                    chunks.push(data);
-                  } else if (data instanceof Blob) {
-                    chunks.push(new Uint8Array(await data.arrayBuffer()));
-                  } else {
-                    chunks.push(bytesFromBufferSource(data) ?? new TextEncoder().encode(String(data)));
-                  }
-                }
-              };
+              return new SmokeWritableFileStream(this.files, this.path);
             }
           }
 
@@ -2246,7 +2315,7 @@ async function installMockFileSystemAccess(client, sessionId) {
               persistSmokeFiles(this.files);
               persistSmokeDirectories(this.directories);
             }
-            async *values() {
+            async *entries() {
               let prefix = this.path ? this.path + "/" : "";
               let emitted = new Set();
               for (let directory of Array.from(this.directories).sort()) {
@@ -2254,19 +2323,35 @@ async function installMockFileSystemAccess(client, sessionId) {
                 let rest = directory.slice(prefix.length);
                 if (!rest || rest.includes("/")) continue;
                 emitted.add(rest);
-                yield new SmokeDirectoryHandle(rest, this.files, this.directories, directory);
+                yield [
+                  rest,
+                  new SmokeDirectoryHandle(rest, this.files, this.directories, directory),
+                ];
               }
               for (let path of Array.from(this.files.keys()).sort()) {
                 if (!path.startsWith(prefix)) continue;
                 let rest = path.slice(prefix.length);
                 if (!rest || rest.includes("/") || emitted.has(rest)) continue;
-                yield new SmokeFileHandle(rest, this.files, path);
+                yield [rest, new SmokeFileHandle(rest, this.files, path)];
+              }
+            }
+            async *values() {
+              for await (let [, handle] of this.entries()) {
+                yield handle;
               }
             }
           }
 
           let files = loadSmokeFiles();
           let directories = loadSmokeDirectories(files);
+          Object.defineProperties(window, {
+            FileSystemDirectoryHandle: { configurable: true, value: SmokeDirectoryHandle },
+            FileSystemFileHandle: { configurable: true, value: SmokeFileHandle },
+            FileSystemWritableFileStream: {
+              configurable: true,
+              value: SmokeWritableFileStream,
+            },
+          });
           window.__localMdSmokeFiles = files;
           window.__localMdSmokeSetFile = (name, value) => {
             let path = normalize(name);
@@ -2283,7 +2368,12 @@ async function installMockFileSystemAccess(client, sessionId) {
   );
 }
 
-async function installDropboxOAuthStub(client, sessionId, accessToken = dropboxAccessToken) {
+async function installDropboxOAuthStub(
+  client,
+  sessionId,
+  accessToken = dropboxAccessToken,
+  accountId,
+) {
   await client.send(
     "Page.addScriptToEvaluateOnNewDocument",
     {
@@ -2296,6 +2386,17 @@ async function installDropboxOAuthStub(client, sessionId, accessToken = dropboxA
               return Promise.resolve(new Response(JSON.stringify({
                 access_token: ${JSON.stringify(accessToken)},
                 expires_in: 3600
+              }), {
+                headers: { "Content-Type": "application/json" },
+                status: 200
+              }));
+            }
+            if (
+              ${JSON.stringify(Boolean(accountId))} &&
+              url == "https://api.dropboxapi.com/2/users/get_current_account"
+            ) {
+              return Promise.resolve(new Response(JSON.stringify({
+                account_id: ${JSON.stringify(accountId)}
               }), {
                 headers: { "Content-Type": "application/json" },
                 status: 200
@@ -2345,6 +2446,9 @@ async function installMockDropboxOperator(client, sessionId) {
         (() => {
           let files = new Map();
           let directories = new Set();
+          let versions = new Map();
+          let decoder = new TextDecoder();
+          let encoder = new TextEncoder();
 
           function normalize(path) {
             return String(path || "").trim().replace(/\\\\/g, "/").replace(/^\\/+|\\/+$/g, "");
@@ -2364,6 +2468,17 @@ async function installMockDropboxOperator(client, sessionId) {
             }
           }
 
+          function metadata(path, kind) {
+            if (kind == "directory") return { kind, path };
+            let value = files.get(path);
+            return {
+              kind,
+              path,
+              size: encoder.encode(value).byteLength,
+              version: String(versions.get(path))
+            };
+          }
+
           function entries(prefix = "") {
             let normalizedPrefix = normalize(prefix);
             let result = [];
@@ -2378,92 +2493,127 @@ async function installMockDropboxOperator(client, sessionId) {
 
             for (let path of directorySet) {
               if (normalizedPrefix && path != normalizedPrefix && !path.startsWith(normalizedPrefix + "/")) continue;
-              result.push({ isDirectory: true, isFile: false, path });
+              result.push(metadata(path, "directory"));
             }
             for (let path of files.keys()) {
               if (normalizedPrefix && path != normalizedPrefix && !path.startsWith(normalizedPrefix + "/")) continue;
-              result.push({ isDirectory: false, isFile: true, path });
+              result.push(metadata(path, "file"));
             }
             return result.sort((left, right) => left.path.localeCompare(right.path));
           }
 
           window.__localMdMockDropboxFiles = files;
-          window.__localMdWorkspaceTestDropboxOperatorFactory = async () => ({
-            capabilities() {
-              return {
-                nativeCopy: true,
-                nativeCreateDir: true,
-                nativeDelete: true,
-                nativeList: true,
-                nativeRead: true,
-                nativeRename: true,
-                nativeStat: true,
-                nativeWrite: true
-              };
+          window.__localMdWorkspaceTestDropboxOperatorFactory = async (source) => ({
+            info: {
+              capabilities: {
+                createDirectory: true,
+                delete: { recursive: "native", single: true },
+                list: true,
+                read: true,
+                rename: { directory: "native", file: "native" },
+                stat: true,
+                write: true,
+                writeConditions: {
+                  ifMatch: false,
+                  ifNotExists: true,
+                  ifVersion: true
+                }
+              },
+              root: source.root || "",
+              scheme: "dropbox"
             },
-            async createDir(path) {
+            async createDirectory(path) {
               let normalized = normalize(path);
               if (normalized) {
                 ensureParents(normalized);
                 directories.add(normalized);
               }
             },
-            async delete(path) {
-              let normalized = normalize(path);
-              if (files.delete(normalized)) return;
-              let removed = false;
+            async delete(request) {
+              let normalized = normalize(request.path);
+              if (files.delete(normalized)) {
+                versions.delete(normalized);
+                return { status: "applied" };
+              }
               for (let key of Array.from(files.keys())) {
                 if (key.startsWith(normalized + "/")) {
                   files.delete(key);
-                  removed = true;
+                  versions.delete(key);
                 }
               }
               for (let key of Array.from(directories)) {
                 if (key == normalized || key.startsWith(normalized + "/")) {
                   directories.delete(key);
-                  removed = true;
                 }
               }
-              if (!removed) throw new Error("not_found");
+              return { status: "applied" };
             },
+            dispose() {},
             async list(prefix) {
               return entries(prefix);
             },
-            async readText(path) {
+            async read(path) {
               let normalized = normalize(path);
               if (!files.has(normalized)) throw new Error("not_found");
-              return files.get(normalized);
+              return {
+                bytes: encoder.encode(files.get(normalized)),
+                metadata: metadata(normalized, "file"),
+                metadataBinding: "same-read"
+              };
             },
-            async rename(from, to) {
-              let source = normalize(from);
-              let target = normalize(to);
-              if (files.has(source)) {
-                let value = files.get(source);
-                files.delete(source);
+            async rename(request) {
+              let from = normalize(request.from);
+              let target = normalize(request.to);
+              if (files.has(from)) {
+                let value = files.get(from);
+                let version = versions.get(from);
+                files.delete(from);
+                versions.delete(from);
                 ensureParents(target);
                 files.set(target, value);
-                return;
+                versions.set(target, version);
+                return { status: "applied" };
               }
-              if (!directories.has(source)) throw new Error("not_found");
-              directories.delete(source);
+              if (!directories.has(from)) throw new Error("not_found");
+              directories.delete(from);
               directories.add(target);
               for (let key of Array.from(files.keys())) {
-                if (!key.startsWith(source + "/")) continue;
+                if (!key.startsWith(from + "/")) continue;
                 let value = files.get(key);
+                let version = versions.get(key);
                 files.delete(key);
-                files.set(target + key.slice(source.length), value);
+                versions.delete(key);
+                let nextPath = target + key.slice(from.length);
+                files.set(nextPath, value);
+                versions.set(nextPath, version);
               }
+              return { status: "applied" };
             },
             async stat(path) {
               let normalized = normalize(path);
-              if (files.has(normalized)) return { isDirectory: false, isFile: true, path: normalized };
-              if (directories.has(normalized)) return { isDirectory: true, isFile: false, path: normalized };
+              if (files.has(normalized)) return metadata(normalized, "file");
+              if (directories.has(normalized)) return metadata(normalized, "directory");
               throw new Error("not_found");
             },
-            async writeText(path, value) {
-              let normalized = normalize(path);
+            async write(request) {
+              let normalized = normalize(request.path);
+              if (request.condition?.kind == "if-not-exists" && files.has(normalized)) {
+                throw new Error("condition_failed");
+              }
+              if (
+                request.condition?.kind == "if-version" &&
+                String(versions.get(normalized)) != request.condition.version
+              ) {
+                throw new Error("condition_failed");
+              }
               ensureParents(normalized);
-              files.set(normalized, String(value));
+              files.set(normalized, decoder.decode(request.bytes));
+              versions.set(normalized, (versions.get(normalized) || 0) + 1);
+              return {
+                metadata: metadata(normalized, "file"),
+                metadataBinding: "write-response",
+                status: "applied"
+              };
             }
           });
         })();
@@ -2543,15 +2693,21 @@ function dropboxApiPath(fileName) {
 
 function waitForDevToolsEndpoint(child) {
   return new Promise((resolve, reject) => {
+    let stderr = "";
     let timer = setTimeout(() => reject(new Error("Timed out waiting for Chromium.")), 10_000);
     child.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${String(chunk)}`.slice(-8_000);
       let match = String(chunk).match(/DevTools listening on (ws:\/\/[^\s]+)/);
       if (!match) return;
       clearTimeout(timer);
       resolve(match[1]);
     });
-    child.on("exit", (code) => {
-      reject(new Error(`Chromium exited before DevTools was ready: ${code}`));
+    child.on("exit", (code, signal) => {
+      reject(
+        new Error(
+          `Chromium exited before DevTools was ready: code=${code}, signal=${signal}\n${stderr}`,
+        ),
+      );
     });
   });
 }

@@ -1,6 +1,6 @@
 import type { LoroDoc } from "loro-crdt";
-import type { WorkspaceBackend } from "@/lib/workspace-backend";
 import { collabBroadcastChannelName } from "@/lib/workspace/source-identity";
+import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
 
 type BroadcastSyncMessage = {
   bytes: Uint8Array;
@@ -10,7 +10,7 @@ type BroadcastSyncMessage = {
 };
 
 export type CollabDocumentBroadcastSyncOptions = {
-  backend: WorkspaceBackend;
+  identity: WorkspaceIdentity;
   doc: LoroDoc;
   docId: string;
   onRemoteUpdate?: () => void;
@@ -18,7 +18,7 @@ export type CollabDocumentBroadcastSyncOptions = {
 };
 
 export function createCollabDocumentBroadcastSync({
-  backend,
+  identity,
   doc,
   docId,
   onRemoteUpdate,
@@ -26,7 +26,7 @@ export function createCollabDocumentBroadcastSync({
 }: CollabDocumentBroadcastSyncOptions) {
   if (typeof BroadcastChannel == "undefined") return () => {};
 
-  let channel = new BroadcastChannel(collabDocumentBroadcastChannelName(backend, docId));
+  let channel = new BroadcastChannel(collabDocumentBroadcastChannelName(identity, docId));
   let unsubscribe = doc.subscribeLocalUpdates((bytes) => {
     channel.postMessage({
       bytes: new Uint8Array(bytes),
@@ -57,8 +57,8 @@ export function createCollabDocumentBroadcastSync({
   };
 }
 
-export function collabDocumentBroadcastChannelName(backend: WorkspaceBackend, docId: string) {
-  return collabBroadcastChannelName(backend, docId);
+export function collabDocumentBroadcastChannelName(identity: WorkspaceIdentity, docId: string) {
+  return collabBroadcastChannelName(identity, docId);
 }
 
 function parseBroadcastSyncMessage(value: unknown): BroadcastSyncMessage | null {

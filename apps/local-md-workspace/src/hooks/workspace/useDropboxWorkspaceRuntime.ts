@@ -7,9 +7,10 @@ import {
 import { saveDropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
 import type { TFunction } from "@/lib/i18n";
 import {
+  opendalWorkspaceId,
   sameOpendalWorkspaceIdentity,
   type OpendalWorkspaceIdentity,
-} from "@/lib/opendal-workspace-backend";
+} from "@/lib/opendal-workspace-identity";
 import {
   defaultDropboxRedirectUri,
   normalizeDropboxRootInput,
@@ -20,31 +21,33 @@ import {
   type StoredDropboxWorkspaceConfig,
   type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
-import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import type { MarkdownFileNode } from "@/lib/workspace-tree";
+import { createCloudWorkspaceRuntime } from "@/lib/workspace-runtime/cloud-runtime";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 type MutableRef<T> = {
   current: T;
 };
 
-type UseDropboxWorkspaceBackendOptions = {
+type UseDropboxWorkspaceRuntimeOptions = {
   dirtyRef: MutableRef<boolean>;
   editorValueRef: MutableRef<string>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
   setStoredDropboxConfig: (config: StoredDropboxWorkspaceConfig | null) => void;
   setStoredWorkspaceKind: (kind: StoredWorkspaceKind | null) => void;
   t: TFunction;
-  workspaceBackendRef: MutableRef<WorkspaceBackend | null>;
+  workspaceRuntimeRef: MutableRef<WorkspaceRuntime | null>;
 };
 
-export function useDropboxWorkspaceBackend({
+export function useDropboxWorkspaceRuntime({
   dirtyRef,
   editorValueRef,
   selectedFileRef,
   setStoredDropboxConfig,
   setStoredWorkspaceKind,
   t,
-  workspaceBackendRef,
-}: UseDropboxWorkspaceBackendOptions) {
+  workspaceRuntimeRef,
+}: UseDropboxWorkspaceRuntimeOptions) {
   let dropboxTokenRef = useRef<DropboxAccessToken | null>(null);
   let dropboxTokenAppKeyRef = useRef("");
   let dropboxAuthPromiseRef = useRef<Promise<DropboxAccessToken> | null>(null);
@@ -82,10 +85,10 @@ export function useDropboxWorkspaceBackend({
         appKey: normalizedAppKey,
         ...(redirectUri ? { redirectUri } : {}),
         onBeforeFullPageRedirect: () => {
-          let backend = workspaceBackendRef.current;
+          let runtime = workspaceRuntimeRef.current;
           let file = selectedFileRef.current;
           let shouldRestoreDirtyEditor =
-            backend?.kind == "opendal-dropbox" && Boolean(file) && dirtyRef.current;
+            runtime?.identity.kind == "opendal-dropbox" && Boolean(file) && dirtyRef.current;
 
           saveDropboxRedirectDraft({
             appKey: normalizedAppKey,
@@ -106,10 +109,10 @@ export function useDropboxWorkspaceBackend({
         if (dropboxAuthPromiseRef.current == promise) dropboxAuthPromiseRef.current = null;
       }
     },
-    [dirtyRef, editorValueRef, selectedFileRef, workspaceBackendRef],
+    [dirtyRef, editorValueRef, selectedFileRef, workspaceRuntimeRef],
   );
 
-  let createDropboxBackend = useCallback(
+  let createDropboxRuntime = useCallback(
     async (config: StoredDropboxWorkspaceConfig) => {
       let appKey = config.appKey.trim();
       if (!appKey) throw new Error("Dropbox app key is required.");
@@ -136,28 +139,39 @@ export function useDropboxWorkspaceBackend({
         return refreshAccessToken();
       };
 
-      workspaceIdentity = await dropboxTokenIdentity(await getAccessToken());
-      let { createDropboxWorkspaceBackend } = await import("@/lib/dropbox-workspace-backend");
-      let backend = createDropboxWorkspaceBackend({
-        getAccessToken,
-        identity: workspaceIdentity,
-        name: t("workspace.dropboxWorkspace"),
-        refreshAccessToken,
-        root,
+      let initialToken = await getAccessToken();
+      workspaceIdentity = await dropboxTokenIdentity(initialToken);
+      let name = t("workspace.dropboxWorkspace");
+      let runtime = await createCloudWorkspaceRuntime({
+        identity: {
+          id: opendalWorkspaceId("dropbox", root, workspaceIdentity),
+          kind: "opendal-dropbox",
+          name,
+        },
+        renewSource: async () => ({
+          accessToken: (await refreshAccessToken()).accessToken,
+          kind: "dropbox",
+          root,
+        }),
+        source: {
+          accessToken: initialToken.accessToken,
+          kind: "dropbox",
+          root,
+        },
       });
       let storedConfig = root ? { appKey, root } : { appKey };
       setStoredDropboxConfig(storedConfig);
       setStoredWorkspaceKind("dropbox");
       saveStoredDropboxWorkspaceConfig(storedConfig);
       saveStoredWorkspaceKind("dropbox");
-      return backend;
+      return runtime;
     },
     [authorizeDropboxAccess, setStoredDropboxConfig, setStoredWorkspaceKind, t],
   );
 
   return {
     clearDropboxAccessToken,
-    createDropboxBackend,
+    createDropboxRuntime,
     setDropboxRedirectAccessToken,
   };
 }

@@ -1,16 +1,14 @@
-import type {
-  MarkdownFileNode,
-  WorkspaceBackend,
-  WorkspaceBackendKind,
-  WorkspaceSourceRevision,
-} from "@/lib/workspace-backend";
+import type { WorkspaceStorageKind } from "@/lib/storage/types";
+import type { MarkdownFileNode } from "@/lib/workspace-tree";
 import {
   documentSourceAliasRefs,
   documentSourceRef,
   sameDocumentSourceRef,
-  workspaceSourceCapabilities,
+  workspaceCanHostOwnerShare,
   type DocumentSourceRef,
+  type WorkspaceSourceRevision,
 } from "@/lib/workspace/source-identity";
+import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
 import {
   getCollabDocumentValue,
   hashMarkdownText,
@@ -37,7 +35,7 @@ const shareRecordStoragePrefix = "local-md-workspace:share-record:";
 const schemaVersion = 2;
 
 export type OwnerShareRecord = {
-  backendKind: WorkspaceBackendKind;
+  backendKind: WorkspaceStorageKind;
   createdAt: number;
   displayName: string;
   expiresAt: number | null;
@@ -56,7 +54,7 @@ export type OwnerShareRecord = {
 };
 
 export type CreateOwnerShareOptions = {
-  backend: WorkspaceBackend;
+  identity: WorkspaceIdentity;
   baseUrl: string | URL;
   document: CollabDocumentState;
   expiration: ShareExpirationOption;
@@ -73,7 +71,7 @@ export type CreatedOwnerShare = {
 };
 
 export type RotateOwnerShareOptions = {
-  backend: WorkspaceBackend;
+  identity: WorkspaceIdentity;
   baseUrl: string | URL;
   expiration: ShareExpirationOption;
   hostSecret: string;
@@ -88,7 +86,7 @@ export type RotateOwnerShareOptions = {
 };
 
 export type RevokeOwnerShareOptions = {
-  backend: WorkspaceBackend;
+  identity: WorkspaceIdentity;
   hostSecret: string;
   record: OwnerShareRecord;
   relayOrigin: string;
@@ -106,7 +104,7 @@ type ShareRecordStore = Pick<Storage, "getItem" | "key" | "removeItem" | "setIte
 let memoryShareRecords = new Map<string, string>();
 
 export async function createOwnerShare({
-  backend,
+  identity,
   baseUrl,
   document,
   expiration,
@@ -116,16 +114,15 @@ export async function createOwnerShare({
   now = Date.now(),
   relayOrigin,
 }: CreateOwnerShareOptions): Promise<CreatedOwnerShare> {
-  let capabilities = workspaceSourceCapabilities(backend);
-  if (!capabilities.canHostOwnerShare) {
+  if (!workspaceCanHostOwnerShare(identity)) {
     throw new Error("This workspace cannot host shared files.");
   }
 
   let credentials = createShareCredentials();
   let hostSecretRef = hostSecretStorageKey(credentials.shareId);
-  let sourceRef = documentSourceRef(backend, file.path);
+  let sourceRef = documentSourceRef(identity, file.path);
   let record: OwnerShareRecord = {
-    backendKind: backend.kind,
+    backendKind: identity.kind,
     createdAt: now,
     displayName: file.name,
     expiresAt: shareExpiresAt(expiration, now),
@@ -142,7 +139,7 @@ export async function createOwnerShare({
   };
 
   saveHostSecret(hostSecretRef, credentials.hostSecret, hostSecretStore);
-  await writeOwnerShareRecord(backend, record);
+  await writeOwnerShareRecord(identity, record);
   await createRelayShare(relayOrigin, {
     displayName: record.displayName,
     expiresAt: record.expiresAt,
@@ -158,7 +155,7 @@ export async function createOwnerShare({
 }
 
 export async function rotateOwnerShare({
-  backend,
+  identity,
   baseUrl,
   expiration,
   hostSecret,
@@ -184,7 +181,7 @@ export async function rotateOwnerShare({
     expiresAt: result.expiresAt,
     guestSecretHash: nextGuestSecretHash,
   };
-  await writeOwnerShareRecord(backend, nextRecord);
+  await writeOwnerShareRecord(identity, nextRecord);
   return {
     link: buildShareLink(baseUrl, {
       guestSecret: credentials.guestSecret,
@@ -195,7 +192,7 @@ export async function rotateOwnerShare({
 }
 
 export async function revokeOwnerShare({
-  backend,
+  identity,
   hostSecret,
   record,
   relayOrigin,
@@ -208,20 +205,20 @@ export async function revokeOwnerShare({
     ...record,
     revokedAt: result.revokedAt,
   };
-  await writeOwnerShareRecord(backend, nextRecord);
+  await writeOwnerShareRecord(identity, nextRecord);
   return nextRecord;
 }
 
-export async function readOwnerShareRecord(_backend: WorkspaceBackend, shareId: string) {
+export async function readOwnerShareRecord(_identity: WorkspaceIdentity, shareId: string) {
   let raw = shareRecordStore().getItem(ownerShareRecordPath(shareId));
   if (!raw) throw new Error("Shared file metadata is not available in this browser.");
   return parseOwnerShareRecord(JSON.parse(raw));
 }
 
-export async function restoreOwnerShareRecordForPath(backend: WorkspaceBackend, path: string) {
+export async function restoreOwnerShareRecordForPath(identity: WorkspaceIdentity, path: string) {
   let store = shareRecordStore();
-  let sourceRef = documentSourceRef(backend, path);
-  let aliasRefs = documentSourceAliasRefs(backend, path);
+  let sourceRef = documentSourceRef(identity, path);
+  let aliasRefs = documentSourceAliasRefs(identity, path);
   let records: OwnerShareRecord[] = [];
   for (let index = 0; index < store.length; index++) {
     let key = store.key(index);
@@ -239,7 +236,7 @@ export async function restoreOwnerShareRecordForPath(backend: WorkspaceBackend, 
         aliasRefs.some((aliasRef) => sameDocumentSourceRef(record.sourceRef, aliasRef))
       ) {
         let migratedRecord = ownerShareRecordForSource(record, sourceRef);
-        await writeOwnerShareRecord(backend, migratedRecord);
+        await writeOwnerShareRecord(identity, migratedRecord);
         records.push(migratedRecord);
       }
     } catch {
@@ -251,7 +248,10 @@ export async function restoreOwnerShareRecordForPath(backend: WorkspaceBackend, 
   return records[0] ?? null;
 }
 
-export async function writeOwnerShareRecord(_backend: WorkspaceBackend, record: OwnerShareRecord) {
+export async function writeOwnerShareRecord(
+  _identity: WorkspaceIdentity,
+  record: OwnerShareRecord,
+) {
   shareRecordStore().setItem(ownerShareRecordPath(record.shareId), JSON.stringify(record));
 }
 
@@ -297,7 +297,7 @@ function parseOwnerShareRecord(value: unknown): OwnerShareRecord {
     backendKind?: unknown;
     sourceRef?: unknown;
   };
-  let backendKind = parseWorkspaceBackendKind(record.backendKind);
+  let backendKind = parseWorkspaceStorageKind(record.backendKind);
   if (
     record.schemaVersion != schemaVersion ||
     typeof record.shareId != "string" ||
@@ -345,7 +345,7 @@ function parseOwnerShareRecord(value: unknown): OwnerShareRecord {
 
 function parseOwnerShareSourceRef(
   value: unknown,
-  fallback: { backendKind: WorkspaceBackendKind; path: string; workspaceId: string },
+  fallback: { backendKind: WorkspaceStorageKind; path: string; workspaceId: string },
 ): DocumentSourceRef {
   if (value == null) {
     return {
@@ -361,7 +361,7 @@ function parseOwnerShareSourceRef(
     backendKind?: unknown;
     revision?: unknown;
   };
-  let backendKind = parseWorkspaceBackendKind(record.backendKind);
+  let backendKind = parseWorkspaceStorageKind(record.backendKind);
   if (
     typeof record.path != "string" ||
     typeof record.workspaceId != "string" ||
@@ -381,7 +381,7 @@ function parseOwnerShareSourceRef(
   };
 }
 
-function parseWorkspaceBackendKind(value: unknown): WorkspaceBackendKind {
+function parseWorkspaceStorageKind(value: unknown): WorkspaceStorageKind {
   if (
     value == "local" ||
     value == "opendal-dropbox" ||
@@ -389,7 +389,7 @@ function parseWorkspaceBackendKind(value: unknown): WorkspaceBackendKind {
     value == "opendal-onedrive" ||
     value == "opendal-s3"
   ) {
-    return value as WorkspaceBackendKind;
+    return value as WorkspaceStorageKind;
   }
   throw new Error("Invalid share metadata.");
 }
@@ -412,7 +412,7 @@ function parseWorkspaceSourceRevision(value: unknown): WorkspaceSourceRevision |
 }
 
 function rawWorkspaceIdFromLegacyNamespace(
-  backendKind: WorkspaceBackendKind,
+  backendKind: WorkspaceStorageKind,
   legacyWorkspaceId: string,
 ) {
   let prefix = `${backendKind}:`;

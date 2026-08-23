@@ -7,9 +7,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
 import type { RelayShareSession } from "@/lib/collaboration/share-relay-client";
 import type { OwnerShareRecord } from "@/lib/collaboration/share-storage";
-import type { WorkspaceBackend } from "@/lib/workspace-backend";
 import { createDocumentSession } from "@/lib/workspace/document-session";
 import { documentSourceRef } from "@/lib/workspace/source-identity";
+import { createMemoryWorkspaceRuntime } from "@/test/memory-workspace-runtime";
 import { useOwnerShareHost } from "./useOwnerShareHost";
 
 type ReactActGlobal = typeof globalThis & {
@@ -137,11 +137,14 @@ function OwnerShareHostHarness() {
 }
 
 function ownerShareFixture() {
-  let backend = fakeBackend();
+  let runtime = createMemoryWorkspaceRuntime([["note.md", ""]], {
+    id: "workspace-id",
+    name: "Workspace",
+  });
   let file = { kind: "file" as const, name: "note.md", path: "note.md" };
-  let sourceRef = documentSourceRef(backend, file.path);
+  let sourceRef = documentSourceRef(runtime.identity, file.path);
   let record: OwnerShareRecord = {
-    backendKind: backend.kind,
+    backendKind: runtime.identity.kind,
     createdAt: Date.now(),
     displayName: file.name,
     expiresAt: Date.now() + 60_000,
@@ -154,7 +157,7 @@ function ownerShareFixture() {
     schemaVersion: 2,
     shareId: "share-id",
     sourceRef,
-    workspaceId: backend.id,
+    workspaceId: runtime.identity.id,
   };
   let doc = new LoroDoc();
   let collabDocument = {
@@ -164,7 +167,7 @@ function ownerShareFixture() {
   } as CollabDocumentState;
   return {
     record,
-    session: createDocumentSession(backend, file, collabDocument),
+    session: createDocumentSession(runtime, file, collabDocument),
   };
 }
 
@@ -180,25 +183,6 @@ function relaySession(sessionToken: string): RelayShareSession {
     sessionToken,
     shareExpiresAt: Date.now() + 3_600_000,
     shareId: "share-id",
-  };
-}
-
-function fakeBackend(): WorkspaceBackend {
-  return {
-    id: "workspace-id",
-    kind: "local",
-    name: "Workspace",
-    createFile: async () => null,
-    deleteFile: async () => {},
-    readFile: async () => "",
-    readTree: async () => ({
-      children: [],
-      kind: "directory",
-      name: "Workspace",
-      path: "",
-    }),
-    renameFile: async (_path, name) => name,
-    writeFile: async () => {},
   };
 }
 

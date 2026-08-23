@@ -1,10 +1,14 @@
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { WorkspaceCommandPalette } from "@/components/WorkspaceCommandPalette";
 import { DeleteEntryDialog } from "@/components/workspace/DeleteEntryDialog";
+import {
+  DocumentRecoveryDialogs,
+  type DocumentRecoveryAction,
+} from "@/components/workspace/DocumentRecoveryDialogs";
 import { FileNameDialog, SaveAsDropboxDialog } from "@/components/workspace/FileDialogs";
 import { ShareFileDialog } from "@/components/workspace/ShareFileDialog";
 import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
-import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace-backend";
+import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace-tree";
 import type { ActiveOwnerShareRecord, FileDialogMode } from "@/lib/workspace/types";
 
 type FileNameDialogState = {
@@ -78,6 +82,16 @@ type WorkspaceDialogsProps = {
   commandPalette: CommandPaletteState;
   deleteDialog: DeleteDialogState;
   fileNameDialog: FileNameDialogState;
+  recoveryDialog: {
+    action: DocumentRecoveryAction | null;
+    busy: boolean;
+    copyPath: string;
+    error: string;
+    onClose: () => void;
+    onConfirm: () => Promise<void>;
+    onCopyPathChange: (value: string) => void;
+    onKeepLocalAs: (path: string) => Promise<void>;
+  };
   saveAsDropboxDialog: SaveAsDropboxDialogState;
   shareDialog: ShareDialogState;
 };
@@ -86,6 +100,7 @@ export function WorkspaceDialogs({
   commandPalette,
   deleteDialog,
   fileNameDialog,
+  recoveryDialog,
   saveAsDropboxDialog,
   shareDialog,
 }: WorkspaceDialogsProps) {
@@ -101,6 +116,8 @@ export function WorkspaceDialogs({
         onSubmit={fileNameDialog.onSubmit}
         onValueChange={fileNameDialog.onValueChange}
       />
+
+      <DocumentRecoveryDialogs {...recoveryDialog} />
 
       <ShareFileDialog
         activeShare={shareDialog.activeShare}

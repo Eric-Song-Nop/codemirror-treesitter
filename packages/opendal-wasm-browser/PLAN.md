@@ -1,5 +1,10 @@
 # OpenDAL Browser WASM Wrapper Plan
 
+> Status: superseded as the active architecture record. This file preserves the
+> original cloud-wrapper plan. BrowserLocal, the exact operator contract, and
+> the final application layering are defined by
+> [`apps/local-md-workspace/OPENDAL_WORKSPACE_ARCHITECTURE.md`](../../apps/local-md-workspace/OPENDAL_WORKSPACE_ARCHITECTURE.md).
+
 ## Objective
 
 Build a browser-first OpenDAL wrapper that can be imported by
