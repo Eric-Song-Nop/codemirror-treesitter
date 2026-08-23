@@ -1,4 +1,5 @@
-import { MenuIcon, SaveIcon, Share2Icon } from "lucide-react";
+import { MenuIcon, SaveIcon, Share2Icon, SparklesIcon } from "lucide-react";
+import type { Ref } from "react";
 import { Badge } from "@/components/ui/badge";
 import { useI18n } from "@/lib/i18n";
 import type { SaveState } from "@/lib/workspace/types";
@@ -7,6 +8,8 @@ import { TooltipIconButton } from "./TooltipIconButton";
 
 type WorkspaceHeaderProps = {
   activeShare: boolean;
+  agentButtonRef?: Ref<HTMLButtonElement>;
+  agentOpen: boolean;
   busy: boolean;
   canExport: boolean;
   canInsertImage: boolean;
@@ -27,10 +30,13 @@ type WorkspaceHeaderProps = {
   onSaveAsLocal: () => void;
   onShareFile: () => void;
   onToggleSidebar: () => void;
+  onToggleAgent: () => void;
 };
 
 export function WorkspaceHeader({
   activeShare,
+  agentButtonRef,
+  agentOpen,
   busy,
   canExport,
   canInsertImage,
@@ -51,6 +57,7 @@ export function WorkspaceHeader({
   onSaveAsLocal,
   onShareFile,
   onToggleSidebar,
+  onToggleAgent,
 }: WorkspaceHeaderProps) {
   let { t } = useI18n();
 
@@ -78,6 +85,17 @@ export function WorkspaceHeader({
           {t("workspace.sharedFileBadge")}
         </Badge>
       )}
+      <TooltipIconButton
+        ref={agentButtonRef}
+        aria-controls="workspace-agent-panel"
+        aria-expanded={agentOpen}
+        label={agentOpen ? t("agent.actions.hide") : t("agent.actions.show")}
+        size="icon-sm"
+        variant={agentOpen ? "secondary" : "ghost"}
+        onClick={onToggleAgent}
+      >
+        <SparklesIcon />
+      </TooltipIconButton>
       <WorkspaceDocumentActionsMenu
         activeShare={activeShare}
         busy={busy}
