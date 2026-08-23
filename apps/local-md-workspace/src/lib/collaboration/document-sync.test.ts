@@ -6,7 +6,7 @@ import {
   collabDocumentBroadcastChannelName,
   createCollabDocumentBroadcastSync,
 } from "./document-sync.ts";
-import type { WorkspaceBackend } from "@/lib/workspace-backend";
+import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
 
 let originalBroadcastChannel: typeof BroadcastChannel | undefined;
 
@@ -23,7 +23,7 @@ afterEach(() => {
 
 describe("collab document BroadcastChannel sync", () => {
   it("uses backend and document identity in the channel name", () => {
-    expect(collabDocumentBroadcastChannelName(memoryBackend, "doc-1")).toBe(
+    expect(collabDocumentBroadcastChannelName(memoryIdentity, "doc-1")).toBe(
       "local-md-workspace:local:memory:test:doc:doc-1",
     );
   });
@@ -39,13 +39,13 @@ describe("collab document BroadcastChannel sync", () => {
     second.import(first.export({ mode: "snapshot" }));
 
     let stopFirst = createCollabDocumentBroadcastSync({
-      backend: memoryBackend,
+      identity: memoryIdentity,
       doc: first,
       docId: "doc-1",
       senderId: "first",
     });
     let stopSecond = createCollabDocumentBroadcastSync({
-      backend: memoryBackend,
+      identity: memoryIdentity,
       doc: second,
       docId: "doc-1",
       onRemoteUpdate: () => {
@@ -66,11 +66,11 @@ describe("collab document BroadcastChannel sync", () => {
   });
 });
 
-const memoryBackend = {
+const memoryIdentity = {
   id: "memory:test",
   kind: "local",
   name: "Memory",
-} as WorkspaceBackend;
+} satisfies WorkspaceIdentity;
 
 class MemoryBroadcastChannel extends EventTarget {
   static channels = new Map<string, Set<MemoryBroadcastChannel>>();

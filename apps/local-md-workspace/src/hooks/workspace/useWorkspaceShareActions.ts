@@ -12,12 +12,13 @@ import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { readHostSecret } from "@/lib/workspace/share-host";
 import type { ActiveOwnerShareRecord } from "@/lib/workspace/types";
-import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import type { MarkdownFileNode } from "@/lib/workspace-tree";
 import {
   createDocumentSession,
   documentSessionMatchesSource,
   type DocumentSession,
 } from "@/lib/workspace/document-session";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 type MutableRef<T> = {
   current: T;
@@ -33,7 +34,7 @@ type UseWorkspaceShareActionsOptions = {
   activeShareRecord: ActiveOwnerShareRecord | null;
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
   ensureSelectedCollabDocument: (
-    backend: WorkspaceBackend,
+    runtime: WorkspaceRuntime,
     file: MarkdownFileNode,
   ) => Promise<CollabDocumentState>;
   flushOwnerShareHost: () => void;
@@ -47,7 +48,7 @@ type UseWorkspaceShareActionsOptions = {
   shareExpiration: ShareExpirationOption;
   startOwnerShareHost: StartOwnerShareHost;
   stopOwnerShareHost: () => void;
-  workspaceBackendRef: MutableRef<WorkspaceBackend | null>;
+  workspaceRuntimeRef: MutableRef<WorkspaceRuntime | null>;
 };
 
 export function useWorkspaceShareActions({
@@ -65,30 +66,30 @@ export function useWorkspaceShareActions({
   shareExpiration,
   startOwnerShareHost,
   stopOwnerShareHost,
-  workspaceBackendRef,
+  workspaceRuntimeRef,
 }: UseWorkspaceShareActionsOptions) {
   let createSharedFileLink = useCallback(async () => {
-    let backend = workspaceBackendRef.current;
+    let runtime = workspaceRuntimeRef.current;
     let file = selectedFileRef.current;
-    if (!backend || !file) return;
+    if (!runtime || !file) return;
     if (!(await saveCurrentFile())) return;
 
     setShareCreating(true);
     setShareError("");
     setShareCopied(false);
     try {
-      let document = await ensureSelectedCollabDocument(backend, file);
+      let document = await ensureSelectedCollabDocument(runtime, file);
       let share = await createOwnerShare({
-        backend,
         baseUrl: window.location.href,
         document,
         expiration: shareExpiration,
         file,
+        identity: runtime.identity,
         relayOrigin: configuredShareRelayOrigin(),
       });
       setCreatedShare(share);
       setActiveShareRecord(share.record);
-      await startOwnerShareHost(share.record, createDocumentSession(backend, file, document));
+      await startOwnerShareHost(share.record, createDocumentSession(runtime, file, document));
     } catch (error) {
       setShareError(errorToMessage(error));
     } finally {
@@ -105,19 +106,19 @@ export function useWorkspaceShareActions({
     setShareError,
     shareExpiration,
     startOwnerShareHost,
-    workspaceBackendRef,
+    workspaceRuntimeRef,
   ]);
 
   let rotateSharedFileLink = useCallback(async () => {
-    let backend = workspaceBackendRef.current;
+    let runtime = workspaceRuntimeRef.current;
     let record = activeShareRecord;
-    if (!backend || !record || record.revokedAt != null) return;
+    if (!runtime || !record || record.revokedAt != null) return;
 
     let document = collabDocumentRef.current;
     let file = selectedFileRef.current;
     let session =
       document && file && document.path == file.path
-        ? createDocumentSession(backend, file, document)
+        ? createDocumentSession(runtime, file, document)
         : null;
     let shouldRestartHost =
       session != null && documentSessionMatchesSource(session, record.sourceRef);
@@ -133,10 +134,10 @@ export function useWorkspaceShareActions({
     if (shouldRestartHost) stopOwnerShareHost();
     try {
       let share = await rotateOwnerShare({
-        backend,
         baseUrl: window.location.href,
         expiration: shareExpiration,
         hostSecret,
+        identity: runtime.identity,
         record,
         relayOrigin: configuredShareRelayOrigin(),
       });
@@ -169,13 +170,13 @@ export function useWorkspaceShareActions({
     shareExpiration,
     startOwnerShareHost,
     stopOwnerShareHost,
-    workspaceBackendRef,
+    workspaceRuntimeRef,
   ]);
 
   let stopSharingFile = useCallback(async () => {
-    let backend = workspaceBackendRef.current;
+    let runtime = workspaceRuntimeRef.current;
     let record = activeShareRecord;
-    if (!backend || !record || record.revokedAt != null) return;
+    if (!runtime || !record || record.revokedAt != null) return;
 
     let hostSecret = readHostSecret(record);
     if (!hostSecret) {
@@ -189,8 +190,8 @@ export function useWorkspaceShareActions({
     try {
       flushOwnerShareHost();
       let nextRecord = await revokeOwnerShare({
-        backend,
         hostSecret,
+        identity: runtime.identity,
         record,
         relayOrigin: configuredShareRelayOrigin(),
       });
@@ -211,7 +212,7 @@ export function useWorkspaceShareActions({
     setShareCreating,
     setShareError,
     stopOwnerShareHost,
-    workspaceBackendRef,
+    workspaceRuntimeRef,
   ]);
 
   return {

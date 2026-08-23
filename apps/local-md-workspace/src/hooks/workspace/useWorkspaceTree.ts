@@ -9,27 +9,31 @@ import {
   replaceMarkdownDirectory,
   type MarkdownDirectoryNode,
   type MarkdownFileNode,
-  type WorkspaceBackend,
-} from "@/lib/workspace-backend";
+} from "@/lib/workspace-tree";
 import { dirname } from "pathe";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
 import { readWorkspaceDirectory, readWorkspaceTree } from "@/lib/workspace/workspace-data-cache";
-import type { SingleFileSource } from "@/lib/workspace/types";
+import {
+  activeDocumentSourceId,
+  type ActiveDocumentSource,
+  type SingleFileSource,
+} from "@/lib/workspace/types";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 type MutableRef<T> = {
   current: T;
 };
 
 type UseWorkspaceTreeOptions = {
-  clearActiveDocument: () => void;
+  clearActiveDocument: () => Promise<void>;
   documentTargetGenerationRef: MutableRef<number>;
   loadFile: (
-    backend: WorkspaceBackend,
+    runtime: WorkspaceRuntime,
     file: MarkdownFileNode,
     options?: { saveCurrent?: boolean },
   ) => Promise<void>;
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
-  selectedFileBackendRef: MutableRef<WorkspaceBackend | null>;
+  selectedFileSourceRef: MutableRef<ActiveDocumentSource | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
   setTree: Dispatch<SetStateAction<MarkdownDirectoryNode | null>>;
   setTreeSelection: (target: FileTreeDeleteTarget | null) => void;
@@ -41,7 +45,7 @@ export function useWorkspaceTree({
   documentTargetGenerationRef,
   loadFile,
   localFileHandleRef,
-  selectedFileBackendRef,
+  selectedFileSourceRef,
   selectedFileRef,
   setTree,
   setTreeSelection,
@@ -51,14 +55,14 @@ export function useWorkspaceTree({
 
   let loadTree = useCallback(
     async (
-      backend: WorkspaceBackend,
+      runtime: WorkspaceRuntime,
       nextSelectedPath?: null | string,
       options: { saveBeforeSelect?: boolean } = {},
     ) => {
       documentTargetGenerationRef.current += 1;
       let nextTree = await loadSelectedPathAncestors(
-        backend,
-        await readWorkspaceTree(queryClient, backend),
+        runtime,
+        await readWorkspaceTree(queryClient, runtime),
         nextSelectedPath ?? null,
         queryClient,
       );
@@ -67,21 +71,22 @@ export function useWorkspaceTree({
       let nextSelectedFile = findMarkdownFile(nextTree, nextSelectedPath ?? null);
 
       if (nextSelectedFile) {
-        await loadFile(backend, nextSelectedFile, {
+        await loadFile(runtime, nextSelectedFile, {
           saveCurrent: options.saveBeforeSelect ?? true,
         });
         return;
       }
 
       if (nextSelectedPath) {
-        let selectedPathContext = workspaceSelectedPathContext(backend);
+        let selectedPathContext = workspaceSelectedPathContext(runtime.identity);
         if (selectedPathContext) clearStoredWorkspaceSelectedPath(selectedPathContext);
         if (
           !singleFileSourceRef.current &&
-          selectedFileBackendRef.current?.id == backend.id &&
+          selectedFileSourceRef.current &&
+          activeDocumentSourceId(selectedFileSourceRef.current) == runtime.identity.id &&
           selectedFileRef.current?.path == nextSelectedPath
         ) {
-          clearActiveDocument();
+          await clearActiveDocument();
         }
       }
       setTreeSelection(null);
@@ -90,7 +95,7 @@ export function useWorkspaceTree({
       clearActiveDocument,
       documentTargetGenerationRef,
       loadFile,
-      selectedFileBackendRef,
+      selectedFileSourceRef,
       selectedFileRef,
       setTree,
       setTreeSelection,
@@ -100,34 +105,41 @@ export function useWorkspaceTree({
   );
 
   let findCurrentEditorWorkspacePath = useCallback(
-    async (backend: WorkspaceBackend) => {
+    async (runtime: WorkspaceRuntime) => {
       let source = singleFileSourceRef.current;
       let file = selectedFileRef.current;
-      if (!source && file && selectedFileBackendRef.current?.id == backend.id) return file.path;
-
-      if (source?.kind == "local-file" && localFileHandleRef.current) {
-        return (await backend.findFilePathForHandle?.(localFileHandleRef.current)) ?? null;
+      if (
+        !source &&
+        file &&
+        selectedFileSourceRef.current &&
+        activeDocumentSourceId(selectedFileSourceRef.current) == runtime.identity.id
+      ) {
+        return file.path;
       }
 
-      if (source?.kind == "dropbox-file" && backend.kind == "opendal-dropbox") {
+      if (source?.kind == "local-file" && localFileHandleRef.current) {
+        return (await runtime.host.findFilePathForHandle?.(localFileHandleRef.current)) ?? null;
+      }
+
+      if (source?.kind == "dropbox-file" && runtime.identity.kind == "opendal-dropbox") {
         return source.path;
       }
       return null;
     },
-    [localFileHandleRef, selectedFileBackendRef, selectedFileRef, singleFileSourceRef],
+    [localFileHandleRef, selectedFileSourceRef, selectedFileRef, singleFileSourceRef],
   );
 
   let refreshWorkspaceForCurrentEditor = useCallback(
-    async (backend: WorkspaceBackend) => {
-      let nextSelectedPath = await findCurrentEditorWorkspacePath(backend).catch(() => null);
-      await loadTree(backend, nextSelectedPath, { saveBeforeSelect: false });
+    async (runtime: WorkspaceRuntime) => {
+      let nextSelectedPath = await findCurrentEditorWorkspacePath(runtime).catch(() => null);
+      await loadTree(runtime, nextSelectedPath, { saveBeforeSelect: false });
     },
     [findCurrentEditorWorkspacePath, loadTree],
   );
 
   let loadDirectory = useCallback(
-    async (backend: WorkspaceBackend, path: string) => {
-      let directory = await readWorkspaceDirectory(queryClient, backend, path);
+    async (runtime: WorkspaceRuntime, path: string) => {
+      let directory = await readWorkspaceDirectory(queryClient, runtime, path);
       if (!directory) return;
       setTree((currentTree) =>
         currentTree ? replaceMarkdownDirectory(currentTree, directory) : currentTree,
@@ -145,7 +157,7 @@ export function useWorkspaceTree({
 }
 
 async function loadSelectedPathAncestors(
-  backend: WorkspaceBackend,
+  runtime: WorkspaceRuntime,
   tree: MarkdownDirectoryNode,
   selectedPath: string | null,
   queryClient: QueryClient,
@@ -157,7 +169,7 @@ async function loadSelectedPathAncestors(
     if (!directory) break;
     if (directory.childrenLoaded) continue;
 
-    let loadedDirectory = await readWorkspaceDirectory(queryClient, backend, directoryPath);
+    let loadedDirectory = await readWorkspaceDirectory(queryClient, runtime, directoryPath);
     if (!loadedDirectory) break;
     tree = replaceMarkdownDirectory(tree, loadedDirectory);
     if (findMarkdownFile(tree, selectedPath)) break;

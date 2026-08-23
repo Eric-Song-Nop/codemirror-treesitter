@@ -7,9 +7,10 @@ import {
 import { saveOneDriveRedirectDraft } from "@/lib/onedrive-redirect-draft";
 import type { TFunction } from "@/lib/i18n";
 import {
+  opendalWorkspaceId,
   sameOpendalWorkspaceIdentity,
   type OpendalWorkspaceIdentity,
-} from "@/lib/opendal-workspace-backend";
+} from "@/lib/opendal-workspace-identity";
 import {
   defaultOneDriveRedirectUri,
   normalizeOneDriveRootInput,
@@ -20,31 +21,33 @@ import {
   type StoredOneDriveWorkspaceConfig,
   type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
-import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import type { MarkdownFileNode } from "@/lib/workspace-tree";
+import { createCloudWorkspaceRuntime } from "@/lib/workspace-runtime/cloud-runtime";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 type MutableRef<T> = {
   current: T;
 };
 
-type UseOneDriveWorkspaceBackendOptions = {
+type UseOneDriveWorkspaceRuntimeOptions = {
   dirtyRef: MutableRef<boolean>;
   editorValueRef: MutableRef<string>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
   setStoredOneDriveConfig: (config: StoredOneDriveWorkspaceConfig | null) => void;
   setStoredWorkspaceKind: (kind: StoredWorkspaceKind | null) => void;
   t: TFunction;
-  workspaceBackendRef: MutableRef<WorkspaceBackend | null>;
+  workspaceRuntimeRef: MutableRef<WorkspaceRuntime | null>;
 };
 
-export function useOneDriveWorkspaceBackend({
+export function useOneDriveWorkspaceRuntime({
   dirtyRef,
   editorValueRef,
   selectedFileRef,
   setStoredOneDriveConfig,
   setStoredWorkspaceKind,
   t,
-  workspaceBackendRef,
-}: UseOneDriveWorkspaceBackendOptions) {
+  workspaceRuntimeRef,
+}: UseOneDriveWorkspaceRuntimeOptions) {
   let oneDriveTokenRef = useRef<OneDriveAccessToken | null>(null);
   let oneDriveTokenClientIdRef = useRef("");
   let oneDriveAuthPromiseRef = useRef<Promise<OneDriveAccessToken> | null>(null);
@@ -76,10 +79,10 @@ export function useOneDriveWorkspaceBackend({
         clientId: normalizedClientId,
         ...(redirectUri ? { redirectUri } : {}),
         onBeforeFullPageRedirect: () => {
-          let backend = workspaceBackendRef.current;
+          let runtime = workspaceRuntimeRef.current;
           let file = selectedFileRef.current;
           let shouldRestoreDirtyEditor =
-            backend?.kind == "opendal-onedrive" && Boolean(file) && dirtyRef.current;
+            runtime?.identity.kind == "opendal-onedrive" && Boolean(file) && dirtyRef.current;
 
           saveOneDriveRedirectDraft({
             clientId: normalizedClientId,
@@ -100,10 +103,10 @@ export function useOneDriveWorkspaceBackend({
         if (oneDriveAuthPromiseRef.current == promise) oneDriveAuthPromiseRef.current = null;
       }
     },
-    [dirtyRef, editorValueRef, selectedFileRef, workspaceBackendRef],
+    [dirtyRef, editorValueRef, selectedFileRef, workspaceRuntimeRef],
   );
 
-  let createOneDriveBackend = useCallback(
+  let createOneDriveRuntime = useCallback(
     async (config: StoredOneDriveWorkspaceConfig) => {
       let clientId = config.clientId.trim();
       if (!clientId) throw new Error("OneDrive client ID is required.");
@@ -130,28 +133,35 @@ export function useOneDriveWorkspaceBackend({
         return refreshAccessToken();
       };
 
-      workspaceIdentity = await fetchOneDriveDriveIdentity((await getAccessToken()).accessToken);
-      let { createOneDriveWorkspaceBackend } = await import("@/lib/onedrive-workspace-backend");
-      let backend = createOneDriveWorkspaceBackend({
-        getAccessToken,
-        identity: workspaceIdentity,
-        name: t("workspace.onedriveWorkspace"),
-        refreshAccessToken,
-        root,
+      let initialToken = await getAccessToken();
+      workspaceIdentity = await fetchOneDriveDriveIdentity(initialToken.accessToken);
+      let name = t("workspace.onedriveWorkspace");
+      let runtime = await createCloudWorkspaceRuntime({
+        identity: {
+          id: opendalWorkspaceId("onedrive", root, workspaceIdentity),
+          kind: "opendal-onedrive",
+          name,
+        },
+        renewSource: async () => ({
+          accessToken: (await refreshAccessToken()).accessToken,
+          kind: "onedrive",
+          root,
+        }),
+        source: { accessToken: initialToken.accessToken, kind: "onedrive", root },
       });
       let storedConfig = root ? { clientId, root } : { clientId };
       setStoredOneDriveConfig(storedConfig);
       setStoredWorkspaceKind("onedrive");
       saveStoredOneDriveWorkspaceConfig(storedConfig);
       saveStoredWorkspaceKind("onedrive");
-      return backend;
+      return runtime;
     },
     [authorizeOneDriveAccess, setStoredOneDriveConfig, setStoredWorkspaceKind, t],
   );
 
   return {
     clearOneDriveAccessToken,
-    createOneDriveBackend,
+    createOneDriveRuntime,
     setOneDriveRedirectAccessToken,
   };
 }

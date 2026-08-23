@@ -22,7 +22,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
 import { translateKnownMessage, useI18n, type Locale, type TFunction } from "@/lib/i18n";
-import type { MarkdownFileNode } from "@/lib/workspace-backend";
+import type { MarkdownFileNode } from "@/lib/workspace-tree";
 import type { ActiveOwnerShareRecord } from "@/lib/workspace/types";
 import { PendingButtonContent } from "./PendingButtonContent";
 

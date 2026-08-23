@@ -26,18 +26,14 @@ import {
   markdownPrintWarningMessage,
 } from "@/lib/workspace/export";
 import {
-  createLocalFileBackend,
+  createLocalFileSource,
   markdownDownloadFileName,
   singleFileMarkdownNode,
 } from "@/lib/workspace/single-file";
-import type { SingleFileSource } from "@/lib/workspace/types";
-import {
-  normalizeMarkdownPath,
-  writeNewWorkspaceFile,
-  type MarkdownFileNode,
-  type WorkspaceBackend,
-} from "@/lib/workspace-backend";
+import type { ActiveDocumentSource, SingleFileSource } from "@/lib/workspace/types";
+import { normalizeMarkdownPath, type MarkdownFileNode } from "@/lib/workspace-tree";
 import type { StoredDropboxWorkspaceConfig } from "@/lib/workspace-store";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 type MutableRef<T> = {
   current: T;
@@ -56,24 +52,24 @@ type MarkdownHtmlExportInput = {
 type UseWorkspaceFileActionsOptions = {
   activateSingleFileDocument: (
     source: SingleFileSource,
-    backend: WorkspaceBackend,
+    persistence: ActiveDocumentSource,
     file: MarkdownFileNode,
     value: string,
   ) => void;
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
-  createDropboxBackend: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceBackend>;
+  createDropboxRuntime: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceRuntime>;
   discardMaterializedDraft: (source: SingleFileSource | null) => void;
   documentTargetGenerationRef: MutableRef<number>;
   editorElementRef: RefObject<LiveMdEditorElement | null>;
   editorValueRef: MutableRef<string>;
   loadTree: (
-    backend: WorkspaceBackend,
+    runtime: WorkspaceRuntime,
     nextSelectedPath?: null | string,
     options?: { saveBeforeSelect?: boolean },
   ) => Promise<void>;
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
   markdownConfig?: LiveMdMarkdownConfig | null;
-  refreshWorkspaceForCurrentEditor: (backend: WorkspaceBackend) => Promise<void>;
+  refreshWorkspaceForCurrentEditor: (runtime: WorkspaceRuntime) => Promise<void>;
   resolveImageAssetFile: NonNullable<MarkdownHtmlExportOptions["resolveAsset"]>;
   saveCurrentFile: () => Promise<boolean>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
@@ -81,17 +77,17 @@ type UseWorkspaceFileActionsOptions = {
   setDropboxConnecting: (connecting: boolean) => void;
   setErrorMessage: (message: string) => void;
   setRetryLoadPath: (path: string | null) => void;
-  setWorkspaceBackend: (backend: WorkspaceBackend) => void;
+  replaceWorkspaceRuntime: (runtime: WorkspaceRuntime) => Promise<void>;
   singleFileSourceRef: MutableRef<SingleFileSource | null>;
   storedDropboxConfig: StoredDropboxWorkspaceConfig | null;
   t: TFunction;
-  workspaceBackendRef: MutableRef<WorkspaceBackend | null>;
+  workspaceRuntimeRef: MutableRef<WorkspaceRuntime | null>;
 };
 
 export function useWorkspaceFileActions({
   activateSingleFileDocument,
   collabDocumentRef,
-  createDropboxBackend,
+  createDropboxRuntime,
   discardMaterializedDraft,
   documentTargetGenerationRef,
   editorElementRef,
@@ -107,11 +103,11 @@ export function useWorkspaceFileActions({
   setDropboxConnecting,
   setErrorMessage,
   setRetryLoadPath,
-  setWorkspaceBackend,
+  replaceWorkspaceRuntime,
   singleFileSourceRef,
   storedDropboxConfig,
   t,
-  workspaceBackendRef,
+  workspaceRuntimeRef,
 }: UseWorkspaceFileActionsOptions) {
   let [saveAsDropboxDialogOpen, setSaveAsDropboxDialogOpen] = useState(false);
   let [saveAsDropboxPath, setSaveAsDropboxPath] = useState("");
@@ -273,13 +269,13 @@ export function useWorkspaceFileActions({
       localFileHandleRef.current = handle;
       activateSingleFileDocument(
         { kind: "local-file", name: nextName },
-        createLocalFileBackend(handle),
+        createLocalFileSource(handle),
         nextFile,
         value,
       );
       discardMaterializedDraft(source);
-      let backend = workspaceBackendRef.current;
-      if (backend) await refreshWorkspaceForCurrentEditor(backend);
+      let runtime = workspaceRuntimeRef.current;
+      if (runtime) await refreshWorkspaceForCurrentEditor(runtime);
     } catch (error) {
       if (!isAbortError(error)) setErrorMessage(errorToMessage(error));
     } finally {
@@ -298,7 +294,7 @@ export function useWorkspaceFileActions({
     setErrorMessage,
     setRetryLoadPath,
     singleFileSourceRef,
-    workspaceBackendRef,
+    workspaceRuntimeRef,
   ]);
 
   let openSaveAsDropboxDialog = useCallback(() => {
@@ -334,16 +330,23 @@ export function useWorkspaceFileActions({
       setRetryLoadPath(null);
       try {
         let path = normalizeMarkdownPath(rawPath);
-        let backend =
-          workspaceBackendRef.current?.kind == "opendal-dropbox"
-            ? workspaceBackendRef.current
-            : await createDropboxBackend({
+        let runtime =
+          workspaceRuntimeRef.current?.identity.kind == "opendal-dropbox"
+            ? workspaceRuntimeRef.current
+            : await createDropboxRuntime({
                 appKey,
                 root: storedDropboxConfig?.root ?? defaultDropboxRoot(),
               });
-        await writeNewWorkspaceFile(backend, path, value);
-        setWorkspaceBackend(backend);
-        await loadTree(backend, path, { saveBeforeSelect: false });
+        let result = await runtime.documents.commit({
+          condition: { kind: "if-absent" },
+          path,
+          value,
+        });
+        if (result.status != "committed") {
+          throw new Error(`Workspace write for ${path} ended with ${result.status}.`);
+        }
+        await replaceWorkspaceRuntime(runtime);
+        await loadTree(runtime, path, { saveBeforeSelect: false });
         discardMaterializedDraft(source);
         setSaveAsDropboxDialogOpen(false);
       } catch (error) {
@@ -354,7 +357,7 @@ export function useWorkspaceFileActions({
       }
     },
     [
-      createDropboxBackend,
+      createDropboxRuntime,
       currentMarkdownValue,
       discardMaterializedDraft,
       documentTargetGenerationRef,
@@ -363,10 +366,10 @@ export function useWorkspaceFileActions({
       setDropboxConnecting,
       setErrorMessage,
       setRetryLoadPath,
-      setWorkspaceBackend,
+      replaceWorkspaceRuntime,
       singleFileSourceRef,
       storedDropboxConfig,
-      workspaceBackendRef,
+      workspaceRuntimeRef,
     ],
   );
 

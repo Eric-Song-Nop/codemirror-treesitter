@@ -7,11 +7,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { EditorView } from "@codemirror/view";
 import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import type { EditorDocument, SingleFileSource } from "@/lib/workspace/types";
-import type {
-  CreatedWorkspaceImageNode,
-  MarkdownFileNode,
-  WorkspaceBackend,
-} from "@/lib/workspace-backend";
+import type { CreatedWorkspaceImageNode, MarkdownFileNode } from "@/lib/workspace-tree";
+import type { WorkspaceAssetPort, WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import { createMemoryWorkspaceRuntime } from "@/test/memory-workspace-runtime";
 import { useWorkspaceImageAssets } from "./useWorkspaceImageAssets";
 
 type ReactActGlobal = typeof globalThis & {
@@ -65,8 +63,8 @@ describe("useWorkspaceImageAssets", () => {
       .fn(async (_path: string) => new Uint8Array())
       .mockResolvedValueOnce(new Uint8Array([1, 2, 3]))
       .mockResolvedValueOnce(new Uint8Array([4, 5, 6]));
-    let firstBackend = createTestBackend("workspace-a", readWorkspaceImage);
-    let secondBackend = createTestBackend(
+    let firstBackend = createTestRuntime("workspace-a", readWorkspaceImage);
+    let secondBackend = createTestRuntime(
       "workspace-b",
       vi.fn(async (_path: string) => new Uint8Array([9])),
     );
@@ -90,12 +88,12 @@ describe("useWorkspaceImageAssets", () => {
     let upload = createDeferred<CreatedWorkspaceImageNode>();
     let deleteFile = vi.fn(async () => {});
     let createImageAsset = vi.fn(async () => upload.promise);
-    let backend = createTestBackend("workspace-a", undefined, {
+    let backend = createTestRuntime("workspace-a", undefined, {
       createImageAsset,
       deleteFile,
     });
     let otherDeleteFile = vi.fn(async () => {});
-    let otherBackend = createTestBackend("workspace-b", undefined, {
+    let otherBackend = createTestRuntime("workspace-b", undefined, {
       createImageAsset: vi.fn(),
       deleteFile: otherDeleteFile,
     });
@@ -105,7 +103,7 @@ describe("useWorkspaceImageAssets", () => {
       documentTargetGeneration: 1,
       editorView,
       selectedFile: testSelectedFile,
-      workspaceBackend: backend,
+      workspaceRuntime: backend,
     });
     void startImageUpload([createdAsset.file]);
     expect(createImageAsset).toHaveBeenCalledWith(testSelectedFile.path, createdAsset.file);
@@ -114,13 +112,13 @@ describe("useWorkspaceImageAssets", () => {
       documentTargetGeneration: 2,
       editorView,
       selectedFile: otherSelectedFile,
-      workspaceBackend: otherBackend,
+      workspaceRuntime: otherBackend,
     });
     await renderImageAssetsHook({
       documentTargetGeneration: 3,
       editorView,
       selectedFile: testSelectedFile,
-      workspaceBackend: backend,
+      workspaceRuntime: backend,
     });
 
     await act(async () => upload.resolve(createdAsset));
@@ -146,7 +144,7 @@ describe("useWorkspaceImageAssets", () => {
     let deleteFile = vi.fn(async () => {});
     let setBusy = vi.fn();
     let setErrorMessage = vi.fn();
-    let backend = createTestBackend("workspace-a", undefined, {
+    let backend = createTestRuntime("workspace-a", undefined, {
       createImageAsset,
       deleteFile,
     });
@@ -158,7 +156,7 @@ describe("useWorkspaceImageAssets", () => {
       selectedFile: testSelectedFile,
       setBusy,
       setErrorMessage,
-      workspaceBackend: backend,
+      workspaceRuntime: backend,
     });
     void startImageUpload([firstAsset.file, secondFile]);
     await waitFor(() => setBusy.mock.calls.some(([busy]) => busy === false));
@@ -188,7 +186,7 @@ describe("useWorkspaceImageAssets", () => {
     });
     let setBusy = vi.fn();
     let setErrorMessage = vi.fn();
-    let backend = createTestBackend("workspace-a", undefined, {
+    let backend = createTestRuntime("workspace-a", undefined, {
       createImageAsset,
       deleteFile,
     });
@@ -200,7 +198,7 @@ describe("useWorkspaceImageAssets", () => {
       selectedFile: testSelectedFile,
       setBusy,
       setErrorMessage,
-      workspaceBackend: backend,
+      workspaceRuntime: backend,
     });
     void startImageUpload([firstAsset.file, secondAsset.file, thirdFile]);
     await waitFor(() => setBusy.mock.calls.some(([busy]) => busy === false));
@@ -221,13 +219,13 @@ describe("useWorkspaceImageAssets", () => {
     let createdAsset = createImageNode("photo.png", "notes/assets/photo.png");
     let upload = createDeferred<CreatedWorkspaceImageNode>();
     let deleteFile = vi.fn(async () => {});
-    let backend = createTestBackend("workspace-a", undefined, {
+    let backend = createTestRuntime("workspace-a", undefined, {
       createImageAsset: vi.fn(async () => upload.promise),
       deleteFile,
     });
     let editorView = createTestEditorView();
 
-    await renderImageAssetsHook({ editorView, workspaceBackend: backend });
+    await renderImageAssetsHook({ editorView, workspaceRuntime: backend });
     void startImageUpload([createdAsset.file]);
     act(() => {
       root?.unmount();
@@ -243,13 +241,13 @@ describe("useWorkspaceImageAssets", () => {
   it("commits a successful batch once to the captured editor view", async () => {
     let createdAsset = createImageNode("photo.png", "notes/assets/photo.png");
     let deleteFile = vi.fn(async () => {});
-    let backend = createTestBackend("workspace-a", undefined, {
+    let backend = createTestRuntime("workspace-a", undefined, {
       createImageAsset: vi.fn(async () => createdAsset),
       deleteFile,
     });
     let editorView = createTestEditorView();
 
-    await renderImageAssetsHook({ editorView, workspaceBackend: backend });
+    await renderImageAssetsHook({ editorView, workspaceRuntime: backend });
     let upload = startImageUpload([createdAsset.file]);
     await act(async () => upload);
 
@@ -266,7 +264,7 @@ type RenderImageAssetsHookOptions = {
   selectedFile?: MarkdownFileNode;
   setBusy?: (busy: boolean) => void;
   setErrorMessage?: (message: string) => void;
-  workspaceBackend: WorkspaceBackend;
+  workspaceRuntime: WorkspaceRuntime;
 };
 
 type TestEditorView = EditorView & {
@@ -275,7 +273,7 @@ type TestEditorView = EditorView & {
 };
 
 async function renderImageAssetsHook(
-  workspaceBackendOrOptions: WorkspaceBackend | RenderImageAssetsHookOptions,
+  workspaceRuntimeOrOptions: WorkspaceRuntime | RenderImageAssetsHookOptions,
 ) {
   if (!container) {
     container = document.body.appendChild(document.createElement("div"));
@@ -285,9 +283,9 @@ async function renderImageAssetsHook(
   let queryClient = activeQueryClient ?? new QueryClient();
   activeQueryClient = queryClient;
   let options =
-    "workspaceBackend" in workspaceBackendOrOptions
-      ? workspaceBackendOrOptions
-      : { workspaceBackend: workspaceBackendOrOptions };
+    "workspaceRuntime" in workspaceRuntimeOrOptions
+      ? workspaceRuntimeOrOptions
+      : { workspaceRuntime: workspaceRuntimeOrOptions };
 
   await act(async () => {
     root?.render(
@@ -299,7 +297,7 @@ async function renderImageAssetsHook(
           selectedFile={options.selectedFile ?? testSelectedFile}
           setBusy={options.setBusy ?? (() => {})}
           setErrorMessage={options.setErrorMessage ?? (() => {})}
-          workspaceBackend={options.workspaceBackend}
+          workspaceRuntime={options.workspaceRuntime}
         />
       </QueryClientProvider>,
     );
@@ -313,7 +311,7 @@ function ImageAssetsHarness({
   selectedFile,
   setBusy,
   setErrorMessage,
-  workspaceBackend,
+  workspaceRuntime,
 }: {
   documentTargetGeneration: number;
   editorView: TestEditorView | null;
@@ -321,37 +319,37 @@ function ImageAssetsHarness({
   selectedFile: MarkdownFileNode;
   setBusy: (busy: boolean) => void;
   setErrorMessage: (message: string) => void;
-  workspaceBackend: WorkspaceBackend;
+  workspaceRuntime: WorkspaceRuntime;
 }) {
   let editorElementRef = useRef<LiveMdEditorElement | null>(null);
   let documentTargetGenerationRef = useRef(documentTargetGeneration);
-  let selectedFileBackendRef = useRef<WorkspaceBackend | null>(workspaceBackend);
+  let selectedFileSourceRef = useRef<WorkspaceRuntime | null>(workspaceRuntime);
   let selectedFileRef = useRef<MarkdownFileNode | null>(selectedFile);
   let singleFileSourceRef = useRef<SingleFileSource | null>(null);
-  let workspaceBackendRef = useRef<WorkspaceBackend | null>(workspaceBackend);
+  let workspaceRuntimeRef = useRef<WorkspaceRuntime | null>(workspaceRuntime);
 
   documentTargetGenerationRef.current = documentTargetGeneration;
   editorElementRef.current = editorView
     ? ({ view: editorView } as unknown as LiveMdEditorElement)
     : null;
-  selectedFileBackendRef.current = workspaceBackend;
+  selectedFileSourceRef.current = workspaceRuntime;
   selectedFileRef.current = selectedFile;
   singleFileSourceRef.current = null;
-  workspaceBackendRef.current = workspaceBackend;
+  workspaceRuntimeRef.current = workspaceRuntime;
 
   let hookOptions = {
     documentTargetGenerationRef,
     editorDocument: { ...testEditorDocument, path: selectedFile.path },
     editorElementRef,
     selectedFile,
-    selectedFileBackendRef,
+    selectedFileSourceRef,
     selectedFileRef,
     setBusy,
     setErrorMessage,
     singleFileSource: null,
     singleFileSourceRef,
-    workspaceBackend,
-    workspaceBackendRef,
+    workspaceRuntime,
+    workspaceRuntimeRef,
   };
   let api = useWorkspaceImageAssets(hookOptions);
 
@@ -380,24 +378,29 @@ async function fileBytes(file: File) {
   return [...new Uint8Array(await file.arrayBuffer())];
 }
 
-function createTestBackend(
+function createTestRuntime(
   id: string,
-  readBytes: NonNullable<WorkspaceBackend["readBytes"]> = async () => new Uint8Array(),
-  overrides: Partial<WorkspaceBackend> = {},
-): WorkspaceBackend {
-  return {
-    id,
-    kind: "local",
-    name: id,
-    createFile: async () => null,
-    deleteFile: async () => {},
-    readBytes,
-    readFile: async () => "",
-    readTree: async () => ({ children: [], kind: "directory", name: id, path: "" }),
-    renameFile: async (_path, rawName) => rawName,
-    writeFile: async () => {},
-    ...overrides,
+  readBytes: WorkspaceAssetPort["read"] = async () => new Uint8Array(),
+  overrides: {
+    createImageAsset?: WorkspaceAssetPort["create"];
+    deleteFile?: (path: string) => Promise<void>;
+  } = {},
+): WorkspaceRuntime {
+  let runtime = createMemoryWorkspaceRuntime([], { id, name: id });
+  let createAsset = runtime.assets.create.bind(runtime.assets);
+  let deleteAsset = runtime.assets.delete.bind(runtime.assets);
+  runtime.assets = {
+    ...runtime.assets,
+    create: overrides.createImageAsset ?? createAsset,
+    delete: overrides.deleteFile
+      ? async (path) => {
+          await overrides.deleteFile!(path);
+          return { status: "applied" };
+        }
+      : deleteAsset,
+    read: readBytes,
   };
+  return runtime;
 }
 
 function startImageUpload(files: File[]) {

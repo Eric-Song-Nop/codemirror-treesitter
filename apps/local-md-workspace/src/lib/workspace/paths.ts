@@ -1,23 +1,10 @@
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import type { TFunction } from "@/lib/i18n";
-import {
-  findMarkdownFile,
-  type MarkdownDirectoryNode,
-  type WorkspaceBackend,
-} from "@/lib/workspace-backend";
+import { findMarkdownFile, type MarkdownDirectoryNode } from "@/lib/workspace-tree";
 
 export function isPathInsideDirectory(path: string, directory: string) {
   let normalizedDirectory = directory.replace(/\/+$/g, "");
   return path == normalizedDirectory || path.startsWith(`${normalizedDirectory}/`);
-}
-
-export async function renameWorkspaceDirectory(
-  backend: WorkspaceBackend,
-  path: string,
-  rawName: string,
-) {
-  if (!backend.renameDirectory) throw new Error("This workspace cannot rename folders.");
-  return backend.renameDirectory(path, rawName);
 }
 
 export function pathAfterDirectoryRename(

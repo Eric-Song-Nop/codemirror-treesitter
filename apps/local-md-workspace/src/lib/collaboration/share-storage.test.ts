@@ -14,11 +14,12 @@ import {
   rotateOwnerShare,
 } from "./share-storage.ts";
 import { parseShareLink } from "./share-identity.ts";
-import type {
-  MarkdownDirectoryNode,
-  WorkspaceBackend,
-  WorkspaceEntry,
-} from "@/lib/workspace-backend";
+import type { WorkspaceStorageKind } from "@/lib/storage/types";
+import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
+import {
+  createMemoryWorkspaceRuntime,
+  type MemoryWorkspaceRuntime,
+} from "@/test/memory-workspace-runtime";
 
 let indexedDbDescriptor: PropertyDescriptor | undefined;
 let localStorageDescriptor: PropertyDescriptor | undefined;
@@ -84,7 +85,7 @@ describe("owner shared file metadata", () => {
     let relayRequests: unknown[] = [];
 
     let share = await createOwnerShare({
-      backend,
+      identity: backend.identity,
       baseUrl: "https://example.test/workspace",
       createRelayShare: async (_origin, request) => {
         relayRequests.push(request);
@@ -139,7 +140,7 @@ describe("owner shared file metadata", () => {
     expect(stored).not.toContain(linkParts!.guestSecret);
     expect(stored).not.toContain(hostSecret!);
     expect(hostSecret).toEqual(expect.any(String));
-    await expect(readOwnerShareRecord(backend, share.record.shareId)).resolves.toEqual(
+    await expect(readOwnerShareRecord(backend.identity, share.record.shareId)).resolves.toEqual(
       share.record,
     );
   });
@@ -151,7 +152,7 @@ describe("owner shared file metadata", () => {
 
     await expect(
       createOwnerShare({
-        backend,
+        identity: backend.identity,
         baseUrl: "https://example.test/workspace",
         createRelayShare: async () => {
           throw new Error("relay unavailable");
@@ -173,7 +174,7 @@ describe("owner shared file metadata", () => {
     expect(hostSecrets.size).toBe(1);
     let [hostSecretKey] = hostSecrets.keys();
     let shareId = hostSecretKey!.slice(hostSecretStorageKey("").length);
-    await expect(readOwnerShareRecord(backend, shareId)).resolves.toMatchObject({
+    await expect(readOwnerShareRecord(backend.identity, shareId)).resolves.toMatchObject({
       hostSecretRef: hostSecretKey,
       shareId,
     });
@@ -186,7 +187,7 @@ describe("owner shared file metadata", () => {
 
     await expect(
       createOwnerShare({
-        backend,
+        identity: backend.identity,
         baseUrl: "https://example.test/workspace",
         createRelayShare: async () => {
           relayCalled = true;
@@ -216,7 +217,7 @@ describe("owner shared file metadata", () => {
     let document = await openMarkdownCollabDocument(backend, "note.md");
 
     let share = await createOwnerShare({
-      backend,
+      identity: backend.identity,
       baseUrl: "https://example.test/workspace",
       createRelayShare: async () => {},
       document,
@@ -238,7 +239,9 @@ describe("owner shared file metadata", () => {
       },
       workspaceId: "opendal-gdrive:gdrive:workspace-1",
     });
-    await expect(restoreOwnerShareRecordForPath(backend, "note.md")).resolves.toEqual(share.record);
+    await expect(restoreOwnerShareRecordForPath(backend.identity, "note.md")).resolves.toEqual(
+      share.record,
+    );
   });
 
   it("rejects owner-host shares for sources without the share capability", async () => {
@@ -247,7 +250,7 @@ describe("owner shared file metadata", () => {
 
     await expect(
       createOwnerShare({
-        backend,
+        identity: backend.identity,
         baseUrl: "https://example.test/workspace",
         createRelayShare: async () => {},
         document,
@@ -265,7 +268,7 @@ describe("owner shared file metadata", () => {
     let document = await openMarkdownCollabDocument(backend, "note.md");
     let hostSecrets = new Map<string, string>();
     let share = await createOwnerShare({
-      backend,
+      identity: backend.identity,
       baseUrl: "https://example.test/workspace",
       createRelayShare: async () => {},
       document,
@@ -284,7 +287,7 @@ describe("owner shared file metadata", () => {
     let rotateRequests: unknown[] = [];
 
     let rotated = await rotateOwnerShare({
-      backend,
+      identity: backend.identity,
       baseUrl: "https://example.test/workspace",
       expiration: "24h",
       hostSecret,
@@ -317,7 +320,7 @@ describe("owner shared file metadata", () => {
     let stored = window.localStorage.getItem(ownerShareRecordPath(share.record.shareId));
     expect(stored).toBeTruthy();
     expect(stored).not.toContain(rotatedLink.guestSecret);
-    await expect(readOwnerShareRecord(backend, share.record.shareId)).resolves.toEqual(
+    await expect(readOwnerShareRecord(backend.identity, share.record.shareId)).resolves.toEqual(
       rotated.record,
     );
   });
@@ -326,7 +329,7 @@ describe("owner shared file metadata", () => {
     let backend = createMemoryBackend([["note.md", "# First\n"]]);
     let document = await openMarkdownCollabDocument(backend, "note.md");
     let share = await createOwnerShare({
-      backend,
+      identity: backend.identity,
       baseUrl: "https://example.test/workspace",
       createRelayShare: async () => {},
       document,
@@ -338,7 +341,7 @@ describe("owner shared file metadata", () => {
     });
 
     let revoked = await revokeOwnerShare({
-      backend,
+      identity: backend.identity,
       hostSecret: "host-secret",
       record: share.record,
       relayOrigin: "https://relay.example",
@@ -352,14 +355,16 @@ describe("owner shared file metadata", () => {
       ...share.record,
       revokedAt: Date.UTC(2026, 5, 7),
     });
-    await expect(readOwnerShareRecord(backend, share.record.shareId)).resolves.toEqual(revoked);
+    await expect(readOwnerShareRecord(backend.identity, share.record.shareId)).resolves.toEqual(
+      revoked,
+    );
   });
 
   it("discovers the latest active owner share for a file", async () => {
     let backend = createMemoryBackend([["note.md", "# First\n"]]);
     let document = await openMarkdownCollabDocument(backend, "note.md");
     let first = await createOwnerShare({
-      backend,
+      identity: backend.identity,
       baseUrl: "https://example.test/workspace",
       createRelayShare: async () => {},
       document,
@@ -370,7 +375,7 @@ describe("owner shared file metadata", () => {
       relayOrigin: "https://relay.example",
     });
     let second = await createOwnerShare({
-      backend,
+      identity: backend.identity,
       baseUrl: "https://example.test/workspace",
       createRelayShare: async () => {},
       document,
@@ -381,7 +386,7 @@ describe("owner shared file metadata", () => {
       relayOrigin: "https://relay.example",
     });
     await revokeOwnerShare({
-      backend,
+      identity: backend.identity,
       hostSecret: "host-secret",
       record: first.record,
       relayOrigin: "https://relay.example",
@@ -392,7 +397,7 @@ describe("owner shared file metadata", () => {
     });
     window.localStorage.setItem("local-md-workspace:share-record:corrupt", "{");
 
-    await expect(restoreOwnerShareRecordForPath(backend, "note.md")).resolves.toEqual(
+    await expect(restoreOwnerShareRecordForPath(backend.identity, "note.md")).resolves.toEqual(
       second.record,
     );
   });
@@ -423,7 +428,9 @@ describe("owner shared file metadata", () => {
       JSON.stringify(legacyRecord),
     );
 
-    await expect(readOwnerShareRecord(backend, legacyRecord.shareId)).resolves.toMatchObject({
+    await expect(
+      readOwnerShareRecord(backend.identity, legacyRecord.shareId),
+    ).resolves.toMatchObject({
       ...legacyRecord,
       sourceRef: {
         backendKind: "opendal-dropbox",
@@ -432,7 +439,9 @@ describe("owner shared file metadata", () => {
         workspaceNamespace: "opendal-dropbox:dropbox:/workspace",
       },
     });
-    await expect(restoreOwnerShareRecordForPath(backend, "note.md")).resolves.toMatchObject({
+    await expect(
+      restoreOwnerShareRecordForPath(backend.identity, "note.md"),
+    ).resolves.toMatchObject({
       shareId: legacyRecord.shareId,
       sourceRef: {
         workspaceNamespace: "opendal-dropbox:dropbox:/workspace",
@@ -474,7 +483,7 @@ describe("owner shared file metadata", () => {
       JSON.stringify(legacyRecord),
     );
 
-    let restored = await restoreOwnerShareRecordForPath(backend, "note.md");
+    let restored = await restoreOwnerShareRecordForPath(backend.identity, "note.md");
 
     expect(restored).toMatchObject({
       backendKind: "local",
@@ -488,7 +497,9 @@ describe("owner shared file metadata", () => {
       },
       workspaceId: "local:local:workspace-2",
     });
-    await expect(readOwnerShareRecord(backend, legacyRecord.shareId)).resolves.toMatchObject({
+    await expect(
+      readOwnerShareRecord(backend.identity, legacyRecord.shareId),
+    ).resolves.toMatchObject({
       sourceRef: {
         workspaceId: "local:workspace-2",
         workspaceNamespace: "local:local:workspace-2",
@@ -525,7 +536,7 @@ describe("owner shared file metadata", () => {
       JSON.stringify(legacyRecord),
     );
 
-    let restored = await restoreOwnerShareRecordForPath(backend, "note.md");
+    let restored = await restoreOwnerShareRecordForPath(backend.identity, "note.md");
 
     expect(restored).toMatchObject({
       shareId: legacyRecord.shareId,
@@ -538,96 +549,17 @@ describe("owner shared file metadata", () => {
   });
 });
 
-type MemoryBackend = WorkspaceBackend & {
-  files: Map<string, string>;
-};
+type MemoryBackend = MemoryWorkspaceRuntime;
 
 function createMemoryBackend(
   entries: Array<[string, string]>,
-  kind: WorkspaceBackend["kind"] = "local",
+  kind: WorkspaceStorageKind = "local",
   id = "memory:test",
-  sourceAliases: WorkspaceBackend["sourceAliases"] = [],
+  sourceAliases: WorkspaceIdentity["sourceAliases"] = [],
 ): MemoryBackend {
-  let files = new Map(entries);
-
-  return {
-    files,
-    id,
-    kind,
-    name: "Memory",
-    sourceAliases,
-    async createDirectory() {},
-    async createFile(path) {
-      files.set(path, "");
-      return path;
-    },
-    async deleteFile(path) {
-      files.delete(path);
-    },
-    async deleteEntry(path) {
-      files.delete(path);
-    },
-    async listEntries(path) {
-      let prefix = path ? `${path}/` : "";
-      let entries: WorkspaceEntry[] = [];
-      for (let filePath of files.keys()) {
-        if (!filePath.startsWith(prefix)) continue;
-        entries.push({ isDirectory: false, isFile: true, path: filePath });
-      }
-      return entries;
-    },
-    async readBytes(path) {
-      let value = files.get(path);
-      if (value == null) throw new DOMException("File not found.", "NotFoundError");
-      return decodeBase64(value);
-    },
-    async readFile(path) {
-      let value = files.get(path);
-      if (value == null) throw new DOMException("File not found.", "NotFoundError");
-      return value;
-    },
-    async readTextFile(path) {
-      let value = files.get(path);
-      if (value == null) throw new DOMException("File not found.", "NotFoundError");
-      return value;
-    },
-    async readTree(): Promise<MarkdownDirectoryNode> {
-      return { children: [], kind: "directory", name: "Memory", path: "" };
-    },
-    async renameFile(from, to) {
-      let value = files.get(from);
-      if (value == null) throw new DOMException("File not found.", "NotFoundError");
-      files.delete(from);
-      files.set(to, value);
-      return to;
-    },
-    async writeBytes(path, bytes) {
-      files.set(path, encodeBase64(bytes));
-    },
-    async writeFile(path, value) {
-      files.set(path, value);
-    },
-    async writeTextFile(path, value) {
-      files.set(path, value);
-    },
-  };
+  return createMemoryWorkspaceRuntime(entries, { id, kind, sourceAliases });
 }
 
 function hasLiveMdFiles(backend: MemoryBackend) {
   return [...backend.files.keys()].some((path) => path == ".livemd" || path.startsWith(".livemd/"));
-}
-
-function decodeBase64(value: string) {
-  let binary = atob(value);
-  let bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-
-function encodeBase64(bytes: Uint8Array) {
-  let chunks: string[] = [];
-  for (let offset = 0; offset < bytes.byteLength; offset += 0x8000) {
-    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
-  }
-  return btoa(chunks.join(""));
 }

@@ -21,22 +21,28 @@ import {
   readWorkspaceImageBytes,
   removeWorkspaceImageQueries,
 } from "@/lib/workspace/workspace-data-cache";
-import type { EditorDocument, SingleFileSource, WorkspaceImageAsset } from "@/lib/workspace/types";
-import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import type {
+  ActiveDocumentSource,
+  EditorDocument,
+  SingleFileSource,
+  WorkspaceImageAsset,
+} from "@/lib/workspace/types";
+import type { MarkdownFileNode } from "@/lib/workspace-tree";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 type UseWorkspaceImageAssetsOptions = {
   documentTargetGenerationRef: RefObject<number>;
   editorDocument: EditorDocument;
   editorElementRef: RefObject<LiveMdEditorElement | null>;
   selectedFile: MarkdownFileNode | null;
-  selectedFileBackendRef: RefObject<WorkspaceBackend | null>;
+  selectedFileSourceRef: RefObject<ActiveDocumentSource | null>;
   selectedFileRef: RefObject<MarkdownFileNode | null>;
   setBusy: (busy: boolean) => void;
   setErrorMessage: (message: string) => void;
   singleFileSource: SingleFileSource | null;
   singleFileSourceRef: RefObject<SingleFileSource | null>;
-  workspaceBackend: WorkspaceBackend | null;
-  workspaceBackendRef: RefObject<WorkspaceBackend | null>;
+  workspaceRuntime: WorkspaceRuntime | null;
+  workspaceRuntimeRef: RefObject<WorkspaceRuntime | null>;
 };
 
 export function useWorkspaceImageAssets({
@@ -44,14 +50,14 @@ export function useWorkspaceImageAssets({
   editorDocument,
   editorElementRef,
   selectedFile,
-  selectedFileBackendRef,
+  selectedFileSourceRef,
   selectedFileRef,
   setBusy,
   setErrorMessage,
   singleFileSource,
   singleFileSourceRef,
-  workspaceBackend,
-  workspaceBackendRef,
+  workspaceRuntime,
+  workspaceRuntimeRef,
 }: UseWorkspaceImageAssetsOptions) {
   let queryClient = useQueryClient();
   let {
@@ -62,7 +68,7 @@ export function useWorkspaceImageAssets({
   } = useWorkspaceImageAssetStore();
   let imageInputRef = useRef<HTMLInputElement | null>(null);
   let mountedRef = useRef(false);
-  let previousWorkspaceBackendRef = useRef<WorkspaceBackend | null>(null);
+  let previousWorkspaceRuntimeRef = useRef<WorkspaceRuntime | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -72,13 +78,13 @@ export function useWorkspaceImageAssets({
   }, []);
 
   useEffect(() => {
-    let previousBackend = previousWorkspaceBackendRef.current;
-    if (previousBackend && previousBackend.id != workspaceBackend?.id) {
-      removeWorkspaceImageQueries(queryClient, previousBackend);
+    let previousRuntime = previousWorkspaceRuntimeRef.current;
+    if (previousRuntime && previousRuntime.identity.id != workspaceRuntime?.identity.id) {
+      removeWorkspaceImageQueries(queryClient, previousRuntime);
     }
-    previousWorkspaceBackendRef.current = workspaceBackend;
+    previousWorkspaceRuntimeRef.current = workspaceRuntime;
     clearImageAssets();
-  }, [clearImageAssets, queryClient, workspaceBackend]);
+  }, [clearImageAssets, queryClient, workspaceRuntime]);
 
   let loadImageAsset = useCallback(
     (path: string) => {
@@ -87,20 +93,20 @@ export function useWorkspaceImageAssets({
       let cached = getImageAsset(path);
       if (cached) return Promise.resolve(cached);
 
-      let backend = workspaceBackendRef.current;
-      if (!backend) return Promise.resolve(null);
+      let runtime = workspaceRuntimeRef.current;
+      if (!runtime) return Promise.resolve(null);
 
-      return readWorkspaceImageBytes(queryClient, backend, path)
+      return readWorkspaceImageBytes(queryClient, runtime, path)
         .then((bytes) => {
           if (!bytes) return null;
-          if (workspaceBackendRef.current?.id != backend.id) return null;
+          if (workspaceRuntimeRef.current?.identity.id != runtime.identity.id) return null;
           let asset = createWorkspaceImageAssetFromBytes(path, bytes);
           upsertImageAssets([asset]);
           return asset;
         })
         .catch(() => null);
     },
-    [getImageAsset, queryClient, upsertImageAssets, workspaceBackendRef],
+    [getImageAsset, queryClient, upsertImageAssets, workspaceRuntimeRef],
   );
 
   let resolveImageSource = useMemo<LiveMdImageSourceResolver>(() => {
@@ -120,9 +126,9 @@ export function useWorkspaceImageAssets({
       if (singleFileSourceRef.current) return;
 
       let file = selectedFileRef.current;
-      let backend = selectedFileBackendRef.current;
+      let runtime = workspaceRuntimeRef.current;
       let view = options.view ?? editorElementRef.current?.view ?? null;
-      if (!backend?.createImageAsset || workspaceBackendRef.current !== backend || !file || !view) {
+      if (!runtime || selectedFileSourceRef.current !== runtime || !file || !view) {
         return;
       }
 
@@ -134,8 +140,8 @@ export function useWorkspaceImageAssets({
         mountedRef.current &&
         documentTargetGenerationRef.current == targetGeneration &&
         editorElementRef.current?.view === view &&
-        selectedFileBackendRef.current === backend &&
-        workspaceBackendRef.current === backend &&
+        selectedFileSourceRef.current === runtime &&
+        workspaceRuntimeRef.current === runtime &&
         selectedFileRef.current === file &&
         !singleFileSourceRef.current;
 
@@ -148,7 +154,7 @@ export function useWorkspaceImageAssets({
         let insertedAssets: Array<WorkspaceImageAsset & { markdownReference: string }> = [];
         for (let imageFile of imageFiles) {
           if (!targetIsActive()) throw staleImageUpload;
-          let asset = await backend.createImageAsset(file.path, imageFile);
+          let asset = await runtime.assets.create(file.path, imageFile);
           let pendingAsset: PendingImageAsset = { path: asset.path };
           createdAssets.push(pendingAsset);
           if (!targetIsActive()) throw staleImageUpload;
@@ -170,7 +176,7 @@ export function useWorkspaceImageAssets({
         let stale = error === staleImageUpload || !targetIsActive();
         let rollbackErrors = referencesInserted
           ? revokePendingImageAssetUrls(createdAssets)
-          : await rollbackPendingImageAssets(backend, createdAssets);
+          : await rollbackPendingImageAssets(runtime, createdAssets);
         let reportedError = error;
         if (rollbackErrors.length) {
           reportedError = new AggregateError(
@@ -189,13 +195,13 @@ export function useWorkspaceImageAssets({
     [
       documentTargetGenerationRef,
       editorElementRef,
-      selectedFileBackendRef,
+      selectedFileSourceRef,
       selectedFileRef,
       setBusy,
       setErrorMessage,
       singleFileSourceRef,
       upsertImageAssets,
-      workspaceBackendRef,
+      workspaceRuntimeRef,
     ],
   );
 
@@ -235,9 +241,7 @@ export function useWorkspaceImageAssets({
   );
 
   return {
-    canInsertImage: Boolean(
-      !singleFileSource && workspaceBackend?.createImageAsset && selectedFile,
-    ),
+    canInsertImage: Boolean(!singleFileSource && workspaceRuntime && selectedFile),
     imageInputRef,
     imagePlugin,
     handleImageInputChange,
@@ -252,13 +256,17 @@ type PendingImageAsset = {
   url?: string;
 };
 
-async function rollbackPendingImageAssets(backend: WorkspaceBackend, assets: PendingImageAsset[]) {
+async function rollbackPendingImageAssets(runtime: WorkspaceRuntime, assets: PendingImageAsset[]) {
   let errors = revokePendingImageAssetUrls(assets);
   let deleteResults = await Promise.allSettled(
-    assets.toReversed().map((asset) => backend.deleteFile(asset.path)),
+    assets.toReversed().map((asset) => runtime.assets.delete(asset.path)),
   );
   for (let result of deleteResults) {
-    if (result.status == "rejected") errors.push(result.reason);
+    if (result.status == "rejected") {
+      errors.push(result.reason);
+    } else if (result.value.status != "applied") {
+      errors.push(new Error(`Image cleanup ended with ${result.value.status}.`));
+    }
   }
   return errors;
 }

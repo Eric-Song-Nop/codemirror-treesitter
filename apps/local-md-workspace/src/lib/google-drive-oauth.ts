@@ -1,4 +1,4 @@
-import type { OpendalWorkspaceIdentity } from "./opendal-workspace-backend.ts";
+import type { OpendalWorkspaceIdentity } from "./opendal-workspace-identity.ts";
 
 export const GOOGLE_DRIVE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_DRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token";

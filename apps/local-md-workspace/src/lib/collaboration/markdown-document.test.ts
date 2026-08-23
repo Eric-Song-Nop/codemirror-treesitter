@@ -10,13 +10,19 @@ import {
 import {
   getCollabDocumentValue,
   ingestExternalMarkdownEdit,
+  ingestExternalMarkdownObservation,
   materializeCollabDocument,
   openMarkdownCollabDocument,
+  resolveCollabRecoveryUseExternal,
   saveCollabDocumentSnapshot,
   savePendingCollabDocumentUpdates,
   scheduleCollabDocumentSnapshotFlush,
 } from "./markdown-document.ts";
-import type { MarkdownDirectoryNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import {
+  createMemoryWorkspaceRuntime,
+  type MemoryWorkspaceRuntime,
+} from "@/test/memory-workspace-runtime";
+import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
 
 let indexedDbDescriptor: PropertyDescriptor | undefined;
 
@@ -186,6 +192,35 @@ describe("Markdown collaboration documents", () => {
     expect(hasLiveMdFiles(backend)).toBe(false);
   });
 
+  it("imports an already observed source snapshot without reading storage again", async () => {
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let observe = vi.spyOn(backend.documents, "observe");
+
+    let result = await ingestExternalMarkdownObservation(document, {
+      state: "present",
+      value: {
+        bytes: new TextEncoder().encode("# External\n"),
+        capture: "bound",
+        contentHash: "sha256:external",
+        metadata: { etag: "etag-2" },
+        revision: { kind: "etag", validation: "atomic", value: "etag-2" },
+        value: "# External\n",
+      },
+    });
+
+    expect(observe).not.toHaveBeenCalled();
+    expect(result?.value).toBe("# External\n");
+    expect(document.source).toEqual({
+      baseline: {
+        contentHash: "sha256:external",
+        revision: { kind: "etag", validation: "atomic", value: "etag-2" },
+      },
+      kind: "present",
+    });
+    await document.dispose();
+  });
+
   it("imports source edits into the same Loro document when shared text also changed", async () => {
     let backend = createMemoryBackend([["note.md", "# First\n\n"]]);
     let document = await openMarkdownCollabDocument(backend, "note.md");
@@ -231,6 +266,59 @@ describe("Markdown collaboration documents", () => {
 
     expect(secondImport).toBeNull();
     expect(reopened.sourceState).toEqual({ kind: "needs-write" });
+  });
+
+  it("preserves dirty Loro content until external recovery is explicitly confirmed", async () => {
+    let { document, reopened } = await openRecoveryRequiredDocument();
+
+    expect(reopened.value).toBe("# Local recovery content\n");
+    expect(reopened.sourceState).toEqual({ kind: "blocked" });
+    expect(reopened.source).toMatchObject({
+      incoming: { value: "# External recovery content\n" },
+      kind: "recovery-required",
+    });
+
+    if (reopened.source.kind != "recovery-required") throw new Error("Expected recovery state.");
+    let result = await resolveCollabRecoveryUseExternal(
+      reopened,
+      reopened.source.incoming,
+      reopened.source.incoming.revision,
+    );
+
+    expect(result.status).toBe("applied");
+    expect(getCollabDocumentValue(reopened)).toBe("# External recovery content\n");
+    expect(reopened.cleanValue).toBe("# External recovery content\n");
+    expect(reopened.source.kind).toBe("present");
+    expect(reopened.sourceState).toEqual({ kind: "synced" });
+    await document.dispose();
+    await reopened.dispose();
+  });
+
+  it("requires recovery confirmation again when the incoming revision changed", async () => {
+    let { document, reopened } = await openRecoveryRequiredDocument();
+    if (reopened.source.kind != "recovery-required") throw new Error("Expected recovery state.");
+    let confirmedRevision = reopened.source.incoming.revision;
+
+    let result = await resolveCollabRecoveryUseExternal(
+      reopened,
+      {
+        ...reopened.source.incoming,
+        contentHash: "sha256:changed-again",
+        revision: {
+          kind: "etag",
+          validation: "atomic",
+          value: "changed-again",
+        },
+        value: "# Changed again\n",
+      },
+      confirmedRevision,
+    );
+
+    expect(result.status).toBe("incoming-changed");
+    expect(getCollabDocumentValue(reopened)).toBe("# Local recovery content\n");
+    expect(reopened.source.kind).toBe("recovery-required");
+    await document.dispose();
+    await reopened.dispose();
   });
 
   it("materializes shared text to the Markdown source and updates browser metadata", async () => {
@@ -342,56 +430,36 @@ describe("Markdown collaboration documents", () => {
   });
 });
 
-type MemoryBackend = WorkspaceBackend & {
-  files: Map<string, string>;
-};
+async function openRecoveryRequiredDocument() {
+  let backend = createMemoryBackend([["note.md", "# First\n"]]);
+  let document = await openMarkdownCollabDocument(backend, "note.md");
+  let text = document.doc.getText("markdown");
+  text.update("# Local recovery content\n");
+  document.doc.commit();
+  text.free();
+  await writeBrowserCollabSnapshot(
+    {
+      ...document.metadata,
+      materializedFrontiers: [{ counter: 999, peer: "999" }],
+      materializedVersionVector: [["999", 999]],
+    },
+    document.doc.export({ mode: "snapshot" }),
+  );
+  backend.files.set("note.md", "# External recovery content\n");
+  return {
+    document,
+    reopened: await openMarkdownCollabDocument(backend, "note.md"),
+  };
+}
+
+type MemoryBackend = MemoryWorkspaceRuntime;
 
 function createMemoryBackend(
   entries: Array<[string, string]> | Map<string, string>,
   id = "memory:test",
-  sourceAliases: WorkspaceBackend["sourceAliases"] = [],
+  sourceAliases: WorkspaceIdentity["sourceAliases"] = [],
 ): MemoryBackend {
-  let files = entries instanceof Map ? entries : new Map(entries);
-  return {
-    files,
-    id,
-    kind: "local",
-    name: "Memory",
-    sourceAliases,
-    async createFile(path) {
-      files.set(path, "");
-      return path;
-    },
-    async deleteFile(path) {
-      files.delete(path);
-    },
-    async readFile(path) {
-      let value = files.get(path);
-      if (value == null) throw new DOMException("File not found.", "NotFoundError");
-      return value;
-    },
-    async readTree(): Promise<MarkdownDirectoryNode> {
-      return { children: [], kind: "directory", name: "Memory", path: "" };
-    },
-    async renameFile(from, to) {
-      let value = files.get(from);
-      if (value == null) throw new DOMException("File not found.", "NotFoundError");
-      files.delete(from);
-      files.set(to, value);
-      return to;
-    },
-    async stat(path) {
-      return {
-        exists: files.has(path),
-        isDirectory: false,
-        isFile: files.has(path),
-        path,
-      };
-    },
-    async writeFile(path, value) {
-      files.set(path, value);
-    },
-  };
+  return createMemoryWorkspaceRuntime(entries, { id, sourceAliases });
 }
 
 function hasLiveMdFiles(backend: MemoryBackend) {

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { WorkspaceStorageKind } from "@/lib/storage/types";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 import { sourceAutoSaveKey, sourceAutoSaveTiming } from "./source-autosave.ts";
 
 describe("source autosave scheduling", () => {
@@ -12,13 +14,7 @@ describe("source autosave scheduling", () => {
 
   it("uses the slower cadence for cloud-backed workspaces", () => {
     for (let kind of ["opendal-dropbox", "opendal-gdrive", "opendal-onedrive"] as const) {
-      expect(
-        sourceAutoSaveKey({
-          id: `${kind}:test`,
-          kind,
-          name: kind,
-        } as Parameters<typeof sourceAutoSaveKey>[0]),
-      ).toBe("cloud");
+      expect(sourceAutoSaveKey(runtime(kind))).toBe("cloud");
     }
     expect(sourceAutoSaveTiming("cloud")).toEqual({
       delayMs: 2500,
@@ -26,3 +22,9 @@ describe("source autosave scheduling", () => {
     });
   });
 });
+
+function runtime(kind: WorkspaceStorageKind): WorkspaceRuntime {
+  return {
+    identity: { id: `${kind}:test`, kind, name: kind },
+  } as WorkspaceRuntime;
+}

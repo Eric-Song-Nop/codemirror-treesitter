@@ -2,19 +2,20 @@ import { useCallback, useMemo, useState } from "react";
 import type { CreatedOwnerShare } from "@/lib/collaboration/share-storage";
 import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
 import type { ActiveOwnerShareRecord, SingleFileSource } from "@/lib/workspace/types";
-import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import type { MarkdownFileNode } from "@/lib/workspace-tree";
 import { documentSourceRef, sameDocumentSourceRef } from "@/lib/workspace/source-identity";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 type UseWorkspaceShareStateOptions = {
   selectedFile: MarkdownFileNode | null;
   singleFileSource: SingleFileSource | null;
-  workspaceBackend: WorkspaceBackend | null;
+  workspaceRuntime: WorkspaceRuntime | null;
 };
 
 export function useWorkspaceShareState({
   selectedFile,
   singleFileSource,
-  workspaceBackend,
+  workspaceRuntime,
 }: UseWorkspaceShareStateOptions) {
   let [shareDialogOpen, setShareDialogOpen] = useState(false);
   let [shareExpiration, setShareExpiration] = useState<ShareExpirationOption>("7d");
@@ -26,10 +27,10 @@ export function useWorkspaceShareState({
 
   let selectedSourceRef = useMemo(
     () =>
-      !singleFileSource && workspaceBackend && selectedFile
-        ? documentSourceRef(workspaceBackend, selectedFile.path)
+      !singleFileSource && workspaceRuntime && selectedFile
+        ? documentSourceRef(workspaceRuntime.identity, selectedFile.path)
         : null,
-    [selectedFile, singleFileSource, workspaceBackend],
+    [selectedFile, singleFileSource, workspaceRuntime],
   );
   let activeShareForSelectedFile = useMemo(
     () =>

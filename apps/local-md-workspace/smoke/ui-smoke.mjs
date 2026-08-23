@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -24,14 +24,21 @@ if (!chromePath) {
 }
 
 let userDataDir = await mkdtemp(join(tmpdir(), "local-md-workspace-smoke-"));
-let chrome = execFile(chromePath, [
-  "--headless=new",
-  "--remote-debugging-port=0",
-  `--user-data-dir=${userDataDir}`,
-  "--no-default-browser-check",
-  "--no-first-run",
-  liveMdBoundariesOnly ? SMOKE_URL : "about:blank",
-]);
+let chromeEnvironment = { ...process.env };
+delete chromeEnvironment.DYLD_INSERT_LIBRARIES;
+delete chromeEnvironment.LD_PRELOAD;
+let chrome = spawn(
+  chromePath,
+  [
+    "--headless=new",
+    "--remote-debugging-port=0",
+    `--user-data-dir=${userDataDir}`,
+    "--no-default-browser-check",
+    "--no-first-run",
+    liveMdBoundariesOnly ? SMOKE_URL : "about:blank",
+  ],
+  { env: chromeEnvironment, stdio: ["ignore", "ignore", "pipe"] },
+);
 
 try {
   if (liveMdBoundariesOnly) console.log("Starting focused LiveMD browser regression smoke.");
@@ -277,10 +284,22 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
     sessionId,
   );
 
-  await client.waitForPredicate(
-    `Boolean(document.querySelector("live-md-editor")?.value?.includes("# smoke local"))`,
-    sessionId,
-  );
+  try {
+    await client.waitForPredicate(
+      `Boolean(document.querySelector("live-md-editor")?.value?.includes("# smoke local"))`,
+      sessionId,
+    );
+  } catch (error) {
+    let state = await client.evaluate(
+      `(() => ({
+        body: document.body.innerText,
+        editorValue: document.querySelector("live-md-editor")?.value ?? null,
+        files: Array.from(window.__localMdSmokeFiles?.entries?.() ?? []),
+      }))()`,
+      sessionId,
+    );
+    throw new Error(`${error.message}\n\nLocal create state:\n${JSON.stringify(state, null, 2)}`);
+  }
 
   let nextValue = "# smoke local\\n\\nEdited by local UI smoke.\\n";
   await client.evaluate(
@@ -295,11 +314,23 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
     sessionId,
   );
 
-  await client.waitForPredicate(
-    `window.__localMdSmokeFiles?.get("smoke-local.md") == ${JSON.stringify(nextValue)}`,
-    sessionId,
-    3_000,
-  );
+  try {
+    await client.waitForPredicate(
+      `window.__localMdSmokeFiles?.get("smoke-local.md") == ${JSON.stringify(nextValue)}`,
+      sessionId,
+      3_000,
+    );
+  } catch (error) {
+    let state = await client.evaluate(
+      `(() => ({
+        body: document.body.innerText,
+        editorValue: document.querySelector("live-md-editor")?.value ?? null,
+        files: Array.from(window.__localMdSmokeFiles?.entries?.() ?? []),
+      }))()`,
+      sessionId,
+    );
+    throw new Error(`${error.message}\n\nLocal save state:\n${JSON.stringify(state, null, 2)}`);
+  }
 
   let state = await client.evaluate(
     `
@@ -785,11 +816,15 @@ async function setLiveMdSmokeDocument(client, sessionId, value) {
 async function clickLiveMdWidget(client, sessionId, selector, { xRatio, yRatio }) {
   let target = await client.evaluate(
     `
-      (() => {
+      (async () => {
         let widget = document
           .querySelector("live-md-editor")
           ?.shadowRoot?.querySelector(${JSON.stringify(selector)});
         if (!widget) return null;
+        widget.scrollIntoView({ block: "center", inline: "center" });
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve))
+        );
         let rect = widget.getBoundingClientRect();
         return {
           x: Math.floor(rect.left + rect.width * ${xRatio}),
@@ -1003,6 +1038,10 @@ async function liveMdPreviewState(client, sessionId) {
           lineText: Array.from(root?.querySelectorAll(".cm-line") ?? []).map(
             (line) => line.textContent
           ),
+          saveText: Array.from(document.querySelectorAll("[role=status], [aria-live]"))
+            .map((node) => node.textContent)
+            .filter(Boolean),
+          selection: editor?.view?.state.selection.main.toJSON() ?? null,
           value: editor?.value ?? null,
           widgets: [
             ".cm-md-mermaid",
@@ -2144,6 +2183,53 @@ async function installMockFileSystemAccess(client, sessionId) {
             return result;
           }
 
+          function stableLastModified(value) {
+            let bytes = typeof value == "string"
+              ? new TextEncoder().encode(value)
+              : bytesFromBufferSource(value) ?? new Uint8Array();
+            let hash = 2166136261;
+            for (let byte of bytes) {
+              hash ^= byte;
+              hash = Math.imul(hash, 16777619);
+            }
+            return 1_700_000_000_000 + (hash >>> 0);
+          }
+
+          class SmokeWritableFileStream {
+            constructor(files, path) {
+              this.files = files;
+              this.path = path;
+              this.chunks = [];
+            }
+            async abort() {
+              this.chunks = [];
+            }
+            async close() {
+              let value = this.chunks.every((chunk) => typeof chunk == "string")
+                ? this.chunks.join("")
+                : concatBytes(this.chunks);
+              if (this.path.endsWith(".md") && value instanceof Uint8Array) {
+                value = new TextDecoder().decode(value);
+              }
+              this.files.set(this.path, value);
+              persistSmokeFiles(this.files);
+            }
+            async write(data) {
+              if (data && typeof data == "object" && data.type == "write") {
+                data = data.data;
+              }
+              if (typeof data == "string") {
+                this.chunks.push(data);
+              } else if (data instanceof Blob) {
+                this.chunks.push(new Uint8Array(await data.arrayBuffer()));
+              } else {
+                this.chunks.push(
+                  bytesFromBufferSource(data) ?? new TextEncoder().encode(String(data))
+                );
+              }
+            }
+          }
+
           class SmokeFileHandle {
             kind = "file";
             constructor(name, files, path = name) {
@@ -2154,34 +2240,12 @@ async function installMockFileSystemAccess(client, sessionId) {
             async getFile() {
               let value = this.files.get(this.path) ?? "";
               return new File([value], this.name, {
+                lastModified: stableLastModified(value),
                 type: this.name.endsWith(".md") ? "text/markdown" : "application/octet-stream"
               });
             }
             async createWritable() {
-              let chunks = [];
-              return {
-                abort: async () => {
-                  chunks = [];
-                },
-                close: async () => {
-                  this.files.set(
-                    this.path,
-                    chunks.every((chunk) => typeof chunk == "string")
-                      ? chunks.join("")
-                      : concatBytes(chunks)
-                  );
-                  persistSmokeFiles(this.files);
-                },
-                write: async (data) => {
-                  if (typeof data == "string") {
-                    chunks.push(data);
-                  } else if (data instanceof Blob) {
-                    chunks.push(new Uint8Array(await data.arrayBuffer()));
-                  } else {
-                    chunks.push(bytesFromBufferSource(data) ?? new TextEncoder().encode(String(data)));
-                  }
-                }
-              };
+              return new SmokeWritableFileStream(this.files, this.path);
             }
           }
 
@@ -2246,7 +2310,7 @@ async function installMockFileSystemAccess(client, sessionId) {
               persistSmokeFiles(this.files);
               persistSmokeDirectories(this.directories);
             }
-            async *values() {
+            async *entries() {
               let prefix = this.path ? this.path + "/" : "";
               let emitted = new Set();
               for (let directory of Array.from(this.directories).sort()) {
@@ -2254,19 +2318,35 @@ async function installMockFileSystemAccess(client, sessionId) {
                 let rest = directory.slice(prefix.length);
                 if (!rest || rest.includes("/")) continue;
                 emitted.add(rest);
-                yield new SmokeDirectoryHandle(rest, this.files, this.directories, directory);
+                yield [
+                  rest,
+                  new SmokeDirectoryHandle(rest, this.files, this.directories, directory),
+                ];
               }
               for (let path of Array.from(this.files.keys()).sort()) {
                 if (!path.startsWith(prefix)) continue;
                 let rest = path.slice(prefix.length);
                 if (!rest || rest.includes("/") || emitted.has(rest)) continue;
-                yield new SmokeFileHandle(rest, this.files, path);
+                yield [rest, new SmokeFileHandle(rest, this.files, path)];
+              }
+            }
+            async *values() {
+              for await (let [, handle] of this.entries()) {
+                yield handle;
               }
             }
           }
 
           let files = loadSmokeFiles();
           let directories = loadSmokeDirectories(files);
+          Object.defineProperties(window, {
+            FileSystemDirectoryHandle: { configurable: true, value: SmokeDirectoryHandle },
+            FileSystemFileHandle: { configurable: true, value: SmokeFileHandle },
+            FileSystemWritableFileStream: {
+              configurable: true,
+              value: SmokeWritableFileStream,
+            },
+          });
           window.__localMdSmokeFiles = files;
           window.__localMdSmokeSetFile = (name, value) => {
             let path = normalize(name);
@@ -2543,15 +2623,21 @@ function dropboxApiPath(fileName) {
 
 function waitForDevToolsEndpoint(child) {
   return new Promise((resolve, reject) => {
+    let stderr = "";
     let timer = setTimeout(() => reject(new Error("Timed out waiting for Chromium.")), 10_000);
     child.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${String(chunk)}`.slice(-8_000);
       let match = String(chunk).match(/DevTools listening on (ws:\/\/[^\s]+)/);
       if (!match) return;
       clearTimeout(timer);
       resolve(match[1]);
     });
-    child.on("exit", (code) => {
-      reject(new Error(`Chromium exited before DevTools was ready: ${code}`));
+    child.on("exit", (code, signal) => {
+      reject(
+        new Error(
+          `Chromium exited before DevTools was ready: code=${code}, signal=${signal}\n${stderr}`,
+        ),
+      );
     });
   });
 }

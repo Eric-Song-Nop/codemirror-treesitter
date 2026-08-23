@@ -7,9 +7,10 @@ import {
 } from "@/lib/google-drive-oauth";
 import type { TFunction } from "@/lib/i18n";
 import {
+  opendalWorkspaceId,
   sameOpendalWorkspaceIdentity,
   type OpendalWorkspaceIdentity,
-} from "@/lib/opendal-workspace-backend";
+} from "@/lib/opendal-workspace-identity";
 import {
   ensureGoogleDriveAppWorkspaceManifest,
   ensureGoogleDriveAppWorkspaceRoot,
@@ -21,18 +22,19 @@ import {
   type StoredGoogleDriveWorkspaceConfig,
   type StoredWorkspaceKind,
 } from "@/lib/workspace-store";
+import { createCloudWorkspaceRuntime } from "@/lib/workspace-runtime/cloud-runtime";
 
-type UseGoogleDriveWorkspaceBackendOptions = {
+type UseGoogleDriveWorkspaceRuntimeOptions = {
   setStoredGoogleDriveConfig: (config: StoredGoogleDriveWorkspaceConfig | null) => void;
   setStoredWorkspaceKind: (kind: StoredWorkspaceKind | null) => void;
   t: TFunction;
 };
 
-export function useGoogleDriveWorkspaceBackend({
+export function useGoogleDriveWorkspaceRuntime({
   setStoredGoogleDriveConfig,
   setStoredWorkspaceKind,
   t,
-}: UseGoogleDriveWorkspaceBackendOptions) {
+}: UseGoogleDriveWorkspaceRuntimeOptions) {
   let googleDriveTokenRef = useRef<GoogleDriveAccessToken | null>(null);
   let googleDriveTokenClientIdRef = useRef("");
   let googleDriveAuthPromiseRef = useRef<Promise<GoogleDriveAccessToken> | null>(null);
@@ -78,7 +80,7 @@ export function useGoogleDriveWorkspaceBackend({
     }
   }, []);
 
-  let createGoogleDriveBackend = useCallback(
+  let createGoogleDriveRuntime = useCallback(
     async (config: StoredGoogleDriveWorkspaceConfig) => {
       let clientId = config.clientId.trim();
       if (!clientId) throw new Error("Google Drive client ID is required.");
@@ -107,41 +109,60 @@ export function useGoogleDriveWorkspaceBackend({
         return refreshAccessToken();
       };
 
-      workspaceIdentity = await fetchGoogleDriveAccountIdentity(
-        (await getAccessToken()).accessToken,
-      );
-      let { createGoogleDriveWorkspaceBackend } =
-        await import("@/lib/google-drive-workspace-backend");
-      let bootstrapBackend = createGoogleDriveWorkspaceBackend({
-        getAccessToken,
-        identity: workspaceIdentity,
-        name: t("workspace.googleDriveWorkspace"),
-        refreshAccessToken,
+      let initialToken = await getAccessToken();
+      workspaceIdentity = await fetchGoogleDriveAccountIdentity(initialToken.accessToken);
+      let name = t("workspace.googleDriveWorkspace");
+      let bootstrapRuntime = await createCloudWorkspaceRuntime({
+        identity: {
+          id: opendalWorkspaceId("gdrive", undefined, workspaceIdentity),
+          kind: "opendal-gdrive",
+          name,
+        },
+        renewSource: async () => ({
+          accessToken: (await refreshAccessToken()).accessToken,
+          kind: "gdrive",
+        }),
+        source: { accessToken: initialToken.accessToken, kind: "gdrive" },
       });
-      await ensureGoogleDriveAppWorkspaceRoot(bootstrapBackend);
+      try {
+        await ensureGoogleDriveAppWorkspaceRoot(bootstrapRuntime);
+      } finally {
+        await bootstrapRuntime.dispose();
+      }
 
-      let backend = createGoogleDriveWorkspaceBackend({
-        getAccessToken,
-        identity: workspaceIdentity,
-        name: t("workspace.googleDriveWorkspace"),
-        refreshAccessToken,
-        root,
+      let runtime = await createCloudWorkspaceRuntime({
+        identity: {
+          id: opendalWorkspaceId("gdrive", root, workspaceIdentity),
+          kind: "opendal-gdrive",
+          name,
+        },
+        renewSource: async () => ({
+          accessToken: (await refreshAccessToken()).accessToken,
+          kind: "gdrive",
+          root,
+        }),
+        source: { accessToken: initialToken.accessToken, kind: "gdrive", root },
       });
-      await ensureGoogleDriveAppWorkspaceManifest(backend);
+      try {
+        await ensureGoogleDriveAppWorkspaceManifest(runtime);
+      } catch (error) {
+        await runtime.dispose().catch(() => {});
+        throw error;
+      }
 
       let storedConfig = { clientId };
       setStoredGoogleDriveConfig(storedConfig);
       setStoredWorkspaceKind("gdrive");
       saveStoredGoogleDriveWorkspaceConfig(storedConfig);
       saveStoredWorkspaceKind("gdrive");
-      return backend;
+      return runtime;
     },
     [authorizeGoogleDriveAccess, setStoredGoogleDriveConfig, setStoredWorkspaceKind, t],
   );
 
   return {
     clearGoogleDriveAccessToken,
-    createGoogleDriveBackend,
+    createGoogleDriveRuntime,
     setGoogleDriveRedirectAccessToken,
   };
 }

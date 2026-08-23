@@ -35,11 +35,173 @@ export type OpendalBrowserOperatorConfig =
   | OpendalOneDriveOperatorConfig
   | OpendalS3OperatorConfig;
 
+export type OpendalS3Credentials = {
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  sessionToken?: string;
+};
+
+export type OpendalBrowserSource =
+  | { kind: "browser-local"; rootHandle: FileSystemDirectoryHandle }
+  | { accessToken: string; kind: "dropbox"; root?: string }
+  | { accessToken: string; kind: "gdrive"; root?: string }
+  | { accessToken: string; kind: "onedrive"; root?: string }
+  | {
+      bucket: string;
+      credentials?: OpendalS3Credentials;
+      endpoint: string;
+      kind: "s3";
+      region: string;
+      root?: string;
+    };
+
+export type OpendalEntryKind = "directory" | "file";
+
+export type OpendalMetadata = {
+  etag?: string;
+  kind: OpendalEntryKind;
+  lastModified?: string;
+  path: string;
+  size?: number;
+  version?: string;
+};
+
+export type OpendalCapabilities = {
+  createDirectory: boolean;
+  delete: {
+    recursive: "emulated" | "native" | "unsupported";
+    single: boolean;
+  };
+  list: boolean;
+  read: boolean;
+  rename: {
+    directory: "copy-delete" | "native" | "unsupported";
+    file: "copy-delete" | "native" | "unsupported";
+  };
+  stat: boolean;
+  write: boolean;
+  writeConditions: {
+    ifMatch: boolean;
+    ifNotExists: boolean;
+    ifVersion: boolean;
+  };
+};
+
+export type OpendalOperatorInfo = {
+  capabilities: OpendalCapabilities;
+  root: string;
+  scheme: OpendalBrowserSource["kind"];
+};
+
+export type OpendalReadResult =
+  | { bytes: Uint8Array; metadata: OpendalMetadata; metadataBinding: "same-read" }
+  | { bytes: Uint8Array; metadataBinding: "none" };
+
+export type OpendalWriteCondition =
+  | { kind: "if-match"; etag: string }
+  | { kind: "if-not-exists" }
+  | { kind: "if-version"; version: string };
+
+export type OpendalWriteRequest = {
+  bytes: Uint8Array;
+  condition?: OpendalWriteCondition;
+  path: string;
+};
+
+export type OpendalWriteResult =
+  | {
+      metadata: OpendalMetadata;
+      metadataBinding: "post-write" | "write-response";
+      status: "applied";
+    }
+  | { metadataBinding: "none"; status: "applied" };
+
+export type OpendalPathMutationResult =
+  | { status: "applied" }
+  | {
+      phase: "recursive-delete" | "source-remove" | "target-copy";
+      reconcilePaths: string[];
+      status: "partial";
+    }
+  | { reconcilePaths: string[]; status: "unknown" };
+
+export type OpendalDeleteRequest = { path: string; recursive: boolean };
+
+export type OpendalRenameRequest = {
+  from: string;
+  kind: OpendalEntryKind;
+  to: string;
+};
+
+export type OpendalErrorCode =
+  | "already-exists"
+  | "authentication-expired"
+  | "condition-failed"
+  | "not-found"
+  | "permission-denied"
+  | "rate-limited"
+  | "temporary"
+  | "unknown"
+  | "unsupported";
+
+export type OpendalOperation =
+  | "create-directory"
+  | "delete"
+  | "list"
+  | "read"
+  | "rename"
+  | "stat"
+  | "write";
+
+export class OpendalBrowserError extends Error {
+  readonly code: OpendalErrorCode;
+  readonly mutationOutcome?: "not-applied" | "partial" | "unknown";
+  readonly operation: OpendalOperation;
+  readonly path?: string;
+  readonly reconcilePaths?: string[];
+  readonly retryable: boolean;
+
+  constructor(input: {
+    cause?: unknown;
+    code: OpendalErrorCode;
+    message: string;
+    mutationOutcome?: "not-applied" | "partial" | "unknown";
+    operation: OpendalOperation;
+    path?: string;
+    reconcilePaths?: string[];
+    retryable?: boolean;
+  }) {
+    super(input.message, { cause: input.cause });
+    this.name = "OpendalBrowserError";
+    this.code = input.code;
+    this.mutationOutcome = input.mutationOutcome;
+    this.operation = input.operation;
+    this.path = input.path;
+    this.reconcilePaths = input.reconcilePaths;
+    this.retryable = input.retryable ?? (input.code == "rate-limited" || input.code == "temporary");
+  }
+}
+
+export interface OpendalExactBrowserOperator {
+  readonly info: OpendalOperatorInfo;
+
+  createDirectory(path: string): Promise<void>;
+  delete(request: OpendalDeleteRequest): Promise<OpendalPathMutationResult>;
+  dispose(): void;
+  list(path: string): Promise<OpendalMetadata[]>;
+  read(path: string): Promise<OpendalReadResult>;
+  rename(request: OpendalRenameRequest): Promise<OpendalPathMutationResult>;
+  stat(path: string): Promise<OpendalMetadata>;
+  write(request: OpendalWriteRequest): Promise<OpendalWriteResult>;
+}
+
 export type OpendalBrowserCapabilities = {
   nativeCopy: boolean;
   nativeCreateDir: boolean;
   nativeDelete: boolean;
+  nativeDeleteWithRecursive?: boolean;
   nativeList: boolean;
+  nativeListWithRecursive?: boolean;
   nativeRead: boolean;
   nativeRename: boolean;
   nativeStat: boolean;
@@ -70,7 +232,7 @@ export type OpendalBrowserReadResult<T> = {
   value: T;
 };
 
-export type OpendalBrowserOperator = {
+export type LegacyOpendalBrowserOperator = {
   capabilities(): OpendalBrowserCapabilities;
   createDir(path: string): Promise<void>;
   delete(path: string): Promise<void>;
@@ -92,6 +254,9 @@ export type OpendalBrowserOperator = {
   ): Promise<OpendalBrowserEntry | void>;
 };
 
+/** @deprecated Use `openOpendalBrowserOperator` and `OpendalExactBrowserOperator`. */
+export type OpendalBrowserOperator = LegacyOpendalBrowserOperator;
+
 export type CreateOpendalBrowserOperatorOptions = {
   generatedModuleUrl?: string;
   wasmModuleUrl?: string | URL | WebAssembly.Module | Response | Promise<Response>;
@@ -105,9 +270,11 @@ export type OpendalBrowserRuntimeAssetOptions = {
 type GeneratedOperator = {
   capabilities(): unknown;
   createDir(path: string): Promise<void>;
-  delete(path: string): Promise<void>;
+  delete(path: string, recursive?: boolean): Promise<void>;
+  free?(): void;
   list(prefix: string): Promise<unknown>;
   readBytes(path: string): Promise<unknown>;
+  readBytesWithMetadata?(path: string): Promise<unknown>;
   readText(path: string): Promise<string>;
   readTextWithMetadata?(path: string): Promise<unknown>;
   rename(from: string, to: string): Promise<void>;
@@ -125,12 +292,13 @@ type GeneratedOperatorConstructor = new (config: OpendalBrowserOperatorConfig) =
 type GeneratedModule = {
   default?: (moduleOrPath?: unknown) => Promise<unknown>;
   OpendalBrowserOperator: GeneratedOperatorConstructor;
+  openBrowserLocalOperator?: (rootHandle: FileSystemDirectoryHandle) => GeneratedOperator;
 };
 
 export async function createOpendalBrowserOperator(
   config: OpendalBrowserOperatorConfig,
   options: CreateOpendalBrowserOperatorOptions = {},
-): Promise<OpendalBrowserOperator> {
+): Promise<LegacyOpendalBrowserOperator> {
   let normalizedConfig = normalizeConfig(config);
   let generated = await loadGeneratedModule(options.generatedModuleUrl);
   await initializeGeneratedModule(generated, options.wasmModuleUrl);
@@ -138,6 +306,25 @@ export async function createOpendalBrowserOperator(
     new generated.OpendalBrowserOperator(normalizedConfig),
     normalizedConfig,
   );
+}
+
+export async function openOpendalBrowserOperator(
+  source: OpendalBrowserSource,
+  options: CreateOpendalBrowserOperatorOptions = {},
+): Promise<OpendalExactBrowserOperator> {
+  let generated = await loadGeneratedModule(options.generatedModuleUrl);
+  await initializeGeneratedModule(generated, options.wasmModuleUrl);
+
+  let operator: GeneratedOperator;
+  if (source.kind == "browser-local") {
+    if (typeof generated.openBrowserLocalOperator != "function") {
+      throw new Error("OpenDAL browser WASM does not include the browser-local service.");
+    }
+    operator = generated.openBrowserLocalOperator(source.rootHandle);
+  } else {
+    operator = new generated.OpendalBrowserOperator(sourceToLegacyConfig(source));
+  }
+  return new ExactWasmOpendalBrowserOperator(operator, source);
 }
 
 export function defaultGeneratedModuleUrl() {
@@ -168,7 +355,7 @@ async function initializeGeneratedModule(
   }
 }
 
-class WasmOpendalBrowserOperator implements OpendalBrowserOperator {
+class WasmOpendalBrowserOperator implements LegacyOpendalBrowserOperator {
   constructor(
     private readonly operator: GeneratedOperator,
     private readonly config: OpendalBrowserOperatorConfig,
@@ -249,6 +436,538 @@ class WasmOpendalBrowserOperator implements OpendalBrowserOperator {
   }
 }
 
+class ExactWasmOpendalBrowserOperator implements OpendalExactBrowserOperator {
+  readonly info: OpendalOperatorInfo;
+  private disposed = false;
+
+  constructor(
+    private readonly operator: GeneratedOperator,
+    private readonly source: OpendalBrowserSource,
+  ) {
+    this.info = exactOperatorInfo(source, parseCapabilities(operator.capabilities()));
+  }
+
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.operator.free?.();
+  }
+
+  async stat(path: string) {
+    this.assertActive();
+    let normalizedPath = normalizeExactPath(path, { allowRoot: true });
+    try {
+      return toExactMetadata(parseEntry(await this.operator.stat(normalizedPath)));
+    } catch (error) {
+      throw normalizeOpendalError(error, "stat", normalizedPath);
+    }
+  }
+
+  async list(path: string) {
+    this.assertActive();
+    let normalizedPath = normalizeExactPath(path, { allowRoot: true, directory: true });
+    if (!this.info.capabilities.list) {
+      throw unsupportedOperation("list", normalizedPath);
+    }
+    try {
+      return parseEntries(await this.operator.list(normalizedPath)).map(toExactMetadata);
+    } catch (error) {
+      throw normalizeOpendalError(error, "list", normalizedPath);
+    }
+  }
+
+  async read(path: string): Promise<OpendalReadResult> {
+    this.assertActive();
+    let normalizedPath = normalizeExactPath(path);
+    if (!this.info.capabilities.read) {
+      throw unsupportedOperation("read", normalizedPath);
+    }
+    try {
+      if (this.source.kind == "dropbox") {
+        let result = await readDropboxBytes(this.source, normalizedPath);
+        return {
+          bytes: result.value,
+          metadata: toExactMetadata(result.entry),
+          metadataBinding: "same-read",
+        };
+      }
+
+      if (typeof this.operator.readBytesWithMetadata == "function") {
+        let result = requireRecord(
+          await this.operator.readBytesWithMetadata(normalizedPath),
+          "readBytesWithMetadata",
+        );
+        let bytes = parseBytes(result.bytes);
+        if (result.entry != null) {
+          return {
+            bytes,
+            metadata: toExactMetadata(parseEntry(result.entry, "readBytesWithMetadata.entry")),
+            metadataBinding: "same-read",
+          };
+        }
+        return { bytes, metadataBinding: "none" };
+      }
+
+      return {
+        bytes: parseBytes(await this.operator.readBytes(normalizedPath)),
+        metadataBinding: "none",
+      };
+    } catch (error) {
+      throw normalizeOpendalError(error, "read", normalizedPath);
+    }
+  }
+
+  async write(request: OpendalWriteRequest): Promise<OpendalWriteResult> {
+    this.assertActive();
+    let path = normalizeExactPath(request.path);
+    assertExactWriteCondition(this.info.capabilities, request.condition, path);
+    let options = exactWriteOptions(request.condition);
+    try {
+      let result =
+        this.source.kind == "dropbox" && hasDropboxWriteCondition(options)
+          ? await writeDropboxBytes(
+              this.source,
+              path,
+              Uint8Array.from(request.bytes).buffer,
+              options!,
+            )
+          : await this.operator.writeBytes(path, Uint8Array.from(request.bytes), options);
+      if (result == null) return { metadataBinding: "none", status: "applied" };
+      return {
+        metadata: toExactMetadata(parseEntry(result, "write result")),
+        metadataBinding: this.source.kind == "browser-local" ? "post-write" : "write-response",
+        status: "applied",
+      };
+    } catch (error) {
+      throw normalizeOpendalError(
+        error,
+        "write",
+        path,
+        true,
+        undefined,
+        this.source.kind == "browser-local",
+      );
+    }
+  }
+
+  async createDirectory(path: string) {
+    this.assertActive();
+    let normalizedPath = normalizeExactPath(path, { directory: true });
+    if (!this.info.capabilities.createDirectory) {
+      throw unsupportedOperation("create-directory", normalizedPath);
+    }
+    try {
+      await this.operator.createDir(normalizedPath);
+    } catch (error) {
+      throw normalizeOpendalError(
+        error,
+        "create-directory",
+        normalizedPath,
+        true,
+        undefined,
+        this.source.kind == "browser-local",
+      );
+    }
+  }
+
+  async delete(request: OpendalDeleteRequest): Promise<OpendalPathMutationResult> {
+    this.assertActive();
+    let path = normalizeExactPath(request.path, { preserveDirectory: true });
+    let capability = this.info.capabilities.delete;
+    if (!capability.single || (request.recursive && capability.recursive == "unsupported")) {
+      throw unsupportedOperation("delete", path);
+    }
+
+    if (request.recursive && capability.recursive == "emulated") {
+      return this.deleteRecursively(path);
+    }
+    try {
+      await this.operator.delete(path, request.recursive);
+      return { status: "applied" };
+    } catch (error) {
+      let normalized = normalizeOpendalError(
+        error,
+        "delete",
+        path,
+        true,
+        undefined,
+        this.source.kind == "browser-local",
+      );
+      if (normalized.mutationOutcome == "unknown") {
+        return { reconcilePaths: [path], status: "unknown" };
+      }
+      throw normalized;
+    }
+  }
+
+  async rename(request: OpendalRenameRequest): Promise<OpendalPathMutationResult> {
+    this.assertActive();
+    let from = normalizeExactPath(request.from, {
+      directory: request.kind == "directory",
+    });
+    let to = normalizeExactPath(request.to, {
+      directory: request.kind == "directory",
+    });
+    let capability = this.info.capabilities.rename[request.kind];
+    if (capability == "unsupported") throw unsupportedOperation("rename", from);
+
+    if (capability == "native") {
+      try {
+        await this.operator.rename(from, to);
+        return { status: "applied" };
+      } catch (error) {
+        let normalized = normalizeOpendalError(error, "rename", from, true, [from, to]);
+        if (normalized.mutationOutcome == "unknown") {
+          return { reconcilePaths: [from, to], status: "unknown" };
+        }
+        throw normalized;
+      }
+    }
+
+    return request.kind == "file"
+      ? this.copyDeleteFile(from, to)
+      : this.copyDeleteDirectory(from, to);
+  }
+
+  private async copyDeleteFile(from: string, to: string): Promise<OpendalPathMutationResult> {
+    await this.assertTargetMissing(to);
+    let source = await this.read(from);
+    let copied = false;
+    try {
+      await this.write({
+        bytes: source.bytes,
+        condition: this.info.capabilities.writeConditions.ifNotExists
+          ? { kind: "if-not-exists" }
+          : undefined,
+        path: to,
+      });
+      copied = true;
+      let target = await this.read(to);
+      if (!equalBytes(source.bytes, target.bytes)) {
+        return { phase: "target-copy", reconcilePaths: [from, to], status: "partial" };
+      }
+    } catch (error) {
+      if (copied || mutationMayHaveApplied(error)) {
+        return { phase: "target-copy", reconcilePaths: [from, to], status: "partial" };
+      }
+      throw error;
+    }
+
+    try {
+      let result = await this.delete({ path: from, recursive: false });
+      if (result.status != "applied") {
+        return { phase: "source-remove", reconcilePaths: [from, to], status: "partial" };
+      }
+      return result;
+    } catch {
+      return { phase: "source-remove", reconcilePaths: [from, to], status: "partial" };
+    }
+  }
+
+  private async copyDeleteDirectory(from: string, to: string): Promise<OpendalPathMutationResult> {
+    await this.assertTargetMissing(to);
+    let targetTouched = false;
+    try {
+      await this.createDirectory(to);
+      targetTouched = true;
+      let entries = await this.collectTree(from);
+      for (let entry of entries.filter((entry) => entry.kind == "directory")) {
+        await this.createDirectory(`${to}${entry.path.slice(from.length)}`);
+      }
+      for (let entry of entries.filter((entry) => entry.kind == "file")) {
+        let source = await this.read(entry.path);
+        let targetPath = `${to}${entry.path.slice(from.length)}`;
+        await this.write({ bytes: source.bytes, path: targetPath });
+        let target = await this.read(targetPath);
+        if (!equalBytes(source.bytes, target.bytes)) {
+          return { phase: "target-copy", reconcilePaths: [from, to], status: "partial" };
+        }
+      }
+    } catch (error) {
+      if (targetTouched || mutationMayHaveApplied(error)) {
+        return { phase: "target-copy", reconcilePaths: [from, to], status: "partial" };
+      }
+      throw error;
+    }
+
+    try {
+      let result = await this.delete({ path: from, recursive: true });
+      if (result.status != "applied") {
+        return { phase: "source-remove", reconcilePaths: [from, to], status: "partial" };
+      }
+      return result;
+    } catch {
+      return { phase: "source-remove", reconcilePaths: [from, to], status: "partial" };
+    }
+  }
+
+  private async deleteRecursively(path: string): Promise<OpendalPathMutationResult> {
+    try {
+      let entries = await this.collectTree(path);
+      let files = entries.filter((entry) => entry.kind == "file");
+      let directories = entries
+        .filter((entry) => entry.kind == "directory")
+        .sort((a, b) => b.path.length - a.path.length);
+      for (let entry of files) await this.operator.delete(entry.path, false);
+      for (let entry of directories) await this.operator.delete(entry.path, false);
+      await this.operator.delete(path, false);
+      return { status: "applied" };
+    } catch {
+      return { phase: "recursive-delete", reconcilePaths: [path], status: "partial" };
+    }
+  }
+
+  private async collectTree(root: string) {
+    let entries: OpendalMetadata[] = [];
+    let pending = [root];
+    while (pending.length) {
+      let directory = pending.shift()!;
+      let children = await this.list(directory);
+      entries.push(...children);
+      pending.push(
+        ...children.filter((entry) => entry.kind == "directory").map((entry) => entry.path),
+      );
+    }
+    return entries;
+  }
+
+  private async assertTargetMissing(path: string) {
+    try {
+      await this.stat(path);
+    } catch (error) {
+      if (error instanceof OpendalBrowserError && error.code == "not-found") return;
+      throw error;
+    }
+    throw new OpendalBrowserError({
+      code: "already-exists",
+      message: `OpenDAL rename target already exists: ${path}`,
+      mutationOutcome: "not-applied",
+      operation: "rename",
+      path,
+    });
+  }
+
+  private assertActive() {
+    if (this.disposed) throw new Error("OpenDAL browser operator is disposed.");
+  }
+}
+
+function sourceToLegacyConfig(
+  source: Exclude<OpendalBrowserSource, { kind: "browser-local" }>,
+): OpendalBrowserOperatorConfig {
+  if (source.kind != "s3") {
+    return normalizeConfig({
+      accessToken: source.accessToken,
+      provider: source.kind,
+      root: source.root,
+    });
+  }
+  return normalizeConfig({
+    accessKeyId: source.credentials?.accessKeyId,
+    bucket: source.bucket,
+    endpoint: source.endpoint,
+    provider: "s3",
+    region: source.region,
+    root: source.root,
+    secretAccessKey: source.credentials?.secretAccessKey,
+    sessionToken: source.credentials?.sessionToken,
+  });
+}
+
+function exactOperatorInfo(
+  source: OpendalBrowserSource,
+  raw: OpendalBrowserCapabilities,
+): OpendalOperatorInfo {
+  let canCopyDeleteFile = raw.nativeRead && raw.nativeWrite && raw.nativeDelete;
+  let canCopyDeleteDirectory = canCopyDeleteFile && raw.nativeList && raw.nativeCreateDir;
+  let nativeRename = raw.nativeRename;
+  return {
+    capabilities: {
+      createDirectory: raw.nativeCreateDir,
+      delete: {
+        recursive: raw.nativeDeleteWithRecursive
+          ? "native"
+          : raw.nativeDelete && raw.nativeList
+            ? "emulated"
+            : "unsupported",
+        single: raw.nativeDelete,
+      },
+      list: raw.nativeList,
+      read: raw.nativeRead,
+      rename: {
+        directory: nativeRename ? "native" : canCopyDeleteDirectory ? "copy-delete" : "unsupported",
+        file: nativeRename ? "native" : canCopyDeleteFile ? "copy-delete" : "unsupported",
+      },
+      stat: raw.nativeStat,
+      write: raw.nativeWrite,
+      writeConditions: {
+        ifMatch: raw.nativeWriteWithIfMatch,
+        ifNotExists: source.kind == "dropbox" || Boolean(raw.nativeWriteWithIfNotExists),
+        ifVersion: source.kind == "dropbox" || Boolean(raw.nativeWriteWithVersion),
+      },
+    },
+    root: source.kind == "browser-local" ? "/" : (normalizeRoot(source.root) ?? "/"),
+    scheme: source.kind,
+  };
+}
+
+function toExactMetadata(entry: OpendalBrowserEntry): OpendalMetadata {
+  let kind: OpendalEntryKind;
+  if (entry.isFile == entry.isDirectory) {
+    throw new Error(`OpenDAL metadata returned an ambiguous entry kind for ${entry.path}.`);
+  }
+  kind = entry.isDirectory ? "directory" : "file";
+  return {
+    etag: entry.etag,
+    kind,
+    lastModified: entry.lastModified,
+    path: normalizeExactPath(entry.path, {
+      allowRoot: kind == "directory",
+      directory: kind == "directory",
+    }),
+    size: entry.size,
+    version: entry.version,
+  };
+}
+
+function normalizeExactPath(
+  rawPath: string,
+  options: { allowRoot?: boolean; directory?: boolean; preserveDirectory?: boolean } = {},
+) {
+  if (typeof rawPath != "string") throw new TypeError("OpenDAL path must be a string.");
+  let raw = rawPath.trim().replace(/\\/g, "/");
+  if (raw.startsWith("/") && raw != "/") {
+    throw new Error("OpenDAL paths must be relative to the workspace root.");
+  }
+  let parts = raw.split("/").filter(Boolean);
+  if (parts.some((part) => part == "." || part == "..")) {
+    throw new Error("OpenDAL paths cannot include . or .. segments.");
+  }
+  if (!parts.length) {
+    if (options.allowRoot) return "";
+    throw new Error("OpenDAL operation requires a non-root path.");
+  }
+  let path = parts.join("/");
+  if (options.directory || (options.preserveDirectory && raw.endsWith("/"))) path += "/";
+  return path;
+}
+
+function exactWriteOptions(
+  condition: OpendalWriteCondition | undefined,
+): OpendalBrowserWriteOptions | undefined {
+  if (!condition) return undefined;
+  switch (condition.kind) {
+    case "if-match":
+      return { ifMatch: condition.etag };
+    case "if-not-exists":
+      return { ifNotExists: true };
+    case "if-version":
+      return { ifVersion: condition.version };
+  }
+}
+
+function assertExactWriteCondition(
+  capabilities: OpendalCapabilities,
+  condition: OpendalWriteCondition | undefined,
+  path: string,
+) {
+  if (!capabilities.write) throw unsupportedOperation("write", path);
+  if (!condition) return;
+  let supported =
+    condition.kind == "if-match"
+      ? capabilities.writeConditions.ifMatch
+      : condition.kind == "if-version"
+        ? capabilities.writeConditions.ifVersion
+        : capabilities.writeConditions.ifNotExists;
+  if (!supported) {
+    throw new OpendalBrowserError({
+      code: "unsupported",
+      message: `OpenDAL backend does not support ${condition.kind} writes.`,
+      mutationOutcome: "not-applied",
+      operation: "write",
+      path,
+    });
+  }
+}
+
+function unsupportedOperation(operation: OpendalOperation, path?: string) {
+  return new OpendalBrowserError({
+    code: "unsupported",
+    message: `OpenDAL backend does not support ${operation}.`,
+    mutationOutcome: operationIsMutation(operation) ? "not-applied" : undefined,
+    operation,
+    path,
+  });
+}
+
+function normalizeOpendalError(
+  cause: unknown,
+  operation: OpendalOperation,
+  path?: string,
+  mutation = false,
+  reconcilePaths = path ? [path] : undefined,
+  mutationMayHaveStarted = false,
+) {
+  if (cause instanceof OpendalBrowserError) return cause;
+  let message = cause instanceof Error ? cause.message : String(cause);
+  let code: OpendalErrorCode = /condition|if[- ]?match|no[- ]?clobber|precondition|revision/i.test(
+    message,
+  )
+    ? "condition-failed"
+    : /not.?found|does not exist|404/i.test(message)
+      ? "not-found"
+      : /already.?exists|409|conflict/i.test(message)
+        ? "already-exists"
+        : /unauth|expired.?token|invalid.?token|401/i.test(message)
+          ? "authentication-expired"
+          : /permission|not.?allowed|forbidden|403|securityerror/i.test(message)
+            ? "permission-denied"
+            : /rate.?limit|too many requests|429/i.test(message)
+              ? "rate-limited"
+              : /unsupported|not.?supported/i.test(message)
+                ? "unsupported"
+                : /network|fetch|timeout|temporar|unavailable|502|503|504/i.test(message)
+                  ? "temporary"
+                  : "unknown";
+  let knownNotApplied = [
+    "already-exists",
+    "authentication-expired",
+    "condition-failed",
+    "not-found",
+    "permission-denied",
+    "unsupported",
+  ].includes(code);
+  return new OpendalBrowserError({
+    cause,
+    code,
+    message,
+    mutationOutcome: mutation
+      ? mutationMayHaveStarted
+        ? "unknown"
+        : knownNotApplied
+          ? "not-applied"
+          : "unknown"
+      : undefined,
+    operation,
+    path,
+    reconcilePaths:
+      mutation && (mutationMayHaveStarted || !knownNotApplied) ? reconcilePaths : undefined,
+  });
+}
+
+function operationIsMutation(operation: OpendalOperation) {
+  return ["create-directory", "delete", "rename", "write"].includes(operation);
+}
+
+function mutationMayHaveApplied(error: unknown) {
+  return error instanceof OpendalBrowserError && error.mutationOutcome != "not-applied";
+}
+
+function equalBytes(a: Uint8Array, b: Uint8Array) {
+  if (a.byteLength != b.byteLength) return false;
+  return a.every((value, index) => value == b[index]);
+}
+
 function assertSupportedWriteOptions(
   capabilities: OpendalBrowserCapabilities,
   options: OpendalBrowserWriteOptions | undefined,
@@ -281,6 +1000,16 @@ async function readDropboxText(
   config: OpendalDropboxOperatorConfig,
   path: string,
 ): Promise<OpendalBrowserReadResult<string>> {
+  let result = await readDropboxBytes(config, path);
+  return { entry: result.entry, value: new TextDecoder().decode(result.value) };
+}
+
+type DropboxAccessConfig = { accessToken: string; root?: string };
+
+async function readDropboxBytes(
+  config: DropboxAccessConfig,
+  path: string,
+): Promise<OpendalBrowserReadResult<Uint8Array>> {
   let normalizedPath = normalizeStoragePath(path);
   let response = await fetch("https://content.dropboxapi.com/2/files/download", {
     headers: dropboxHeaders(config, {
@@ -301,12 +1030,12 @@ async function readDropboxText(
       parseJsonRecord(rawMetadata, "download metadata"),
       "download",
     ),
-    value: await response.text(),
+    value: new Uint8Array(await response.arrayBuffer()),
   };
 }
 
 async function writeDropboxBytes(
-  config: OpendalDropboxOperatorConfig,
+  config: DropboxAccessConfig,
   path: string,
   body: BodyInit,
   options: OpendalBrowserWriteOptions,
@@ -342,7 +1071,7 @@ async function writeDropboxBytes(
   );
 }
 
-function dropboxHeaders(config: OpendalDropboxOperatorConfig, args: unknown) {
+function dropboxHeaders(config: DropboxAccessConfig, args: unknown) {
   return {
     Authorization: `Bearer ${config.accessToken}`,
     "Dropbox-API-Arg": JSON.stringify(args),
@@ -474,7 +1203,9 @@ function parseCapabilities(value: unknown): OpendalBrowserCapabilities {
     nativeCopy: Boolean(record.nativeCopy),
     nativeCreateDir: Boolean(record.nativeCreateDir),
     nativeDelete: Boolean(record.nativeDelete),
+    nativeDeleteWithRecursive: Boolean(record.nativeDeleteWithRecursive),
     nativeList: Boolean(record.nativeList),
+    nativeListWithRecursive: Boolean(record.nativeListWithRecursive),
     nativeRead: Boolean(record.nativeRead),
     nativeRename: Boolean(record.nativeRename),
     nativeStat: Boolean(record.nativeStat),

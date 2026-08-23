@@ -11,13 +11,17 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
 - Connect to Dropbox with OAuth PKCE and use
   `@codemirror-treesitter/opendal-wasm-browser` for browser-side file
   operations.
-- Provide a reusable OpenDAL workspace backend for Dropbox, including cloud-save
-  serialization, token refresh retry, same-response metadata tracking, atomic
-  no-clobber creates, Dropbox revision CAS, and ETag-based conditional writes
-  when supported by the provider. OneDrive and Google Drive adapter code exists
-  in source, but those providers are not exposed in the current Grove UI.
+- Route local-directory and cloud workspace content through one OpenDAL browser
+  operator and `WorkspaceObjectStore`, with explicit revisions, conditional
+  writes, readback verification, path-scoped persistence ordering, and token
+  renewal that never blindly replays an indeterminate mutation. OneDrive and
+  Google Drive runtime construction exists in source, but those providers are
+  not exposed in the current Grove UI.
 - Build a Markdown file tree, create/rename/delete files and folders, autosave
-  edits, and surface permission/storage errors.
+  edits, and surface permission/storage errors. Only the active workspace
+  document is monitored: BrowserLocal uses a non-recursive
+  `FileSystemObserver` on its immediate parent when available, with an adaptive
+  authoritative polling fallback shared with cloud runtimes.
 - Open a command palette with `Cmd/Ctrl+Shift+P` for file navigation and core
   workspace actions.
 - Insert pasted, dropped, or selected image files into sibling `assets/`
@@ -59,15 +63,18 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   localization.
 - `src/theme/*`: shared named-theme contract, document/storage adapters, and
   CSS token ownership for the local and shared workspace routes.
-- `src/lib/file-system.ts`: File System Access API backend.
-- `src/lib/dropbox-oauth.ts` and `src/lib/dropbox-workspace-backend.ts`:
-  Dropbox OAuth PKCE and OpenDAL workspace adapter used by the current Grove UI.
-- `src/lib/google-drive-*` and `src/lib/onedrive-*`: dormant OpenDAL provider
-  adapters not exposed in the current Grove UI.
-- `src/lib/opendal-workspace-backend.ts`: shared OpenDAL workspace backend used
-  by cloud provider adapters.
-- `src/lib/workspace-backend.ts`: normalized workspace tree, path, image, and
-  backend contracts.
+- `src/lib/file-system.ts`: browser picker, permission, standalone-file, and
+  directory-handle host helpers. Workspace content I/O does not bypass OpenDAL.
+- `src/lib/storage/*`: provider-neutral object storage contract, exact OpenDAL
+  operator lifetime, explicit revision/CAS policy, indeterminate outcomes, and
+  cross-tab path locking.
+- `src/lib/workspace-runtime/*`: focused tree, entry, asset, and document ports;
+  BrowserLocal/cloud runtime assembly; active-document observation; and the
+  document persistence coordinator.
+- `src/hooks/workspace/use*WorkspaceRuntime.ts`: OAuth-aware provider runtime
+  construction. Dropbox is used by the current Grove UI; Google Drive and
+  OneDrive remain dormant.
+- `src/lib/workspace-tree.ts`: Markdown tree, path, naming, and visibility rules.
 - `src/lib/export/markdown-html.ts`: standalone HTML export wrapper, LiveMD
   theme snapshotting, and workspace image embedding.
 - `src/lib/export/browser-print.ts`: browser print-view helper for standalone
@@ -85,6 +92,18 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   service worker.
 - `smoke/ui-smoke.mjs`: headless Chrome UI smoke for local, sharing, conflict,
   and Dropbox UI flows.
+
+## Storage Architecture
+
+- [OpenDAL Workspace Storage Architecture](./OPENDAL_WORKSPACE_ARCHITECTURE.md):
+  path-scoped persistence, and current-document reconciliation contracts.
+  implemented browser operator, workspace object storage, explicit source
+  states, path-scoped persistence, and current-document reconciliation
+  contracts.
+  path-scoped persistence, and current-document reconciliation contracts.
+- [OpenDAL Workspace Implementation Plan](./OPENDAL_WORKSPACE_IMPLEMENTATION_PLAN.md):
+  stacked pull request boundaries, migration rules, verification gates, and the
+  completed legacy-removal criteria.
 
 ## Configuration
 

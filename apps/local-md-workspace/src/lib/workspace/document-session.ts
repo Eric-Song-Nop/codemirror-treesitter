@@ -1,31 +1,32 @@
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
-import type { MarkdownFileNode, WorkspaceBackend } from "@/lib/workspace-backend";
+import type { MarkdownFileNode } from "@/lib/workspace-tree";
 import {
   documentSourceDocumentIdInput,
   documentSourceRef,
   sameDocumentSourceRef,
   type DocumentSourceRef,
 } from "@/lib/workspace/source-identity";
+import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
 
 export type DocumentSession = {
-  backend: WorkspaceBackend;
   collabDocument: CollabDocumentState;
   file: MarkdownFileNode;
   id: string;
+  runtime: WorkspaceRuntime;
   sourceRef: DocumentSourceRef;
 };
 
 export function createDocumentSession(
-  backend: WorkspaceBackend,
+  runtime: WorkspaceRuntime,
   file: MarkdownFileNode,
   collabDocument: CollabDocumentState,
 ): DocumentSession {
-  let sourceRef = documentSourceRef(backend, file.path);
+  let sourceRef = documentSourceRef(runtime.identity, file.path);
   return {
-    backend,
     collabDocument,
     file,
     id: documentSourceDocumentIdInput(sourceRef),
+    runtime,
     sourceRef,
   };
 }
