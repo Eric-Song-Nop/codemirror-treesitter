@@ -5,24 +5,28 @@
   "workspaces": [
     "packages/*",
     "apps/*",
-    "tools/*"
+    "tools/*",
+    "vendor/web-tree-sitter"
   ],
   "type": "module",
   "scripts": {
     "audit": "node tools/audit.mjs",
+    "package:validate": "node tools/package-validate.mjs",
     "ready": "vp check && vp run verify:web-tree-sitter && vp run local-md-workspace#i18n:check && vp run -r test && vp run -r build && vp run audit",
     "verify:web-tree-sitter": "node tools/verify-web-tree-sitter-cursor-range.mjs"
   },
   "dependencies": {
-    "web-tree-sitter": "file:vendor/web-tree-sitter"
+    "@codemirror-treesitter/web-tree-sitter": "file:vendor/web-tree-sitter"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.4",
+    "publint": "^0.3.21",
     "vite-plus": "catalog:"
   },
   "overrides": {
+    "@codemirror-treesitter/web-tree-sitter": "file:vendor/web-tree-sitter",
     "vite": "catalog:",
-    "vitest": "catalog:",
-    "web-tree-sitter": "file:vendor/web-tree-sitter"
+    "vitest": "catalog:"
   },
   "engines": {
     "node": ">=26.0.0"

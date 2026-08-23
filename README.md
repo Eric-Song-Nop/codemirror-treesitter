@@ -516,6 +516,7 @@ vp check
 vp run -r test
 vp run -r build
 vp run audit
+vp run package:validate
 ```
 
 The recursive test task includes the OpenDAL browser wrapper's host Rust unit
@@ -531,6 +532,7 @@ Useful task selectors:
 
 ```bash
 vp run verify:web-tree-sitter
+vp run package:validate
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
 vp run @codemirror-treesitter/opendal-wasm-browser#auth:dropbox-token
@@ -551,6 +553,31 @@ vp run collab-editor#types
 ```
 
 `vp run` with no task lists all available package and app tasks.
+
+## NPM Package Readiness
+
+The publishable packages are the public `@codemirror-treesitter/*` packages in
+`packages/*` plus the patched `@codemirror-treesitter/web-tree-sitter` runtime
+in `vendor/web-tree-sitter`. The runtime package carries the upstream
+`web-tree-sitter` MIT license and the local cursor range navigation patch; the
+other public packages use the repository Apache-2.0 license and include a
+package-local `LICENSE` file in their tarballs.
+
+`vp run package:validate` is the npm publishing gate. Run it after package
+builds. It checks public package manifests, rejects non-publishable dependency
+protocols such as `workspace:`, verifies packed tarball contents, runs `publint`
+and Are The Types Wrong, installs all local tarballs into a temporary consumer
+project, and imports the package entry points that are safe to evaluate in Node.
+
+The `.github/workflows/npm-packages.yml` workflow runs the same gate for package
+changes. It validates package readiness only; it does not publish. npm trusted
+publishing should be configured on npmjs.com for each package before adding a
+release workflow. npm currently requires GitHub-hosted runners, npm CLI
+`>=11.5.1`, Node `>=22.14.0`, a workflow filename that exactly matches the
+trusted publisher configuration, and a `repository.url` that matches this
+GitHub repository. Trusted publishing generates provenance automatically for
+public packages from public repositories, so the eventual publish workflow should
+use OIDC instead of a long-lived `NPM_TOKEN`.
 
 `vp run local-md-workspace#dev` starts both the local Markdown workspace
 frontend and the local `apps/grove-relay` shared-file relay. The default relay

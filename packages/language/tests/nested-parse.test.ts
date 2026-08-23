@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { __testCreateNestedTreeMatcher, TreeSitterParser } from "../src/language.js";
 import { NestedTreeMatcher } from "../src/nested-tree-matcher.js";
 import { Tree, type DocRange, type NestedTree } from "../src/tree.js";
-import type { Parser as TSParser, Tree as TSTree } from "web-tree-sitter";
+import type { Parser as TSParser, Tree as TSTree } from "@codemirror-treesitter/web-tree-sitter";
 
 function nested(parser: TreeSitterParser, ranges: readonly DocRange[], marker: number): NestedTree {
   return {

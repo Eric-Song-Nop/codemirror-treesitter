@@ -11,12 +11,12 @@ import {
 } from "../src/index.js";
 import * as languageInternals from "../src/language.js";
 import { SyntaxNode, TreeCursor } from "../src/tree.js";
-import { Query as WebTreeSitterQuery } from "web-tree-sitter";
+import { Query as WebTreeSitterQuery } from "@codemirror-treesitter/web-tree-sitter";
 import type {
   Parser as NativeParser,
   Query as NativeQuery,
   Tree as NativeTree,
-} from "web-tree-sitter";
+} from "@codemirror-treesitter/web-tree-sitter";
 
 const javascriptWasm = new URL(
   "../../../node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm",

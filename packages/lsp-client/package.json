@@ -2,7 +2,24 @@
   "name": "@codemirror-treesitter/lsp-client",
   "version": "0.0.0",
   "description": "Lezer-free language server protocol client for the tree-sitter CodeMirror build",
-  "license": "MIT",
+  "keywords": [
+    "client",
+    "codemirror",
+    "editor",
+    "lsp",
+    "tree-sitter",
+    "typescript"
+  ],
+  "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/lsp-client#readme",
+  "bugs": {
+    "url": "https://github.com/Eric-Song-Nop/codemirror-treesitter/issues"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eric-Song-Nop/codemirror-treesitter.git",
+    "directory": "packages/lsp-client"
+  },
   "files": [
     "dist"
   ],
@@ -13,14 +30,17 @@
     ".": "./dist/index.mjs",
     "./package.json": "./package.json"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "vp pack",
     "test": "vp test",
     "check": "vp check"
   },
   "dependencies": {
-    "@codemirror-treesitter/autocomplete": "workspace:*",
-    "@codemirror-treesitter/language": "workspace:*",
+    "@codemirror-treesitter/autocomplete": "0.0.0",
+    "@codemirror-treesitter/language": "0.0.0",
     "@codemirror/lint": "^6.9.6",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.43.0",
@@ -31,6 +51,6 @@
     "@typescript/native-preview": "7.0.0-dev.20260509.2",
     "tree-sitter-javascript": "^0.25.0",
     "typescript": "^6.0.3",
-    "vite-plus": "catalog:"
+    "vite-plus": "0.1.22"
   }
 }

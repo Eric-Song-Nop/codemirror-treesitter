@@ -2,7 +2,24 @@
   "name": "@codemirror-treesitter/language-data",
   "version": "0.0.0",
   "description": "Tree-sitter language metadata and dynamic loading for the CodeMirror code editor",
-  "license": "MIT",
+  "keywords": [
+    "codemirror",
+    "data",
+    "editor",
+    "language",
+    "tree-sitter",
+    "typescript"
+  ],
+  "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/language-data#readme",
+  "bugs": {
+    "url": "https://github.com/Eric-Song-Nop/codemirror-treesitter/issues"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eric-Song-Nop/codemirror-treesitter.git",
+    "directory": "packages/language-data"
+  },
   "files": [
     "dist"
   ],
@@ -14,13 +31,16 @@
     "./live-md": "./dist/live-md.mjs",
     "./package.json": "./package.json"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "vp pack",
     "test": "vp test",
     "check": "vp check"
   },
   "dependencies": {
-    "@codemirror-treesitter/language": "workspace:*",
+    "@codemirror-treesitter/language": "0.0.0",
     "@derekstride/tree-sitter-sql": "0.3.11",
     "@elm-tooling/tree-sitter-elm": "5.9.0",
     "@repomix/tree-sitter-wasms": "^0.1.17",
@@ -78,6 +98,6 @@
   "devDependencies": {
     "@typescript/native-preview": "7.0.0-dev.20260509.2",
     "typescript": "^6.0.3",
-    "vite-plus": "catalog:"
+    "vite-plus": "0.1.22"
   }
 }

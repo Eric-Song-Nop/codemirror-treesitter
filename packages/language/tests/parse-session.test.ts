@@ -10,7 +10,10 @@ import {
   type DocRange,
 } from "../src/index.js";
 import type { NestedParserSource } from "../src/language.js";
-import type { Parser as NativeParser, Tree as NativeTree } from "web-tree-sitter";
+import type {
+  Parser as NativeParser,
+  Tree as NativeTree,
+} from "@codemirror-treesitter/web-tree-sitter";
 
 const pause = Symbol("pause fake native parse");
 

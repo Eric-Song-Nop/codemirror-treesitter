@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { Parser as TSParser } from "web-tree-sitter";
+import { Parser as TSParser } from "@codemirror-treesitter/web-tree-sitter";
 import { TreeSitterParser } from "../src/index.js";
 
 afterEach(() => {

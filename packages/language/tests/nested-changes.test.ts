@@ -6,7 +6,7 @@ import {
   TreeSitterParser,
 } from "../src/language.js";
 import { Tree, type DocRange, type NestedTree } from "../src/tree.js";
-import type { Range as TSRange, Tree as TSTree } from "web-tree-sitter";
+import type { Range as TSRange, Tree as TSTree } from "@codemirror-treesitter/web-tree-sitter";
 
 type MatchStats = {
   indexedGroups: number;

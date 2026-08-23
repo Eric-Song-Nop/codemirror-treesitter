@@ -1,12 +1,11 @@
 {
-  "name": "web-tree-sitter",
+  "name": "@codemirror-treesitter/web-tree-sitter",
   "version": "0.26.9-codemirror-treesitter.0",
-  "private": true,
-  "description": "Vendored web-tree-sitter runtime with a cursor range navigation patch",
+  "description": "web-tree-sitter runtime with the cursor range navigation patch used by @codemirror-treesitter/language",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tree-sitter/tree-sitter.git",
-    "directory": "lib/binding_web"
+    "url": "git+https://github.com/Eric-Song-Nop/codemirror-treesitter.git",
+    "directory": "vendor/web-tree-sitter"
   },
   "license": "MIT",
   "author": {
@@ -46,10 +45,11 @@
   },
   "types": "web-tree-sitter.d.ts",
   "keywords": [
-    "incremental",
-    "parsing",
+    "codemirror",
     "tree-sitter",
-    "wasm"
+    "web-tree-sitter",
+    "wasm",
+    "parser"
   ],
   "codemirrorTreesitterPatch": {
     "script": "../../tools/patch-web-tree-sitter-cursor-range.mjs",
@@ -73,5 +73,21 @@
     "web-tree-sitter.d.ts.map",
     "web-tree-sitter.d.cts",
     "web-tree-sitter.d.cts.map"
-  ]
+  ],
+  "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/vendor/web-tree-sitter#readme",
+  "bugs": {
+    "url": "https://github.com/Eric-Song-Nop/codemirror-treesitter/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "upstream": {
+    "name": "web-tree-sitter",
+    "version": "0.26.9",
+    "repository": {
+      "type": "git",
+      "url": "git+https://github.com/tree-sitter/tree-sitter.git",
+      "directory": "lib/binding_web"
+    }
+  }
 }

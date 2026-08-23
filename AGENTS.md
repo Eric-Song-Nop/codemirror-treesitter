@@ -131,12 +131,14 @@ vp check
 vp run -r test
 vp run -r build
 vp run audit
+vp run package:validate
 vp run ready
 ```
 
 Useful task selectors:
 
 ```bash
+vp run package:validate
 vp run @codemirror-treesitter/language#test
 vp run @codemirror-treesitter/live-md#build
 vp run local-md-workspace#dev
