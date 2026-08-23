@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
-import type { WorkspaceStorageKind } from "@/lib/storage/types";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import type { WorkspaceStorageKind } from "@/lib/workspace/storage/types";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 import { createDocumentSession, documentSessionMatchesSource } from "./document-session.ts";
 import { documentSourceRef } from "./source-identity.ts";
 

@@ -12,13 +12,13 @@ import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { readHostSecret } from "@/lib/workspace/share-host";
 import type { ActiveOwnerShareRecord } from "@/lib/workspace/types";
-import type { MarkdownFileNode } from "@/lib/workspace-tree";
+import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import {
   createDocumentSession,
   documentSessionMatchesSource,
   type DocumentSession,
 } from "@/lib/workspace/document-session";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
   current: T;

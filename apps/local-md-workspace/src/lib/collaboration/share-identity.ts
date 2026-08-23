@@ -1,5 +1,5 @@
 import type { LoroDoc, UndoManager } from "loro-crdt";
-import type { WorkspaceStorageKind } from "@/lib/storage/types";
+import type { WorkspaceStorageKind } from "@/lib/workspace/storage/types";
 import type { DocumentSourceRef } from "@/lib/workspace/source-identity";
 
 export type ShareExpirationOption = "24h" | "7d" | "30d";

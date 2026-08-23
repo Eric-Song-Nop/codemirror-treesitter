@@ -4,8 +4,8 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { defineLiveMdEditor, prepareLiveMd } from "@codemirror-treesitter/live-md";
 import { App } from "./App";
 import "./index.css";
-import { LiveMdPreloadErrorProvider } from "./lib/live-md-preload";
-import { registerAppServiceWorker } from "./lib/pwa";
+import { LiveMdPreloadErrorProvider } from "./lib/editor/live-md-preload";
+import { registerAppServiceWorker } from "./lib/platform/pwa";
 import { queryClient } from "./lib/query-client";
 import {
   applyThemeToDocument,

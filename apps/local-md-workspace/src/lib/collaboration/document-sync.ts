@@ -1,6 +1,6 @@
 import type { LoroDoc } from "loro-crdt";
 import { collabBroadcastChannelName } from "@/lib/workspace/source-identity";
-import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
+import type { WorkspaceIdentity } from "@/lib/workspace/runtime/types";
 
 type BroadcastSyncMessage = {
   bytes: Uint8Array;

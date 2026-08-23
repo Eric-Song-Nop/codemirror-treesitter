@@ -63,25 +63,33 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   localization.
 - `src/theme/*`: shared named-theme contract, document/storage adapters, and
   CSS token ownership for the local and shared workspace routes.
-- `src/lib/file-system.ts`: browser picker, permission, standalone-file, and
-  directory-handle host helpers. Workspace content I/O does not bypass OpenDAL.
-- `src/lib/storage/*`: provider-neutral object storage contract, exact OpenDAL
-  operator lifetime, explicit revision/CAS policy, indeterminate outcomes, and
-  cross-tab path locking.
-- `src/lib/workspace-runtime/*`: focused tree, entry, asset, and document ports;
+- `src/lib/workspace/*`: workspace tree/path rules, document and source state,
+  browser file handles, single-file drafts, persistence metadata, status, and
+  user-facing workspace errors.
+- `src/lib/workspace/providers/*`: provider-specific OAuth, redirect drafts,
+  configuration, and shared OpenDAL workspace identity. Dropbox, Google Drive,
+  and OneDrive each own a dedicated provider directory.
+- `src/lib/workspace/storage/*`: provider-neutral object storage contract,
+  exact OpenDAL operator lifetime, explicit revision/CAS policy, indeterminate
+  outcomes, and cross-tab path locking.
+- `src/lib/workspace/runtime/*`: focused tree, entry, asset, and document ports;
   BrowserLocal/cloud runtime assembly; active-document observation; and the
   document persistence coordinator.
 - `src/hooks/workspace/use*WorkspaceRuntime.ts`: OAuth-aware provider runtime
   construction. Dropbox is used by the current Grove UI; Google Drive and
   OneDrive remain dormant.
-- `src/lib/workspace-tree.ts`: Markdown tree, path, naming, and visibility rules.
+- `src/lib/platform/*`: browser capability detection, PWA registration, and
+  installed-PWA share-target launch handling.
+- `src/lib/editor/*`: React-side LiveMD initialization and retry state.
 - `src/lib/export/markdown-html.ts`: standalone HTML export wrapper, LiveMD
   theme snapshotting, and workspace image embedding.
 - `src/lib/export/browser-print.ts`: browser print-view helper for standalone
   Markdown HTML.
+- `src/lib/export/workspace-file.ts`: localized export naming, warnings, and
+  browser download handling.
 - `src/lib/collaboration/*`: local Loro document persistence, share identity,
-  relay protocol/client/connection, share storage, and document sync helpers.
-  `markdown-document.ts` is a lightweight facade; it loads
+  relay protocol/client/connection, share storage, Markdown hashing, and
+  document sync helpers. `markdown-document.ts` is a lightweight facade; it loads
   `markdown-document-runtime.ts` only when a file is opened.
 - `src/components/ui/*`: local shadcn/radix UI primitives.
 - `scripts/dev.mjs`: starts the local Grove relay when needed, then starts the

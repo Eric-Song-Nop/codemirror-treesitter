@@ -1,21 +1,21 @@
 import { useCallback } from "react";
-import type { DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
+import type { DropboxRedirectDraft } from "@/lib/workspace/providers/dropbox/redirect-draft";
 import {
   type AccessDirectoryHandle,
   ensureReadWritePermission,
   pickWorkspaceDirectory,
   supportsDirectoryPicker,
-} from "@/lib/file-system";
+} from "@/lib/workspace/file-system";
 import { defaultSidebarOpen } from "@/lib/workspace/constants";
-import { defaultDropboxAppKey } from "@/lib/workspace/dropbox-config";
+import { defaultDropboxAppKey } from "@/lib/workspace/providers/dropbox/config";
 import { errorToMessage, isAbortError } from "@/lib/workspace/errors";
 import { loadWorkspaceSelectedPath } from "@/lib/workspace/state";
 import type {
   StoredDropboxWorkspaceConfig,
   StoredLocalWorkspaceRecord,
-} from "@/lib/workspace-store";
-import { createBrowserLocalWorkspaceRuntime } from "@/lib/workspace-runtime/browser-local-runtime";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+} from "@/lib/workspace/store";
+import { createBrowserLocalWorkspaceRuntime } from "@/lib/workspace/runtime/browser-local-runtime";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
   current: T;

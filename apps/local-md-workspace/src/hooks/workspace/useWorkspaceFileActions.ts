@@ -14,9 +14,9 @@ import {
   saveMarkdownFileAs,
   supportsSaveFilePicker,
   type AccessFileHandle,
-} from "@/lib/file-system";
+} from "@/lib/workspace/file-system";
 import type { TFunction } from "@/lib/i18n";
-import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
+import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/providers/dropbox/config";
 import { errorToMessage, isAbortError } from "@/lib/workspace/errors";
 import {
   downloadTextFile,
@@ -24,16 +24,16 @@ import {
   htmlExportTitle,
   markdownHtmlExportWarningMessage,
   markdownPrintWarningMessage,
-} from "@/lib/workspace/export";
+} from "@/lib/export/workspace-file";
 import {
   createLocalFileSource,
   markdownDownloadFileName,
   singleFileMarkdownNode,
 } from "@/lib/workspace/single-file";
 import type { ActiveDocumentSource, SingleFileSource } from "@/lib/workspace/types";
-import { normalizeMarkdownPath, type MarkdownFileNode } from "@/lib/workspace-tree";
-import type { StoredDropboxWorkspaceConfig } from "@/lib/workspace-store";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import { normalizeMarkdownPath, type MarkdownFileNode } from "@/lib/workspace/tree";
+import type { StoredDropboxWorkspaceConfig } from "@/lib/workspace/store";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
   current: T;

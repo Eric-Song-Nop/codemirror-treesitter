@@ -10,7 +10,7 @@ import {
   normalizeMarkdownPath,
   normalizeWorkspaceCreateTarget,
   starterMarkdown,
-} from "./workspace-tree.ts";
+} from "./tree.ts";
 
 describe("workspace tree and path helpers", () => {
   it("normalizes user-provided Markdown paths", () => {

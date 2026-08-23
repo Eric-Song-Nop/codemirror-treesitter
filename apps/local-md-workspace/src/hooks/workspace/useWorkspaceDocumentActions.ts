@@ -12,10 +12,10 @@ import {
   type CreatedOwnerShare,
   type OwnerShareRecord,
 } from "@/lib/collaboration/share-storage";
-import type { DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
-import type { GoogleDriveRedirectDraft } from "@/lib/google-drive-redirect-draft";
-import type { OneDriveRedirectDraft } from "@/lib/onedrive-redirect-draft";
-import { type AccessFileHandle } from "@/lib/file-system";
+import type { DropboxRedirectDraft } from "@/lib/workspace/providers/dropbox/redirect-draft";
+import type { GoogleDriveRedirectDraft } from "@/lib/workspace/providers/google-drive/redirect-draft";
+import type { OneDriveRedirectDraft } from "@/lib/workspace/providers/onedrive/redirect-draft";
+import { type AccessFileHandle } from "@/lib/workspace/file-system";
 import {
   clearLastSingleFileDraft,
   createSingleFileDraft,
@@ -23,8 +23,8 @@ import {
   loadLastSingleFileDraft,
   loadSingleFileDraft,
   rememberLastSingleFileDraft,
-} from "@/lib/single-file-draft-store";
-import { sharedMarkdownDraftUnavailableMessage } from "@/lib/share-target";
+} from "@/lib/workspace/single-file-draft-store";
+import { sharedMarkdownDraftUnavailableMessage } from "@/lib/platform/share-target";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { createDocumentSession, type DocumentSession } from "@/lib/workspace/document-session";
 import { createSingleFileDraftSource, singleFileMarkdownNode } from "@/lib/workspace/single-file";
@@ -38,10 +38,10 @@ import type {
   SourceAutoSaveTask,
 } from "@/lib/workspace/types";
 import { activeDocumentSourceId } from "@/lib/workspace/types";
-import { saveStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
-import type { MarkdownFileNode } from "@/lib/workspace-tree";
-import { workspaceDocumentPersistenceCoordinator } from "@/lib/workspace-runtime/document-persistence-coordinator";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import { saveStoredWorkspaceSelectedPath } from "@/lib/workspace/store";
+import type { MarkdownFileNode } from "@/lib/workspace/tree";
+import { workspaceDocumentPersistenceCoordinator } from "@/lib/workspace/runtime/document-persistence-coordinator";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
   current: T;

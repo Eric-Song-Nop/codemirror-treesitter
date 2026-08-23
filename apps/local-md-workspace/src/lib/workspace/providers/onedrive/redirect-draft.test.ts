@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { saveOneDriveRedirectDraft, takeOneDriveRedirectDraft } from "./onedrive-redirect-draft.ts";
+import { saveOneDriveRedirectDraft, takeOneDriveRedirectDraft } from "./redirect-draft.ts";
 
 describe("OneDrive redirect draft storage", () => {
   let values: Map<string, string>;

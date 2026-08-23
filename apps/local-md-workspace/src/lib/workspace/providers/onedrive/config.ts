@@ -1,4 +1,4 @@
-import { hasOneDriveRedirectCallbackForStoredTransaction } from "@/lib/onedrive-oauth";
+import { hasOneDriveRedirectCallbackForStoredTransaction } from "@/lib/workspace/providers/onedrive/oauth";
 
 export function defaultOneDriveClientId() {
   let configured = import.meta.env.VITE_ONEDRIVE_CLIENT_ID;

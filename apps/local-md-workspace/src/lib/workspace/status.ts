@@ -1,4 +1,4 @@
-import type { WorkspaceIdentity } from "./workspace-runtime/types.ts";
+import type { WorkspaceIdentity } from "./runtime/types.ts";
 
 export type DropboxWorkspaceSession = {
   expiresAt: number;

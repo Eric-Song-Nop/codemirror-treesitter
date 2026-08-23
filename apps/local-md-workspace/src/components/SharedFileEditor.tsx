@@ -18,7 +18,7 @@ import { parseShareLink, type ShareLinkParts } from "@/lib/collaboration/share-i
 import { useSharedFileConnection } from "@/hooks/shared/useSharedFileConnection";
 import { useSharedFileSession } from "@/hooks/shared/useSharedFileSession";
 import { translateKnownMessage, useI18n, type TFunction, type Locale } from "@/lib/i18n";
-import { useLiveMdPreload } from "@/lib/live-md-preload";
+import { useLiveMdPreload } from "@/lib/editor/live-md-preload";
 import type { SerializedCollabVersionVector } from "@/lib/collaboration/collab-browser-store";
 
 type SharedFileRoute =

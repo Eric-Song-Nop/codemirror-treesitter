@@ -14,8 +14,8 @@ import {
   rotateOwnerShare,
 } from "./share-storage.ts";
 import { parseShareLink } from "./share-identity.ts";
-import type { WorkspaceStorageKind } from "@/lib/storage/types";
-import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
+import type { WorkspaceStorageKind } from "@/lib/workspace/storage/types";
+import type { WorkspaceIdentity } from "@/lib/workspace/runtime/types";
 import {
   createMemoryWorkspaceRuntime,
   type MemoryWorkspaceRuntime,

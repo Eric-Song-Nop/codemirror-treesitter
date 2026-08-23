@@ -7,8 +7,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { EditorView } from "@codemirror/view";
 import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import type { EditorDocument, SingleFileSource } from "@/lib/workspace/types";
-import type { CreatedWorkspaceImageNode, MarkdownFileNode } from "@/lib/workspace-tree";
-import type { WorkspaceAssetPort, WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import type { CreatedWorkspaceImageNode, MarkdownFileNode } from "@/lib/workspace/tree";
+import type { WorkspaceAssetPort, WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 import { createMemoryWorkspaceRuntime } from "@/test/memory-workspace-runtime";
 import { useWorkspaceImageAssets } from "./useWorkspaceImageAssets";
 

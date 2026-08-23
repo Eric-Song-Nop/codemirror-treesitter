@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createRelayShareSession } from "@/lib/collaboration/share-relay-client";
-import { workspaceQueryKeys } from "@/lib/workspace-query-keys";
+import { workspaceQueryKeys } from "@/lib/workspace/query-keys";
 
 type UseSharedFileSessionOptions = {
   enabled: boolean;

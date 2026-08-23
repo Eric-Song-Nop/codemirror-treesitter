@@ -1,12 +1,12 @@
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
-import type { MarkdownFileNode } from "@/lib/workspace-tree";
+import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import {
   documentSourceDocumentIdInput,
   documentSourceRef,
   sameDocumentSourceRef,
   type DocumentSourceRef,
 } from "@/lib/workspace/source-identity";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 export type DocumentSession = {
   collabDocument: CollabDocumentState;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { isWorkspaceWriteConflictError } from "./workspace-file-conflict.ts";
+import { isWorkspaceWriteConflictError } from "./file-conflict.ts";
 
 describe("workspace write conflict errors", () => {
   it("classifies Dropbox-style write conflicts as save conflicts", () => {

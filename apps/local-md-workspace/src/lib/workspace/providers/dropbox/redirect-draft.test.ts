@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { saveDropboxRedirectDraft, takeDropboxRedirectDraft } from "./dropbox-redirect-draft.ts";
+import { saveDropboxRedirectDraft, takeDropboxRedirectDraft } from "./redirect-draft.ts";
 
 describe("Dropbox redirect draft storage", () => {
   let values: Map<string, string>;

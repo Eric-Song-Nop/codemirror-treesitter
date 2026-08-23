@@ -8,7 +8,7 @@ import {
   LiveMdPreloadErrorProvider,
   useLiveMdPreload,
   type LiveMdPreloadState,
-} from "@/lib/live-md-preload";
+} from "@/lib/editor/live-md-preload";
 import { ThemeProvider } from "@/theme";
 import { LiveMdEditor } from "./LiveMdEditor";
 

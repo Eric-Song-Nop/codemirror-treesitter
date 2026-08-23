@@ -8,7 +8,7 @@ import {
   starterMarkdown,
   type MarkdownDirectoryNode,
   type WorkspaceEntry as LegacyWorkspaceEntry,
-} from "../workspace-tree.ts";
+} from "../tree.ts";
 import type {
   WorkspaceAssetPort,
   WorkspaceDocumentPort,

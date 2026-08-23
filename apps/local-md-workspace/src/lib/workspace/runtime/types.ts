@@ -1,4 +1,4 @@
-import type { CreatedWorkspaceImageNode, MarkdownDirectoryNode } from "../workspace-tree.ts";
+import type { CreatedWorkspaceImageNode, MarkdownDirectoryNode } from "../tree.ts";
 import type {
   SourceObservation,
   SourceProbe,

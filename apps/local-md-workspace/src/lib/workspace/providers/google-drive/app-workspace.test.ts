@@ -3,8 +3,8 @@ import {
   GOOGLE_DRIVE_APP_WORKSPACE_MANIFEST_PATH,
   ensureGoogleDriveAppWorkspaceManifest,
   ensureGoogleDriveAppWorkspaceRoot,
-} from "./google-drive-app-workspace.ts";
-import { GOOGLE_DRIVE_WORKSPACE_ROOT } from "./google-drive-config.ts";
+} from "./app-workspace.ts";
+import { GOOGLE_DRIVE_WORKSPACE_ROOT } from "./config.ts";
 
 describe("Google Drive app workspace bootstrap", () => {
   it("creates the fixed Grove workspace root", async () => {

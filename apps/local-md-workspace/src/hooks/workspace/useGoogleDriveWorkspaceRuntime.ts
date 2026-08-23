@@ -4,25 +4,25 @@ import {
   fetchGoogleDriveAccountIdentity,
   preloadGoogleDriveIdentityServices,
   type GoogleDriveAccessToken,
-} from "@/lib/google-drive-oauth";
+} from "@/lib/workspace/providers/google-drive/oauth";
 import type { TFunction } from "@/lib/i18n";
 import {
   opendalWorkspaceId,
   sameOpendalWorkspaceIdentity,
   type OpendalWorkspaceIdentity,
-} from "@/lib/opendal-workspace-identity";
+} from "@/lib/workspace/providers/identity";
 import {
   ensureGoogleDriveAppWorkspaceManifest,
   ensureGoogleDriveAppWorkspaceRoot,
-} from "@/lib/workspace/google-drive-app-workspace";
-import { defaultGoogleDriveRoot } from "@/lib/workspace/google-drive-config";
+} from "@/lib/workspace/providers/google-drive/app-workspace";
+import { defaultGoogleDriveRoot } from "@/lib/workspace/providers/google-drive/config";
 import {
   saveStoredGoogleDriveWorkspaceConfig,
   saveStoredWorkspaceKind,
   type StoredGoogleDriveWorkspaceConfig,
   type StoredWorkspaceKind,
-} from "@/lib/workspace-store";
-import { createCloudWorkspaceRuntime } from "@/lib/workspace-runtime/cloud-runtime";
+} from "@/lib/workspace/store";
+import { createCloudWorkspaceRuntime } from "@/lib/workspace/runtime/cloud-runtime";
 
 type UseGoogleDriveWorkspaceRuntimeOptions = {
   setStoredGoogleDriveConfig: (config: StoredGoogleDriveWorkspaceConfig | null) => void;

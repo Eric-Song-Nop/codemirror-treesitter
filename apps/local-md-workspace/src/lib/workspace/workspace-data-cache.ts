@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { workspaceQueryKeys } from "@/lib/workspace-query-keys";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import { workspaceQueryKeys } from "@/lib/workspace/query-keys";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 export function readWorkspaceTree(queryClient: QueryClient, runtime: WorkspaceRuntime) {
   return queryClient.fetchQuery({

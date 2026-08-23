@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { WorkspaceStorageKind } from "@/lib/storage/types";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import type { WorkspaceStorageKind } from "@/lib/workspace/storage/types";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 import { sourceAutoSaveKey, sourceAutoSaveTiming } from "./source-autosave.ts";
 
 describe("source autosave scheduling", () => {

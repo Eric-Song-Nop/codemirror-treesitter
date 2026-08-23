@@ -12,7 +12,7 @@ import {
   hasDropboxOAuthCallback,
   hasDropboxRedirectTransaction,
   parseDropboxOAuthCallback,
-} from "./dropbox-oauth.ts";
+} from "./oauth.ts";
 
 describe("Dropbox OAuth PKCE helpers", () => {
   afterEach(() => {

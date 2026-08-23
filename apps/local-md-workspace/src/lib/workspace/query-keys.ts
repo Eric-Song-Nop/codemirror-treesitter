@@ -1,4 +1,4 @@
-import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
+import type { WorkspaceIdentity } from "@/lib/workspace/runtime/types";
 
 export const workspaceQueryKeys = {
   all: ["local-md-workspace"] as const,

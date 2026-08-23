@@ -1,12 +1,12 @@
-import type { AccessDirectoryHandle } from "@/lib/file-system";
+import type { AccessDirectoryHandle } from "@/lib/workspace/file-system";
 import type { TFunction } from "@/lib/i18n";
 import {
   loadStoredWorkspaceSelectedPath,
   type StoredLocalWorkspaceRecord,
   type StoredWorkspaceSelectedPathContext,
-} from "@/lib/workspace-store";
-import type { MarkdownFileNode } from "@/lib/workspace-tree";
-import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
+} from "@/lib/workspace/store";
+import type { MarkdownFileNode } from "@/lib/workspace/tree";
+import type { WorkspaceIdentity } from "@/lib/workspace/runtime/types";
 import type { SaveState, SingleFileSource } from "@/lib/workspace/types";
 
 export function saveStateLabel(

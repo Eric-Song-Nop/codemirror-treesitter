@@ -8,7 +8,7 @@ import {
 import { FileNameDialog, SaveAsDropboxDialog } from "@/components/workspace/FileDialogs";
 import { ShareFileDialog } from "@/components/workspace/ShareFileDialog";
 import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
-import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace-tree";
+import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace/tree";
 import type { ActiveOwnerShareRecord, FileDialogMode } from "@/lib/workspace/types";
 
 type FileNameDialogState = {

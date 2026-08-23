@@ -1,26 +1,29 @@
 import { useEffect, useRef, useState } from "react";
-import { completeDropboxRedirectOAuthIfPresent } from "@/lib/dropbox-oauth";
-import { takeDropboxRedirectDraft, type DropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
-import { queryReadWritePermission } from "@/lib/file-system";
+import { completeDropboxRedirectOAuthIfPresent } from "@/lib/workspace/providers/dropbox/oauth";
+import {
+  takeDropboxRedirectDraft,
+  type DropboxRedirectDraft,
+} from "@/lib/workspace/providers/dropbox/redirect-draft";
+import { queryReadWritePermission } from "@/lib/workspace/file-system";
 import {
   clearSharedMarkdownDraftLaunchParams,
   readSharedMarkdownDraftLaunch,
   sharedMarkdownDraftLaunchErrorMessage,
-} from "@/lib/share-target";
+} from "@/lib/platform/share-target";
 import { defaultSidebarOpen } from "@/lib/workspace/constants";
-import { isDropboxRedirectCallbackWindow } from "@/lib/workspace/dropbox-config";
+import { isDropboxRedirectCallbackWindow } from "@/lib/workspace/providers/dropbox/config";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { loadWorkspaceSelectedPath } from "@/lib/workspace/state";
-import type { OpendalWorkspaceIdentity } from "@/lib/opendal-workspace-identity";
+import type { OpendalWorkspaceIdentity } from "@/lib/workspace/providers/identity";
 import {
   loadStoredLocalWorkspaceRecord,
   type StoredDropboxWorkspaceConfig,
   type StoredLocalWorkspaceRecord,
   type StoredWorkspaceKind,
-} from "@/lib/workspace-store";
-import type { MarkdownFileNode } from "@/lib/workspace-tree";
-import { createBrowserLocalWorkspaceRuntime } from "@/lib/workspace-runtime/browser-local-runtime";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+} from "@/lib/workspace/store";
+import type { MarkdownFileNode } from "@/lib/workspace/tree";
+import { createBrowserLocalWorkspaceRuntime } from "@/lib/workspace/runtime/browser-local-runtime";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
   current: T;

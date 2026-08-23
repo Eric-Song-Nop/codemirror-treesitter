@@ -2,14 +2,14 @@ import {
   readAccessFileHandle,
   writeAccessFileHandle,
   type AccessFileHandle,
-} from "@/lib/file-system";
+} from "@/lib/workspace/file-system";
 import {
   loadSingleFileDraft,
   rememberLastSingleFileDraft,
   saveSingleFileDraft,
   type SingleFileDraft,
-} from "@/lib/single-file-draft-store";
-import type { MarkdownFileNode } from "@/lib/workspace-tree";
+} from "@/lib/workspace/single-file-draft-store";
+import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import type { StandaloneDocumentSource } from "@/lib/workspace/types";
 
 export function createSingleFileDraftSource(draft: SingleFileDraft): StandaloneDocumentSource {

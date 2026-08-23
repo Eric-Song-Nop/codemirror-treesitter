@@ -1,6 +1,6 @@
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import type { TFunction } from "@/lib/i18n";
-import { findMarkdownFile, type MarkdownDirectoryNode } from "@/lib/workspace-tree";
+import { findMarkdownFile, type MarkdownDirectoryNode } from "@/lib/workspace/tree";
 
 export function isPathInsideDirectory(path: string, directory: string) {
   let normalizedDirectory = directory.replace(/\/+$/g, "");

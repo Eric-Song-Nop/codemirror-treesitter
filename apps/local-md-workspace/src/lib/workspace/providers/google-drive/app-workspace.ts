@@ -1,5 +1,5 @@
-import type { WorkspaceDocumentPort, WorkspaceEntryPort } from "@/lib/workspace-runtime/types";
-import { GOOGLE_DRIVE_WORKSPACE_ROOT } from "./google-drive-config.ts";
+import type { WorkspaceDocumentPort, WorkspaceEntryPort } from "@/lib/workspace/runtime/types";
+import { GOOGLE_DRIVE_WORKSPACE_ROOT } from "./config.ts";
 
 export const GOOGLE_DRIVE_APP_WORKSPACE_MANIFEST_PATH = ".grove/workspace.json";
 

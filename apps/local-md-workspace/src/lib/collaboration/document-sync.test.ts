@@ -6,7 +6,7 @@ import {
   collabDocumentBroadcastChannelName,
   createCollabDocumentBroadcastSync,
 } from "./document-sync.ts";
-import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
+import type { WorkspaceIdentity } from "@/lib/workspace/runtime/types";
 
 let originalBroadcastChannel: typeof BroadcastChannel | undefined;
 

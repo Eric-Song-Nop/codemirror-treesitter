@@ -11,10 +11,10 @@ import {
 } from "@/lib/workspace/paths";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
 import type { FileDialogMode, SingleFileSource, SourceAutoSaveTask } from "@/lib/workspace/types";
-import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
-import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace-tree";
-import type { SourceRevision, WorkspacePathMutationResult } from "@/lib/storage/types";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace/store";
+import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace/tree";
+import type { SourceRevision, WorkspacePathMutationResult } from "@/lib/workspace/storage/types";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
   current: T;

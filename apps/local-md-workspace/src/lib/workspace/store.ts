@@ -1,4 +1,4 @@
-import type { AccessDirectoryHandle } from "@/lib/file-system";
+import type { AccessDirectoryHandle } from "@/lib/workspace/file-system";
 import { legacyLocalWorkspaceId } from "@/lib/workspace/source-identity";
 
 const DB_NAME = "local-md-workspace";

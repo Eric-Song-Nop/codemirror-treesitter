@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { workspaceErrorMessage } from "./workspace-errors.ts";
+import { workspaceErrorMessage } from "./errors.ts";
 
 describe("workspace error messages", () => {
   it("distinguishes Dropbox write conflicts from missing paths", () => {

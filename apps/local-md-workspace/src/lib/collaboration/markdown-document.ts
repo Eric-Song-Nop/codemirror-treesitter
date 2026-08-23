@@ -3,7 +3,7 @@ type MarkdownDocumentRuntime = typeof import("./markdown-document-runtime.ts");
 let loadedRuntime: MarkdownDocumentRuntime | null = null;
 let runtimeRequest: Promise<MarkdownDocumentRuntime> | null = null;
 
-export { hashMarkdownText } from "../markdown-hash.ts";
+export { hashMarkdownText } from "./markdown-hash.ts";
 export type {
   CollabDocumentMaterialization,
   CollabDocumentState,
