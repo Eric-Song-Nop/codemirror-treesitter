@@ -3,27 +3,27 @@ import {
   authorizeDropboxWithPkce,
   fetchDropboxAccountIdentity,
   type DropboxAccessToken,
-} from "@/lib/dropbox-oauth";
-import { saveDropboxRedirectDraft } from "@/lib/dropbox-redirect-draft";
+} from "@/lib/workspace/providers/dropbox/oauth";
+import { saveDropboxRedirectDraft } from "@/lib/workspace/providers/dropbox/redirect-draft";
 import type { TFunction } from "@/lib/i18n";
 import {
   opendalWorkspaceId,
   sameOpendalWorkspaceIdentity,
   type OpendalWorkspaceIdentity,
-} from "@/lib/opendal-workspace-identity";
+} from "@/lib/workspace/providers/identity";
 import {
   defaultDropboxRedirectUri,
   normalizeDropboxRootInput,
-} from "@/lib/workspace/dropbox-config";
+} from "@/lib/workspace/providers/dropbox/config";
 import {
   saveStoredDropboxWorkspaceConfig,
   saveStoredWorkspaceKind,
   type StoredDropboxWorkspaceConfig,
   type StoredWorkspaceKind,
-} from "@/lib/workspace-store";
-import type { MarkdownFileNode } from "@/lib/workspace-tree";
-import { createCloudWorkspaceRuntime } from "@/lib/workspace-runtime/cloud-runtime";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+} from "@/lib/workspace/store";
+import type { MarkdownFileNode } from "@/lib/workspace/tree";
+import { createCloudWorkspaceRuntime } from "@/lib/workspace/runtime/cloud-runtime";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
   current: T;

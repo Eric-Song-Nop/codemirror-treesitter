@@ -1,4 +1,4 @@
-import { hasDropboxRedirectCallbackForStoredTransaction } from "@/lib/dropbox-oauth";
+import { hasDropboxRedirectCallbackForStoredTransaction } from "@/lib/workspace/providers/dropbox/oauth";
 
 export function defaultDropboxAppKey() {
   let configured = import.meta.env.VITE_DROPBOX_APP_KEY;

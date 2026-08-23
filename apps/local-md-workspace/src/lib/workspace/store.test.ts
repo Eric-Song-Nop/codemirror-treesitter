@@ -14,7 +14,7 @@ import {
   saveStoredOneDriveWorkspaceConfig,
   saveStoredWorkspaceSelectedPath,
   saveStoredWorkspaceKind,
-} from "./workspace-store.ts";
+} from "./store.ts";
 
 const DB_NAME = "local-md-workspace";
 const STORE_NAME = "workspace";

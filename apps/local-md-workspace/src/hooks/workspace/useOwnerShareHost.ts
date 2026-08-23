@@ -10,7 +10,7 @@ import {
 } from "@/lib/collaboration/share-relay-client";
 import type { ShareRelayConnection } from "@/lib/collaboration/share-relay-connection";
 import type { OwnerShareRecord } from "@/lib/collaboration/share-storage";
-import { hashMarkdownText } from "@/lib/markdown-hash";
+import { hashMarkdownText } from "@/lib/collaboration/markdown-hash";
 import { errorToMessage } from "@/lib/workspace/errors";
 import {
   getOrCreateOwnerShareClientId,
@@ -20,7 +20,7 @@ import {
 import type { ActiveOwnerShareRecord, SaveState } from "@/lib/workspace/types";
 import type { DocumentSession } from "@/lib/workspace/document-session";
 import { documentSourceRef, sameDocumentSourceRef } from "@/lib/workspace/source-identity";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
   current: T;

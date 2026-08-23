@@ -2,9 +2,9 @@ import { useCallback, useMemo, useState } from "react";
 import type { CreatedOwnerShare } from "@/lib/collaboration/share-storage";
 import type { ShareExpirationOption } from "@/lib/collaboration/share-identity";
 import type { ActiveOwnerShareRecord, SingleFileSource } from "@/lib/workspace/types";
-import type { MarkdownFileNode } from "@/lib/workspace-tree";
+import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import { documentSourceRef, sameDocumentSourceRef } from "@/lib/workspace/source-identity";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type UseWorkspaceShareStateOptions = {
   selectedFile: MarkdownFileNode | null;

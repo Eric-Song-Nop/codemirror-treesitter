@@ -1,5 +1,5 @@
-import type { WorkspaceStorageKind } from "@/lib/storage/types";
-import type { MarkdownFileNode } from "@/lib/workspace-tree";
+import type { WorkspaceStorageKind } from "@/lib/workspace/storage/types";
+import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import {
   documentSourceAliasRefs,
   documentSourceRef,
@@ -8,7 +8,7 @@ import {
   type DocumentSourceRef,
   type WorkspaceSourceRevision,
 } from "@/lib/workspace/source-identity";
-import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
+import type { WorkspaceIdentity } from "@/lib/workspace/runtime/types";
 import {
   getCollabDocumentValue,
   hashMarkdownText,

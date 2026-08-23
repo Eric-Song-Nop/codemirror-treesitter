@@ -15,7 +15,7 @@ import {
 } from "@/lib/collaboration/markdown-document";
 import { createCollabDocumentBroadcastSync } from "@/lib/collaboration/document-sync";
 import { createDebouncedTask } from "@/lib/scheduling/debounced-task";
-import { isWorkspaceWriteConflictError } from "@/lib/workspace-file-conflict";
+import { isWorkspaceWriteConflictError } from "@/lib/workspace/file-conflict";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { sourceAutoSaveKey, sourceAutoSaveTiming } from "@/lib/workspace/source-autosave";
 import {
@@ -26,10 +26,10 @@ import {
   type SaveState,
   type SourceAutoSaveTask,
 } from "@/lib/workspace/types";
-import { normalizeMarkdownPath, type MarkdownFileNode } from "@/lib/workspace-tree";
-import { workspaceDocumentPersistenceCoordinator } from "@/lib/workspace-runtime/document-persistence-coordinator";
-import type { WorkspaceRuntime, WorkspaceTextSnapshot } from "@/lib/workspace-runtime/types";
-import type { SourceObservation, SourceRevision } from "@/lib/storage/types";
+import { normalizeMarkdownPath, type MarkdownFileNode } from "@/lib/workspace/tree";
+import { workspaceDocumentPersistenceCoordinator } from "@/lib/workspace/runtime/document-persistence-coordinator";
+import type { WorkspaceRuntime, WorkspaceTextSnapshot } from "@/lib/workspace/runtime/types";
+import type { SourceObservation, SourceRevision } from "@/lib/workspace/storage/types";
 
 type MutableRef<T> = {
   current: T;

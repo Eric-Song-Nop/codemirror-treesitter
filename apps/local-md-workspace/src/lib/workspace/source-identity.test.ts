@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { WorkspaceStorageKind } from "@/lib/storage/types";
-import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
+import type { WorkspaceStorageKind } from "@/lib/workspace/storage/types";
+import type { WorkspaceIdentity } from "@/lib/workspace/runtime/types";
 import {
   collabBroadcastChannelName,
   documentSourceAliasRefs,

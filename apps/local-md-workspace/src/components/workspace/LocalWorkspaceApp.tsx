@@ -20,27 +20,27 @@ import { useWorkspaceShareActions } from "@/hooks/workspace/useWorkspaceShareAct
 import { useWorkspaceShareState } from "@/hooks/workspace/useWorkspaceShareState";
 import { useWorkspaceStartup } from "@/hooks/workspace/useWorkspaceStartup";
 import { useWorkspaceTree } from "@/hooks/workspace/useWorkspaceTree";
-import { completeDropboxPopupOAuthIfPresent } from "@/lib/dropbox-oauth";
+import { completeDropboxPopupOAuthIfPresent } from "@/lib/workspace/providers/dropbox/oauth";
 import {
   flushCollabDocumentPersistence,
   type CollabDocumentState,
 } from "@/lib/collaboration/markdown-document";
-import { isMobileBrowser } from "@/lib/browser-support";
+import { isMobileBrowser } from "@/lib/platform/browser-support";
 import {
   supportsDirectoryPicker,
   supportsSaveFilePicker,
   type AccessDirectoryHandle,
   type AccessFileHandle,
-} from "@/lib/file-system";
+} from "@/lib/workspace/file-system";
 import {
   findMarkdownFile,
   type MarkdownDirectoryNode,
   type MarkdownFileNode,
-} from "@/lib/workspace-tree";
+} from "@/lib/workspace/tree";
 import { useI18n } from "@/lib/i18n";
-import { useLiveMdPreload } from "@/lib/live-md-preload";
+import { useLiveMdPreload } from "@/lib/editor/live-md-preload";
 import { defaultSidebarOpen, isMobileSidebarViewport } from "@/lib/workspace/constants";
-import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/dropbox-config";
+import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/providers/dropbox/config";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { createEphemeralLocalWorkspaceRecord, saveStateLabel } from "@/lib/workspace/state";
 import type {
@@ -58,12 +58,12 @@ import {
   type StoredLocalWorkspaceRecord,
   type StoredDropboxWorkspaceConfig,
   type StoredWorkspaceKind,
-} from "@/lib/workspace-store";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+} from "@/lib/workspace/store";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 import {
   enqueueRuntimeTransition,
   transitionWorkspaceRuntime,
-} from "@/lib/workspace-runtime/runtime-lifecycle";
+} from "@/lib/workspace/runtime/runtime-lifecycle";
 
 const emptyLiveMdConfig: LiveMdConfig = {};
 const emptyLiveMdPlugins: NonNullable<LiveMdConfig["plugins"]> = [];

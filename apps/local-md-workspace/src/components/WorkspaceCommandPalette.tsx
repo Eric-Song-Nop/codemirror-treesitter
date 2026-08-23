@@ -27,7 +27,7 @@ import {
   flattenMarkdownFiles,
   type MarkdownDirectoryNode,
   type MarkdownFileNode,
-} from "@/lib/workspace-tree";
+} from "@/lib/workspace/tree";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { themeDefinitions, useTheme } from "@/theme";

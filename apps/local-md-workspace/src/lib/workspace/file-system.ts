@@ -1,4 +1,4 @@
-import { normalizeMarkdownFileName } from "./workspace-tree.ts";
+import { normalizeMarkdownFileName } from "./tree.ts";
 
 type AccessPermissionMode = "read" | "readwrite";
 

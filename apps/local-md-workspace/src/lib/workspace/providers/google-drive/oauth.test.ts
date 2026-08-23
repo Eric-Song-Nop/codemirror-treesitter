@@ -11,7 +11,7 @@ import {
   hasGoogleDriveOAuthCallback,
   hasGoogleDriveRedirectTransaction,
   parseGoogleDriveOAuthCallback,
-} from "./google-drive-oauth.ts";
+} from "./oauth.ts";
 
 type TestGoogleDriveTokenClientConfig = {
   callback: (response: {

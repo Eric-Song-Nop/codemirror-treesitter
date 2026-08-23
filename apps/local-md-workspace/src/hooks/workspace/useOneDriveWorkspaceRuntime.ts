@@ -3,27 +3,27 @@ import {
   authorizeOneDriveWithPkce,
   fetchOneDriveDriveIdentity,
   type OneDriveAccessToken,
-} from "@/lib/onedrive-oauth";
-import { saveOneDriveRedirectDraft } from "@/lib/onedrive-redirect-draft";
+} from "@/lib/workspace/providers/onedrive/oauth";
+import { saveOneDriveRedirectDraft } from "@/lib/workspace/providers/onedrive/redirect-draft";
 import type { TFunction } from "@/lib/i18n";
 import {
   opendalWorkspaceId,
   sameOpendalWorkspaceIdentity,
   type OpendalWorkspaceIdentity,
-} from "@/lib/opendal-workspace-identity";
+} from "@/lib/workspace/providers/identity";
 import {
   defaultOneDriveRedirectUri,
   normalizeOneDriveRootInput,
-} from "@/lib/workspace/onedrive-config";
+} from "@/lib/workspace/providers/onedrive/config";
 import {
   saveStoredOneDriveWorkspaceConfig,
   saveStoredWorkspaceKind,
   type StoredOneDriveWorkspaceConfig,
   type StoredWorkspaceKind,
-} from "@/lib/workspace-store";
-import type { MarkdownFileNode } from "@/lib/workspace-tree";
-import { createCloudWorkspaceRuntime } from "@/lib/workspace-runtime/cloud-runtime";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+} from "@/lib/workspace/store";
+import type { MarkdownFileNode } from "@/lib/workspace/tree";
+import { createCloudWorkspaceRuntime } from "@/lib/workspace/runtime/cloud-runtime";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
   current: T;

@@ -18,7 +18,7 @@ import {
   catppuccinMacchiatoLiveMdTheme,
 } from "@codemirror-treesitter/live-md-theme-catppuccin";
 import { githubLightLiveMdTheme } from "@codemirror-treesitter/live-md-theme-github";
-import { useLiveMdPreload } from "@/lib/live-md-preload";
+import { useLiveMdPreload } from "@/lib/editor/live-md-preload";
 import { useTheme, type Theme } from "@/theme";
 
 type LiveMdEditorProps = {

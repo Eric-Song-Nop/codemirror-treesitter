@@ -1,4 +1,4 @@
-import { hasGoogleDriveRedirectCallbackForStoredTransaction } from "@/lib/google-drive-oauth";
+import { hasGoogleDriveRedirectCallbackForStoredTransaction } from "@/lib/workspace/providers/google-drive/oauth";
 
 export const GOOGLE_DRIVE_WORKSPACE_ROOT = "Grove";
 

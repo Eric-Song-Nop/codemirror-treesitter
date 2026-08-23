@@ -1,4 +1,4 @@
-import { sha256ContentHash } from "@/lib/storage/opendal-workspace-object-store";
+import { sha256ContentHash } from "@/lib/workspace/storage/opendal-workspace-object-store";
 import type {
   SourceObservation,
   SourceProbe,
@@ -14,14 +14,14 @@ import type {
   WorkspacePathMutationResult,
   WorkspaceStorageKind,
   WorkspaceTargetCondition,
-} from "@/lib/storage/types";
+} from "@/lib/workspace/storage/types";
 import {
   OpendalWorkspaceAssetService,
   OpendalWorkspaceDocumentService,
   OpendalWorkspaceEntryService,
   OpendalWorkspaceTreeService,
-} from "@/lib/workspace-runtime/services";
-import type { WorkspaceIdentity, WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+} from "@/lib/workspace/runtime/services";
+import type { WorkspaceIdentity, WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 export type MemoryWorkspaceRuntime = WorkspaceRuntime & {
   files: Map<string, string>;

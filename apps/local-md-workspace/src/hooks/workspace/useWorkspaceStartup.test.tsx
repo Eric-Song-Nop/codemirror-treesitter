@@ -9,13 +9,13 @@ const dropboxOAuthMocks = vi.hoisted(() => ({
   completeRedirect: vi.fn(),
 }));
 
-vi.mock("@/lib/dropbox-oauth", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/dropbox-oauth")>()),
+vi.mock("@/lib/workspace/providers/dropbox/oauth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/workspace/providers/dropbox/oauth")>()),
   completeDropboxRedirectOAuthIfPresent: dropboxOAuthMocks.completeRedirect,
 }));
 
-vi.mock("@/lib/workspace/dropbox-config", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/workspace/dropbox-config")>()),
+vi.mock("@/lib/workspace/providers/dropbox/config", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/workspace/providers/dropbox/config")>()),
   isDropboxRedirectCallbackWindow: () => true,
 }));
 

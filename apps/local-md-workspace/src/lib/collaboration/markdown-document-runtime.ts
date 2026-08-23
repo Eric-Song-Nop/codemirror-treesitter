@@ -3,20 +3,20 @@ import type { LiveMdConfig } from "@codemirror-treesitter/live-md";
 import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import type { Frontiers } from "loro-crdt";
 import { createDebouncedTask, type DebouncedTask } from "@/lib/scheduling/debounced-task";
-import type { SourceObservation } from "@/lib/storage/types";
+import type { SourceObservation } from "@/lib/workspace/storage/types";
 import type {
   DocumentSourceState,
   WorkspaceIdentity,
   WorkspaceRuntime,
   WorkspaceTextSnapshot,
-} from "@/lib/workspace-runtime/types";
+} from "@/lib/workspace/runtime/types";
 import {
   documentSourceAliasRefs,
   documentSourceDocumentIdInput,
   documentSourceRef,
   type DocumentSourceRef,
 } from "@/lib/workspace/source-identity";
-import { hashMarkdownText } from "../markdown-hash.ts";
+import { hashMarkdownText } from "./markdown-hash.ts";
 import {
   appendBrowserCollabUpdates,
   clearBrowserCollabUpdates,
@@ -28,7 +28,7 @@ import {
   type SerializedCollabVersionVector,
 } from "./collab-browser-store.ts";
 
-export { hashMarkdownText } from "../markdown-hash.ts";
+export { hashMarkdownText } from "./markdown-hash.ts";
 
 const textKey = "markdown";
 const maxDocumentUpdateLogBytes = 64 * 1024;
@@ -97,7 +97,7 @@ type AcknowledgeCollabDocumentSourceSavedOptions = {
   frontiers?: SerializedCollabFrontier[];
   source?: {
     contentHash: string;
-    revision: import("@/lib/storage/types").SourceRevision;
+    revision: import("@/lib/workspace/storage/types").SourceRevision;
   };
   versionVector?: SerializedCollabVersionVector;
 };
@@ -668,7 +668,7 @@ async function importExternalMarkdownObservation(
 export async function resolveCollabRecoveryUseExternal(
   state: CollabDocumentState,
   snapshot: WorkspaceTextSnapshot,
-  confirmedIncomingRevision: import("@/lib/storage/types").SourceRevision,
+  confirmedIncomingRevision: import("@/lib/workspace/storage/types").SourceRevision,
 ) {
   if (state.source.kind != "recovery-required") {
     throw new Error("The document is not awaiting external-source recovery.");
@@ -732,8 +732,8 @@ function baselineFromMetadata(metadata: BrowserCollabDocumentMetadata) {
 }
 
 function sameSourceRevision(
-  left: import("@/lib/storage/types").SourceRevision,
-  right: import("@/lib/storage/types").SourceRevision,
+  left: import("@/lib/workspace/storage/types").SourceRevision,
+  right: import("@/lib/workspace/storage/types").SourceRevision,
 ) {
   return (
     left.kind == right.kind && left.validation == right.validation && left.value == right.value

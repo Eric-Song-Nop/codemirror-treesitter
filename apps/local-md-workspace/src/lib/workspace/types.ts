@@ -1,7 +1,7 @@
 import type { OwnerShareRecord } from "@/lib/collaboration/share-storage";
 import type { DebouncedTask } from "@/lib/scheduling/debounced-task";
 import type { SourceAutoSaveKey } from "@/lib/workspace/source-autosave";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 export type SaveState = "idle" | "pending" | "saving" | "saved" | "error";
 

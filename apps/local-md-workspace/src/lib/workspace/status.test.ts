@@ -3,8 +3,8 @@ import {
   createWorkspaceProviderStatus,
   dropboxRootLabel,
   dropboxTokenExpiryStatus,
-} from "./workspace-status.ts";
-import type { WorkspaceIdentity } from "./workspace-runtime/types.ts";
+} from "./status.ts";
+import type { WorkspaceIdentity } from "./runtime/types.ts";
 
 describe("workspace provider status", () => {
   it("describes a local workspace", () => {

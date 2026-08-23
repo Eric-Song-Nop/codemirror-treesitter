@@ -1,4 +1,4 @@
-import type { SourceRevision } from "../storage/types.ts";
+import type { SourceRevision } from "../workspace/storage/types.ts";
 
 const dbName = "local-md-workspace-collab";
 const dbVersion = 1;

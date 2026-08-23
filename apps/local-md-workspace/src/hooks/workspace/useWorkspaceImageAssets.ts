@@ -27,8 +27,8 @@ import type {
   SingleFileSource,
   WorkspaceImageAsset,
 } from "@/lib/workspace/types";
-import type { MarkdownFileNode } from "@/lib/workspace-tree";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import type { MarkdownFileNode } from "@/lib/workspace/tree";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type UseWorkspaceImageAssetsOptions = {
   documentTargetGenerationRef: RefObject<number>;

@@ -10,10 +10,7 @@ import {
 } from "../file-system.ts";
 import { StaticOpendalOperatorHost } from "../storage/opendal-operator-host.ts";
 import { OpendalWorkspaceObjectStore } from "../storage/opendal-workspace-object-store.ts";
-import {
-  legacyLocalWorkspaceId,
-  localWorkspaceSourceAliases,
-} from "../workspace/source-identity.ts";
+import { legacyLocalWorkspaceId, localWorkspaceSourceAliases } from "../source-identity.ts";
 import { ActiveDocumentChangeSource } from "./current-document-changes.ts";
 import {
   OpendalWorkspaceAssetService,

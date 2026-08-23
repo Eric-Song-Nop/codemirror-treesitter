@@ -1,15 +1,15 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
-import type { AccessFileHandle } from "@/lib/file-system";
-import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace-store";
+import type { AccessFileHandle } from "@/lib/workspace/file-system";
+import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace/store";
 import {
   findMarkdownFile,
   findMarkdownDirectory,
   replaceMarkdownDirectory,
   type MarkdownDirectoryNode,
   type MarkdownFileNode,
-} from "@/lib/workspace-tree";
+} from "@/lib/workspace/tree";
 import { dirname } from "pathe";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
 import { readWorkspaceDirectory, readWorkspaceTree } from "@/lib/workspace/workspace-data-cache";
@@ -18,7 +18,7 @@ import {
   type ActiveDocumentSource,
   type SingleFileSource,
 } from "@/lib/workspace/types";
-import type { WorkspaceRuntime } from "@/lib/workspace-runtime/types";
+import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
   current: T;

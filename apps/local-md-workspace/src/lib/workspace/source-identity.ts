@@ -1,5 +1,5 @@
-import type { WorkspaceStorageKind } from "@/lib/storage/types";
-import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
+import type { WorkspaceStorageKind } from "@/lib/workspace/storage/types";
+import type { WorkspaceIdentity } from "@/lib/workspace/runtime/types";
 
 export type WorkspaceSourceAlias = NonNullable<WorkspaceIdentity["sourceAliases"]>[number];
 export type WorkspaceSourceRevision = {

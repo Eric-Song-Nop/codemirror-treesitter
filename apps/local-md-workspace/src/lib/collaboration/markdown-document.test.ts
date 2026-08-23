@@ -22,7 +22,7 @@ import {
   createMemoryWorkspaceRuntime,
   type MemoryWorkspaceRuntime,
 } from "@/test/memory-workspace-runtime";
-import type { WorkspaceIdentity } from "@/lib/workspace-runtime/types";
+import type { WorkspaceIdentity } from "@/lib/workspace/runtime/types";
 
 let indexedDbDescriptor: PropertyDescriptor | undefined;
 

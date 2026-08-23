@@ -3,9 +3,19 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
-const srcRoot = fileURLToPath(new URL("../..", import.meta.url));
+const srcRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const libRoot = join(srcRoot, "lib");
 
-describe("workspace runtime architecture boundary", () => {
+describe("workspace architecture boundary", () => {
+  it("keeps domain modules out of the lib root", async () => {
+    let rootModules = (await readdir(libRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && /\.[cm]?[jt]sx?$/.test(entry.name))
+      .map((entry) => entry.name)
+      .toSorted();
+
+    expect(rootModules).toEqual(["i18n.tsx", "query-client.ts", "utils.ts"]);
+  });
+
   it("keeps raw object storage and operator hosts out of React modules", async () => {
     let files = [
       ...(await sourceFiles(join(srcRoot, "components"))),

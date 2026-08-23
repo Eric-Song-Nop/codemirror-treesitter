@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import {
-  saveGoogleDriveRedirectDraft,
-  takeGoogleDriveRedirectDraft,
-} from "./google-drive-redirect-draft.ts";
+import { saveGoogleDriveRedirectDraft, takeGoogleDriveRedirectDraft } from "./redirect-draft.ts";
 
 const GOOGLE_DRIVE_REDIRECT_DRAFT_KEY = "local-md-workspace:google-drive-redirect-draft";
 

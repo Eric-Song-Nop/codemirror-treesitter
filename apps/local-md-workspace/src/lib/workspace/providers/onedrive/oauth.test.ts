@@ -11,7 +11,7 @@ import {
   hasOneDriveRedirectTransaction,
   ONEDRIVE_REDIRECT_TRANSACTION_KEY,
   parseOneDriveOAuthCallback,
-} from "./onedrive-oauth.ts";
+} from "./oauth.ts";
 
 describe("OneDrive OAuth PKCE helpers", () => {
   afterEach(() => {

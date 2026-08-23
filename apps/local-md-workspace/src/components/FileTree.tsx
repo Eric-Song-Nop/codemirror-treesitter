@@ -6,8 +6,8 @@ import type {
   MarkdownDirectoryNode,
   MarkdownFileNode,
   MarkdownTreeNode,
-} from "@/lib/workspace-tree";
-import { findMarkdownDirectory, findMarkdownFile } from "@/lib/workspace-tree";
+} from "@/lib/workspace/tree";
+import { findMarkdownDirectory, findMarkdownFile } from "@/lib/workspace/tree";
 import { useI18n, type TFunction } from "@/lib/i18n";
 
 type FileTreeProps = {

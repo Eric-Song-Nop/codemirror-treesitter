@@ -1,4 +1,4 @@
-import type { OpendalWorkspaceIdentity } from "./opendal-workspace-identity.ts";
+import type { OpendalWorkspaceIdentity } from "../identity.ts";
 
 export const ONEDRIVE_AUTHORIZE_URL =
   "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
