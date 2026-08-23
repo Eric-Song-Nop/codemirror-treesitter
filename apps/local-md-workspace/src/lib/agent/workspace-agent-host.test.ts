@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import type { EditorView } from "@codemirror/view";
 import type { MarkdownDirectoryNode, MarkdownTreeNode } from "../workspace/tree.ts";
 import type {
   WorkspaceDocumentPort,
@@ -8,6 +9,7 @@ import type {
 import type { SourceObservation } from "../workspace/storage/types.ts";
 import { createWorkspaceAgentHost } from "./workspace-agent-host.ts";
 import type { WorkspaceAgentReadRuntime } from "./workspace-search.ts";
+import type { WorkspaceAgentActiveEditorCapability } from "./contracts.ts";
 
 describe("workspace agent read host", () => {
   it("lists the filtered Markdown tree recursively with stable pagination", async () => {
@@ -52,17 +54,24 @@ describe("workspace agent read host", () => {
       files: { "draft.md": "persisted needle", "other.md": "Needle elsewhere" },
     });
     let host = createWorkspaceAgentHost({
-      getActiveDocument: () => ({
-        dirty: true,
-        path: "draft.md",
-        value: "# Draft\nunsaved Needle",
-        version: 7,
-      }),
+      activeEditor: readOnlyActiveEditor("# Draft\nunsaved Needle"),
       runtime,
     });
 
     await expect(host.readMarkdown({ path: "draft.md" })).resolves.toMatchObject({
-      source: { dirty: true, kind: "active-document", version: 7 },
+      source: {
+        dirty: true,
+        kind: "active-document",
+        version: {
+          documentGeneration: 1,
+          documentId: "doc:draft.md",
+          editVersion: 7,
+          path: "draft.md",
+          targetGeneration: 1,
+          version: 1,
+          workspaceId: "local:test",
+        },
+      },
       status: "found",
       text: "# Draft\nunsaved Needle",
     });
@@ -232,5 +241,23 @@ function observation(path: string, value: string): SourceObservation<WorkspaceTe
       revision: { kind: "etag", validation: "atomic", value: `revision:${path}` },
       value,
     },
+  };
+}
+
+function readOnlyActiveEditor(value: string): WorkspaceAgentActiveEditorCapability {
+  return {
+    getActiveEditor: () => ({
+      documentGeneration: 1,
+      documentId: "doc:draft.md",
+      dirty: true,
+      editVersion: 7,
+      path: "draft.md",
+      targetGeneration: 1,
+      value,
+      view: {
+        state: { doc: { toString: () => value } },
+      } as EditorView,
+      workspaceId: "local:test",
+    }),
   };
 }

@@ -6,6 +6,7 @@ import type {
 } from "../workspace/runtime/types.ts";
 import type { SourceObservation } from "../workspace/storage/types.ts";
 import { awaitWorkspaceAgentOperation, throwIfWorkspaceAgentAborted } from "./abort.ts";
+import { workspaceAgentActiveDocumentVersion } from "./active-document.ts";
 import type {
   WorkspaceAgentActiveDocument,
   WorkspaceAgentDocumentSource,
@@ -61,7 +62,7 @@ export async function readWorkspaceMarkdown(input: {
       source: {
         dirty: activeDocument.dirty,
         kind: "active-document",
-        version: activeDocument.version,
+        version: workspaceAgentActiveDocumentVersion(activeDocument),
       },
       totalBytes: utf8ByteLength(activeDocument.value),
       value: activeDocument.value,
