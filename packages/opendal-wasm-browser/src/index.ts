@@ -1,40 +1,3 @@
-export type OpendalBrowserProvider = "dropbox" | "gdrive" | "onedrive" | "s3";
-
-export type OpendalDropboxOperatorConfig = {
-  accessToken: string;
-  provider: "dropbox";
-  root?: string;
-};
-
-export type OpendalGoogleDriveOperatorConfig = {
-  accessToken: string;
-  provider: "gdrive";
-  root?: string;
-};
-
-export type OpendalS3OperatorConfig = {
-  accessKeyId?: string;
-  bucket: string;
-  endpoint: string;
-  provider: "s3";
-  region: string;
-  root?: string;
-  secretAccessKey?: string;
-  sessionToken?: string;
-};
-
-export type OpendalOneDriveOperatorConfig = {
-  accessToken: string;
-  provider: "onedrive";
-  root?: string;
-};
-
-export type OpendalBrowserOperatorConfig =
-  | OpendalDropboxOperatorConfig
-  | OpendalGoogleDriveOperatorConfig
-  | OpendalOneDriveOperatorConfig
-  | OpendalS3OperatorConfig;
-
 export type OpendalS3Credentials = {
   accessKeyId?: string;
   secretAccessKey?: string;
@@ -195,7 +158,7 @@ export interface OpendalExactBrowserOperator {
   write(request: OpendalWriteRequest): Promise<OpendalWriteResult>;
 }
 
-export type OpendalBrowserCapabilities = {
+type GeneratedCapabilities = {
   nativeCopy: boolean;
   nativeCreateDir: boolean;
   nativeDelete: boolean;
@@ -211,7 +174,7 @@ export type OpendalBrowserCapabilities = {
   nativeWriteWithVersion?: boolean;
 };
 
-export type OpendalBrowserEntry = {
+type GeneratedEntry = {
   etag?: string;
   isDirectory: boolean;
   isFile: boolean;
@@ -221,41 +184,11 @@ export type OpendalBrowserEntry = {
   version?: string;
 };
 
-export type OpendalBrowserWriteOptions = {
+type GeneratedWriteOptions = {
   ifMatch?: string;
   ifNotExists?: boolean;
   ifVersion?: string;
 };
-
-export type OpendalBrowserReadResult<T> = {
-  entry: OpendalBrowserEntry;
-  value: T;
-};
-
-export type LegacyOpendalBrowserOperator = {
-  capabilities(): OpendalBrowserCapabilities;
-  createDir(path: string): Promise<void>;
-  delete(path: string): Promise<void>;
-  list(prefix: string): Promise<OpendalBrowserEntry[]>;
-  readBytes(path: string): Promise<Uint8Array>;
-  readText(path: string): Promise<string>;
-  readTextWithMetadata?(path: string): Promise<OpendalBrowserReadResult<string>>;
-  rename(from: string, to: string): Promise<void>;
-  stat(path: string): Promise<OpendalBrowserEntry>;
-  writeBytes(
-    path: string,
-    bytes: Uint8Array,
-    options?: OpendalBrowserWriteOptions,
-  ): Promise<OpendalBrowserEntry | void>;
-  writeText(
-    path: string,
-    value: string,
-    options?: OpendalBrowserWriteOptions,
-  ): Promise<OpendalBrowserEntry | void>;
-};
-
-/** @deprecated Use `openOpendalBrowserOperator` and `OpendalExactBrowserOperator`. */
-export type OpendalBrowserOperator = LegacyOpendalBrowserOperator;
 
 export type CreateOpendalBrowserOperatorOptions = {
   generatedModuleUrl?: string;
@@ -275,38 +208,30 @@ type GeneratedOperator = {
   list(prefix: string): Promise<unknown>;
   readBytes(path: string): Promise<unknown>;
   readBytesWithMetadata?(path: string): Promise<unknown>;
-  readText(path: string): Promise<string>;
-  readTextWithMetadata?(path: string): Promise<unknown>;
   rename(from: string, to: string): Promise<void>;
   stat(path: string): Promise<unknown>;
-  writeBytes(
-    path: string,
-    bytes: Uint8Array,
-    options?: OpendalBrowserWriteOptions,
-  ): Promise<unknown>;
-  writeText(path: string, value: string, options?: OpendalBrowserWriteOptions): Promise<unknown>;
+  writeBytes(path: string, bytes: Uint8Array, options?: GeneratedWriteOptions): Promise<unknown>;
 };
 
-type GeneratedOperatorConstructor = new (config: OpendalBrowserOperatorConfig) => GeneratedOperator;
+type GeneratedOperatorConfig = {
+  accessKeyId?: string;
+  accessToken?: string;
+  bucket?: string;
+  endpoint?: string;
+  provider: Exclude<OpendalBrowserSource["kind"], "browser-local">;
+  region?: string;
+  root?: string;
+  secretAccessKey?: string;
+  sessionToken?: string;
+};
+
+type GeneratedOperatorConstructor = new (config: GeneratedOperatorConfig) => GeneratedOperator;
 
 type GeneratedModule = {
   default?: (moduleOrPath?: unknown) => Promise<unknown>;
   OpendalBrowserOperator: GeneratedOperatorConstructor;
   openBrowserLocalOperator?: (rootHandle: FileSystemDirectoryHandle) => GeneratedOperator;
 };
-
-export async function createOpendalBrowserOperator(
-  config: OpendalBrowserOperatorConfig,
-  options: CreateOpendalBrowserOperatorOptions = {},
-): Promise<LegacyOpendalBrowserOperator> {
-  let normalizedConfig = normalizeConfig(config);
-  let generated = await loadGeneratedModule(options.generatedModuleUrl);
-  await initializeGeneratedModule(generated, options.wasmModuleUrl);
-  return new WasmOpendalBrowserOperator(
-    new generated.OpendalBrowserOperator(normalizedConfig),
-    normalizedConfig,
-  );
-}
 
 export async function openOpendalBrowserOperator(
   source: OpendalBrowserSource,
@@ -322,7 +247,7 @@ export async function openOpendalBrowserOperator(
     }
     operator = generated.openBrowserLocalOperator(source.rootHandle);
   } else {
-    operator = new generated.OpendalBrowserOperator(sourceToLegacyConfig(source));
+    operator = new generated.OpendalBrowserOperator(sourceToGeneratedConfig(source));
   }
   return new ExactWasmOpendalBrowserOperator(operator, source);
 }
@@ -352,87 +277,6 @@ async function initializeGeneratedModule(
 ) {
   if (typeof generated.default == "function") {
     await generated.default(wasmModuleUrl == null ? undefined : { module_or_path: wasmModuleUrl });
-  }
-}
-
-class WasmOpendalBrowserOperator implements LegacyOpendalBrowserOperator {
-  constructor(
-    private readonly operator: GeneratedOperator,
-    private readonly config: OpendalBrowserOperatorConfig,
-  ) {}
-
-  capabilities() {
-    let capabilities = parseCapabilities(this.operator.capabilities());
-    if (this.config.provider != "dropbox") return capabilities;
-    return {
-      ...capabilities,
-      nativeWriteWithIfNotExists: true,
-      nativeWriteWithVersion: true,
-    };
-  }
-
-  async createDir(path: string) {
-    await this.operator.createDir(path);
-  }
-
-  async delete(path: string) {
-    await this.operator.delete(path);
-  }
-
-  async list(prefix: string) {
-    return parseEntries(await this.operator.list(prefix));
-  }
-
-  async readBytes(path: string) {
-    return parseBytes(await this.operator.readBytes(path));
-  }
-
-  async readText(path: string) {
-    return this.operator.readText(path);
-  }
-
-  async readTextWithMetadata(path: string) {
-    if (this.config.provider == "dropbox") {
-      return readDropboxText(this.config, path);
-    }
-
-    if (typeof this.operator.readTextWithMetadata == "function") {
-      return parseReadTextResult(await this.operator.readTextWithMetadata(path));
-    }
-
-    let [value, entry] = await Promise.all([
-      this.operator.readText(path),
-      this.operator.stat(path),
-    ]);
-    return { entry: parseEntry(entry), value };
-  }
-
-  async rename(from: string, to: string) {
-    await this.operator.rename(from, to);
-  }
-
-  async stat(path: string) {
-    return parseEntry(await this.operator.stat(path));
-  }
-
-  async writeBytes(path: string, bytes: Uint8Array, options?: OpendalBrowserWriteOptions) {
-    assertSupportedWriteOptions(this.capabilities(), options);
-    if (this.config.provider == "dropbox" && hasDropboxWriteCondition(options)) {
-      return writeDropboxBytes(this.config, path, Uint8Array.from(bytes).buffer, options!);
-    }
-    let result = await this.operator.writeBytes(path, bytes, options);
-    if (result == null) return undefined;
-    return parseEntry(result, "write result");
-  }
-
-  async writeText(path: string, value: string, options?: OpendalBrowserWriteOptions) {
-    assertSupportedWriteOptions(this.capabilities(), options);
-    if (this.config.provider == "dropbox" && hasDropboxWriteCondition(options)) {
-      return writeDropboxBytes(this.config, path, value, options!);
-    }
-    let result = await this.operator.writeText(path, value, options);
-    if (result == null) return undefined;
-    return parseEntry(result, "write result");
   }
 }
 
@@ -752,31 +596,31 @@ class ExactWasmOpendalBrowserOperator implements OpendalExactBrowserOperator {
   }
 }
 
-function sourceToLegacyConfig(
+function sourceToGeneratedConfig(
   source: Exclude<OpendalBrowserSource, { kind: "browser-local" }>,
-): OpendalBrowserOperatorConfig {
+): GeneratedOperatorConfig {
   if (source.kind != "s3") {
-    return normalizeConfig({
-      accessToken: source.accessToken,
+    return {
+      accessToken: requireText(source.accessToken, "accessToken"),
       provider: source.kind,
-      root: source.root,
-    });
+      root: normalizeRoot(source.root),
+    };
   }
-  return normalizeConfig({
-    accessKeyId: source.credentials?.accessKeyId,
-    bucket: source.bucket,
-    endpoint: source.endpoint,
+  return {
+    accessKeyId: emptyToUndefined(source.credentials?.accessKeyId),
+    bucket: requireText(source.bucket, "bucket"),
+    endpoint: requireText(source.endpoint, "endpoint"),
     provider: "s3",
-    region: source.region,
-    root: source.root,
-    secretAccessKey: source.credentials?.secretAccessKey,
-    sessionToken: source.credentials?.sessionToken,
-  });
+    region: requireText(source.region, "region"),
+    root: normalizeRoot(source.root),
+    secretAccessKey: emptyToUndefined(source.credentials?.secretAccessKey),
+    sessionToken: emptyToUndefined(source.credentials?.sessionToken),
+  };
 }
 
 function exactOperatorInfo(
   source: OpendalBrowserSource,
-  raw: OpendalBrowserCapabilities,
+  raw: GeneratedCapabilities,
 ): OpendalOperatorInfo {
   let canCopyDeleteFile = raw.nativeRead && raw.nativeWrite && raw.nativeDelete;
   let canCopyDeleteDirectory = canCopyDeleteFile && raw.nativeList && raw.nativeCreateDir;
@@ -811,7 +655,7 @@ function exactOperatorInfo(
   };
 }
 
-function toExactMetadata(entry: OpendalBrowserEntry): OpendalMetadata {
+function toExactMetadata(entry: GeneratedEntry): OpendalMetadata {
   let kind: OpendalEntryKind;
   if (entry.isFile == entry.isDirectory) {
     throw new Error(`OpenDAL metadata returned an ambiguous entry kind for ${entry.path}.`);
@@ -854,7 +698,7 @@ function normalizeExactPath(
 
 function exactWriteOptions(
   condition: OpendalWriteCondition | undefined,
-): OpendalBrowserWriteOptions | undefined {
+): GeneratedWriteOptions | undefined {
   if (!condition) return undefined;
   switch (condition.kind) {
     case "if-match":
@@ -968,40 +812,8 @@ function equalBytes(a: Uint8Array, b: Uint8Array) {
   return a.every((value, index) => value == b[index]);
 }
 
-function assertSupportedWriteOptions(
-  capabilities: OpendalBrowserCapabilities,
-  options: OpendalBrowserWriteOptions | undefined,
-) {
-  if (!options) return;
-  let conditions = [
-    options.ifMatch != null,
-    options.ifNotExists === true,
-    options.ifVersion != null,
-  ];
-  if (conditions.filter(Boolean).length > 1) {
-    throw new Error("OpenDAL browser writes accept only one atomic write condition.");
-  }
-  if (options.ifMatch != null && !capabilities.nativeWriteWithIfMatch) {
-    throw new Error("OpenDAL backend does not support atomic ETag writes.");
-  }
-  if (options.ifNotExists && !capabilities.nativeWriteWithIfNotExists) {
-    throw new Error("OpenDAL backend does not support atomic no-clobber writes.");
-  }
-  if (options.ifVersion != null && !capabilities.nativeWriteWithVersion) {
-    throw new Error("OpenDAL backend does not support atomic version writes.");
-  }
-}
-
-function hasDropboxWriteCondition(options: OpendalBrowserWriteOptions | undefined) {
+function hasDropboxWriteCondition(options: GeneratedWriteOptions | undefined) {
   return options?.ifNotExists === true || options?.ifVersion != null;
-}
-
-async function readDropboxText(
-  config: OpendalDropboxOperatorConfig,
-  path: string,
-): Promise<OpendalBrowserReadResult<string>> {
-  let result = await readDropboxBytes(config, path);
-  return { entry: result.entry, value: new TextDecoder().decode(result.value) };
 }
 
 type DropboxAccessConfig = { accessToken: string; root?: string };
@@ -1009,7 +821,7 @@ type DropboxAccessConfig = { accessToken: string; root?: string };
 async function readDropboxBytes(
   config: DropboxAccessConfig,
   path: string,
-): Promise<OpendalBrowserReadResult<Uint8Array>> {
+): Promise<{ entry: GeneratedEntry; value: Uint8Array }> {
   let normalizedPath = normalizeStoragePath(path);
   let response = await fetch("https://content.dropboxapi.com/2/files/download", {
     headers: dropboxHeaders(config, {
@@ -1038,7 +850,7 @@ async function writeDropboxBytes(
   config: DropboxAccessConfig,
   path: string,
   body: BodyInit,
-  options: OpendalBrowserWriteOptions,
+  options: GeneratedWriteOptions,
 ) {
   let normalizedPath = normalizeStoragePath(path);
   let condition: "no-clobber" | "revision" = options.ifNotExists ? "no-clobber" : "revision";
@@ -1096,7 +908,7 @@ function dropboxEntry(
   path: string,
   metadata: Record<string, unknown>,
   operation: "download" | "upload",
-): OpendalBrowserEntry {
+): GeneratedEntry {
   return {
     etag: optionalText(metadata.content_hash, "Dropbox metadata.content_hash"),
     isDirectory: false,
@@ -1146,58 +958,7 @@ function parseJsonRecord(value: string, label: string) {
   }
 }
 
-function normalizeConfig(config: OpendalBrowserOperatorConfig): OpendalBrowserOperatorConfig {
-  let rawProvider = (config as { provider?: unknown }).provider;
-  let provider = typeof rawProvider == "string" ? rawProvider : "";
-
-  if (provider == "dropbox") {
-    return {
-      accessToken: requireText((config as OpendalDropboxOperatorConfig).accessToken, "accessToken"),
-      provider: "dropbox",
-      root: normalizeRoot(config.root),
-    };
-  }
-
-  if (provider == "gdrive") {
-    return {
-      accessToken: requireText(
-        (config as OpendalGoogleDriveOperatorConfig).accessToken,
-        "accessToken",
-      ),
-      provider: "gdrive",
-      root: normalizeRoot(config.root),
-    };
-  }
-
-  if (provider == "onedrive") {
-    return {
-      accessToken: requireText(
-        (config as OpendalOneDriveOperatorConfig).accessToken,
-        "accessToken",
-      ),
-      provider: "onedrive",
-      root: normalizeRoot(config.root),
-    };
-  }
-
-  if (provider == "s3") {
-    let s3Config = config as OpendalS3OperatorConfig;
-    return {
-      accessKeyId: emptyToUndefined(s3Config.accessKeyId),
-      bucket: requireText(s3Config.bucket, "bucket"),
-      endpoint: requireText(s3Config.endpoint, "endpoint"),
-      provider: "s3",
-      region: requireText(s3Config.region, "region"),
-      root: normalizeRoot(s3Config.root),
-      secretAccessKey: emptyToUndefined(s3Config.secretAccessKey),
-      sessionToken: emptyToUndefined(s3Config.sessionToken),
-    };
-  }
-
-  throw new Error(`Unsupported OpenDAL browser provider: ${provider}`);
-}
-
-function parseCapabilities(value: unknown): OpendalBrowserCapabilities {
+function parseCapabilities(value: unknown): GeneratedCapabilities {
   let record = requireRecord(value, "capabilities");
   return {
     nativeCopy: Boolean(record.nativeCopy),
@@ -1216,23 +977,12 @@ function parseCapabilities(value: unknown): OpendalBrowserCapabilities {
   };
 }
 
-function parseReadTextResult(value: unknown): OpendalBrowserReadResult<string> {
-  let record = requireRecord(value, "readTextWithMetadata");
-  if (typeof record.value != "string") {
-    throw new Error("OpenDAL readTextWithMetadata.value returned a non-string value.");
-  }
-  return {
-    entry: parseEntry(record.entry, "readTextWithMetadata.entry"),
-    value: record.value,
-  };
-}
-
 function parseEntries(value: unknown) {
   if (!Array.isArray(value)) throw new Error("OpenDAL list returned a non-array value.");
   return value.map((entry, index) => parseEntry(entry, `entry ${index}`));
 }
 
-function parseEntry(value: unknown, label = "entry"): OpendalBrowserEntry {
+function parseEntry(value: unknown, label = "entry"): GeneratedEntry {
   let record = requireRecord(value, label);
   return {
     etag: optionalText(record.etag, `${label}.etag`),

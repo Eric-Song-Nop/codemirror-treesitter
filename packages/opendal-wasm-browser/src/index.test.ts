@@ -1,38 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import {
-  createOpendalBrowserOperator,
-  openOpendalBrowserOperator,
-  OpendalBrowserError,
-} from "./index.ts";
-
-const generatedModuleUrl = `data:text/javascript,${encodeURIComponent(`
-export default async function init() {}
-export class OpendalBrowserOperator {
-  capabilities() {
-    return {
-      nativeCopy: true,
-      nativeCreateDir: true,
-      nativeDelete: true,
-      nativeList: true,
-      nativeRead: true,
-      nativeRename: true,
-      nativeStat: true,
-      nativeWrite: true,
-      nativeWriteWithIfMatch: false,
-      nativeWriteWithIfNotExists: false
-    }
-  }
-  async createDir() {}
-  async delete() {}
-  async list() { return [] }
-  async readBytes() { throw new Error("generated readBytes called") }
-  async readText() { throw new Error("generated readText called") }
-  async rename() {}
-  async stat(path) { return { isDirectory: false, isFile: true, path } }
-  async writeBytes() { throw new Error("generated writeBytes called") }
-  async writeText() { throw new Error("generated writeText called") }
-}
-`)}`;
+import { openOpendalBrowserOperator, OpendalBrowserError } from "./index.ts";
 
 const exactGeneratedModuleUrl = `data:text/javascript,${encodeURIComponent(`
 export default async function init() {}
@@ -82,7 +49,6 @@ class Operator {
           }
         }
   }
-  async readText(path) { return new TextDecoder().decode(await this.readBytes(path)) }
   async rename() { throw new Error("native rename must not be used") }
   async stat(path) {
     let key = path.endsWith("/") ? path.slice(0, -1) : path
@@ -103,7 +69,6 @@ class Operator {
       size: bytes.byteLength
     }
   }
-  async writeText(path, value) { return this.writeBytes(path, new TextEncoder().encode(value)) }
 }
 export class OpendalBrowserOperator extends Operator {}
 export function openBrowserLocalOperator() { return new Operator() }
@@ -114,7 +79,7 @@ afterEach(() => {
 });
 
 describe("Dropbox browser transport", () => {
-  it("reads text and Dropbox revision from the same response", async () => {
+  it("reads bytes and Dropbox revision from the same response", async () => {
     let requests: Request[] = [];
     vi.stubGlobal(
       "fetch",
@@ -134,17 +99,17 @@ describe("Dropbox browser transport", () => {
     );
     let operator = await dropboxOperator();
 
-    await expect(operator.readTextWithMetadata!("notes/note.md")).resolves.toEqual({
-      entry: {
+    await expect(operator.read("notes/note.md")).resolves.toEqual({
+      bytes: new TextEncoder().encode("# note\n"),
+      metadata: {
         etag: "hash-a",
-        isDirectory: false,
-        isFile: true,
+        kind: "file",
         lastModified: "2026-07-17T01:02:03Z",
         path: "notes/note.md",
         size: 7,
         version: "rev-a",
       },
-      value: "# note\n",
+      metadataBinding: "same-read",
     });
 
     expect(requests).toHaveLength(1);
@@ -174,7 +139,7 @@ describe("Dropbox browser transport", () => {
     );
     let operator = await dropboxOperator();
 
-    await expect(operator.readTextWithMetadata!("notes/note.md")).rejects.toThrow(
+    await expect(operator.read("notes/note.md")).rejects.toThrow(
       "Dropbox download response did not include file revision metadata.",
     );
   });
@@ -200,8 +165,16 @@ describe("Dropbox browser transport", () => {
     );
     let operator = await dropboxOperator();
 
-    await operator.writeText("new.md", "# new\n", { ifNotExists: true });
-    await operator.writeText("new.md", "# edit\n", { ifVersion: "rev-1" });
+    await operator.write({
+      bytes: new TextEncoder().encode("# new\n"),
+      condition: { kind: "if-not-exists" },
+      path: "new.md",
+    });
+    await operator.write({
+      bytes: new TextEncoder().encode("# edit\n"),
+      condition: { kind: "if-version", version: "rev-1" },
+      path: "new.md",
+    });
 
     expect(uploadArgs).toEqual([
       {
@@ -244,7 +217,11 @@ describe("Dropbox browser transport", () => {
     let operator = await dropboxOperator();
 
     await expect(
-      operator.writeText("existing.md", "# replacement\n", { ifNotExists: true }),
+      operator.write({
+        bytes: new TextEncoder().encode("# replacement\n"),
+        condition: { kind: "if-not-exists" },
+        path: "existing.md",
+      }),
     ).rejects.toThrow("Dropbox no-clobber conflict: 409 Conflict: path/conflict/file/..");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
@@ -254,8 +231,12 @@ describe("Dropbox browser transport", () => {
     let operator = await dropboxOperator();
 
     await expect(
-      operator.writeText("../outside.md", "# outside\n", { ifNotExists: true }),
-    ).rejects.toThrow("paths cannot include . or .. segments");
+      operator.write({
+        bytes: new TextEncoder().encode("# outside\n"),
+        condition: { kind: "if-not-exists" },
+        path: "../outside.md",
+      }),
+    ).rejects.toThrow("OpenDAL paths cannot include . or .. segments");
     expect(fetch).not.toHaveBeenCalled();
   });
 });
@@ -279,7 +260,7 @@ describe("exact browser operator", () => {
     );
     let operator = await openOpendalBrowserOperator(
       { accessToken: "token", kind: "dropbox", root: "/Grove/" },
-      { generatedModuleUrl },
+      { generatedModuleUrl: exactGeneratedModuleUrl },
     );
 
     await expect(operator.read("binary.dat")).resolves.toEqual({
@@ -367,8 +348,8 @@ describe("exact browser operator", () => {
 });
 
 async function dropboxOperator() {
-  return createOpendalBrowserOperator(
-    { accessToken: "token", provider: "dropbox", root: "/Grove/" },
-    { generatedModuleUrl },
+  return openOpendalBrowserOperator(
+    { accessToken: "token", kind: "dropbox", root: "/Grove/" },
+    { generatedModuleUrl: exactGeneratedModuleUrl },
   );
 }

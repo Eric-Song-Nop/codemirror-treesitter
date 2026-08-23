@@ -1,9 +1,4 @@
-import type { OpendalBrowserProvider } from "@codemirror-treesitter/opendal-wasm-browser";
-
-export type OpendalWorkspaceProvider = Extract<
-  OpendalBrowserProvider,
-  "dropbox" | "gdrive" | "onedrive"
->;
+export type OpendalWorkspaceProvider = "dropbox" | "gdrive" | "onedrive";
 
 export type OpendalWorkspaceIdentity = {
   id: string;

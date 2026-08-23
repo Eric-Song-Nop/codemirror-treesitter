@@ -133,6 +133,13 @@ export function useWorkspaceSaveActions({
       documentGeneration == activeDocumentGenerationRef.current &&
       selectedFileSourceRef.current === source &&
       selectedFileRef.current === file;
+    let markCurrentTargetSaved = () => {
+      if (!isCurrentSaveTarget()) return;
+      cleanValueRef.current = value;
+      if (editVersion != editVersionRef.current) return;
+      dirtyRef.current = false;
+      setSaveStateSynced("saved");
+    };
     setSaveStateSynced("saving");
 
     let outcome = await workspaceDocumentPersistenceCoordinator.schedule({
@@ -163,26 +170,14 @@ export function useWorkspaceSaveActions({
             }
           }
 
-          if (document && document.path == file.path) {
-            let materialization = captureCollabDocumentMaterialization(document);
-            value = materialization.value;
-            if (document.source.kind != "present") {
-              throw new Error(sourceWriteBlockedMessage(document.source.kind));
-            }
+          if (document) {
             if (!runtime) throw new Error("Collaborative documents require a workspace runtime.");
-            await saveCollabDocumentSnapshot(runtime, document);
-            let savedSource = await commitDocumentValue(
+            let materialization = await persistCollaborativeDocument(
               runtime,
-              file.path,
-              materialization.value,
-              document.source.baseline.revision,
+              document,
+              sourceImport,
             );
-            await acknowledgeCollabDocumentSourceSaved(runtime, document, materialization.value, {
-              externalEdit: sourceImport?.externalEdit,
-              frontiers: materialization.frontiers,
-              source: savedSource,
-              versionVector: materialization.versionVector,
-            });
+            value = materialization.value;
             sendHostSaveAck(
               runtime,
               file.path,
@@ -203,21 +198,17 @@ export function useWorkspaceSaveActions({
               await source.writeFile(value);
             }
           }
-          if (isCurrentSaveTarget()) {
-            cleanValueRef.current = value;
-            if (editVersion == editVersionRef.current) {
-              dirtyRef.current = false;
-              setSaveStateSynced("saved");
-            }
-          }
+          markCurrentTargetSaved();
           return true;
         } catch (error) {
-          let finalError = error;
-          if (error instanceof IndeterminateDocumentCommitError && document) {
+          let reconcileIndeterminateCommit = async (candidate: unknown) => {
+            if (!(candidate instanceof IndeterminateDocumentCommitError) || !document) {
+              return candidate;
+            }
             try {
               let sourceImport = await ingestExternalMarkdownObservation(
                 document,
-                error.observation,
+                candidate.observation,
               );
               if (sourceImport) {
                 if (runtime) sendHostDocumentUpdate(runtime, file.path, sourceImport.update);
@@ -225,53 +216,33 @@ export function useWorkspaceSaveActions({
               }
               if (runtime) await saveCollabDocumentSnapshot(runtime, document);
             } catch (reconcileError) {
-              finalError = reconcileError;
+              return reconcileError;
             }
-          } else if (isWorkspaceWriteConflictError(error)) {
+            return candidate;
+          };
+
+          let finalError = await reconcileIndeterminateCommit(error);
+          if (finalError === error && isWorkspaceWriteConflictError(error)) {
             try {
-              if (document && document.path == file.path) {
+              if (document) {
                 if (!runtime)
                   throw new Error("Collaborative documents require a workspace runtime.");
                 let sourceImport = await ingestExternalMarkdownEdit(runtime, document);
                 if (sourceImport) sendHostDocumentUpdate(runtime, file.path, sourceImport.update);
                 value = applyCollabDocumentValue(document, getCollabDocumentValue(document));
-                if (document.source.kind != "present") {
-                  throw new Error(sourceWriteBlockedMessage(document.source.kind));
-                }
-
-                let materialization = captureCollabDocumentMaterialization(document);
-                value = materialization.value;
-                await saveCollabDocumentSnapshot(runtime, document);
-                let savedSource = await commitDocumentValue(
-                  runtime,
-                  file.path,
-                  materialization.value,
-                  document.source.baseline.revision,
-                );
-                await acknowledgeCollabDocumentSourceSaved(
+                let materialization = await persistCollaborativeDocument(
                   runtime,
                   document,
-                  materialization.value,
-                  {
-                    externalEdit: sourceImport?.externalEdit,
-                    frontiers: materialization.frontiers,
-                    source: savedSource,
-                    versionVector: materialization.versionVector,
-                  },
+                  sourceImport,
                 );
+                value = materialization.value;
                 sendHostSaveAck(
                   runtime,
                   file.path,
                   materialization.value,
                   materialization.versionVector,
                 );
-                if (isCurrentSaveTarget()) {
-                  cleanValueRef.current = value;
-                  if (editVersion == editVersionRef.current) {
-                    dirtyRef.current = false;
-                    setSaveStateSynced("saved");
-                  }
-                }
+                markCurrentTargetSaved();
                 return true;
               }
 
@@ -281,37 +252,11 @@ export function useWorkspaceSaveActions({
                   ? await source.readFile()
                   : "";
               if (externalValue == value) {
-                if (isCurrentSaveTarget()) {
-                  cleanValueRef.current = value;
-                  if (editVersion == editVersionRef.current) {
-                    dirtyRef.current = false;
-                    setSaveStateSynced("saved");
-                  }
-                }
+                markCurrentTargetSaved();
                 return true;
               }
             } catch (retryError) {
-              finalError = retryError;
-            }
-          }
-
-          if (
-            finalError !== error &&
-            finalError instanceof IndeterminateDocumentCommitError &&
-            document
-          ) {
-            try {
-              let sourceImport = await ingestExternalMarkdownObservation(
-                document,
-                finalError.observation,
-              );
-              if (sourceImport) {
-                if (runtime) sendHostDocumentUpdate(runtime, file.path, sourceImport.update);
-                value = applyCollabDocumentValue(document, sourceImport.value);
-              }
-              if (runtime) await saveCollabDocumentSnapshot(runtime, document);
-            } catch (reconcileError) {
-              finalError = reconcileError;
+              finalError = await reconcileIndeterminateCommit(retryError);
             }
           }
 
@@ -738,6 +683,31 @@ class IndeterminateDocumentCommitError extends Error {
     super(`The write outcome for ${path} could not be confirmed. Reconcile before saving again.`);
     this.name = "IndeterminateDocumentCommitError";
   }
+}
+
+async function persistCollaborativeDocument(
+  runtime: WorkspaceRuntime,
+  document: CollabDocumentState,
+  sourceImport: CollabSourceImportResult | null,
+) {
+  let materialization = captureCollabDocumentMaterialization(document);
+  if (document.source.kind != "present") {
+    throw new Error(sourceWriteBlockedMessage(document.source.kind));
+  }
+  await saveCollabDocumentSnapshot(runtime, document);
+  let source = await commitDocumentValue(
+    runtime,
+    document.path,
+    materialization.value,
+    document.source.baseline.revision,
+  );
+  await acknowledgeCollabDocumentSourceSaved(runtime, document, materialization.value, {
+    externalEdit: sourceImport?.externalEdit,
+    frontiers: materialization.frontiers,
+    source,
+    versionVector: materialization.versionVector,
+  });
+  return materialization;
 }
 
 async function commitDocumentValue(

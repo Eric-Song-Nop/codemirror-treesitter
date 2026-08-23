@@ -1375,7 +1375,12 @@ async function assertMockDropboxWorkspaceFlow(client, sessionId) {
   let nextValue = `# Mock Dropbox UI smoke\\n\\n${fileName}\\n`;
   let sharedValue = `# Mock Dropbox UI smoke\\n\\nShared edit for ${fileName}\\n`;
 
-  await installDropboxOAuthStub(client, sessionId, "mock-dropbox-token");
+  await installDropboxOAuthStub(
+    client,
+    sessionId,
+    "mock-dropbox-token",
+    "dbid:mock-dropbox-account",
+  );
   await installMockDropboxOperator(client, sessionId);
   await navigate(client, sessionId, SMOKE_URL);
   await client.evaluate(
@@ -2363,7 +2368,12 @@ async function installMockFileSystemAccess(client, sessionId) {
   );
 }
 
-async function installDropboxOAuthStub(client, sessionId, accessToken = dropboxAccessToken) {
+async function installDropboxOAuthStub(
+  client,
+  sessionId,
+  accessToken = dropboxAccessToken,
+  accountId,
+) {
   await client.send(
     "Page.addScriptToEvaluateOnNewDocument",
     {
@@ -2376,6 +2386,17 @@ async function installDropboxOAuthStub(client, sessionId, accessToken = dropboxA
               return Promise.resolve(new Response(JSON.stringify({
                 access_token: ${JSON.stringify(accessToken)},
                 expires_in: 3600
+              }), {
+                headers: { "Content-Type": "application/json" },
+                status: 200
+              }));
+            }
+            if (
+              ${JSON.stringify(Boolean(accountId))} &&
+              url == "https://api.dropboxapi.com/2/users/get_current_account"
+            ) {
+              return Promise.resolve(new Response(JSON.stringify({
+                account_id: ${JSON.stringify(accountId)}
               }), {
                 headers: { "Content-Type": "application/json" },
                 status: 200
@@ -2425,6 +2446,9 @@ async function installMockDropboxOperator(client, sessionId) {
         (() => {
           let files = new Map();
           let directories = new Set();
+          let versions = new Map();
+          let decoder = new TextDecoder();
+          let encoder = new TextEncoder();
 
           function normalize(path) {
             return String(path || "").trim().replace(/\\\\/g, "/").replace(/^\\/+|\\/+$/g, "");
@@ -2444,6 +2468,17 @@ async function installMockDropboxOperator(client, sessionId) {
             }
           }
 
+          function metadata(path, kind) {
+            if (kind == "directory") return { kind, path };
+            let value = files.get(path);
+            return {
+              kind,
+              path,
+              size: encoder.encode(value).byteLength,
+              version: String(versions.get(path))
+            };
+          }
+
           function entries(prefix = "") {
             let normalizedPrefix = normalize(prefix);
             let result = [];
@@ -2458,92 +2493,127 @@ async function installMockDropboxOperator(client, sessionId) {
 
             for (let path of directorySet) {
               if (normalizedPrefix && path != normalizedPrefix && !path.startsWith(normalizedPrefix + "/")) continue;
-              result.push({ isDirectory: true, isFile: false, path });
+              result.push(metadata(path, "directory"));
             }
             for (let path of files.keys()) {
               if (normalizedPrefix && path != normalizedPrefix && !path.startsWith(normalizedPrefix + "/")) continue;
-              result.push({ isDirectory: false, isFile: true, path });
+              result.push(metadata(path, "file"));
             }
             return result.sort((left, right) => left.path.localeCompare(right.path));
           }
 
           window.__localMdMockDropboxFiles = files;
-          window.__localMdWorkspaceTestDropboxOperatorFactory = async () => ({
-            capabilities() {
-              return {
-                nativeCopy: true,
-                nativeCreateDir: true,
-                nativeDelete: true,
-                nativeList: true,
-                nativeRead: true,
-                nativeRename: true,
-                nativeStat: true,
-                nativeWrite: true
-              };
+          window.__localMdWorkspaceTestDropboxOperatorFactory = async (source) => ({
+            info: {
+              capabilities: {
+                createDirectory: true,
+                delete: { recursive: "native", single: true },
+                list: true,
+                read: true,
+                rename: { directory: "native", file: "native" },
+                stat: true,
+                write: true,
+                writeConditions: {
+                  ifMatch: false,
+                  ifNotExists: true,
+                  ifVersion: true
+                }
+              },
+              root: source.root || "",
+              scheme: "dropbox"
             },
-            async createDir(path) {
+            async createDirectory(path) {
               let normalized = normalize(path);
               if (normalized) {
                 ensureParents(normalized);
                 directories.add(normalized);
               }
             },
-            async delete(path) {
-              let normalized = normalize(path);
-              if (files.delete(normalized)) return;
-              let removed = false;
+            async delete(request) {
+              let normalized = normalize(request.path);
+              if (files.delete(normalized)) {
+                versions.delete(normalized);
+                return { status: "applied" };
+              }
               for (let key of Array.from(files.keys())) {
                 if (key.startsWith(normalized + "/")) {
                   files.delete(key);
-                  removed = true;
+                  versions.delete(key);
                 }
               }
               for (let key of Array.from(directories)) {
                 if (key == normalized || key.startsWith(normalized + "/")) {
                   directories.delete(key);
-                  removed = true;
                 }
               }
-              if (!removed) throw new Error("not_found");
+              return { status: "applied" };
             },
+            dispose() {},
             async list(prefix) {
               return entries(prefix);
             },
-            async readText(path) {
+            async read(path) {
               let normalized = normalize(path);
               if (!files.has(normalized)) throw new Error("not_found");
-              return files.get(normalized);
+              return {
+                bytes: encoder.encode(files.get(normalized)),
+                metadata: metadata(normalized, "file"),
+                metadataBinding: "same-read"
+              };
             },
-            async rename(from, to) {
-              let source = normalize(from);
-              let target = normalize(to);
-              if (files.has(source)) {
-                let value = files.get(source);
-                files.delete(source);
+            async rename(request) {
+              let from = normalize(request.from);
+              let target = normalize(request.to);
+              if (files.has(from)) {
+                let value = files.get(from);
+                let version = versions.get(from);
+                files.delete(from);
+                versions.delete(from);
                 ensureParents(target);
                 files.set(target, value);
-                return;
+                versions.set(target, version);
+                return { status: "applied" };
               }
-              if (!directories.has(source)) throw new Error("not_found");
-              directories.delete(source);
+              if (!directories.has(from)) throw new Error("not_found");
+              directories.delete(from);
               directories.add(target);
               for (let key of Array.from(files.keys())) {
-                if (!key.startsWith(source + "/")) continue;
+                if (!key.startsWith(from + "/")) continue;
                 let value = files.get(key);
+                let version = versions.get(key);
                 files.delete(key);
-                files.set(target + key.slice(source.length), value);
+                versions.delete(key);
+                let nextPath = target + key.slice(from.length);
+                files.set(nextPath, value);
+                versions.set(nextPath, version);
               }
+              return { status: "applied" };
             },
             async stat(path) {
               let normalized = normalize(path);
-              if (files.has(normalized)) return { isDirectory: false, isFile: true, path: normalized };
-              if (directories.has(normalized)) return { isDirectory: true, isFile: false, path: normalized };
+              if (files.has(normalized)) return metadata(normalized, "file");
+              if (directories.has(normalized)) return metadata(normalized, "directory");
               throw new Error("not_found");
             },
-            async writeText(path, value) {
-              let normalized = normalize(path);
+            async write(request) {
+              let normalized = normalize(request.path);
+              if (request.condition?.kind == "if-not-exists" && files.has(normalized)) {
+                throw new Error("condition_failed");
+              }
+              if (
+                request.condition?.kind == "if-version" &&
+                String(versions.get(normalized)) != request.condition.version
+              ) {
+                throw new Error("condition_failed");
+              }
               ensureParents(normalized);
-              files.set(normalized, String(value));
+              files.set(normalized, decoder.decode(request.bytes));
+              versions.set(normalized, (versions.get(normalized) || 0) + 1);
+              return {
+                metadata: metadata(normalized, "file"),
+                metadataBinding: "write-response",
+                status: "applied"
+              };
             }
           });
         })();

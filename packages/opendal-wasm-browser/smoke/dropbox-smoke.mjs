@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 
 let accessToken = process.env.OPENDAL_DROPBOX_ACCESS_TOKEN;
 
@@ -9,15 +10,20 @@ if (!accessToken) {
 
 let generatedModuleUrl = new URL("../pkg/opendal_wasm_browser.js", import.meta.url);
 let wasmModuleUrl = new URL("../pkg/opendal_wasm_browser_bg.wasm", import.meta.url);
+let wrapperModuleUrl = new URL("../dist/index.mjs", import.meta.url);
 
-if (!existsSync(generatedModuleUrl) || !existsSync(wasmModuleUrl)) {
+if (
+  !existsSync(generatedModuleUrl) ||
+  !existsSync(wasmModuleUrl) ||
+  !existsSync(wrapperModuleUrl)
+) {
   throw new Error(
-    "Build the WASM package first with `vp run @codemirror-treesitter/opendal-wasm-browser#build:wasm`.",
+    "Build the package first with `vp run @codemirror-treesitter/opendal-wasm-browser#build`.",
   );
 }
 
-let generated = await import(generatedModuleUrl.href);
-await generated.default(wasmModuleUrl);
+let { openOpendalBrowserOperator } = await import(wrapperModuleUrl.href);
+let wasmModule = await WebAssembly.compile(await readFile(wasmModuleUrl));
 
 let root = process.env.OPENDAL_DROPBOX_ROOT?.trim() || undefined;
 let prefix = process.env.OPENDAL_DROPBOX_SMOKE_PREFIX?.trim() || "opendal-browser-smoke";
@@ -25,24 +31,34 @@ let suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let firstPath = `${prefix}-${suffix}.md`;
 let renamedPath = `${prefix}-${suffix}-renamed.md`;
 let value = "# OpenDAL Dropbox smoke\n";
-let operator = new generated.OpendalBrowserOperator({
-  accessToken,
-  provider: "dropbox",
-  root,
-});
+let operator = await openOpendalBrowserOperator(
+  {
+    accessToken,
+    kind: "dropbox",
+    root,
+  },
+  { generatedModuleUrl: generatedModuleUrl.href, wasmModuleUrl: wasmModule },
+);
 
 try {
   let initialEntries = await operator.list("");
-  await operator.writeText(firstPath, value);
-  let readValue = await operator.readText(firstPath);
+  await operator.write({ bytes: new TextEncoder().encode(value), path: firstPath });
+  let readValue = new TextDecoder().decode((await operator.read(firstPath)).bytes);
   if (readValue !== value) {
-    throw new Error("Dropbox smoke readText did not return the written content.");
+    throw new Error("Dropbox smoke read did not return the written content.");
   }
 
-  await operator.rename(firstPath, renamedPath);
+  let renameResult = await operator.rename({
+    from: firstPath,
+    kind: "file",
+    to: renamedPath,
+  });
+  if (renameResult.status != "applied") {
+    throw new Error(`Dropbox smoke rename ended with ${renameResult.status}.`);
+  }
   let renamedStat = await operator.stat(renamedPath);
   let renamedEntries = await operator.list("");
-  await operator.delete(renamedPath);
+  await operator.delete({ path: renamedPath, recursive: false });
 
   console.log(
     JSON.stringify(
@@ -58,7 +74,9 @@ try {
     ),
   );
 } catch (error) {
-  await operator.delete(firstPath).catch(() => {});
-  await operator.delete(renamedPath).catch(() => {});
+  await operator.delete({ path: firstPath, recursive: false }).catch(() => {});
+  await operator.delete({ path: renamedPath, recursive: false }).catch(() => {});
   throw error;
+} finally {
+  operator.dispose();
 }

@@ -72,12 +72,6 @@ struct OpendalBrowserEntry {
     version: Option<String>,
 }
 
-#[derive(Serialize)]
-struct OpendalBrowserReadTextResult {
-    entry: OpendalBrowserEntry,
-    value: String,
-}
-
 #[wasm_bindgen(js_name = OpendalBrowserOperator)]
 pub struct WasmOpendalBrowserOperator {
     operator: Operator,
@@ -266,31 +260,6 @@ impl WasmOpendalBrowserOperator {
         to_js_value(entries)
     }
 
-    #[wasm_bindgen(js_name = readText)]
-    pub async fn read_text(&self, path: String) -> Result<String, JsValue> {
-        let bytes = self
-            .operator
-            .read(&normalize_file_path(&path)?)
-            .await
-            .map_err(js_error)?;
-        String::from_utf8(bytes.to_vec()).map_err(js_error)
-    }
-
-    #[wasm_bindgen(js_name = readTextWithMetadata)]
-    pub async fn read_text_with_metadata(&self, path: String) -> Result<JsValue, JsValue> {
-        let path = normalize_file_path(&path)?;
-        let reader = self.operator.reader(&path).await.map_err(js_error)?;
-        let bytes = reader.read(..).await.map_err(js_error)?;
-        let metadata = reader.metadata().ok_or_else(|| {
-            js_error("OpenDAL read did not return metadata from the content snapshot.")
-        })?;
-        let value = String::from_utf8(bytes.to_vec()).map_err(js_error)?;
-        to_js_value(OpendalBrowserReadTextResult {
-            entry: metadata_to_payload(path, metadata),
-            value,
-        })
-    }
-
     #[wasm_bindgen(js_name = readBytes)]
     pub async fn read_bytes(&self, path: String) -> Result<Vec<u8>, JsValue> {
         let bytes = self
@@ -329,16 +298,6 @@ impl WasmOpendalBrowserOperator {
             .create_dir(&normalize_dir_path(&path)?)
             .await
             .map_err(js_error)
-    }
-
-    #[wasm_bindgen(js_name = writeText)]
-    pub async fn write_text(
-        &self,
-        path: String,
-        value: String,
-        options: Option<JsValue>,
-    ) -> Result<JsValue, JsValue> {
-        write_operator_bytes(&self.operator, path, value.into_bytes(), options).await
     }
 
     #[wasm_bindgen(js_name = writeBytes)]
@@ -541,7 +500,7 @@ mod tests {
     fn omitted_if_not_exists_defaults_to_false() {
         let options: OpendalBrowserWriteOptions =
             serde_json::from_value(serde_json::json!({ "ifMatch": "revision-1" }))
-                .expect("legacy ifMatch-only options must remain valid");
+                .expect("ifMatch-only options must remain valid");
 
         assert_eq!(options.if_match.as_deref(), Some("revision-1"));
         assert!(!options.if_not_exists);

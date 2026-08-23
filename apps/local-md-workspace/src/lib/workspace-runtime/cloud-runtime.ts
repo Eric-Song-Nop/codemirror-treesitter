@@ -17,19 +17,25 @@ import {
 import type { WorkspaceIdentity, WorkspaceRuntime } from "./types.ts";
 
 type CloudSource = Exclude<OpendalBrowserSource, { kind: "browser-local" }>;
+type CloudOperatorFactory = (
+  source: CloudSource,
+  options: CreateOpendalBrowserOperatorOptions,
+) => Promise<OpendalExactBrowserOperator>;
+
+type CloudOperatorFactoryWindow = Window & {
+  __localMdWorkspaceTestDropboxOperatorFactory?: CloudOperatorFactory;
+};
 
 export async function createCloudWorkspaceRuntime(input: {
   identity: WorkspaceIdentity;
-  openOperator?: (
-    source: CloudSource,
-    options: CreateOpendalBrowserOperatorOptions,
-  ) => Promise<OpendalExactBrowserOperator>;
+  openOperator?: CloudOperatorFactory;
   renewSource: () => Promise<CloudSource>;
   runtimeOptions?: CreateOpendalBrowserOperatorOptions;
   source: CloudSource;
 }): Promise<WorkspaceRuntime> {
   let runtimeOptions = input.runtimeOptions ?? defaultOpendalBrowserRuntimeOptions();
-  let open = input.openOperator ?? openOpendalBrowserOperator;
+  let open =
+    input.openOperator ?? devTestCloudOperatorFactory(input.source) ?? openOpendalBrowserOperator;
   let operator = await open(input.source, runtimeOptions);
   let host = new RenewableOpendalOperatorHost(input.identity, operator, async () =>
     open(await input.renewSource(), runtimeOptions),
@@ -55,4 +61,10 @@ export async function createCloudWorkspaceRuntime(input: {
     identity: input.identity,
     tree: new OpendalWorkspaceTreeService(store, input.identity.name),
   };
+}
+
+function devTestCloudOperatorFactory(source: CloudSource) {
+  if (!import.meta.env.DEV || source.kind != "dropbox" || typeof window == "undefined") return null;
+  let factory = (window as CloudOperatorFactoryWindow).__localMdWorkspaceTestDropboxOperatorFactory;
+  return typeof factory == "function" ? factory : null;
 }

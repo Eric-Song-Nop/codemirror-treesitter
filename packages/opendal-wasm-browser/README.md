@@ -108,10 +108,6 @@ The exact operator exposes:
 - `rename(request)` with applied, partial, or unknown outcomes
 - `dispose()` to release the underlying WASM operator
 
-The older `createOpendalBrowserOperator` text/byte facade remains exported for
-compatibility but is deprecated. Product code uses the exact operator through
-the application object-store layer.
-
 `createDirectory` normalizes directory paths and delegates to OpenDAL's recursive
 `create_dir` behavior when the backend advertises `nativeCreateDir`.
 
@@ -173,13 +169,15 @@ Example shape:
 
 ```json
 {
-  "provider": "s3",
+  "kind": "s3",
   "endpoint": "https://example-r2-or-s3-endpoint",
   "bucket": "markdown",
   "region": "auto",
   "root": "workspace",
-  "accessKeyId": "...",
-  "secretAccessKey": "..."
+  "credentials": {
+    "accessKeyId": "...",
+    "secretAccessKey": "..."
+  }
 }
 ```
 
@@ -190,7 +188,7 @@ Dropbox smoke config uses a short-lived access token:
 
 ```json
 {
-  "provider": "dropbox",
+  "kind": "dropbox",
   "root": "workspace",
   "accessToken": "..."
 }
@@ -200,7 +198,7 @@ Google Drive smoke config uses a short-lived Google Drive API access token:
 
 ```json
 {
-  "provider": "gdrive",
+  "kind": "gdrive",
   "root": "workspace",
   "accessToken": "..."
 }
@@ -210,7 +208,7 @@ OneDrive smoke config also uses a short-lived Microsoft Graph access token:
 
 ```json
 {
-  "provider": "onedrive",
+  "kind": "onedrive",
   "root": "workspace",
   "accessToken": "..."
 }
@@ -219,14 +217,14 @@ OneDrive smoke config also uses a short-lived Microsoft Graph access token:
 Clicking the fixture runs the full narrow workspace operation set:
 
 - `list("")`
-- `writeText("opendal-browser-smoke-....md", value)`
-- `readText(...)`
-- `rename(..., "...-renamed.md")`
+- `write({ path, bytes })`
+- `read(path)`
+- `rename({ from, kind: "file", to })`
 - `stat(...)`
-- `delete(...)`
+- `delete({ path, recursive: false })`
 
 There is also a credential-gated Dropbox smoke task for local validation after
-building `pkg/`:
+building the package:
 
 ```bash
 OPENDAL_DROPBOX_ACCESS_TOKEN="..." \

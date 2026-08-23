@@ -96,14 +96,9 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
 ## Storage Architecture
 
 - [OpenDAL Workspace Storage Architecture](./OPENDAL_WORKSPACE_ARCHITECTURE.md):
-  path-scoped persistence, and current-document reconciliation contracts.
   implemented browser operator, workspace object storage, explicit source
   states, path-scoped persistence, and current-document reconciliation
   contracts.
-  path-scoped persistence, and current-document reconciliation contracts.
-- [OpenDAL Workspace Implementation Plan](./OPENDAL_WORKSPACE_IMPLEMENTATION_PLAN.md):
-  stacked pull request boundaries, migration rules, verification gates, and the
-  completed legacy-removal criteria.
 
 ## Configuration
 
