@@ -7,8 +7,8 @@ part: the browser calls OpenAI directly with a user-provided API key.
 
 ## Product Decisions
 
-- Use Vercel AI SDK Core's `ToolLoopAgent` as the first Agent runtime, behind a
-  provider-neutral local facade.
+- Use Vercel AI SDK Core's `ToolLoopAgent`, AI SDK UI `useChat`, and shadcn/ui
+  primitives behind a provider-neutral local facade.
 - Start with the OpenAI provider, default to `gpt-5.4-mini`, and allow the user
   to enter another OpenAI model ID.
 - Keep the API key and model choice in page memory only. The key,
@@ -30,8 +30,8 @@ part: the browser calls OpenAI directly with a user-provided API key.
   relay, and source-autosave paths.
 - Reject stale intent before dispatch. CRDT convergence does not make a model's
   edit semantically correct when the user or another peer changed its base.
-- Keep Agent domain contracts independent of any SDK so another browser Agent
-  runtime can replace AI SDK later.
+- Keep Agent domain contracts SDK-independent; UI state retains only text and
+  generic tool status so another browser runtime can replace AI SDK later.
 
 ## MVP Scope
 
@@ -50,7 +50,7 @@ The MVP includes:
 - normal Loro undo, browser persistence, BroadcastChannel, Grove Relay, and
   OpenDAL autosave behavior;
 - English and Simplified Chinese UI;
-- lazy loading so AI SDK and its provider do not enter the launcher bundle.
+- lazy loading so Agent dependencies do not enter the launcher bundle.
 
 The MVP excludes:
 
@@ -65,11 +65,11 @@ The MVP excludes:
 ## Architecture
 
 ```text
-WorkspaceAgentFeature / WorkspaceAgentPanel
+WorkspaceAgentFeature / WorkspaceAgentPanel (shadcn/ui)
         |
         v
-useWorkspaceAgent
-- messages / animation-frame-batched streaming / cancellation
+useWorkspaceAgent / AI SDK UI useChat
+- safe UIMessage state / cancellation / transport
         |
         v (dynamic import)
 AI SDK adapter
@@ -88,12 +88,12 @@ WorkspaceAgentHost
               --> LiveMD input / autosave / OpenDAL materialization
 ```
 
-The Agent panel, conversation controller, and SDK adapter never receive a raw
-OpenDAL operator, `FileSystemHandle`, storage OAuth token, or mutable `LoroDoc`
-handle. The workspace host owns those application capabilities. Workspace paths
-and Markdown returned by tools are treated as untrusted model input. The SDK
-adapter is a demand-loaded production chunk rather than part of the launcher
-static closure.
+The panel, controller, transport, and SDK adapter never receive a raw OpenDAL
+operator, `FileSystemHandle`, storage OAuth token, or mutable `LoroDoc` handle.
+The workspace host owns those capabilities. Workspace paths and Markdown are
+untrusted model input; the transport strips raw tool IDs, inputs, and outputs
+from `UIMessage` state. Agent UI and model code remain separate demand-loaded
+chunks outside the launcher static closure.
 
 ## Tool Contract
 

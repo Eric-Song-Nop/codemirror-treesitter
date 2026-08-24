@@ -2,7 +2,8 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { getToolName, isToolUIPart, type UIMessage } from "ai";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import {
   DEFAULT_WORKSPACE_AGENT_MODEL,
   type WorkspaceAgentRunInput,
@@ -22,27 +23,9 @@ type ReactActGlobal = typeof globalThis & {
 let currentApi: ReturnType<typeof useWorkspaceAgent> | null = null;
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
-let scheduledFrames: Array<FrameRequestCallback | undefined> = [];
 
 beforeAll(() => {
   (globalThis as ReactActGlobal).IS_REACT_ACT_ENVIRONMENT = true;
-});
-
-beforeEach(() => {
-  scheduledFrames = [];
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((callback: FrameRequestCallback) => {
-      scheduledFrames.push(callback);
-      return scheduledFrames.length;
-    }),
-  );
-  vi.stubGlobal(
-    "cancelAnimationFrame",
-    vi.fn((id: number) => {
-      scheduledFrames[id - 1] = undefined;
-    }),
-  );
 });
 
 afterEach(() => {
@@ -51,7 +34,6 @@ afterEach(() => {
   container?.remove();
   container = null;
   currentApi = null;
-  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -78,9 +60,9 @@ describe("useWorkspaceAgent", () => {
 
     expect(inputs[0]).toMatchObject({ apiKey: "sk-secret", model: "gpt-test" });
     expect(inputs[0]?.messages).toEqual([{ content: "Review this note", role: "user" }]);
-    expect(currentApi?.messages).toEqual([
-      { content: "Review this note", id: 1, role: "user" },
-      { content: "Done", id: 2, role: "assistant" },
+    expect(currentApi?.messages.map((message) => [message.role, messageText(message)])).toEqual([
+      ["user", "Review this note"],
+      ["assistant", "Done"],
     ]);
     expect(currentApi?.status).toBe("success");
     expect(JSON.stringify(currentApi)).not.toContain("sk-secret");
@@ -90,7 +72,7 @@ describe("useWorkspaceAgent", () => {
     expect(currentApi?.hasApiKey).toBe(false);
   });
 
-  it("batches streamed text to one animation frame and stores only safe tool activity", async () => {
+  it("stores AI SDK message parts while exposing only safe tool activity", async () => {
     let deferred = createDeferred<WorkspaceAgentRunResult>();
     let runnerInputs: WorkspaceAgentRunInput[] = [];
     let runner: WorkspaceAgentRunner = (input) => {
@@ -119,14 +101,16 @@ describe("useWorkspaceAgent", () => {
       sendPromise = currentApi!.send("Summarize", () => host);
       await Promise.resolve();
     });
+    await waitUntil(() => messageText(currentApi?.messages.at(-1)) == "one two");
 
-    expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
-    expect(currentApi?.messages.at(-1)?.content).toBe("");
-    act(() => scheduledFrames[0]?.(16));
-    expect(currentApi?.messages.at(-1)?.content).toBe("one two");
-    expect(currentApi?.toolActivity).toEqual([{ name: "read_markdown", status: "success" }]);
-    expect(currentApi?.toolActivity[0]).not.toHaveProperty("toolCallId");
-    expect(JSON.stringify(currentApi?.toolActivity)).not.toContain("private-call-id");
+    let toolPart = currentApi?.messages.at(-1)?.parts.find(isToolUIPart);
+    expect(toolPart && getToolName(toolPart)).toBe("read_markdown");
+    expect(toolPart).toMatchObject({
+      input: {},
+      output: { status: "success" },
+      state: "output-available",
+    });
+    expect(JSON.stringify(toolPart)).not.toContain("private-call-id");
 
     await act(async () => {
       deferred.resolve(completedRun("one two"));
@@ -158,17 +142,17 @@ describe("useWorkspaceAgent", () => {
     expect(runnerInputs[0]?.signal?.aborted).toBe(true);
     expect(currentApi?.running).toBe(false);
     expect(currentApi?.status).toBe("cancelled");
-    expect(currentApi?.messages).toEqual([{ content: "Edit this", id: 1, role: "user" }]);
+    expect(currentApi?.messages.map((message) => [message.role, messageText(message)])).toEqual([
+      ["user", "Edit this"],
+    ]);
 
     act(() => runnerInputs[0]?.onEvent?.({ delta: "late", type: "text-delta" }));
-    await act(async () => {
-      deferred.resolve(completedRun("late result"));
-      expect(await sendPromise).toBe(false);
-    });
-    expect(currentApi?.messages).toEqual([{ content: "Edit this", id: 1, role: "user" }]);
+    await act(async () => expect(await sendPromise).toBe(false));
+    deferred.resolve(completedRun("late result"));
+    expect(currentApi?.messages.map(messageText)).not.toContain("late result");
   });
 
-  it("stops a run without surfacing an abort error and keeps its streamed text", async () => {
+  it("stops a run without surfacing an abort error and keeps streamed text", async () => {
     let deferred = createDeferred<WorkspaceAgentRunResult>();
     let runnerInputs: WorkspaceAgentRunInput[] = [];
     let runner: WorkspaceAgentRunner = (input) => {
@@ -185,19 +169,21 @@ describe("useWorkspaceAgent", () => {
       sendPromise = currentApi!.send("Search", () => host);
       await Promise.resolve();
     });
+    await waitUntil(() => messageText(currentApi?.messages.at(-1)) == "Partial");
     act(() => currentApi?.stop());
 
     expect(runnerInputs[0]?.signal?.aborted).toBe(true);
     expect(currentApi?.running).toBe(false);
     expect(currentApi?.error).toBeNull();
-    expect(currentApi?.messages.at(-1)?.content).toBe("Partial");
-    expect(currentApi?.toolActivity).toEqual([{ name: "search_markdown", status: "cancelled" }]);
-
-    await act(async () => {
-      deferred.resolve(completedRun("late result"));
-      expect(await sendPromise).toBe(false);
+    expect(messageText(currentApi?.messages.at(-1))).toBe("Partial");
+    expect(currentApi?.messages.at(-1)?.parts.find(isToolUIPart)).toMatchObject({
+      state: "input-available",
     });
-    expect(currentApi?.messages.at(-1)?.content).toBe("Partial");
+    expect(currentApi?.status).toBe("cancelled");
+
+    await act(async () => expect(await sendPromise).toBe(false));
+    deferred.resolve(completedRun("late result"));
+    expect(messageText(currentApi?.messages.at(-1))).toBe("Partial");
   });
 
   it("keeps one coherent running status during configuration and duplicate sends", async () => {
@@ -253,7 +239,6 @@ describe("useWorkspaceAgent", () => {
     });
     await rerenderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-b" });
     expect(currentApi?.messages).toEqual([]);
-    expect(currentApi?.toolActivity).toEqual([]);
     expect(currentApi?.error).toBeNull();
     expect(currentApi?.hasApiKey).toBe(true);
   });
@@ -267,13 +252,25 @@ async function renderHook(options: UseWorkspaceAgentOptions) {
 
 async function rerenderHook(options: UseWorkspaceAgentOptions) {
   await act(async () => {
-    root?.render(<WorkspaceAgentHarness options={options} />);
+    root?.render(<WorkspaceAgentHarness options={{ throttleMs: 0, ...options }} />);
   });
 }
 
 function WorkspaceAgentHarness({ options }: { options: UseWorkspaceAgentOptions }) {
   currentApi = useWorkspaceAgent(options);
   return null;
+}
+
+function messageText(message: UIMessage | null | undefined) {
+  return message?.parts.flatMap((part) => (part.type == "text" ? part.text : [])).join("") ?? "";
+}
+
+async function waitUntil(predicate: () => boolean) {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (predicate()) return;
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  }
+  throw new Error("Timed out waiting for Agent state.");
 }
 
 function createDeferred<T>() {

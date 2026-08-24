@@ -2,6 +2,7 @@
 
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { createChat } from "@shadcn/helpers/ai-sdk";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorkspaceAgentPanel } from "./WorkspaceAgentPanel";
@@ -63,14 +64,10 @@ describe("WorkspaceAgentPanel", () => {
       <WorkspaceAgentPanel
         error={null}
         hasApiKey
-        messages={[
-          { content: "Please inspect this note.", id: 1, role: "user" },
-          { content: '<img src="x" onerror="alert(1)"> Done.', id: 2, role: "assistant" },
-        ]}
+        messages={agentMessages()}
         model="gpt-test"
         open
         runStatus="success"
-        toolActivity={[{ name: "read_markdown", status: "success" }]}
         workspaceAvailable
         onClose={close}
         onConfigure={vi.fn()}
@@ -81,7 +78,7 @@ describe("WorkspaceAgentPanel", () => {
     );
 
     expect(document.querySelector("img")).toBeNull();
-    expect(document.body.textContent).toContain('<img src="x" onerror="alert(1)"> Done.');
+    expect(document.body.textContent).toContain("Done.");
     expect(document.body.textContent).toContain("Read Markdown");
     expect(document.body.textContent).toContain("Complete");
 
@@ -120,7 +117,6 @@ describe("WorkspaceAgentPanel", () => {
         model="gpt-test"
         open
         runStatus="idle"
-        toolActivity={[]}
         workspaceAvailable
         onClose={vi.fn()}
         onConfigure={configure}
@@ -149,7 +145,6 @@ function KeyConfigurationHarness({ onConfigure }: { onConfigure: (value: unknown
       model="gpt-5.4-mini"
       open
       runStatus="idle"
-      toolActivity={[]}
       workspaceAvailable
       onClose={vi.fn()}
       onConfigure={(input) => {
@@ -161,6 +156,16 @@ function KeyConfigurationHarness({ onConfigure }: { onConfigure: (value: unknown
       onStop={vi.fn()}
     />
   );
+}
+
+function agentMessages() {
+  return createChat()
+    .user("Please inspect this note.")
+    .assistant(({ writer }) => {
+      writer.tool("read_markdown", { input: {}, output: { status: "success" } });
+      writer.text('<img src="x" onerror="alert(1)"> Done.');
+    })
+    .get();
 }
 
 async function render(element: React.ReactNode) {
