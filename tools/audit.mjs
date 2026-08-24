@@ -62,12 +62,21 @@ const skippedExampleSlugs = new Set([
 ]);
 
 const allowedLanguageDataExtras = new Set(["Elixir", "Regex", "ERB"]);
+const localWorkspaceOnlyDependencies = new Set(["effect", "zustand"]);
+const localWorkspaceAppDirectory = path.join("apps", "local-md-workspace");
+const packageDependencyFields = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+];
 
 let failures = 0;
 
 async function main() {
   await checkPackageNames();
   await checkNoLezerDependencies();
+  await checkAppOnlyStateDependencies();
   await checkLanguagePublicExports();
   await checkCommandsPublicExports();
   await checkCommandsHaveNoStubs();
@@ -467,6 +476,95 @@ async function checkNoLezerDependencies() {
     }
   }
   pass("implementation packages have no Lezer dependencies or source imports");
+}
+
+async function checkAppOnlyStateDependencies() {
+  let rootPackage = JSON.parse(await readText("package.json"));
+  let localWorkspacePackageFile = path.join(localWorkspaceAppDirectory, "package.json");
+  let localWorkspacePackage = JSON.parse(await readText(localWorkspacePackageFile));
+
+  for (let dependency of localWorkspaceOnlyDependencies) {
+    if (localWorkspacePackage.dependencies?.[dependency] == null) {
+      fail(
+        `${localWorkspacePackageFile} must declare app-only runtime dependency ${dependency} in dependencies`,
+      );
+    }
+  }
+
+  for (let declaration of appOnlyStateDependencyDeclarations(localWorkspacePackage)) {
+    if (declaration.field != "dependencies" || declaration.name != declaration.dependency) {
+      fail(
+        `${localWorkspacePackageFile} must declare ${declaration.dependency} directly in dependencies, not as ${declaration.name} in ${declaration.field}`,
+      );
+    }
+  }
+
+  for (let declaration of appOnlyStateDependencyDeclarations(rootPackage)) {
+    let isSourceOnlyEffect =
+      declaration.dependency == "effect" &&
+      declaration.field == "devDependencies" &&
+      declaration.name == "effect";
+    if (!isSourceOnlyEffect) {
+      fail(
+        `package.json may declare only the source-inspection effect devDependency, not ${declaration.name} in ${declaration.field}`,
+      );
+    }
+  }
+
+  if (rootPackage.devDependencies?.effect !== localWorkspacePackage.dependencies?.effect) {
+    fail("the root Effect source version must exactly match apps/local-md-workspace");
+  }
+
+  let packageJsons = [
+    ...(await collectFiles("packages", (file) => path.basename(file) == "package.json")),
+    ...(await collectFiles("apps", (file) => path.basename(file) == "package.json")),
+  ].filter((file) => !isInsideDirectory(file, localWorkspaceAppDirectory));
+
+  for (let file of packageJsons) {
+    let pkg = JSON.parse(await readText(file));
+    for (let declaration of appOnlyStateDependencyDeclarations(pkg)) {
+      fail(
+        `${relative(file)} declares app-only dependency ${declaration.dependency} as ${declaration.name} in ${declaration.field}`,
+      );
+    }
+  }
+
+  let rootSourceFiles = (await readdir(root, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && isDependencyImportSourceFile(entry.name))
+    .map((entry) => entry.name);
+  let sourceFiles = [
+    ...rootSourceFiles,
+    ...(await collectFiles("tools", isDependencyImportSourceFile)),
+    ...(await collectFiles("packages", isDependencyImportSourceFile)),
+    ...(await collectFiles("apps", isDependencyImportSourceFile)),
+  ].filter((file) => !isInsideDirectory(file, localWorkspaceAppDirectory));
+
+  for (let file of sourceFiles) {
+    let imports = importedAppOnlyStateDependencies(await readText(file), file);
+    for (let dependency of imports) {
+      fail(`${relative(file)} imports app-only dependency ${dependency}`);
+    }
+  }
+
+  pass("Effect and Zustand stay scoped to apps/local-md-workspace");
+}
+
+function appOnlyStateDependencyDeclarations(pkg) {
+  let declarations = [];
+  for (let field of packageDependencyFields) {
+    for (let [name, specifier] of Object.entries(pkg[field] ?? {})) {
+      let dependency = appOnlyStateDependencyTarget(name, specifier);
+      if (dependency) declarations.push({ dependency, field, name });
+    }
+  }
+  return declarations;
+}
+
+function appOnlyStateDependencyTarget(name, specifier) {
+  if (localWorkspaceOnlyDependencies.has(name)) return name;
+  if (typeof specifier != "string") return null;
+  let alias = /^npm:(effect|zustand)(?:@|$)/.exec(specifier);
+  return alias?.[1] ?? null;
 }
 
 async function checkBasicSetupImports() {
@@ -1105,6 +1203,70 @@ function stringArray(node) {
     values.push(element.text);
   }
   return values;
+}
+
+function isDependencyImportSourceFile(file) {
+  return isJavaScriptOrTypeScriptFile(file) || /\.(?:astro|html|svelte|vue)$/.test(file);
+}
+
+function isJavaScriptOrTypeScriptFile(file) {
+  return /\.[cm]?[jt]sx?$/.test(file);
+}
+
+function importedAppOnlyStateDependencies(sourceText, file) {
+  /** @type {Set<string>} */
+  let dependencies = new Set();
+  let addSpecifier = (specifier) => {
+    if (!specifier) return;
+    for (let dependency of localWorkspaceOnlyDependencies) {
+      if (specifier == dependency || specifier.startsWith(`${dependency}/`)) {
+        dependencies.add(dependency);
+      }
+    }
+  };
+
+  if (!isJavaScriptOrTypeScriptFile(file)) {
+    for (let match of sourceText.matchAll(
+      /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["'`]([^"'`]+)["'`]/g,
+    )) {
+      addSpecifier(match[1]);
+    }
+    return [...dependencies].sort(compareString);
+  }
+
+  let source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true);
+  let addLiteral = (node) => {
+    if (node && ts.isStringLiteralLike(node)) addSpecifier(node.text);
+  };
+
+  function visit(node) {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      addLiteral(node.moduleSpecifier);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      addLiteral(node.moduleReference.expression);
+    } else if (ts.isCallExpression(node)) {
+      let isDynamicImport = node.expression.kind == ts.SyntaxKind.ImportKeyword;
+      let isRequire = ts.isIdentifier(node.expression) && node.expression.text == "require";
+      let isRequireResolve =
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) &&
+        node.expression.expression.text == "require" &&
+        node.expression.name.text == "resolve";
+      if (isDynamicImport || isRequire || isRequireResolve) addLiteral(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source);
+  return [...dependencies].sort(compareString);
+}
+
+function isInsideDirectory(file, directory) {
+  let nested = path.relative(directory, file);
+  return nested == "" || (nested != ".." && !nested.startsWith(`..${path.sep}`));
 }
 
 async function workspacePackageJsons(workspace) {

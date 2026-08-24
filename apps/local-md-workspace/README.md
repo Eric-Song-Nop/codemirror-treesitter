@@ -3,6 +3,10 @@
 Grove local-first Markdown workspace. It is a React app built around LiveMD,
 the browser File System Access API, optional Dropbox storage through the OpenDAL
 WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
+Its application layer uses a Zustand vanilla store for the React read model and
+Effect services for typed asynchronous orchestration and resource lifecycles.
+Those dependencies are app-only and do not enter LiveMD or other reusable core
+packages.
 
 ## Responsibilities
 
@@ -52,9 +56,18 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
 
 ## Source Layout
 
-- `src/App.tsx`: main local workspace state machine, restore flow, file
-  operations, autosave, image assets, share creation, owner hosting, and
-  conflict handling.
+- `src/app/workspace-store.ts`: app-owned Zustand vanilla state and atomic
+  document-view publication operations.
+- `src/app/workspace-application.ts` and
+  `src/app/WorkspaceApplicationProvider.tsx`: the StrictMode-external app
+  lifetime and stable React composition boundary.
+- `src/app/effect-runtime.ts`: the app-owned Effect `ManagedRuntime`
+  composition boundary.
+- `src/App.tsx`: i18n boundary and route shell for the workspace and shared-file
+  editor.
+- `src/components/workspace/LocalWorkspaceApp.tsx`: main local workspace
+  composition root for restore flow, file operations, autosave, image assets,
+  sharing, owner hosting, and conflict handling.
 - `src/components/LiveMdEditor.tsx`: React wrapper for the LiveMD custom
   element and image input handling.
 - `src/components/FileTree.tsx`: Markdown tree navigation and file/folder
@@ -77,7 +90,8 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   outcomes, and cross-tab path locking.
 - `src/lib/workspace/runtime/*`: focused tree, entry, asset, and document ports;
   BrowserLocal/cloud runtime assembly; active-document observation; and the
-  document persistence coordinator.
+  document persistence coordinator. Workspace runtime replacement is serialized
+  by an Effect service rather than a component-owned Promise queue.
 - `src/hooks/workspace/use*WorkspaceRuntime.ts`: OAuth-aware provider runtime
   construction. Dropbox is used by the current Grove UI; Google Drive and
   OneDrive remain dormant.
@@ -125,6 +139,8 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   contracts.
 - [Browser Agent Architecture](./BROWSER_AGENT_PLAN.md): browser-side workspace
   tools, active-document editing, BYOK boundaries, and resource budgets.
+- [Effect and Zustand migration](./EFFECT_ZUSTAND_MIGRATION.md): app-only
+  dependency boundary, lifecycle invariants, and phased migration plan.
 
 ## Configuration
 

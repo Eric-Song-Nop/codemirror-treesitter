@@ -35,10 +35,12 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Product/runtime integrations: LiveMD uses KaTeX, Mermaid, and
   `beautiful-mermaid`; optional collaboration uses `loro-crdt` and
   `loro-codemirror`; `apps/local-md-workspace` uses React 19, shadcn/radix UI,
-  i18next/react-i18next, the browser File System Access API, Dropbox OAuth
-  PKCE, the OpenDAL browser WASM wrapper, Grove shared-file relay clients, and a
-  lazy Vercel AI SDK `@ai-sdk/deepseek` browser Agent with user-provided
-  credentials, a fixed `https://api.deepseek.com` origin,
+  Zustand for its authoritative application read model, Effect for typed async
+  orchestration and scoped resource lifecycles, i18next/react-i18next, the
+  browser File System Access API, Dropbox OAuth PKCE, the OpenDAL browser WASM
+  wrapper, Grove shared-file relay clients, and a lazy Vercel AI SDK
+  `@ai-sdk/deepseek` browser Agent with user-provided credentials, a fixed
+  `https://api.deepseek.com` origin,
   `deepseek-v4-flash` by default, and only `deepseek-v4-pro` as a manual model
   choice;
   `apps/grove-relay` and `apps/collab-editor` use Cloudflare Workers, Durable
@@ -103,6 +105,11 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 
 ## Dependency Boundaries
 
+- Effect and Zustand are application-only dependencies of
+  `apps/local-md-workspace`. Do not import either library from `packages/*`
+  (including LiveMD), another app, or reusable editor/runtime packages. The
+  root `effect` devDependency exists only to expose the pinned source and agent
+  guidance in `node_modules`; it is not a runtime dependency boundary escape.
 - Implementation packages should not depend on Lezer packages or official
   language-layer CodeMirror packages unless the specific package README and
   `tools/audit.mjs` allow it.
@@ -143,6 +150,18 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `packages/opendal-wasm-browser` is private and experimental. Its generated
   `pkg/` output must be rebuilt with the package WASM task when Rust wrapper
   code changes.
+
+## Learning more about Effect
+
+This repository uses the Effect Typescript library only in
+`apps/local-md-workspace`.
+
+Before writing any Effect code, first read `node_modules/effect/AGENTS.md`
+**completely**, and follow the links in the file when required.
+
+If you need to learn more about particular Effect APIs and concepts that the
+guide does not cover, search through the source code in
+`node_modules/effect/src`.
 
 ## Common Commands
 
