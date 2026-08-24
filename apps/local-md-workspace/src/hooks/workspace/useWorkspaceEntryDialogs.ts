@@ -25,7 +25,6 @@ type UseWorkspaceEntryDialogsOptions = {
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   beginDocumentTransition: (path?: string) => WorkspaceDocumentIntentLease;
   clearActiveDocument: () => Promise<void>;
-  closeActiveDocumentSession: () => Promise<void>;
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
   documentTargetGenerationRef: MutableRef<number>;
   finishDocumentTransition: (lease: WorkspaceDocumentIntentLease) => void;
@@ -55,7 +54,6 @@ export function useWorkspaceEntryDialogs({
   autoSaveTaskRef,
   beginDocumentTransition,
   clearActiveDocument,
-  closeActiveDocumentSession,
   collabDocumentRef,
   documentTargetGenerationRef,
   finishDocumentTransition,
@@ -148,7 +146,7 @@ export function useWorkspaceEntryDialogs({
           : undefined;
       let documentIntent: WorkspaceDocumentIntentLease | null = null;
       try {
-        if (closesActiveSession) await closeActiveDocumentSession();
+        if (closesActiveSession) await clearActiveDocument();
         let nextPath =
           fileDialogMode == "create"
             ? await workspaceRuntime.entries.create(value)
@@ -184,7 +182,6 @@ export function useWorkspaceEntryDialogs({
     },
     [
       beginDocumentTransition,
-      closeActiveDocumentSession,
       collabDocumentRef,
       documentTargetGenerationRef,
       fileDialogMode,
@@ -231,7 +228,7 @@ export function useWorkspaceEntryDialogs({
         ? activeDocumentRevision(collabDocumentRef.current)
         : undefined;
     try {
-      if (deletesActiveDocument) await closeActiveDocumentSession();
+      if (deletesActiveDocument) await clearActiveDocument();
       assertEntryMutationApplied(
         await runtime.entries.delete({ kind: target.kind, path: target.path, revision }),
         target.path,
@@ -242,7 +239,6 @@ export function useWorkspaceEntryDialogs({
       if (deletesActiveDocument) {
         let selectedPathContext = workspaceSelectedPathContext(runtime.identity);
         if (selectedPathContext) clearStoredWorkspaceSelectedPath(selectedPathContext);
-        await clearActiveDocument();
       }
       await loadTree(runtime, nextSelectedPath, { saveBeforeSelect: false });
     } catch (error) {
@@ -256,7 +252,6 @@ export function useWorkspaceEntryDialogs({
     }
   }, [
     clearActiveDocument,
-    closeActiveDocumentSession,
     collabDocumentRef,
     autoSaveTaskRef,
     deleteTarget,

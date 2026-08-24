@@ -1,93 +1,56 @@
-import {
-  Cause,
-  Context,
-  Effect,
-  Exit,
-  Fiber,
-  FiberMap,
-  FiberSet,
-  Layer,
-  Predicate,
-  Scope,
-  Schema,
-  Semaphore,
-  SynchronizedRef,
-} from "effect";
+import { Context, Effect, Exit, Fiber, FiberSet, Layer, Predicate, Scope, Semaphore } from "effect";
 import {
   clearWorkspaceDocumentOpening,
   clearWorkspaceDocumentView,
   publishWorkspaceDocumentOpening,
   publishWorkspaceDocumentView,
   type WorkspaceAppStore,
+  type WorkspaceDocumentView,
 } from "./workspace-store.ts";
-import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
 import type { ActiveWorkspaceDocumentSession } from "@/lib/workspace/document-session";
-import type { MarkdownFileNode } from "@/lib/workspace/tree";
-import type { SaveState } from "@/lib/workspace/types";
 
-const documentTransitionKey = "active-document";
-
-export type WorkspaceDocumentIntentLease = Readonly<{
-  id: number;
-  path: string | null;
-}>;
+export type WorkspaceDocumentIntentLease = Readonly<{ id: number }>;
 
 export type PreparedWorkspaceDocumentSession = Readonly<{
   activate: () => InstalledWorkspaceDocumentSession;
   dispose: () => Promise<void>;
-  document: CollabDocumentState;
-  file: MarkdownFileNode;
-  saveState: SaveState;
-  value: string;
+  view: WorkspaceDocumentView;
 }>;
 
-export type InstalledWorkspaceDocumentSession = Readonly<{
+type InstalledWorkspaceDocumentSession = Readonly<{
   release: () => Promise<void>;
   retire: () => void;
   session: ActiveWorkspaceDocumentSession;
 }>;
 
-export type WorkspaceDocumentTransitionOutcome =
-  | { status: "aborted" }
-  | { session: ActiveWorkspaceDocumentSession; status: "activated" }
-  | { hadActiveSession: boolean; status: "closed" }
-  | { status: "superseded" };
-
-export type WorkspaceDocumentTransitionInput = Readonly<{
+type WorkspaceDocumentTransitionInput = Readonly<{
   lease: WorkspaceDocumentIntentLease;
   prepare: () => Promise<PreparedWorkspaceDocumentSession | null>;
 }>;
 
-export class WorkspaceDocumentSessionError extends Schema.TaggedError<WorkspaceDocumentSessionError>()(
-  "WorkspaceDocumentSessionError",
-  {
-    cause: Schema.Defect(),
-    message: Schema.String,
-    operation: Schema.String,
-  },
-) {}
+type WorkspaceDocumentCloseResult = { hadActiveSession: boolean } | null;
 
 type ManagedWorkspaceDocumentSession = InstalledWorkspaceDocumentSession & {
   scope: Scope.Closeable;
 };
 
 export type WorkspaceDocumentSessionKernel = {
-  active: SynchronizedRef.SynchronizedRef<ManagedWorkspaceDocumentSession | null>;
-  closed: boolean;
-  currentIntentId: number;
-  nextIntentId: number;
+  active: ManagedWorkspaceDocumentSession | null;
+  intentId: number | null;
   store: WorkspaceAppStore;
 };
 
 export type WorkspaceDocumentSessionController = {
-  begin(path: string, options?: { activeValue?: string }): WorkspaceDocumentIntentLease;
-  close(lease?: WorkspaceDocumentIntentLease): Promise<WorkspaceDocumentTransitionOutcome>;
-  current(): ActiveWorkspaceDocumentSession | null;
-  finish(lease: WorkspaceDocumentIntentLease): void;
-  invalidate(): WorkspaceDocumentIntentLease;
-  isActive(session: ActiveWorkspaceDocumentSession): boolean;
-  isCurrent(lease: WorkspaceDocumentIntentLease): boolean;
-  transition(input: WorkspaceDocumentTransitionInput): Promise<WorkspaceDocumentTransitionOutcome>;
+  begin: (path: string, options?: { activeValue?: string }) => WorkspaceDocumentIntentLease;
+  close: (lease?: WorkspaceDocumentIntentLease) => Promise<WorkspaceDocumentCloseResult>;
+  current: () => ActiveWorkspaceDocumentSession | null;
+  finish: (lease: WorkspaceDocumentIntentLease) => void;
+  invalidate: () => void;
+  isActive: (session: ActiveWorkspaceDocumentSession) => boolean;
+  isCurrent: (lease: WorkspaceDocumentIntentLease) => boolean;
+  transition: (
+    input: WorkspaceDocumentTransitionInput,
+  ) => Promise<ActiveWorkspaceDocumentSession | null>;
 };
 
 type WorkspaceDocumentEffectRunner = <A, E>(
@@ -97,44 +60,44 @@ type WorkspaceDocumentEffectRunner = <A, E>(
 export function createWorkspaceDocumentSessionKernel(
   store: WorkspaceAppStore,
 ): WorkspaceDocumentSessionKernel {
-  return {
-    active: SynchronizedRef.makeUnsafe<ManagedWorkspaceDocumentSession | null>(null),
-    closed: false,
-    currentIntentId: 0,
-    nextIntentId: 0,
-    store,
-  };
+  return { active: null, intentId: 0, store };
 }
 
 export function createWorkspaceDocumentSessionController(
   kernel: WorkspaceDocumentSessionKernel,
   runPromise: WorkspaceDocumentEffectRunner,
 ): WorkspaceDocumentSessionController {
-  let begin = (path: string, options: { activeValue?: string } = {}) =>
-    issueWorkspaceDocumentIntent(kernel, path, options);
-  let invalidate = () => issueWorkspaceDocumentIntent(kernel, null);
+  let runCoordinator = <A>(
+    action: (
+      coordinator: WorkspaceDocumentSessionCoordinator["Service"],
+    ) => Effect.Effect<A, Error>,
+  ) => runPromise(WorkspaceDocumentSessionCoordinator.use(action));
 
   return {
-    begin,
-    close(lease) {
-      let preserveOpening = lease != null;
-      return runPromise(closeWorkspaceDocumentSession(lease ?? invalidate(), { preserveOpening }));
+    begin(path, options = {}) {
+      return issueWorkspaceDocumentIntent(kernel, path, options);
+    },
+    async close(lease) {
+      let closeLease = lease ?? issueWorkspaceDocumentIntent(kernel, null);
+      return await runCoordinator((coordinator) => coordinator.close(closeLease));
     },
     current() {
-      return SynchronizedRef.getUnsafe(kernel.active)?.session ?? null;
+      return kernel.active?.session ?? null;
     },
     finish(lease) {
       clearWorkspaceDocumentOpening(kernel.store, lease.id);
     },
-    invalidate,
+    invalidate() {
+      issueWorkspaceDocumentIntent(kernel, null);
+    },
     isActive(session) {
-      return SynchronizedRef.getUnsafe(kernel.active)?.session === session;
+      return kernel.active?.session === session;
     },
     isCurrent(lease) {
       return isCurrentDocumentIntent(kernel, lease);
     },
     transition(input) {
-      return runPromise(transitionWorkspaceDocument(input));
+      return runCoordinator((coordinator) => coordinator.transition(input));
     },
   };
 }
@@ -142,96 +105,69 @@ export function createWorkspaceDocumentSessionController(
 export class WorkspaceDocumentSessionCoordinator extends Context.Service<
   WorkspaceDocumentSessionCoordinator,
   {
-    close(
-      lease: WorkspaceDocumentIntentLease,
-      options?: { preserveOpening?: boolean },
-    ): Effect.Effect<WorkspaceDocumentTransitionOutcome, WorkspaceDocumentSessionError>;
+    close(lease: WorkspaceDocumentIntentLease): Effect.Effect<WorkspaceDocumentCloseResult, Error>;
     transition(
       input: WorkspaceDocumentTransitionInput,
-    ): Effect.Effect<WorkspaceDocumentTransitionOutcome, WorkspaceDocumentSessionError>;
+    ): Effect.Effect<ActiveWorkspaceDocumentSession | null, Error>;
   }
 >()("local-md-workspace/WorkspaceDocumentSessionCoordinator") {
   static layer(kernel: WorkspaceDocumentSessionKernel) {
     return Layer.effect(
       WorkspaceDocumentSessionCoordinator,
       Effect.gen(function* () {
-        let sessionRoot = yield* Scope.fork(yield* Effect.scope, "sequential");
-        let latestTransitions = yield* FiberMap.make<
-          string,
-          WorkspaceDocumentTransitionOutcome,
-          WorkspaceDocumentSessionError
-        >();
-        let inFlightTransitions = yield* FiberSet.make<
-          WorkspaceDocumentTransitionOutcome,
-          WorkspaceDocumentSessionError
-        >();
+        let transitions = yield* FiberSet.make<unknown, Error>();
         let commitGate = yield* Semaphore.make(1);
-
-        let runLatest = Effect.fn("WorkspaceDocumentSessionCoordinator.runLatest")(function* (
-          lease: WorkspaceDocumentIntentLease,
-          workflow: Effect.Effect<
-            WorkspaceDocumentTransitionOutcome,
-            WorkspaceDocumentSessionError
-          >,
-        ) {
-          if (!isCurrentDocumentIntent(kernel, lease)) {
-            return { status: "superseded" } as const;
-          }
-
-          let fiber = yield* FiberSet.run(inFlightTransitions, workflow);
-          yield* FiberMap.set(latestTransitions, documentTransitionKey, fiber);
-          let exit = yield* Fiber.await(fiber);
-          if (Exit.isSuccess(exit)) return exit.value;
-          if (Cause.hasInterruptsOnly(exit.cause)) return { status: "superseded" } as const;
-          return yield* Effect.failCause(exit.cause);
-        });
 
         let transition = Effect.fn("WorkspaceDocumentSessionCoordinator.transition")(function* (
           input: WorkspaceDocumentTransitionInput,
         ) {
-          return yield* runLatest(
-            input.lease,
-            prepareAndCommitWorkspaceDocument({
-              commitGate,
-              input,
-              kernel,
-              sessionRoot,
-            }),
-          ).pipe(
+          if (!isCurrentDocumentIntent(kernel, input.lease)) return null;
+          let fiber = yield* FiberSet.run(
+            transitions,
+            prepareAndCommitWorkspaceDocument({ commitGate, input, kernel }),
+          );
+          return yield* Fiber.join(fiber).pipe(
             Effect.ensuring(
-              Effect.sync(() => {
-                clearWorkspaceDocumentOpening(kernel.store, input.lease.id);
-              }),
+              Effect.sync(() => clearWorkspaceDocumentOpening(kernel.store, input.lease.id)),
             ),
           );
         });
 
         let close = Effect.fn("WorkspaceDocumentSessionCoordinator.close")(function* (
           lease: WorkspaceDocumentIntentLease,
-          options: { preserveOpening?: boolean } = {},
         ) {
-          return yield* runLatest(
-            lease,
+          if (!isCurrentDocumentIntent(kernel, lease)) return null;
+          let fiber = yield* FiberSet.run(
+            transitions,
             commitGate.withPermit(
               Effect.uninterruptible(
-                closeCurrentWorkspaceDocument(kernel, options.preserveOpening ?? false),
+                Effect.gen(function* () {
+                  if (!isCurrentDocumentIntent(kernel, lease)) return null;
+                  return {
+                    hadActiveSession: yield* closeCurrentWorkspaceDocument(
+                      kernel,
+                      kernel.store.getState().openingDocument?.intentId == lease.id,
+                    ),
+                  };
+                }),
               ),
             ),
           );
+          return yield* Fiber.join(fiber);
         });
 
-        yield* Scope.addFinalizer(
-          yield* Effect.scope,
+        yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
-            kernel.closed = true;
-            issueWorkspaceDocumentIntent(kernel, null, { allowClosed: true });
-            yield* FiberSet.clear(inFlightTransitions);
+            issueWorkspaceDocumentIntent(kernel, null);
+            kernel.intentId = null;
+            yield* FiberSet.clear(transitions);
             yield* commitGate.withPermit(
               Effect.uninterruptible(
-                closeCurrentWorkspaceDocument(kernel, false).pipe(Effect.catch(() => Effect.void)),
+                closeCurrentWorkspaceDocument(kernel, false).pipe(
+                  Effect.catchCause(() => Effect.void),
+                ),
               ),
             );
-            yield* Scope.close(sessionRoot, Exit.void);
           }),
         );
 
@@ -241,62 +177,38 @@ export class WorkspaceDocumentSessionCoordinator extends Context.Service<
   }
 }
 
-export const transitionWorkspaceDocument = Effect.fn("transitionWorkspaceDocument")(function* (
-  input: WorkspaceDocumentTransitionInput,
-) {
-  let coordinator = yield* WorkspaceDocumentSessionCoordinator;
-  return yield* coordinator.transition(input);
-});
-
-export const closeWorkspaceDocumentSession = Effect.fn("closeWorkspaceDocumentSession")(function* (
-  lease: WorkspaceDocumentIntentLease,
-  options: { preserveOpening?: boolean } = {},
-) {
-  let coordinator = yield* WorkspaceDocumentSessionCoordinator;
-  return yield* coordinator.close(lease, options);
-});
-
 function prepareAndCommitWorkspaceDocument(input: {
   commitGate: Semaphore.Semaphore;
   input: WorkspaceDocumentTransitionInput;
   kernel: WorkspaceDocumentSessionKernel;
-  sessionRoot: Scope.Scope;
 }) {
-  let handedOff = false;
-
-  return Effect.scoped(
+  return Effect.acquireUseRelease(
     Effect.gen(function* () {
-      let candidateScope = yield* Effect.acquireRelease(
-        Scope.fork(input.sessionRoot, "sequential"),
-        (scope) => (handedOff ? Effect.void : Scope.close(scope, Exit.void)),
-      );
-      let candidate = yield* Scope.provide(candidateScope)(
-        Effect.acquireRelease(
-          tryDocumentSessionPromise("prepare-document", input.input.prepare),
-          (prepared) =>
-            prepared
-              ? tryDocumentSessionPromise("dispose-candidate-document", prepared.dispose).pipe(
-                  Effect.orDie,
-                )
-              : Effect.void,
-        ),
-      );
-      if (!candidate) return { status: "aborted" } as const;
-
-      return yield* input.commitGate.withPermit(
-        Effect.uninterruptible(
-          commitPreparedWorkspaceDocument({
-            candidate,
-            candidateScope,
-            handoff: () => {
-              handedOff = true;
-            },
-            kernel: input.kernel,
-            lease: input.input.lease,
-          }),
-        ),
-      );
+      let candidate = yield* tryDocumentSessionPromise(input.input.prepare);
+      let scope = yield* Scope.make("sequential");
+      if (candidate) {
+        yield* Scope.addFinalizer(
+          scope,
+          tryDocumentSessionPromise(candidate.dispose).pipe(Effect.orDie),
+        );
+      }
+      return { candidate, scope };
     }),
+    ({ candidate, scope }) =>
+      candidate
+        ? input.commitGate.withPermit(
+            Effect.uninterruptible(
+              commitPreparedWorkspaceDocument({
+                candidate,
+                candidateScope: scope,
+                kernel: input.kernel,
+                lease: input.input.lease,
+              }),
+            ),
+          )
+        : Effect.succeed(null),
+    ({ scope }) =>
+      input.kernel.active?.scope === scope ? Effect.void : Scope.close(scope, Exit.void),
   );
 }
 
@@ -304,51 +216,34 @@ const commitPreparedWorkspaceDocument = Effect.fn("commitPreparedWorkspaceDocume
   function* (input: {
     candidate: PreparedWorkspaceDocumentSession;
     candidateScope: Scope.Closeable;
-    handoff: () => void;
     kernel: WorkspaceDocumentSessionKernel;
     lease: WorkspaceDocumentIntentLease;
   }) {
-    if (!isCurrentDocumentIntent(input.kernel, input.lease)) {
-      return { status: "superseded" } as const;
-    }
+    if (!isCurrentDocumentIntent(input.kernel, input.lease)) return null;
 
-    let current = SynchronizedRef.getUnsafe(input.kernel.active);
-    if (current) {
-      yield* retireAndCloseWorkspaceDocument(input.kernel, current, true);
+    if (input.kernel.active) {
+      yield* retireAndCloseWorkspaceDocument(input.kernel, input.kernel.active, true);
     }
-    if (!isCurrentDocumentIntent(input.kernel, input.lease)) {
-      return { status: "superseded" } as const;
-    }
+    if (!isCurrentDocumentIntent(input.kernel, input.lease)) return null;
 
-    let installed = yield* tryDocumentSessionAction("activate-document", input.candidate.activate);
+    let installed = yield* tryDocumentSessionAction(input.candidate.activate);
     yield* Scope.addFinalizer(
       input.candidateScope,
-      tryDocumentSessionPromise("release-active-document", installed.release).pipe(Effect.orDie),
+      tryDocumentSessionPromise(installed.release).pipe(Effect.orDie),
     );
-
-    yield* SynchronizedRef.set(input.kernel.active, {
-      ...installed,
-      scope: input.candidateScope,
-    });
+    input.kernel.active = { ...installed, scope: input.candidateScope };
 
     let publication = yield* Effect.exit(
-      tryDocumentSessionAction("publish-document", () => {
-        publishWorkspaceDocumentView(input.kernel.store, {
-          document: input.candidate.document,
-          file: input.candidate.file,
-          saveState: input.candidate.saveState,
-          value: input.candidate.value,
-        });
+      tryDocumentSessionAction(() => {
+        publishWorkspaceDocumentView(input.kernel.store, input.candidate.view);
       }),
     );
     if (Exit.isFailure(publication)) {
-      yield* SynchronizedRef.set(input.kernel.active, null);
+      input.kernel.active = null;
       yield* retireWorkspaceDocumentView(input.kernel, installed, false);
       return yield* Effect.failCause(publication.cause);
     }
-
-    input.handoff();
-    return { session: installed.session, status: "activated" } as const;
+    return installed.session;
   },
 );
 
@@ -357,11 +252,10 @@ function closeCurrentWorkspaceDocument(
   preserveOpening: boolean,
 ) {
   return Effect.gen(function* () {
-    let current = SynchronizedRef.getUnsafe(kernel.active);
-    if (!current) return { hadActiveSession: false, status: "closed" } as const;
-
+    let current = kernel.active;
+    if (!current) return false;
     yield* retireAndCloseWorkspaceDocument(kernel, current, preserveOpening);
-    return { hadActiveSession: true, status: "closed" } as const;
+    return true;
   });
 }
 
@@ -370,16 +264,10 @@ const retireAndCloseWorkspaceDocument = Effect.fn("retireAndCloseWorkspaceDocume
   current: ManagedWorkspaceDocumentSession,
   preserveOpening: boolean,
 ) {
-  yield* SynchronizedRef.set(kernel.active, null);
-  let retirement = yield* Effect.exit(
-    retireWorkspaceDocumentView(kernel, current, preserveOpening),
+  kernel.active = null;
+  yield* retireWorkspaceDocumentView(kernel, current, preserveOpening).pipe(
+    Effect.onExit(() => Scope.close(current.scope, Exit.void)),
   );
-  let closure = yield* Effect.exit(Scope.close(current.scope, Exit.void));
-
-  if (Exit.isFailure(retirement)) return yield* Effect.failCause(retirement.cause);
-  if (Exit.isFailure(closure)) {
-    return yield* documentSessionError("close-active-document", Cause.squash(closure.cause));
-  }
 });
 
 function retireWorkspaceDocumentView(
@@ -387,31 +275,25 @@ function retireWorkspaceDocumentView(
   current: Pick<InstalledWorkspaceDocumentSession, "retire">,
   preserveOpening: boolean,
 ) {
-  return Effect.gen(function* () {
-    let retirement = yield* Effect.exit(
-      tryDocumentSessionAction("retire-document", current.retire),
-    );
-    let publication = yield* Effect.exit(
-      tryDocumentSessionAction("clear-document-view", () => {
-        clearWorkspaceDocumentView(kernel.store, { preserveOpening });
+  return tryDocumentSessionAction(current.retire).pipe(
+    Effect.onExit(() =>
+      tryDocumentSessionAction(() => {
+        clearWorkspaceDocumentView(kernel.store, preserveOpening);
       }),
-    );
-    if (Exit.isFailure(retirement)) return yield* Effect.failCause(retirement.cause);
-    if (Exit.isFailure(publication)) return yield* Effect.failCause(publication.cause);
-  });
+    ),
+  );
 }
 
 function issueWorkspaceDocumentIntent(
   kernel: WorkspaceDocumentSessionKernel,
   path: string | null,
-  options: { activeValue?: string; allowClosed?: boolean } = {},
+  options: { activeValue?: string } = {},
 ): WorkspaceDocumentIntentLease {
-  if (kernel.closed && !options.allowClosed) {
+  if (kernel.intentId == null) {
     throw new Error("The workspace document session coordinator is closed.");
   }
 
-  let lease = { id: ++kernel.nextIntentId, path } as const;
-  kernel.currentIntentId = lease.id;
+  let lease = { id: ++kernel.intentId } as const;
   if (path == null) {
     let opening = kernel.store.getState().openingDocument;
     if (opening) clearWorkspaceDocumentOpening(kernel.store, opening.intentId);
@@ -429,31 +311,23 @@ function isCurrentDocumentIntent(
   kernel: WorkspaceDocumentSessionKernel,
   lease: WorkspaceDocumentIntentLease,
 ) {
-  return !kernel.closed && kernel.currentIntentId == lease.id;
+  return kernel.intentId == lease.id;
 }
 
-function tryDocumentSessionAction<Value>(operation: string, action: () => Value) {
+function tryDocumentSessionAction<Value>(action: () => Value) {
   return Effect.try({
     try: action,
-    catch: (cause) => workspaceDocumentSessionError(operation, cause),
+    catch: workspaceDocumentSessionError,
   });
 }
 
-function tryDocumentSessionPromise<Value>(operation: string, action: () => Promise<Value>) {
+function tryDocumentSessionPromise<Value>(action: () => Promise<Value>) {
   return Effect.tryPromise({
     try: action,
-    catch: (cause) => workspaceDocumentSessionError(operation, cause),
+    catch: workspaceDocumentSessionError,
   });
 }
 
-function documentSessionError(operation: string, cause: unknown) {
-  return Effect.fail(workspaceDocumentSessionError(operation, cause));
-}
-
-function workspaceDocumentSessionError(operation: string, cause: unknown) {
-  return new WorkspaceDocumentSessionError({
-    cause,
-    message: Predicate.isError(cause) ? cause.message : String(cause),
-    operation,
-  });
+function workspaceDocumentSessionError(cause: unknown) {
+  return Predicate.isError(cause) ? cause : new Error(String(cause));
 }

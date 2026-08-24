@@ -8,7 +8,7 @@ type MutableRef<T> = {
 
 type UseWorkspacePersistenceLifecycleOptions<Document> = {
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
-  closeActiveDocument: () => Promise<void>;
+  closeActiveDocument: () => Promise<unknown>;
   collabDocumentRef: MutableRef<Document | null>;
   dirtyRef: MutableRef<boolean>;
   flushCollabDocument: (document: Document) => Promise<void>;

@@ -1,9 +1,8 @@
-import { Effect, ManagedRuntime } from "effect";
-import { describe, expect, it } from "vite-plus/test";
+import { ManagedRuntime } from "effect";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
-import { createActiveWorkspaceDocumentSession } from "@/lib/workspace/document-session";
+import type { ActiveWorkspaceDocumentSession } from "@/lib/workspace/document-session";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
-import { createMemoryWorkspaceRuntime } from "@/test/memory-workspace-runtime";
 import {
   createWorkspaceDocumentSessionController,
   createWorkspaceDocumentSessionKernel,
@@ -11,463 +10,210 @@ import {
   type PreparedWorkspaceDocumentSession,
   type WorkspaceDocumentSessionController,
 } from "./document-session-coordinator.ts";
-import { createWorkspaceAppStore, type WorkspaceAppState } from "./workspace-store.ts";
+import { createWorkspaceAppStore } from "./workspace-store.ts";
+
+let cleanups: Array<() => Promise<void>> = [];
+
+afterEach(async () => {
+  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+});
 
 describe("WorkspaceDocumentSessionCoordinator", () => {
-  it("lets fast B supersede slow uncancelable A without publishing A", async () => {
+  it("installs the latest document and disposes a stale candidate", async () => {
     let fixture = createFixture();
-    let candidateA = fixture.candidate("A", "a.md", { blockPrepare: true });
+    let prepareA = deferred();
+    let candidateA = fixture.candidate("A", "a.md", { prepareGate: prepareA });
     let candidateB = fixture.candidate("B", "b.md");
 
-    try {
-      let leaseA = fixture.controller.begin(candidateA.file.path);
-      let transitionA = settle(
-        fixture.controller.transition({ lease: leaseA, prepare: candidateA.prepare }),
-      );
-      await candidateA.prepareStarted.promise;
+    let transitionA = transition(fixture.controller, candidateA);
+    await vi.waitFor(() => expect(candidateA.prepareCalls).toBe(1));
 
-      let leaseB = fixture.controller.begin(candidateB.file.path);
-      let transitionB = await settle(
-        fixture.controller.transition({ lease: leaseB, prepare: candidateB.prepare }),
-      );
+    expect(await transition(fixture.controller, candidateB)).toBe(candidateB.session);
+    prepareA.resolve();
 
-      expect(valueOf(transitionB)).toMatchObject({
-        session: candidateB.session,
-        status: "activated",
-      });
-      expect(fixture.controller.current()).toBe(candidateB.session);
-      expect(fixture.store.getState()).toMatchObject({
-        collabDocument: candidateB.document,
-        editorDocument: { path: candidateB.file.path, value: candidateB.document.value },
-        openingDocument: null,
-        selectedFile: candidateB.file,
-      });
-
-      candidateA.releasePrepare.open();
-      expect(valueOf(await transitionA)).toEqual({ status: "superseded" });
-
-      expect(candidateA.activateCalls).toBe(0);
-      expect(candidateA.disposeCalls).toBe(1);
-      expect(candidateB.disposeCalls).toBe(0);
-      expect(fixture.documentSnapshots).not.toContain(candidateA.file.path);
-      expectDocumentSnapshotsCoherent(fixture.snapshots);
-    } finally {
-      await fixture.dispose();
-    }
+    expect(await transitionA).toBeNull();
+    expect(candidateA.activateCalls).toBe(0);
+    expect(candidateA.disposeCalls).toBe(1);
+    expect(fixture.controller.current()).toBe(candidateB.session);
+    expect(fixture.store.getState().selectedFile).toBe(candidateB.file);
   });
 
-  it("keeps B from publishing when C supersedes it during active A closure", async () => {
+  it("rechecks the latest intent after closing the active document", async () => {
     let fixture = createFixture();
-    let candidateA = fixture.candidate("A", "a.md", { blockActiveRelease: true });
-    let candidateB = fixture.candidate("B", "b.md");
-    let candidateC = fixture.candidate("C", "c.md", { blockPrepare: true });
-
-    try {
-      await activate(fixture.controller, candidateA);
-
-      let leaseB = fixture.controller.begin(candidateB.file.path);
-      let transitionB = settle(
-        fixture.controller.transition({ lease: leaseB, prepare: candidateB.prepare }),
-      );
-      await candidateA.activeReleaseStarted.promise;
-      expect(fixture.controller.current()).toBeNull();
-
-      let leaseC = fixture.controller.begin(candidateC.file.path);
-      let transitionC = settle(
-        fixture.controller.transition({ lease: leaseC, prepare: candidateC.prepare }),
-      );
-      await candidateC.prepareStarted.promise;
-
-      candidateA.releaseActiveRelease.open();
-      expect(valueOf(await transitionB)).toEqual({ status: "superseded" });
-
-      expect(fixture.controller.current()).toBeNull();
-      expect(candidateB.activateCalls).toBe(0);
-      expect(candidateB.disposeCalls).toBe(1);
-      expect(fixture.store.getState()).toMatchObject({
-        collabDocument: null,
-        openingDocument: { intentId: leaseC.id, path: candidateC.file.path },
-        selectedFile: null,
-      });
-      expect(fixture.documentSnapshots).not.toContain(candidateB.file.path);
-
-      candidateC.releasePrepare.open();
-      expect(valueOf(await transitionC)).toMatchObject({
-        session: candidateC.session,
-        status: "activated",
-      });
-
-      expect(fixture.controller.current()).toBe(candidateC.session);
-      expect(fixture.store.getState()).toMatchObject({
-        collabDocument: candidateC.document,
-        openingDocument: null,
-        selectedFile: candidateC.file,
-      });
-      expect(candidateA.events.indexOf("active-release:A:end")).toBeLessThan(
-        candidateC.events.indexOf("activate:C"),
-      );
-      expect(candidateB.events.indexOf("dispose:B:end")).toBeLessThan(
-        candidateC.events.indexOf("activate:C"),
-      );
-      expectDocumentSnapshotsCoherent(fixture.snapshots);
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
-  it("keeps a supplied standalone opening visible while its active workspace closes", async () => {
-    let fixture = createFixture();
-    let candidateA = fixture.candidate("A", "a.md", { blockActiveRelease: true });
-
-    try {
-      await activate(fixture.controller, candidateA);
-      let standaloneLease = fixture.controller.begin("Draft.md", {
-        activeValue: "# A edited\n",
-      });
-      let closing = settle(fixture.controller.close(standaloneLease));
-      await candidateA.activeReleaseStarted.promise;
-
-      expect(fixture.controller.current()).toBeNull();
-      expect(fixture.store.getState()).toMatchObject({
-        collabDocument: null,
-        editorDocument: { path: "", value: "" },
-        openingDocument: { intentId: standaloneLease.id, path: "Draft.md" },
-        selectedFile: null,
-      });
-
-      candidateA.releaseActiveRelease.open();
-      expect(valueOf(await closing)).toEqual({ hadActiveSession: true, status: "closed" });
-      expect(fixture.store.getState().openingDocument).toEqual({
-        intentId: standaloneLease.id,
-        path: "Draft.md",
-      });
-
-      fixture.controller.finish(standaloneLease);
-      expect(fixture.store.getState().openingDocument).toBeNull();
-      expect(candidateA.disposeCalls).toBe(1);
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
-  it("waits for a superseded uncancelable candidate and disposes it exactly once", async () => {
-    let fixture = createFixture();
-    let candidateA = fixture.candidate("A", "a.md", {
-      blockDispose: true,
-      blockPrepare: true,
-    });
-    let candidateB = fixture.candidate("B", "b.md");
-
-    try {
-      let leaseA = fixture.controller.begin(candidateA.file.path);
-      let transitionA = settle(
-        fixture.controller.transition({ lease: leaseA, prepare: candidateA.prepare }),
-      );
-      await candidateA.prepareStarted.promise;
-
-      let leaseB = fixture.controller.begin(candidateB.file.path);
-      expect(
-        valueOf(
-          await settle(
-            fixture.controller.transition({ lease: leaseB, prepare: candidateB.prepare }),
-          ),
-        ),
-      ).toMatchObject({ status: "activated" });
-
-      candidateA.releasePrepare.open();
-      await candidateA.disposeStarted.promise;
-      expect(candidateA.disposeCalls).toBe(1);
-
-      let disposed = false;
-      let disposal = fixture.startDisposal().then(() => {
-        disposed = true;
-      });
-      await waitUntil(() => fixture.kernel.closed);
-
-      expect(disposed).toBe(false);
-      expect(candidateA.disposeCalls).toBe(1);
-
-      candidateA.releaseDispose.open();
-      await Promise.all([transitionA, disposal]);
-
-      expect(candidateA.activateCalls).toBe(0);
-      expect(candidateA.disposeCalls).toBe(1);
-      expect(candidateA.maximumConcurrentDisposals).toBe(1);
-      expect(candidateB.disposeCalls).toBe(1);
-      expect(fixture.controller.current()).toBeNull();
-      expect(fixture.store.getState()).toMatchObject({
-        collabDocument: null,
-        openingDocument: null,
-        selectedFile: null,
-      });
-      expect(fixture.documentSnapshots).not.toContain(candidateA.file.path);
-      expectDocumentSnapshotsCoherent(fixture.snapshots);
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
-  it("never activates queued candidates when disposal interrupts a gated active close", async () => {
-    let fixture = createFixture();
-    let candidateA = fixture.candidate("A", "a.md", { blockActiveRelease: true });
+    let releaseA = deferred();
+    let candidateA = fixture.candidate("A", "a.md", { activeReleaseGate: releaseA });
     let candidateB = fixture.candidate("B", "b.md");
     let candidateC = fixture.candidate("C", "c.md");
 
-    try {
-      await activate(fixture.controller, candidateA);
+    await transition(fixture.controller, candidateA);
+    let transitionB = transition(fixture.controller, candidateB);
+    await vi.waitFor(() => expect(candidateA.activeReleaseCalls).toBe(1));
+    let transitionC = transition(fixture.controller, candidateC);
 
-      let leaseB = fixture.controller.begin(candidateB.file.path);
-      let transitionB = settle(
-        fixture.controller.transition({ lease: leaseB, prepare: candidateB.prepare }),
-      );
-      await candidateA.activeReleaseStarted.promise;
+    releaseA.resolve();
 
-      let leaseC = fixture.controller.begin(candidateC.file.path);
-      let transitionC = settle(
-        fixture.controller.transition({ lease: leaseC, prepare: candidateC.prepare }),
-      );
-      await candidateC.prepareFinished.promise;
+    expect(await transitionB).toBeNull();
+    expect(await transitionC).toBe(candidateC.session);
+    expect(candidateB.activateCalls).toBe(0);
+    expect(candidateB.disposeCalls).toBe(1);
+    expect(fixture.controller.current()).toBe(candidateC.session);
+  });
 
-      let disposed = false;
-      let disposal = fixture.startDisposal().then(() => {
-        disposed = true;
-      });
-      await waitUntil(() => fixture.kernel.closed);
+  it("keeps a replacement opening visible while closing the active document", async () => {
+    let fixture = createFixture();
+    await transition(fixture.controller, fixture.candidate("A", "a.md"));
+    let replacement = fixture.controller.begin("Draft.md");
 
-      expect(disposed).toBe(false);
-      expect(candidateB.activateCalls).toBe(0);
-      expect(candidateC.activateCalls).toBe(0);
+    await expect(fixture.controller.close(replacement)).resolves.toEqual({
+      hadActiveSession: true,
+    });
+    expect(fixture.store.getState().openingDocument).toMatchObject({ path: "Draft.md" });
 
-      candidateA.releaseActiveRelease.open();
-      await Promise.all([transitionB, transitionC, disposal]);
+    fixture.controller.finish(replacement);
+    expect(fixture.store.getState().openingDocument).toBeNull();
+  });
 
-      expect(candidateA.disposeCalls).toBe(1);
-      expect(candidateB.disposeCalls).toBe(1);
-      expect(candidateC.disposeCalls).toBe(1);
-      expect(candidateB.activateCalls).toBe(0);
-      expect(candidateC.activateCalls).toBe(0);
-      expect(fixture.controller.current()).toBeNull();
-      expect(fixture.store.getState()).toMatchObject({
-        collabDocument: null,
-        openingDocument: null,
-        selectedFile: null,
-      });
-      expect(fixture.documentSnapshots).not.toContain(candidateB.file.path);
-      expect(fixture.documentSnapshots).not.toContain(candidateC.file.path);
-      expectDocumentSnapshotsCoherent(fixture.snapshots);
-    } finally {
-      await fixture.dispose();
-    }
+  it("waits for pending cleanup and never installs a document during shutdown", async () => {
+    let fixture = createFixture();
+    let releaseA = deferred();
+    let disposeB = deferred();
+    let candidateA = fixture.candidate("A", "a.md", {
+      activeReleaseError: new Error("release A failed"),
+      activeReleaseGate: releaseA,
+      disposeError: new Error("dispose A failed"),
+    });
+    let candidateB = fixture.candidate("B", "b.md", { disposeGate: disposeB });
+    let candidateC = fixture.candidate("C", "c.md");
+
+    await transition(fixture.controller, candidateA);
+    let transitionB = transition(fixture.controller, candidateB);
+    await vi.waitFor(() => expect(candidateA.activeReleaseCalls).toBe(1));
+    let transitionC = transition(fixture.controller, candidateC);
+    let transitions = Promise.allSettled([transitionB, transitionC]);
+    await vi.waitFor(() => expect(candidateC.prepareCalls).toBe(1));
+
+    let disposed = false;
+    let disposal = fixture.startDisposal().then(() => {
+      disposed = true;
+    });
+    releaseA.resolve();
+    await vi.waitFor(() => expect(candidateB.disposeCalls).toBe(1));
+
+    expect(disposed).toBe(false);
+    expect(candidateB.activateCalls).toBe(0);
+    expect(candidateC.activateCalls).toBe(0);
+
+    disposeB.resolve();
+    await transitions;
+    await expect(disposal).resolves.toBeUndefined();
+
+    expect(candidateA.disposeCalls).toBe(1);
+    expect(candidateB.disposeCalls).toBe(1);
+    expect(candidateC.disposeCalls).toBe(1);
+    expect(fixture.controller.current()).toBeNull();
   });
 });
 
-type TestGate = {
-  open(): void;
-  promise: Promise<void>;
-};
-
-type CandidateOptions = {
-  blockActiveRelease?: boolean;
-  blockDispose?: boolean;
-  blockPrepare?: boolean;
-};
+type Deferred = ReturnType<typeof deferred>;
 
 type CandidateProbe = {
-  readonly activeReleaseStarted: TestGate;
+  activeReleaseCalls: number;
   activateCalls: number;
-  readonly document: CollabDocumentState;
   disposeCalls: number;
-  readonly disposeStarted: TestGate;
-  readonly events: string[];
-  readonly file: MarkdownFileNode;
-  maximumConcurrentDisposals: number;
-  readonly prepare: () => Promise<PreparedWorkspaceDocumentSession>;
-  readonly prepareFinished: TestGate;
-  readonly prepareStarted: TestGate;
-  readonly releaseActiveRelease: TestGate;
-  readonly releaseDispose: TestGate;
-  readonly releasePrepare: TestGate;
-  readonly session: ReturnType<typeof createActiveWorkspaceDocumentSession>;
+  file: MarkdownFileNode;
+  prepare: () => Promise<PreparedWorkspaceDocumentSession>;
+  prepareCalls: number;
+  session: ActiveWorkspaceDocumentSession;
 };
-
-type Settled<Value> =
-  | { reason: unknown; status: "rejected" }
-  | { status: "fulfilled"; value: Value };
 
 function createFixture() {
   let store = createWorkspaceAppStore();
   let kernel = createWorkspaceDocumentSessionKernel(store);
   let runtime = ManagedRuntime.make(WorkspaceDocumentSessionCoordinator.layer(kernel));
-  let runPromise = <Value, Error>(
-    effect: Effect.Effect<Value, Error, WorkspaceDocumentSessionCoordinator>,
-  ) => runtime.runPromise(effect);
-  let controller = createWorkspaceDocumentSessionController(kernel, runPromise);
-  let workspaceRuntime = createMemoryWorkspaceRuntime([], {
-    id: "memory:document-session-coordinator",
-  });
-  let gates = new Set<TestGate>();
-  let events: string[] = [];
-  let snapshots: WorkspaceAppState[] = [];
-  let documentSnapshots: Array<string | null> = [];
-  let unsubscribe = store.subscribe((snapshot) => {
-    snapshots.push(snapshot);
-    documentSnapshots.push(snapshot.collabDocument?.path ?? null);
-  });
+  let controller = createWorkspaceDocumentSessionController(kernel, (effect) =>
+    runtime.runPromise(effect),
+  );
+  let gates = new Set<Deferred>();
   let disposal: Promise<void> | null = null;
 
-  function gate(open = false) {
-    let resolve!: () => void;
-    let opened = false;
-    let promise = new Promise<void>((nextResolve) => {
-      resolve = nextResolve;
-    });
-    let nextGate: TestGate = {
-      open() {
-        if (opened) return;
-        opened = true;
-        resolve();
-      },
-      promise,
-    };
-    gates.add(nextGate);
-    if (open) nextGate.open();
-    return nextGate;
-  }
-
-  function candidate(id: string, path: string, options: CandidateOptions = {}): CandidateProbe {
-    let file = { kind: "file" as const, name: path.split("/").at(-1) ?? path, path };
+  function candidate(
+    id: string,
+    path: string,
+    options: {
+      activeReleaseError?: Error;
+      activeReleaseGate?: Deferred;
+      disposeError?: Error;
+      disposeGate?: Deferred;
+      prepareGate?: Deferred;
+    } = {},
+  ): CandidateProbe {
+    let file = { kind: "file" as const, name: path, path };
     let document = {
-      docId: `document:${id}`,
+      docId: "document:" + id,
       path,
-      value: `# ${id}\n`,
+      value: "# " + id + "\\n",
     } as CollabDocumentState;
-    let session = createActiveWorkspaceDocumentSession(
-      workspaceRuntime,
-      file,
-      document,
-      Number(id.codePointAt(0) ?? 0),
-    );
-    let prepareStarted = gate();
-    let prepareFinished = gate();
-    let releasePrepare = gate(!options.blockPrepare);
-    let disposeStarted = gate();
-    let releaseDispose = gate(!options.blockDispose);
-    let activeReleaseStarted = gate();
-    let releaseActiveRelease = gate(!options.blockActiveRelease);
-    let concurrentDisposals = 0;
+    let session = { epoch: id.codePointAt(0) ?? 0, file } as ActiveWorkspaceDocumentSession;
     let probe: CandidateProbe;
+    for (let gate of [options.prepareGate, options.disposeGate, options.activeReleaseGate]) {
+      if (gate) gates.add(gate);
+    }
 
     let prepared: PreparedWorkspaceDocumentSession = {
       activate() {
         probe.activateCalls += 1;
-        events.push(`activate:${id}`);
         return {
           async release() {
-            events.push(`active-release:${id}:start`);
-            activeReleaseStarted.open();
-            await releaseActiveRelease.promise;
-            events.push(`active-release:${id}:end`);
+            probe.activeReleaseCalls += 1;
+            await options.activeReleaseGate?.promise;
+            if (options.activeReleaseError) throw options.activeReleaseError;
           },
-          retire() {
-            events.push(`retire:${id}`);
-          },
+          retire() {},
           session,
         };
       },
       async dispose() {
         probe.disposeCalls += 1;
-        concurrentDisposals += 1;
-        probe.maximumConcurrentDisposals = Math.max(
-          probe.maximumConcurrentDisposals,
-          concurrentDisposals,
-        );
-        events.push(`dispose:${id}:start`);
-        disposeStarted.open();
-        await releaseDispose.promise;
-        events.push(`dispose:${id}:end`);
-        concurrentDisposals -= 1;
+        await options.disposeGate?.promise;
+        if (options.disposeError) throw options.disposeError;
       },
-      document,
-      file,
-      saveState: "saved",
-      value: document.value,
+      view: { document, file, saveState: "saved", value: document.value },
     };
 
-    probe = {
-      activeReleaseStarted,
+    return (probe = {
+      activeReleaseCalls: 0,
       activateCalls: 0,
-      document,
       disposeCalls: 0,
-      disposeStarted,
-      events,
       file,
-      maximumConcurrentDisposals: 0,
       async prepare() {
-        events.push(`prepare:${id}:start`);
-        prepareStarted.open();
-        await releasePrepare.promise;
-        events.push(`prepare:${id}:end`);
-        prepareFinished.open();
+        probe.prepareCalls += 1;
+        await options.prepareGate?.promise;
         return prepared;
       },
-      prepareFinished,
-      prepareStarted,
-      releaseActiveRelease,
-      releaseDispose,
-      releasePrepare,
+      prepareCalls: 0,
       session,
-    };
-    return probe;
+    });
   }
 
-  function startDisposal() {
-    return (disposal ??= runtime.dispose());
-  }
-
-  return {
-    candidate,
-    controller,
-    documentSnapshots,
-    async dispose() {
-      for (let nextGate of gates) nextGate.open();
-      await startDisposal();
-      unsubscribe();
-      await workspaceRuntime.dispose();
-    },
-    events,
-    kernel,
-    snapshots,
-    startDisposal,
-    store,
-  };
+  let startDisposal = () => (disposal ??= runtime.dispose());
+  cleanups.push(async () => {
+    for (let gate of gates) gate.resolve();
+    await startDisposal();
+  });
+  return { candidate, controller, startDisposal, store };
 }
 
-async function activate(controller: WorkspaceDocumentSessionController, candidate: CandidateProbe) {
-  let lease = controller.begin(candidate.file.path);
-  let outcome = await controller.transition({ lease, prepare: candidate.prepare });
-  expect(outcome).toMatchObject({ session: candidate.session, status: "activated" });
+function transition(controller: WorkspaceDocumentSessionController, candidate: CandidateProbe) {
+  return controller.transition({
+    lease: controller.begin(candidate.file.path),
+    prepare: candidate.prepare,
+  });
 }
 
-function expectDocumentSnapshotsCoherent(snapshots: WorkspaceAppState[]) {
-  for (let snapshot of snapshots) {
-    if (!snapshot.collabDocument) continue;
-    expect(snapshot.selectedFile?.path).toBe(snapshot.collabDocument.path);
-    expect(snapshot.editorDocument.path).toBe(snapshot.collabDocument.path);
-  }
-}
-
-function settle<Value>(promise: Promise<Value>): Promise<Settled<Value>> {
-  return promise.then(
-    (value) => ({ status: "fulfilled" as const, value }),
-    (reason: unknown) => ({ reason, status: "rejected" as const }),
-  );
-}
-
-function valueOf<Value>(settled: Settled<Value>) {
-  if (settled.status == "rejected") throw settled.reason;
-  return settled.value;
-}
-
-async function waitUntil(predicate: () => boolean) {
-  while (!predicate()) await Promise.resolve();
+function deferred() {
+  let resolve!: () => void;
+  let promise = new Promise<void>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
 }

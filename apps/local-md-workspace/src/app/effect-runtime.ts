@@ -1,17 +1,11 @@
 import { Layer, ManagedRuntime } from "effect";
 import {
-  createWorkspaceDocumentSessionKernel,
   WorkspaceDocumentSessionCoordinator,
   type WorkspaceDocumentSessionKernel,
 } from "@/app/document-session-coordinator";
-import { createWorkspaceAppStore } from "@/app/workspace-store";
 import { WorkspaceRuntimeTransitions } from "@/lib/workspace/runtime/runtime-lifecycle";
 
-export function createWorkspaceEffectRuntime(
-  documentSessions: WorkspaceDocumentSessionKernel = createWorkspaceDocumentSessionKernel(
-    createWorkspaceAppStore(),
-  ),
-) {
+export function createWorkspaceEffectRuntime(documentSessions: WorkspaceDocumentSessionKernel) {
   return ManagedRuntime.make(
     Layer.mergeAll(
       WorkspaceRuntimeTransitions.layer,

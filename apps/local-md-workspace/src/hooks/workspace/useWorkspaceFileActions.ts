@@ -74,7 +74,6 @@ type UseWorkspaceFileActionsOptions = {
     nextSelectedPath?: null | string,
     options?: { saveBeforeSelect?: boolean },
   ) => Promise<void>;
-  localFileHandleRef: MutableRef<AccessFileHandle | null>;
   markdownConfig?: LiveMdMarkdownConfig | null;
   refreshWorkspaceForCurrentEditor: (runtime: WorkspaceRuntime) => Promise<void>;
   resolveImageAssetFile: NonNullable<MarkdownHtmlExportOptions["resolveAsset"]>;
@@ -102,7 +101,6 @@ export function useWorkspaceFileActions({
   editorElementRef,
   editorValueRef,
   loadTree,
-  localFileHandleRef,
   markdownConfig = null,
   refreshWorkspaceForCurrentEditor,
   resolveImageAssetFile,
@@ -302,10 +300,8 @@ export function useWorkspaceFileActions({
     discardMaterializedDraft,
     documentSessions,
     downloadCurrentMarkdownCopy,
-    localFileHandleRef,
     refreshWorkspaceForCurrentEditor,
     selectedFileRef,
-    setBusy,
     setErrorMessage,
     setRetryLoadPath,
     singleFileSourceRef,

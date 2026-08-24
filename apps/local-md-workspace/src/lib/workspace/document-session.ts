@@ -35,18 +35,6 @@ export function createDocumentSession(
   };
 }
 
-export function createActiveWorkspaceDocumentSession(
-  runtime: WorkspaceRuntime,
-  file: MarkdownFileNode,
-  collabDocument: CollabDocumentState,
-  epoch: number,
-): ActiveWorkspaceDocumentSession {
-  return {
-    ...createDocumentSession(runtime, file, collabDocument),
-    epoch,
-  };
-}
-
 export function documentSessionMatchesSource(
   session: DocumentSession,
   sourceRef: DocumentSourceRef,

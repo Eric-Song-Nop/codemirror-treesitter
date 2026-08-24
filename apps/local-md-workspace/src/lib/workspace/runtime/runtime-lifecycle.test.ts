@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { createWorkspaceDocumentSessionKernel } from "@/app/document-session-coordinator";
 import { createWorkspaceEffectRuntime } from "@/app/effect-runtime";
+import { createWorkspaceAppStore } from "@/app/workspace-store";
 import { transitionWorkspaceRuntime } from "./runtime-lifecycle.ts";
 import type { WorkspaceRuntime } from "./types.ts";
 
 describe("workspace runtime lifecycle", () => {
   it("closes the document before activation and disposes the replaced runtime last", async () => {
-    let effectRuntime = createWorkspaceEffectRuntime();
+    let effectRuntime = createTestWorkspaceEffectRuntime();
     let events: string[] = [];
     let current = runtime("current", events);
     let next = runtime("next", events);
@@ -26,7 +28,7 @@ describe("workspace runtime lifecycle", () => {
   });
 
   it("still closes the active document when reusing the same runtime", async () => {
-    let effectRuntime = createWorkspaceEffectRuntime();
+    let effectRuntime = createTestWorkspaceEffectRuntime();
     let events: string[] = [];
     let current = runtime("current", events);
 
@@ -46,7 +48,7 @@ describe("workspace runtime lifecycle", () => {
   });
 
   it("disposes an unactivated runtime when closing the document fails", async () => {
-    let effectRuntime = createWorkspaceEffectRuntime();
+    let effectRuntime = createTestWorkspaceEffectRuntime();
     let events: string[] = [];
     let next = runtime("next", events);
 
@@ -67,7 +69,7 @@ describe("workspace runtime lifecycle", () => {
   });
 
   it("serializes competing runtime transitions", async () => {
-    let effectRuntime = createWorkspaceEffectRuntime();
+    let effectRuntime = createTestWorkspaceEffectRuntime();
     let release!: () => void;
     let gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -117,7 +119,7 @@ describe("workspace runtime lifecycle", () => {
   });
 
   it("disposes a pending candidate instead of activating it during app runtime disposal", async () => {
-    let effectRuntime = createWorkspaceEffectRuntime();
+    let effectRuntime = createTestWorkspaceEffectRuntime();
     let release!: () => void;
     let gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -157,7 +159,7 @@ describe("workspace runtime lifecycle", () => {
   });
 
   it("disposes a candidate interrupted while waiting for the transition permit", async () => {
-    let effectRuntime = createWorkspaceEffectRuntime();
+    let effectRuntime = createTestWorkspaceEffectRuntime();
     let release!: () => void;
     let gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -211,6 +213,12 @@ describe("workspace runtime lifecycle", () => {
     await Promise.all([first, waiting, disposal]);
   });
 });
+
+function createTestWorkspaceEffectRuntime() {
+  return createWorkspaceEffectRuntime(
+    createWorkspaceDocumentSessionKernel(createWorkspaceAppStore()),
+  );
+}
 
 function runtime(id: string, events: string[]) {
   return {

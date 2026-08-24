@@ -54,7 +54,7 @@ describe("useWorkspaceEntryDialogs active document ordering", () => {
     expect(events).toEqual(["save", "close", "rename", "transition:renamed.md", "load:renamed.md"]);
   });
 
-  it("closes an active document before deleting it and clears it before refreshing", async () => {
+  it("closes an active document before deleting and refreshing", async () => {
     let events: string[] = [];
     let options = createOptions(events);
     options.workspaceRuntime!.entries.delete = vi.fn(async () => {
@@ -70,7 +70,7 @@ describe("useWorkspaceEntryDialogs active document ordering", () => {
       await result.deleteWorkspaceEntry();
     });
 
-    expect(events).toEqual(["save", "close", "delete", "clear", "load:null"]);
+    expect(events).toEqual(["save", "close", "delete", "load:null"]);
   });
 
   it("reopens the captured active path after its parent directory is renamed", async () => {
@@ -78,7 +78,7 @@ describe("useWorkspaceEntryDialogs active document ordering", () => {
     let options = createOptions(events);
     let activeFile = { kind: "file" as const, name: "note.md", path: "folder/note.md" };
     options.selectedFileRef.current = activeFile;
-    options.closeActiveDocumentSession = async () => {
+    options.clearActiveDocument = async () => {
       events.push("close");
       options.selectedFileRef.current = null;
     };
@@ -129,9 +129,6 @@ function createOptions(events: string[]): HookOptions {
       return { id: ++nextIntentId, path };
     },
     clearActiveDocument: async () => {
-      events.push("clear");
-    },
-    closeActiveDocumentSession: async () => {
       events.push("close");
     },
     collabDocumentRef: {
