@@ -65,7 +65,11 @@ export function LocalWorkspaceApp() {
     retry: retryLiveMdPreload,
     retrying: liveMdPreloadRetrying,
   } = useLiveMdPreload();
-  let { runtime: workspaceEffectRuntime, store: workspaceAppStore } = useWorkspaceApplication();
+  let {
+    documents: documentSessions,
+    runtime: workspaceEffectRuntime,
+    store: workspaceAppStore,
+  } = useWorkspaceApplication();
   let {
     agentActivated,
     agentOpen,
@@ -74,6 +78,7 @@ export function LocalWorkspaceApp() {
     dropboxConnecting,
     editorDocument,
     errorMessage,
+    openingDocument,
     recoveryCopyPath,
     recoveryDialogAction,
     recoveryDialogError,
@@ -120,7 +125,6 @@ export function LocalWorkspaceApp() {
   let singleFileSourceRef = useRef<SingleFileSource | null>(null);
   let localFileHandleRef = useRef<AccessFileHandle | null>(null);
   let collabDocumentRef = useRef<CollabDocumentState | null>(null);
-  let collabSyncCleanupRef = useRef<() => void>(() => {});
   let editorValueRef = useRef("");
   let cleanValueRef = useRef("");
   let dirtyRef = useRef(false);
@@ -131,8 +135,8 @@ export function LocalWorkspaceApp() {
   let saveOperationRef = useRef(0);
   let activeDocumentGenerationRef = useRef(0);
   let documentTargetGenerationRef = useRef(0);
-  let loadFileRequestRef = useRef(0);
   let agentWorkspaceKey = singleFileSource ? "" : (workspaceRuntime?.identity.id ?? "");
+  let effectiveBusy = busy || openingDocument != null;
   let agentScopeKey = [
     agentWorkspaceKey,
     selectedFile?.path ?? "",
@@ -173,10 +177,14 @@ export function LocalWorkspaceApp() {
     [],
   );
 
+  let closeManagedDocumentOnUnmount = useCallback(async () => {
+    await documentSessions.close();
+  }, [documentSessions]);
+
   useWorkspacePersistenceLifecycle({
     autoSaveTaskRef,
+    closeActiveDocument: closeManagedDocumentOnUnmount,
     collabDocumentRef,
-    collabSyncCleanupRef,
     dirtyRef,
     flushCollabDocument: flushCollabDocumentPersistence,
     setErrorMessage,
@@ -253,7 +261,6 @@ export function LocalWorkspaceApp() {
 
   let {
     flushOwnerShareHost,
-    isOwnerShareHostPath,
     sendHostDocumentUpdate,
     sendHostSaveAck,
     startOwnerShareHost,
@@ -278,7 +285,6 @@ export function LocalWorkspaceApp() {
     handleEditorInput,
     keepCurrentDocumentAs,
     loadFile,
-    loadingFilePath,
     openSingleFileDraft,
     reconcileCurrentDocumentSource,
     recreateCurrentDocumentSource,
@@ -290,13 +296,11 @@ export function LocalWorkspaceApp() {
     autoSaveTaskRef,
     cleanValueRef,
     collabDocumentRef,
-    collabSyncCleanupRef,
+    documentSessions,
     documentTargetGenerationRef,
     dirtyRef,
     editVersionRef,
     editorValueRef,
-    isOwnerShareHostPath,
-    loadFileRequestRef,
     localFileHandleRef,
     saveOperationRef,
     saveStateRef,
@@ -306,7 +310,6 @@ export function LocalWorkspaceApp() {
     sendHostDocumentUpdate,
     sendHostSaveAck,
     setActiveShareRecord,
-    setBusy,
     setCreatedShare,
     setEditorDocument,
     setErrorMessage,
@@ -574,6 +577,7 @@ export function LocalWorkspaceApp() {
     closeActiveDocumentSession,
     collabDocumentRef,
     documentTargetGenerationRef,
+    finishDocumentTransition: (lease) => documentSessions.finish(lease),
     loadTree,
     saveCurrentFile,
     saveOperationRef,
@@ -655,10 +659,12 @@ export function LocalWorkspaceApp() {
     submitSaveAsDropbox,
   } = useWorkspaceFileActions({
     activateSingleFileDocument,
+    beginDocumentTransition,
     collabDocumentRef,
     createDropboxRuntime,
     discardMaterializedDraft,
     documentTargetGenerationRef,
+    documentSessions,
     editorElementRef,
     editorValueRef,
     loadTree,
@@ -693,7 +699,7 @@ export function LocalWorkspaceApp() {
       <div className="flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
         <WorkspaceSidebar
           browserSupported={browserSupported}
-          busy={busy}
+          busy={effectiveBusy}
           canRefresh={canRefreshWorkspace}
           dropboxConnecting={dropboxConnecting}
           dropboxRestoreAvailable={dropboxRestoreAvailable}
@@ -741,7 +747,7 @@ export function LocalWorkspaceApp() {
             activeShare={Boolean(activeShareForSelectedFile)}
             agentButtonRef={agentButtonRef}
             agentOpen={agentOpen}
-            busy={busy}
+            busy={effectiveBusy}
             canExport={Boolean(selectedFile)}
             canInsertImage={canInsertImage}
             canSaveAs={Boolean(selectedFile)}
@@ -765,7 +771,7 @@ export function LocalWorkspaceApp() {
           />
 
           <WorkspaceErrorBanner
-            busy={busy || liveMdPreloadRetrying}
+            busy={effectiveBusy || liveMdPreloadRetrying}
             message={visibleErrorMessage}
             recoveryKind={recoveryKind}
             retryPath={errorMessage ? retryLoadPath : liveMdPreloadError ? "live-md" : null}
@@ -785,10 +791,12 @@ export function LocalWorkspaceApp() {
             liveMdConfig={selectedFile ? liveMdConfig : emptyLiveMdConfig}
             document={editorDocument}
             loadingLabel={
-              loadingFilePath ? t("workspace.loadingFile", { path: loadingFilePath }) : undefined
+              openingDocument
+                ? t("workspace.loadingFile", { path: openingDocument.path })
+                : undefined
             }
             placeholder={t("workspace.placeholder")}
-            selected={Boolean(selectedFile) && fileDialogMode == null}
+            selected={Boolean(selectedFile) && openingDocument == null && fileDialogMode == null}
             onEditorReady={handleEditorReady}
             onInput={handleEditorInput}
           />
@@ -818,7 +826,7 @@ export function LocalWorkspaceApp() {
 
         <WorkspaceDialogs
           fileNameDialog={{
-            busy,
+            busy: effectiveBusy,
             error: fileDialogError,
             mode: fileDialogMode,
             value: fileDialogValue,
@@ -828,7 +836,7 @@ export function LocalWorkspaceApp() {
           }}
           recoveryDialog={{
             action: recoveryDialogAction,
-            busy,
+            busy: effectiveBusy,
             copyPath: recoveryCopyPath,
             error: recoveryDialogError,
             onClose: closeDocumentRecovery,
@@ -838,7 +846,7 @@ export function LocalWorkspaceApp() {
           }}
           shareDialog={{
             activeShare: activeShareForSelectedFile,
-            busy: busy || shareCreating,
+            busy: effectiveBusy || shareCreating,
             copied: shareCopied,
             error: shareError,
             expiration: shareExpiration,
@@ -854,7 +862,7 @@ export function LocalWorkspaceApp() {
             onStopSharing: stopSharingFile,
           }}
           saveAsDropboxDialog={{
-            busy: busy || dropboxConnecting,
+            busy: effectiveBusy || dropboxConnecting,
             error: saveAsDropboxError,
             open: saveAsDropboxDialogOpen,
             value: saveAsDropboxPath,
@@ -864,7 +872,7 @@ export function LocalWorkspaceApp() {
           }}
           commandPalette={{
             browserSupported,
-            busy,
+            busy: effectiveBusy,
             canInsertImage,
             canSaveAs: Boolean(selectedFile),
             canSaveAsLocal: supportsSaveFilePicker(),
@@ -889,7 +897,7 @@ export function LocalWorkspaceApp() {
             onToggleSidebar: toggleSidebar,
           }}
           deleteDialog={{
-            busy,
+            busy: effectiveBusy,
             target: deleteTarget,
             onConfirm: () => void deleteWorkspaceEntry(),
             onOpenChange: closeDeleteDialog,

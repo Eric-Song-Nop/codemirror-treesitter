@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import type { WorkspaceDocumentIntentLease } from "@/app/document-session-coordinator";
 import type { FileTreeCreateKind, FileTreeDeleteTarget } from "@/components/FileTree";
 import type { TFunction } from "@/lib/i18n";
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
@@ -22,15 +23,19 @@ type MutableRef<T> = {
 
 type UseWorkspaceEntryDialogsOptions = {
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
-  beginDocumentTransition: (path?: string) => void;
+  beginDocumentTransition: (path?: string) => WorkspaceDocumentIntentLease;
   clearActiveDocument: () => Promise<void>;
   closeActiveDocumentSession: () => Promise<void>;
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
   documentTargetGenerationRef: MutableRef<number>;
+  finishDocumentTransition: (lease: WorkspaceDocumentIntentLease) => void;
   loadTree: (
     runtime: WorkspaceRuntime,
     nextSelectedPath?: null | string,
-    options?: { saveBeforeSelect?: boolean },
+    options?: {
+      documentIntent?: WorkspaceDocumentIntentLease;
+      saveBeforeSelect?: boolean;
+    },
   ) => Promise<void>;
   saveCurrentFile: () => Promise<boolean>;
   saveOperationRef: MutableRef<number>;
@@ -53,6 +58,7 @@ export function useWorkspaceEntryDialogs({
   closeActiveDocumentSession,
   collabDocumentRef,
   documentTargetGenerationRef,
+  finishDocumentTransition,
   loadTree,
   saveCurrentFile,
   saveOperationRef,
@@ -140,6 +146,7 @@ export function useWorkspaceEntryDialogs({
         currentTarget?.kind == "file" && currentTarget.path == currentWorkspacePath
           ? activeDocumentRevision(collabDocumentRef.current)
           : undefined;
+      let documentIntent: WorkspaceDocumentIntentLease | null = null;
       try {
         if (closesActiveSession) await closeActiveDocumentSession();
         let nextPath =
@@ -152,20 +159,17 @@ export function useWorkspaceEntryDialogs({
                 : null;
         let nextSelectedPath =
           currentTarget?.kind == "directory" && nextPath
-            ? pathAfterDirectoryRename(
-                selectedFileRef.current?.path ?? null,
-                currentTarget.path,
-                nextPath,
-              )
+            ? pathAfterDirectoryRename(currentWorkspacePath, currentTarget.path, nextPath)
             : nextPath;
         if (closesActiveSession) reopenPath = nextSelectedPath;
 
         setFileDialogMode(null);
         setFileDialogTarget(null);
         if (nextSelectedPath && currentWorkspacePath != nextSelectedPath) {
-          beginDocumentTransition(nextSelectedPath);
+          documentIntent = beginDocumentTransition(nextSelectedPath);
         }
         await loadTree(workspaceRuntime, nextSelectedPath ?? currentWorkspacePath, {
+          documentIntent: documentIntent ?? undefined,
           saveBeforeSelect: false,
         });
       } catch (error) {
@@ -174,6 +178,7 @@ export function useWorkspaceEntryDialogs({
         }
         setFileDialogError(errorToMessage(error));
       } finally {
+        if (documentIntent) finishDocumentTransition(documentIntent);
         setBusy(false);
       }
     },
@@ -184,6 +189,7 @@ export function useWorkspaceEntryDialogs({
       documentTargetGenerationRef,
       fileDialogMode,
       fileDialogTarget,
+      finishDocumentTransition,
       loadTree,
       saveCurrentFile,
       selectedFileRef,

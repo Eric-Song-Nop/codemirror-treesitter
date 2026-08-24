@@ -2,10 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import {
-  beginWorkspaceDocumentTransition,
+  clearWorkspaceDocumentOpening,
   clearWorkspaceDocumentView,
   createWorkspaceAppSetters,
   createWorkspaceAppStore,
+  publishWorkspaceDocumentOpening,
   publishWorkspaceDocumentView,
   type WorkspaceAppState,
   type WorkspaceAppStore,
@@ -23,18 +24,19 @@ describe("workspace app store", () => {
     expect(store.getState().errorMessage).toBe("First error; second error");
   });
 
-  it("publishes one coherent workspace document snapshot", () => {
+  it("keeps A active while B is opening", () => {
     let store = createWorkspaceAppStore();
-    let file = createFile("notes/next.md");
-    let document = createDocument(file.path, "# Next");
-    let snapshots = recordSnapshots(store);
-
+    let file = createFile("notes/a.md");
+    let document = createDocument(file.path, "# A");
     publishWorkspaceDocumentView(store, {
       document,
       file,
-      saveState: "pending",
+      saveState: "saved",
       value: document.value,
     });
+    let snapshots = recordSnapshots(store);
+
+    publishWorkspaceDocumentOpening(store, { intentId: 2, path: "notes/b.md" }, "# A edited");
 
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0]?.collabDocument).toBe(document);
@@ -43,10 +45,11 @@ describe("workspace app store", () => {
       collabDocument: document,
       editorDocument: {
         path: file.path,
-        value: document.value,
+        value: "# A edited",
         version: 1,
       },
-      saveState: "pending",
+      openingDocument: { intentId: 2, path: "notes/b.md" },
+      saveState: "saved",
       selectedFile: file,
       singleFileSource: null,
       treeSelection: {
@@ -57,34 +60,62 @@ describe("workspace app store", () => {
     });
   });
 
-  it("begins a document transition with one atomic publication", () => {
+  it("does not let a stale finish clear a newer opening intent", () => {
     let store = createWorkspaceAppStore();
-    let currentFile = createFile("notes/current.md");
-    let currentDocument = createDocument(currentFile.path, "# Current");
+    publishWorkspaceDocumentOpening(store, { intentId: 2, path: "notes/b.md" });
+    publishWorkspaceDocumentOpening(store, { intentId: 3, path: "notes/c.md" });
+    let snapshots = recordSnapshots(store);
+
+    clearWorkspaceDocumentOpening(store, 2);
+
+    expect(snapshots).toHaveLength(0);
+    expect(store.getState().openingDocument).toEqual({ intentId: 3, path: "notes/c.md" });
+
+    clearWorkspaceDocumentOpening(store, 3);
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.openingDocument).toBeNull();
+  });
+
+  it("installs B and clears its opening state in one coherent snapshot", () => {
+    let store = createWorkspaceAppStore();
+    let currentFile = createFile("notes/a.md");
+    let currentDocument = createDocument(currentFile.path, "# A");
     publishWorkspaceDocumentView(store, {
       document: currentDocument,
       file: currentFile,
       saveState: "saved",
       value: currentDocument.value,
     });
+    let nextFile = createFile("notes/b.md");
+    let nextDocument = createDocument(nextFile.path, "# B");
+    publishWorkspaceDocumentOpening(store, { intentId: 2, path: nextFile.path });
     let snapshots = recordSnapshots(store);
 
-    beginWorkspaceDocumentTransition(store, "notes/next.md");
+    publishWorkspaceDocumentView(store, {
+      document: nextDocument,
+      file: nextFile,
+      saveState: "pending",
+      value: nextDocument.value,
+    });
 
     expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.collabDocument).toBe(nextDocument);
+    expect(snapshots[0]?.selectedFile).toBe(nextFile);
     expect(snapshots[0]).toMatchObject({
-      collabDocument: null,
+      collabDocument: nextDocument,
       editorDocument: {
-        path: "notes/next.md",
-        value: "",
+        path: nextFile.path,
+        value: nextDocument.value,
         version: 2,
       },
-      saveState: "saved",
-      selectedFile: null,
+      openingDocument: null,
+      saveState: "pending",
+      selectedFile: nextFile,
       treeSelection: {
         kind: "file",
-        name: currentFile.name,
-        path: currentFile.path,
+        name: nextFile.name,
+        path: nextFile.path,
       },
     });
   });
@@ -99,6 +130,7 @@ describe("workspace app store", () => {
       saveState: "saved",
       value: currentDocument.value,
     });
+    publishWorkspaceDocumentOpening(store, { intentId: 2, path: "notes/next.md" });
     let snapshots = recordSnapshots(store);
 
     clearWorkspaceDocumentView(store);
@@ -111,6 +143,38 @@ describe("workspace app store", () => {
         value: "",
         version: 2,
       },
+      openingDocument: null,
+      saveState: "idle",
+      selectedFile: null,
+      singleFileSource: null,
+      treeSelection: null,
+    });
+  });
+
+  it("can clear the active view without clearing a newer opening intent", () => {
+    let store = createWorkspaceAppStore();
+    let currentFile = createFile("notes/a.md");
+    let currentDocument = createDocument(currentFile.path, "# A");
+    publishWorkspaceDocumentView(store, {
+      document: currentDocument,
+      file: currentFile,
+      saveState: "saved",
+      value: currentDocument.value,
+    });
+    publishWorkspaceDocumentOpening(store, { intentId: 3, path: "notes/c.md" });
+    let snapshots = recordSnapshots(store);
+
+    clearWorkspaceDocumentView(store, { preserveOpening: true });
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({
+      collabDocument: null,
+      editorDocument: {
+        path: "",
+        value: "",
+        version: 2,
+      },
+      openingDocument: { intentId: 3, path: "notes/c.md" },
       saveState: "idle",
       selectedFile: null,
       singleFileSource: null,

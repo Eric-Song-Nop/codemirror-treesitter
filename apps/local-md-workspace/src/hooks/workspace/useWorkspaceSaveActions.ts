@@ -1,4 +1,5 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
+import type { WorkspaceDocumentSessionController } from "@/app/document-session-coordinator";
 import type { SerializedCollabVersionVector } from "@/lib/collaboration/collab-browser-store";
 import {
   acknowledgeCollabDocumentSourceSaved,
@@ -40,8 +41,8 @@ type UseWorkspaceSaveActionsOptions = {
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   cleanValueRef: MutableRef<string>;
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
-  collabSyncCleanupRef: MutableRef<() => void>;
   dirtyRef: MutableRef<boolean>;
+  documentSessions: WorkspaceDocumentSessionController;
   editVersionRef: MutableRef<number>;
   editorValueRef: MutableRef<string>;
   saveOperationRef: MutableRef<number>;
@@ -71,8 +72,8 @@ export function useWorkspaceSaveActions({
   autoSaveTaskRef,
   cleanValueRef,
   collabDocumentRef,
-  collabSyncCleanupRef,
   dirtyRef,
+  documentSessions,
   editVersionRef,
   editorValueRef,
   saveOperationRef,
@@ -107,13 +108,18 @@ export function useWorkspaceSaveActions({
   );
 
   let saveCurrentFile = useCallback(async () => {
-    let source = selectedFileSourceRef.current;
-    let file = selectedFileRef.current;
+    let activeSession = documentSessions.current();
+    let compatibilityTargetAvailable = collabDocumentRef.current == null;
+    let source =
+      activeSession?.runtime ??
+      (compatibilityTargetAvailable ? selectedFileSourceRef.current : null);
+    let file =
+      activeSession?.file ?? (compatibilityTargetAvailable ? selectedFileRef.current : null);
     if (!source || !file) return true;
     let runtime = isWorkspaceDocumentSource(source) ? source : null;
-    let documentGeneration = activeDocumentGenerationRef.current;
+    let documentGeneration = activeSession?.epoch ?? activeDocumentGenerationRef.current;
 
-    let selectedDocument = collabDocumentRef.current;
+    let selectedDocument = activeSession?.collabDocument ?? collabDocumentRef.current;
     let document = selectedDocument?.path == file.path ? selectedDocument : null;
     let value = document ? getCollabDocumentValue(document) : editorValueRef.current;
     let editVersion = editVersionRef.current;
@@ -130,9 +136,11 @@ export function useWorkspaceSaveActions({
     let operation = ++saveOperationRef.current;
     let isCurrentSaveTarget = () =>
       operation == saveOperationRef.current &&
-      documentGeneration == activeDocumentGenerationRef.current &&
-      selectedFileSourceRef.current === source &&
-      selectedFileRef.current === file;
+      (activeSession
+        ? documentSessions.isActive(activeSession)
+        : documentGeneration == activeDocumentGenerationRef.current &&
+          selectedFileSourceRef.current === source &&
+          selectedFileRef.current === file);
     let markCurrentTargetSaved = () => {
       if (!isCurrentSaveTarget()) return;
       cleanValueRef.current = value;
@@ -285,6 +293,7 @@ export function useWorkspaceSaveActions({
     clearPendingSaveTimer,
     collabDocumentRef,
     dirtyRef,
+    documentSessions,
     editVersionRef,
     editorValueRef,
     saveOperationRef,
@@ -606,7 +615,7 @@ export function useWorkspaceSaveActions({
 
   let bindCollabDocumentBroadcast = useCallback(
     (runtime: WorkspaceRuntime, document: CollabDocumentState) => {
-      collabSyncCleanupRef.current = createCollabDocumentBroadcastSync({
+      return createCollabDocumentBroadcastSync({
         doc: document.doc,
         docId: document.docId,
         identity: runtime.identity,
@@ -615,7 +624,7 @@ export function useWorkspaceSaveActions({
         },
       });
     },
-    [collabSyncCleanupRef, handleRemoteCollabDocumentUpdate],
+    [handleRemoteCollabDocumentUpdate],
   );
 
   let handleEditorInput = useCallback(

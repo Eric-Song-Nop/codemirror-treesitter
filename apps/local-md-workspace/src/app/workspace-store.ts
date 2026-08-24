@@ -14,6 +14,11 @@ import type { EditorDocument, SaveState, SingleFileSource } from "@/lib/workspac
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
+export type WorkspaceDocumentOpening = {
+  intentId: number;
+  path: string;
+};
+
 export type WorkspaceAppSnapshot = {
   agentActivated: boolean;
   agentOpen: boolean;
@@ -22,6 +27,7 @@ export type WorkspaceAppSnapshot = {
   dropboxConnecting: boolean;
   editorDocument: EditorDocument;
   errorMessage: string;
+  openingDocument: WorkspaceDocumentOpening | null;
   recoveryCopyPath: string;
   recoveryDialogAction: DocumentRecoveryAction | null;
   recoveryDialogError: string;
@@ -113,19 +119,28 @@ export function createWorkspaceAppSetters(store: WorkspaceAppStore): WorkspaceAp
   };
 }
 
-export function beginWorkspaceDocumentTransition(store: WorkspaceAppStore, path = "") {
+export function publishWorkspaceDocumentOpening(
+  store: WorkspaceAppStore,
+  opening: WorkspaceDocumentOpening,
+  activeValue?: string,
+) {
   store.setState((state) => ({
-    collabDocument: null,
-    editorDocument: {
-      path,
-      value: "",
-      version: state.editorDocument.version + 1,
-    },
-    selectedFile: null,
+    editorDocument:
+      activeValue == null ? state.editorDocument : { ...state.editorDocument, value: activeValue },
+    openingDocument: opening,
   }));
 }
 
-export function clearWorkspaceDocumentView(store: WorkspaceAppStore) {
+export function clearWorkspaceDocumentOpening(store: WorkspaceAppStore, intentId: number) {
+  store.setState((state) =>
+    state.openingDocument?.intentId == intentId ? { openingDocument: null } : state,
+  );
+}
+
+export function clearWorkspaceDocumentView(
+  store: WorkspaceAppStore,
+  options: { preserveOpening?: boolean } = {},
+) {
   store.setState((state) => ({
     collabDocument: null,
     editorDocument: {
@@ -133,6 +148,7 @@ export function clearWorkspaceDocumentView(store: WorkspaceAppStore) {
       value: "",
       version: state.editorDocument.version + 1,
     },
+    openingDocument: options.preserveOpening ? state.openingDocument : null,
     saveState: "idle",
     selectedFile: null,
     singleFileSource: null,
@@ -155,6 +171,7 @@ export function publishSingleFileDocumentView(
       value: input.value,
       version: state.editorDocument.version + 1,
     },
+    openingDocument: null,
     saveState: "saved",
     selectedFile: input.file,
     singleFileSource: input.singleFileSource,
@@ -178,6 +195,7 @@ export function publishWorkspaceDocumentView(
       value: input.value,
       version: state.editorDocument.version + 1,
     },
+    openingDocument: null,
     saveState: input.saveState,
     selectedFile: input.file,
     singleFileSource: null,
@@ -205,6 +223,7 @@ export function publishCollabDocumentView(
       value: input.value,
       version: state.editorDocument.version + 1,
     },
+    openingDocument: null,
     saveState: input.saveState,
   }));
 }
@@ -218,6 +237,7 @@ function createInitialWorkspaceAppSnapshot(): WorkspaceAppSnapshot {
     dropboxConnecting: false,
     editorDocument: { path: "", value: "", version: 0 },
     errorMessage: "",
+    openingDocument: null,
     recoveryCopyPath: "",
     recoveryDialogAction: null,
     recoveryDialogError: "",

@@ -1,5 +1,6 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import type { WorkspaceDocumentIntentLease } from "@/app/document-session-coordinator";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import type { AccessFileHandle } from "@/lib/workspace/file-system";
 import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace/store";
@@ -30,8 +31,8 @@ type UseWorkspaceTreeOptions = {
   loadFile: (
     runtime: WorkspaceRuntime,
     file: MarkdownFileNode,
-    options?: { saveCurrent?: boolean },
-  ) => Promise<void>;
+    options?: { intent?: WorkspaceDocumentIntentLease; saveCurrent?: boolean },
+  ) => Promise<boolean>;
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
   selectedFileSourceRef: MutableRef<ActiveDocumentSource | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
@@ -57,7 +58,10 @@ export function useWorkspaceTree({
     async (
       runtime: WorkspaceRuntime,
       nextSelectedPath?: null | string,
-      options: { saveBeforeSelect?: boolean } = {},
+      options: {
+        documentIntent?: WorkspaceDocumentIntentLease;
+        saveBeforeSelect?: boolean;
+      } = {},
     ) => {
       documentTargetGenerationRef.current += 1;
       let nextTree = await loadSelectedPathAncestors(
@@ -72,6 +76,7 @@ export function useWorkspaceTree({
 
       if (nextSelectedFile) {
         await loadFile(runtime, nextSelectedFile, {
+          intent: options.documentIntent,
           saveCurrent: options.saveBeforeSelect ?? true,
         });
         return;
