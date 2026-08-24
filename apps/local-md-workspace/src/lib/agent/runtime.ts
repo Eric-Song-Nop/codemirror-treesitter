@@ -1,4 +1,7 @@
-import type { WorkspaceAgentRunInput, WorkspaceAgentRunResult } from "./runtime-contracts.ts";
+import type { WorkspaceAgentRunResult } from "./application/run-contracts.ts";
+import type { OpenAIWorkspaceAgentRunInput } from "./providers/openai/config.ts";
+
+export type WorkspaceAgentRunInput = OpenAIWorkspaceAgentRunInput;
 
 export async function runWorkspaceAgent(
   input: WorkspaceAgentRunInput,

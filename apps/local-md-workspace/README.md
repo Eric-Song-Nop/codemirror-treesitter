@@ -94,12 +94,18 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   relay protocol/client/connection, share storage, Markdown hashing, and
   document sync helpers. `markdown-document.ts` is a lightweight facade; it loads
   `markdown-document-runtime.ts` only when a file is opened.
-- `src/lib/agent/*`: SDK-independent workspace tool contracts and limits,
-  active-document version checks, the CodeMirror edit bridge, the lazy runtime
-  facade, the safe AI SDK UI transport, and the Vercel AI SDK/OpenAI adapter.
-- `src/hooks/agent/*` and `src/components/workspace/WorkspaceAgent*`: the
-  run-scoped capability, AI SDK UI `useChat` controller, and shadcn-based panel;
-  component tests use `@shadcn/helpers/ai-sdk` fixtures.
+- `src/lib/agent/domain` and `src/lib/agent/application`: SDK-independent tool
+  contracts, budgets, host/run ports, policies, workspace read/search use cases,
+  and the run-scoped idempotency/retry session.
+- `src/lib/agent/adapters/{workspace,ai-sdk}` and
+  `src/lib/agent/providers/openai`: the CodeMirror/WorkspaceRuntime host, AI SDK
+  schemas and `ToolLoopAgent` runner, and the isolated OpenAI model binding.
+  Root `runtime.ts` and `ai-sdk-runtime.ts` remain the two small composition
+  facades that preserve demand loading.
+- `src/features/workspace-agent`: the lazy React feature, run-host hook, safe AI
+  SDK chat transport, controller, panel, and their component tests. The pure
+  ref-to-host binding stays in the workspace adapter so browser smoke tests do
+  not import React hooks.
 - `src/components/ui/*`: local shadcn/radix UI primitives.
 - `scripts/dev.mjs`: starts the local Grove relay when needed, then starts the
   frontend with `VITE_LOCAL_MD_SHARE_RELAY_ORIGIN`.

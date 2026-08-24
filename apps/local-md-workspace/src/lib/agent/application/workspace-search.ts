@@ -4,12 +4,14 @@ import type {
   WorkspaceIdentity,
   WorkspaceTreePort,
   WorkspaceTextSnapshot,
-} from "../workspace/runtime/types.ts";
-import type { SourceObservation } from "../workspace/storage/types.ts";
+} from "../../workspace/runtime/types.ts";
+import type { SourceObservation } from "../../workspace/storage/types.ts";
 import { awaitWorkspaceAgentOperation, throwIfWorkspaceAgentAborted } from "./abort.ts";
-import { workspaceAgentActiveDocumentVersion } from "./active-document.ts";
+import {
+  workspaceAgentActiveDocumentVersion,
+  type WorkspaceAgentActiveDocument,
+} from "../domain/active-document.ts";
 import type {
-  WorkspaceAgentActiveDocument,
   WorkspaceAgentDocumentSource,
   WorkspaceAgentIssue,
   WorkspaceAgentReadMarkdownInput,
@@ -18,8 +20,8 @@ import type {
   WorkspaceAgentSearchMatch,
   WorkspaceAgentSearchResult,
   WorkspaceAgentSearchTruncationReason,
-} from "./contracts.ts";
-import type { WorkspaceAgentLimits } from "./limits.ts";
+} from "../domain/contracts.ts";
+import type { WorkspaceAgentLimits } from "../domain/limits.ts";
 import {
   collectWorkspaceMarkdownCatalog,
   compareWorkspaceAgentPaths,

@@ -5,16 +5,16 @@ import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import {
   createWorkspaceAgentRunHost,
   type WorkspaceAgentHostRefs,
-} from "../src/hooks/agent/useWorkspaceAgentHost.ts";
+} from "../src/lib/agent/adapters/workspace/run-host.ts";
 import {
   getCollabDocumentValue,
   openMarkdownCollabDocument,
   savePendingCollabDocumentUpdates,
   type CollabDocumentState,
 } from "../src/lib/collaboration/markdown-document.ts";
-import { runWorkspaceAgentWithLanguageModel } from "../src/lib/agent/ai-sdk-runtime.ts";
-import type { WorkspaceAgentApplyCurrentDocumentEditsResult } from "../src/lib/agent/contracts.ts";
-import type { WorkspaceAgentRunEvent } from "../src/lib/agent/runtime-contracts.ts";
+import { runWorkspaceAgentWithAiSdkModel } from "../src/lib/agent/adapters/ai-sdk/runner.ts";
+import type { WorkspaceAgentRunEvent } from "../src/lib/agent/application/run-contracts.ts";
+import type { WorkspaceAgentApplyCurrentDocumentEditsResult } from "../src/lib/agent/domain/contracts.ts";
 import { createMemoryWorkspaceRuntime } from "../src/test/memory-workspace-runtime.ts";
 
 export type WorkspaceAgentBrowserIntegrationResult = {
@@ -112,14 +112,13 @@ export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAg
       ],
     });
 
-    let result = await runWorkspaceAgentWithLanguageModel(
+    let result = await runWorkspaceAgentWithAiSdkModel(
       {
         host,
         messages: [{ content: "Replace before with after.", role: "user" }],
-        modelId: model.modelId,
         onEvent: (event) => events.push(event),
       },
-      model,
+      { model, modelId: model.modelId },
     );
     await flushMicrotasks();
 

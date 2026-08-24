@@ -20,10 +20,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { TooltipIconButton } from "@/components/workspace/TooltipIconButton";
-import type { WorkspaceAgentRunStatus } from "@/hooks/agent/useWorkspaceAgent";
-import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/runtime-contracts";
+import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/providers/openai/config";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { isMobileSidebarViewport } from "@/lib/workspace/constants";
+import type { WorkspaceAgentRunStatus } from "./useWorkspaceAgent";
 
 type WorkspaceAgentPanelProps = {
   error: string | null;

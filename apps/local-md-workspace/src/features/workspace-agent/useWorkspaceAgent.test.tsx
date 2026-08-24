@@ -4,12 +4,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
-import {
-  DEFAULT_WORKSPACE_AGENT_MODEL,
-  type WorkspaceAgentRunInput,
-  type WorkspaceAgentRunResult,
-} from "@/lib/agent/runtime-contracts";
-import type { WorkspaceAgentHost } from "@/lib/agent/workspace-agent-host";
+import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
+import type { WorkspaceAgentRunResult } from "@/lib/agent/application/run-contracts";
+import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/providers/openai/config";
+import type { WorkspaceAgentRunInput } from "@/lib/agent/runtime";
 import {
   useWorkspaceAgent,
   type UseWorkspaceAgentOptions,
@@ -70,6 +68,22 @@ describe("useWorkspaceAgent", () => {
 
     act(() => currentApi?.configure({ apiKey: "" }));
     expect(currentApi?.hasApiKey).toBe(false);
+  });
+
+  it("redacts credentials from runner failures at the UI boundary", async () => {
+    let runner: WorkspaceAgentRunner = async () => {
+      throw new Error("Provider response exposed sk-secret.");
+    };
+    await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
+    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
+
+    await act(async () => {
+      expect(await currentApi?.send("Fail safely", () => host)).toBe(false);
+    });
+
+    expect(currentApi?.error).toBe("Provider response exposed [redacted].");
+    expect(currentApi?.status).toBe("error");
+    expect(JSON.stringify(currentApi)).not.toContain("sk-secret");
   });
 
   it("stores AI SDK message parts while exposing only safe tool activity", async () => {

@@ -1,17 +1,14 @@
-import { useCallback } from "react";
 import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import {
   getCollabDocumentValue,
   type CollabDocumentState,
-} from "@/lib/collaboration/markdown-document";
-import {
-  createWorkspaceAgentHost,
-  type WorkspaceAgentHost,
-} from "@/lib/agent/workspace-agent-host";
-import type { ActiveDocumentSource, SingleFileSource } from "@/lib/workspace/types";
-import type { MarkdownFileNode } from "@/lib/workspace/tree";
-import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
-import { workspaceNamespace } from "@/lib/workspace/source-identity";
+} from "../../../collaboration/markdown-document.ts";
+import type { WorkspaceAgentHost } from "../../application/host-port.ts";
+import type { WorkspaceRuntime } from "../../../workspace/runtime/types.ts";
+import { workspaceNamespace } from "../../../workspace/source-identity.ts";
+import type { MarkdownFileNode } from "../../../workspace/tree.ts";
+import type { ActiveDocumentSource, SingleFileSource } from "../../../workspace/types.ts";
+import { createWorkspaceAgentHost } from "./host.ts";
 
 type MutableRef<T> = {
   current: T;
@@ -31,54 +28,6 @@ export type WorkspaceAgentHostRefs = {
 };
 
 export type CreateWorkspaceAgentRunHost = () => WorkspaceAgentHost | null;
-
-/**
- * Returns a stable factory. Calling it starts a new workspace-bound Agent run.
- * The refs stay live so an identity switch disables writes without treating
- * ordinary document edits as a switch.
- */
-export function useWorkspaceAgentHost(input: WorkspaceAgentHostRefs): CreateWorkspaceAgentRunHost {
-  let {
-    activeDocumentGenerationRef,
-    collabDocumentRef,
-    dirtyRef,
-    documentTargetGenerationRef,
-    editorElementRef,
-    editVersionRef,
-    selectedFileSourceRef,
-    selectedFileRef,
-    singleFileSourceRef,
-    workspaceRuntimeRef,
-  } = input;
-
-  return useCallback(
-    () =>
-      createWorkspaceAgentRunHost({
-        activeDocumentGenerationRef,
-        collabDocumentRef,
-        dirtyRef,
-        documentTargetGenerationRef,
-        editorElementRef,
-        editVersionRef,
-        selectedFileSourceRef,
-        selectedFileRef,
-        singleFileSourceRef,
-        workspaceRuntimeRef,
-      }),
-    [
-      activeDocumentGenerationRef,
-      collabDocumentRef,
-      dirtyRef,
-      documentTargetGenerationRef,
-      editorElementRef,
-      editVersionRef,
-      selectedFileSourceRef,
-      selectedFileRef,
-      singleFileSourceRef,
-      workspaceRuntimeRef,
-    ],
-  );
-}
 
 export function createWorkspaceAgentRunHost(
   input: WorkspaceAgentHostRefs,

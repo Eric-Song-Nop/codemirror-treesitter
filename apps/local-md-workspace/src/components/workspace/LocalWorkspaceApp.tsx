@@ -68,7 +68,7 @@ import {
 const emptyLiveMdConfig: LiveMdConfig = {};
 const emptyLiveMdPlugins: NonNullable<LiveMdConfig["plugins"]> = [];
 const WorkspaceAgentFeature = lazy(async () => {
-  let module = await import("@/components/workspace/WorkspaceAgentFeature");
+  let module = await import("@/features/workspace-agent/WorkspaceAgentFeature");
   return { default: module.WorkspaceAgentFeature };
 });
 

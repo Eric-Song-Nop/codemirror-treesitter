@@ -1,13 +1,13 @@
-import type { MarkdownDirectoryNode, MarkdownTreeNode } from "../workspace/tree.ts";
-import type { WorkspaceTreePort } from "../workspace/runtime/types.ts";
+import type { MarkdownDirectoryNode, MarkdownTreeNode } from "../../workspace/tree.ts";
+import type { WorkspaceTreePort } from "../../workspace/runtime/types.ts";
 import { awaitWorkspaceAgentOperation, throwIfWorkspaceAgentAborted } from "./abort.ts";
 import type {
   WorkspaceAgentCatalogResult,
   WorkspaceAgentCatalogTruncationReason,
   WorkspaceAgentIssue,
   WorkspaceAgentMarkdownFile,
-} from "./contracts.ts";
-import type { WorkspaceAgentLimits } from "./limits.ts";
+} from "../domain/contracts.ts";
+import type { WorkspaceAgentLimits } from "../domain/limits.ts";
 
 type CatalogLimits = WorkspaceAgentLimits["catalog"];
 

@@ -1,9 +1,9 @@
 import { useChat } from "@ai-sdk/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
+import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/providers/openai/config";
 import { runWorkspaceAgent } from "@/lib/agent/runtime";
-import { createWorkspaceAgentChatTransport } from "@/lib/agent/ui-transport";
-import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/runtime-contracts";
-import type { WorkspaceAgentHost } from "@/lib/agent/workspace-agent-host";
+import { createWorkspaceAgentChatTransport } from "./chat-transport";
 
 export type WorkspaceAgentErrorCode = "missing-api-key" | "missing-prompt" | "missing-workspace";
 

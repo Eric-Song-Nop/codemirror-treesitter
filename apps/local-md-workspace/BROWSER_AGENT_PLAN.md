@@ -65,19 +65,23 @@ The MVP excludes:
 ## Architecture
 
 ```text
-WorkspaceAgentFeature / WorkspaceAgentPanel (shadcn/ui)
-        |
-        v
-useWorkspaceAgent / AI SDK UI useChat
+features/workspace-agent
+- WorkspaceAgentFeature / WorkspaceAgentPanel (shadcn/ui)
+- useWorkspaceAgent / AI SDK UI useChat
 - safe UIMessage state / cancellation / transport
         |
-        v (dynamic import)
-AI SDK adapter
-- ToolLoopAgent / OpenAI provider / schemas / run budgets
+        v (runtime.ts dynamic import)
+lib/agent/ai-sdk-runtime.ts composition root
+- providers/openai model binding
+- adapters/ai-sdk ToolLoopAgent runner / schemas
         |
         v
-WorkspaceAgentHost
-- provider-neutral tools and active-document capability
+application run-scoped tool session
+- SDK-independent call idempotency / stale-edit retry policy
+        |
+        v
+application host port / adapters/workspace
+- provider-neutral tools / workspace and active-editor capabilities
         |
         +-- WorkspaceRuntime tree/documents --> OpenDAL
         |
@@ -90,10 +94,12 @@ WorkspaceAgentHost
 
 The panel, controller, transport, and SDK adapter never receive a raw OpenDAL
 operator, `FileSystemHandle`, storage OAuth token, or mutable `LoroDoc` handle.
-The workspace host owns those capabilities. Workspace paths and Markdown are
-untrusted model input; the transport strips raw tool IDs, inputs, and outputs
-from `UIMessage` state. Agent UI and model code remain separate demand-loaded
-chunks outside the launcher static closure.
+The workspace host owns those capabilities. The SDK-independent tool session is
+created for each run and owns call-id deduplication and stale-edit retry state;
+an SDK adapter only supplies schemas and execution metadata. Workspace paths
+and Markdown are untrusted model input; the transport strips raw tool IDs,
+inputs, and outputs from `UIMessage` state. Agent UI and model code remain
+separate demand-loaded chunks outside the launcher static closure.
 
 ## Tool Contract
 
