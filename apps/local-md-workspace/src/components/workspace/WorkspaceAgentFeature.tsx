@@ -33,7 +33,6 @@ export function WorkspaceAgentFeature({
     messages,
     model,
     newChat,
-    running,
     send,
     stop,
     status,
@@ -62,7 +61,6 @@ export function WorkspaceAgentFeature({
       messages={messages}
       model={model}
       open={open}
-      running={running}
       runStatus={status}
       toolActivity={toolActivity}
       workspaceAvailable={workspaceAvailable}

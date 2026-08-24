@@ -21,6 +21,7 @@ import type {
   WorkspaceAgentToolActivity,
   WorkspaceAgentToolStatus,
 } from "@/hooks/agent/useWorkspaceAgent";
+import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/runtime-contracts";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { isMobileSidebarViewport } from "@/lib/workspace/constants";
@@ -31,7 +32,6 @@ type WorkspaceAgentPanelProps = {
   messages: readonly WorkspaceAgentControllerMessage[];
   model: string;
   open: boolean;
-  running: boolean;
   runStatus: WorkspaceAgentRunStatus;
   toolActivity: readonly WorkspaceAgentToolActivity[];
   workspaceAvailable: boolean;
@@ -48,7 +48,6 @@ export function WorkspaceAgentPanel({
   messages,
   model,
   open,
-  running,
   runStatus,
   toolActivity,
   workspaceAvailable,
@@ -82,7 +81,11 @@ export function WorkspaceAgentPanel({
       : keyInputRef.current;
     let frame = requestAnimationFrame(() => focusTarget?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [hasApiKey, open, workspaceAvailable]);
+  }, [hasApiKey, mobile, open, workspaceAvailable]);
+
+  useEffect(() => {
+    if (open) followOutputRef.current = true;
+  }, [open]);
 
   useEffect(() => {
     if (!open || !followOutputRef.current || (!messages.length && !toolActivity.length && !error))
@@ -92,6 +95,7 @@ export function WorkspaceAgentPanel({
 
   if (!open) return null;
 
+  let running = runStatus == "running";
   let submitPrompt = async () => {
     let value = prompt.trim();
     if (!value || running || !hasApiKey || !workspaceAvailable) return;
@@ -134,6 +138,9 @@ export function WorkspaceAgentPanel({
         onEscapeKeyDown={(event) => {
           if (event.isComposing) event.preventDefault();
         }}
+        onInteractOutside={(event) => {
+          if (!mobile) event.preventDefault();
+        }}
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
         <div
@@ -163,6 +170,7 @@ export function WorkspaceAgentPanel({
               size="icon-sm"
               variant="ghost"
               onClick={() => {
+                followOutputRef.current = true;
                 onNewChat();
                 setPrompt("");
               }}
@@ -211,7 +219,7 @@ export function WorkspaceAgentPanel({
                       </div>
                       <div className="wrap-break-word whitespace-pre-wrap">{message.content}</div>
                       {running && message.role == "assistant" && !message.content ? (
-                        <Spinner className="size-3.5 text-muted-foreground" />
+                        <Spinner aria-hidden className="size-3.5 text-muted-foreground" />
                       ) : null}
                     </article>
                   ))}
@@ -267,10 +275,17 @@ export function WorkspaceAgentPanel({
                 <Input
                   ref={modelInputRef}
                   id="workspace-agent-model"
+                  name="workspace-agent-model"
                   defaultValue={model}
                   disabled={running}
+                  autoComplete="off"
                   spellCheck={false}
-                  onBlur={(event) => onConfigure({ model: event.currentTarget.value })}
+                  onBlur={(event) => {
+                    let nextModel =
+                      event.currentTarget.value.trim() || DEFAULT_WORKSPACE_AGENT_MODEL;
+                    event.currentTarget.value = nextModel;
+                    onConfigure({ model: nextModel });
+                  }}
                 />
               </label>
               {hasApiKey ? (
@@ -340,6 +355,7 @@ export function WorkspaceAgentPanel({
                 <textarea
                   ref={promptRef}
                   id="workspace-agent-prompt"
+                  name="workspace-agent-prompt"
                   className="min-h-20 max-h-40 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                   value={prompt}
                   disabled={!workspaceAvailable || running}
@@ -382,7 +398,7 @@ export function WorkspaceAgentPanel({
 }
 
 function ToolStatusIcon({ status }: { status: WorkspaceAgentToolStatus }) {
-  if (status == "running") return <Spinner className="size-3" />;
+  if (status == "running") return <Spinner aria-hidden className="size-3" />;
   if (status == "error") return <CircleAlertIcon className="size-3 text-destructive" aria-hidden />;
   if (status == "cancelled")
     return <SquareIcon className="size-3 text-muted-foreground" aria-hidden />;

@@ -1,5 +1,6 @@
 import type {
   WorkspaceDocumentPort,
+  WorkspaceEntryPort,
   WorkspaceIdentity,
   WorkspaceTreePort,
   WorkspaceTextSnapshot,
@@ -31,6 +32,7 @@ import {
 
 export type WorkspaceAgentReadRuntime = {
   documents: WorkspaceDocumentPort;
+  entries?: Pick<WorkspaceEntryPort, "probe">;
   identity: WorkspaceIdentity;
   tree: WorkspaceTreePort;
 };
@@ -149,6 +151,7 @@ export async function searchWorkspaceMarkdown(input: {
     workspaceAgentPathIsWithinDirectory(activeDocument.path, directory) &&
     !files.some((file) => file.path == activeDocument.path)
   ) {
+    if (files.length >= input.limits.search.maxFiles) files.pop();
     files.push({
       name: activeDocument.path.split("/").at(-1)!,
       path: activeDocument.path,
@@ -172,7 +175,13 @@ export async function searchWorkspaceMarkdown(input: {
     let batch = files.slice(offset, offset + concurrency);
     let observations = await Promise.all(
       batch.map((file) =>
-        readSearchDocument(file.path, activeDocument, input.runtime.documents, input.signal),
+        readSearchDocument(
+          file.path,
+          activeDocument,
+          input.runtime,
+          input.limits.search.maxFileBytes,
+          input.signal,
+        ),
       ),
     );
 
@@ -187,6 +196,11 @@ export async function searchWorkspaceMarkdown(input: {
       }
       if (observation.kind == "missing") {
         issues.push({ message: "The file disappeared while searching.", path: file.path });
+        continue;
+      }
+      if (observation.kind == "too-large") {
+        skippedLargeFiles++;
+        truncationReason ??= "max-file-bytes";
         continue;
       }
       if (observation.bytes > input.limits.search.maxFileBytes) {
@@ -232,12 +246,14 @@ export async function searchWorkspaceMarkdown(input: {
 type SearchDocumentResult =
   | { bytes: number; kind: "found"; value: string }
   | { kind: "missing" }
+  | { kind: "too-large" }
   | { issue: WorkspaceAgentIssue; kind: "issue" };
 
 async function readSearchDocument(
   path: string,
   activeDocument: WorkspaceAgentActiveDocument | null,
-  documents: WorkspaceDocumentPort,
+  runtime: WorkspaceAgentReadRuntime,
+  maxFileBytes: number,
   signal?: AbortSignal,
 ): Promise<SearchDocumentResult> {
   if (activeDocument?.path == path) {
@@ -248,7 +264,16 @@ async function readSearchDocument(
     };
   }
   try {
-    let observation = await awaitWorkspaceAgentOperation(documents.observe(path), signal);
+    if (runtime.entries) {
+      let probe = await awaitWorkspaceAgentOperation(runtime.entries.probe(path), signal);
+      if (probe.state == "missing") return { kind: "missing" };
+      if (probe.state == "unavailable") {
+        return { issue: issueFromError(path, probe.error), kind: "issue" };
+      }
+      if ((probe.value.metadata.size ?? 0) > maxFileBytes) return { kind: "too-large" };
+    }
+
+    let observation = await awaitWorkspaceAgentOperation(runtime.documents.observe(path), signal);
     if (observation.state == "missing") return { kind: "missing" };
     if (observation.state == "unavailable") {
       return { issue: issueFromError(path, observation.error), kind: "issue" };

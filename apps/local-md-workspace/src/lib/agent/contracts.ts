@@ -24,8 +24,7 @@ export type WorkspaceAgentActiveDocumentVersion = {
   workspaceId: string;
 };
 
-export type WorkspaceAgentActiveEditor = Omit<WorkspaceAgentActiveDocument, "value"> & {
-  value: string;
+export type WorkspaceAgentActiveEditor = WorkspaceAgentActiveDocument & {
   view: EditorView;
 };
 

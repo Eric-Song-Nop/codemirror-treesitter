@@ -39,7 +39,7 @@ type ResolveWorkspaceAgentTextEditsResult =
       status: "not-resolved";
     };
 
-export function resolveWorkspaceAgentTextEdits(input: {
+function resolveWorkspaceAgentTextEdits(input: {
   baseValue: string;
   edits: readonly WorkspaceAgentTextEdit[];
   maxOutputBytes: number;

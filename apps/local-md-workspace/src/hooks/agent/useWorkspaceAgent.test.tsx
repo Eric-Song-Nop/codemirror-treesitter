@@ -200,6 +200,34 @@ describe("useWorkspaceAgent", () => {
     expect(currentApi?.messages.at(-1)?.content).toBe("Partial");
   });
 
+  it("keeps one coherent running status during configuration and duplicate sends", async () => {
+    let deferred = createDeferred<WorkspaceAgentRunResult>();
+    let runner = vi.fn<WorkspaceAgentRunner>(() => deferred.promise);
+    await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
+    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
+
+    let sendPromise!: Promise<boolean>;
+    await act(async () => {
+      sendPromise = currentApi!.send("First", () => host);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      currentApi?.configure({ model: "gpt-next" });
+      expect(await currentApi?.send("", () => host)).toBe(false);
+    });
+
+    expect(currentApi?.model).toBe("gpt-next");
+    expect(currentApi?.error).toBeNull();
+    expect(currentApi?.running).toBe(true);
+    expect(currentApi?.status).toBe("running");
+    expect(runner).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      deferred.resolve(completedRun("Done"));
+      expect(await sendPromise).toBe(true);
+    });
+  });
+
   it("clears the conversation for a new workspace or new chat and reports missing hosts", async () => {
     let runner = vi.fn<WorkspaceAgentRunner>(async () => completedRun("Answer"));
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });

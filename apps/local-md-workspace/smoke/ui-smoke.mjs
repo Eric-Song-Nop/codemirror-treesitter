@@ -14,6 +14,8 @@ const dropboxAccessToken =
 const dropboxRoot =
   process.env.LOCAL_MD_WORKSPACE_DROPBOX_ROOT || process.env.OPENDAL_DROPBOX_ROOT || "";
 const shareRelayOrigin = process.env.VITE_LOCAL_MD_SHARE_RELAY_ORIGIN || "";
+const agentOnly =
+  process.argv.includes("--agent-only") || process.env.LOCAL_MD_WORKSPACE_SMOKE_AGENT_ONLY == "1";
 const liveMdBoundariesOnly = process.env.LOCAL_MD_WORKSPACE_SMOKE_LIVE_MD_BOUNDARIES_ONLY == "1";
 
 let chromePath = findChromePath();
@@ -61,7 +63,14 @@ try {
   await client.send("Runtime.enable", {}, sessionId);
   if (!liveMdBoundariesOnly) await installMockFileSystemAccess(client, sessionId);
 
-  if (liveMdBoundariesOnly) {
+  if (agentOnly) {
+    await assertWorkspaceAgentBrowserIntegration(client);
+    await navigate(client, sessionId, SMOKE_URL);
+    await openMockLocalWorkspace(client, sessionId);
+    await assertAgentApiKeyMemoryOnly(client, sessionId);
+    await client.send("Browser.close");
+    console.log(`Browser Agent UI smoke passed at ${SMOKE_URL}`);
+  } else if (liveMdBoundariesOnly) {
     await waitForLoadedPage(client, sessionId, SMOKE_URL);
     console.log("Focused smoke loaded the test page.");
     await mountFocusedLiveMdEditor(client, sessionId);
@@ -69,6 +78,7 @@ try {
     await assertLiveMdUiRegressions(client, sessionId);
     console.log(`LiveMD browser regression smoke passed at ${SMOKE_URL}`);
   } else {
+    await assertWorkspaceAgentBrowserIntegration(client);
     await navigate(client, sessionId, SMOKE_URL);
     await assertGitHubRepositoryLink(client, sessionId);
     await assertLocalWorkspaceFlow(client, sessionId);
@@ -258,6 +268,7 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
   );
 
   await waitForLocalWorkspaceReady(client, sessionId);
+  await assertAgentApiKeyMemoryOnly(client, sessionId);
 
   await clickNewFileButton(client, sessionId);
   await client.waitForPredicate(
@@ -372,6 +383,167 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
   await assertSharedFileLifecycle(client, sessionId, {
     expectedValue: "# smoke local\n\nEdited by shared-file UI smoke.\n",
   });
+}
+
+async function assertWorkspaceAgentBrowserIntegration(client) {
+  let target = await attachNewTarget(client, "about:blank", {
+    isolated: true,
+    waitForLoad: false,
+  });
+  try {
+    await navigate(client, target.sessionId, SMOKE_URL);
+    let state = await client.evaluate(
+      `
+        (async () => {
+          let fixture = await import("/smoke/agent-integration.ts");
+          let result = await fixture.runWorkspaceAgentBrowserIntegration();
+          return {
+            indexedDbAvailable: typeof indexedDB != "undefined",
+            indexedDbPersistence: await inspectBrowserCollabPersistence(result.documentId),
+            localFallbackKeys: Object.keys(localStorage).filter((key) =>
+              key.includes(result.documentId)
+            ),
+            result
+          };
+
+          async function inspectBrowserCollabPersistence(documentId) {
+            let databases = await indexedDB.databases();
+            if (!databases.some((database) => database.name == "local-md-workspace-collab")) {
+              return { document: false, updates: 0 };
+            }
+
+            return new Promise((resolve, reject) => {
+              let request = indexedDB.open("local-md-workspace-collab");
+              request.onerror = () => reject(request.error ?? new Error("IndexedDB open failed."));
+              request.onblocked = () => reject(new Error("IndexedDB open was blocked."));
+              request.onsuccess = () => {
+                let database = request.result;
+                let transaction = database.transaction(["documents", "updates"], "readonly");
+                let documentRequest = transaction.objectStore("documents").get(documentId);
+                let updatesRequest = transaction
+                  .objectStore("updates")
+                  .index("docId")
+                  .getAll(documentId);
+                transaction.onerror = () =>
+                  reject(transaction.error ?? new Error("IndexedDB read failed."));
+                transaction.onabort = () =>
+                  reject(transaction.error ?? new Error("IndexedDB read was aborted."));
+                transaction.oncomplete = () => {
+                  database.close();
+                  resolve({
+                    document: Boolean(documentRequest.result),
+                    updates: updatesRequest.result.length
+                  });
+                };
+              };
+            });
+          }
+        })()
+      `,
+      target.sessionId,
+    );
+    let expectedValue = "# Browser Agent\n\nafter\n";
+    if (
+      !state.indexedDbAvailable ||
+      !state.indexedDbPersistence.document ||
+      state.localFallbackKeys.length != 0 ||
+      state.result.editorValue != expectedValue ||
+      state.result.loroValue != expectedValue ||
+      state.result.persistedValue != expectedValue ||
+      state.result.localUpdates != 1 ||
+      state.result.switchedWriteReason != "active-document-unavailable" ||
+      !state.result.standaloneBlocked ||
+      JSON.stringify(state.result.userEvents) != JSON.stringify(["input.agent"])
+    ) {
+      throw new Error(
+        `Browser Agent integration did not converge through IndexedDB: ${JSON.stringify(state)}`,
+      );
+    }
+  } finally {
+    await client.send("Target.closeTarget", { targetId: target.targetId }).catch(() => {});
+    if (target.browserContextId) {
+      await client
+        .send("Target.disposeBrowserContext", { browserContextId: target.browserContextId })
+        .catch(() => {});
+    }
+  }
+
+  console.log("Browser Agent fake-model integration smoke passed.");
+}
+
+async function assertAgentApiKeyMemoryOnly(client, sessionId) {
+  let secret = `sk-smoke-memory-only-${Date.now()}`;
+  await client.evaluate(
+    `
+      (() => {
+        let button = document.querySelector('button[aria-controls="workspace-agent-panel"]');
+        if (!button) throw new Error("Agent panel button was not found.");
+        button.click();
+      })()
+    `,
+    sessionId,
+  );
+  await client.waitForPredicate(
+    `Boolean(document.querySelector("#workspace-agent-api-key"))`,
+    sessionId,
+  );
+  await client.evaluate(
+    `
+      (() => {
+        let input = document.querySelector("#workspace-agent-api-key");
+        let setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        setter.call(input, ${JSON.stringify(secret)});
+        input.form.requestSubmit();
+      })()
+    `,
+    sessionId,
+  );
+  await client.waitForPredicate(
+    `!document.querySelector("#workspace-agent-api-key") && Boolean(document.querySelector("#workspace-agent-prompt"))`,
+    sessionId,
+  );
+
+  let state = await client.evaluate(
+    `
+      (() => ({
+        bodyContainsSecret: document.body.textContent.includes(${JSON.stringify(secret)}),
+        htmlContainsSecret: document.documentElement.innerHTML.includes(${JSON.stringify(secret)}),
+        localStorageContainsSecret: Object.values(localStorage).some((value) =>
+          String(value).includes(${JSON.stringify(secret)})
+        ),
+        sessionStorageContainsSecret: Object.values(sessionStorage).some((value) =>
+          String(value).includes(${JSON.stringify(secret)})
+        )
+      }))()
+    `,
+    sessionId,
+  );
+  if (Object.values(state).some(Boolean)) {
+    throw new Error(`Agent API key escaped tab memory: ${JSON.stringify(state)}`);
+  }
+
+  await client.evaluate(
+    `
+      (() => {
+        let panel = document.querySelector("#workspace-agent-panel");
+        let forget = Array.from(panel?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent.trim() == "Forget key"
+        );
+        if (!forget) throw new Error("Forget key button was not found.");
+        forget.click();
+      })()
+    `,
+    sessionId,
+  );
+  await client.waitForPredicate(
+    `Boolean(document.querySelector("#workspace-agent-api-key"))`,
+    sessionId,
+  );
+  await client.evaluate(
+    `document.querySelector('button[aria-controls="workspace-agent-panel"]')?.click()`,
+    sessionId,
+  );
+  await client.waitForPredicate(`!document.querySelector("#workspace-agent-panel")`, sessionId);
 }
 
 async function assertLiveMdUiRegressions(client, sessionId) {

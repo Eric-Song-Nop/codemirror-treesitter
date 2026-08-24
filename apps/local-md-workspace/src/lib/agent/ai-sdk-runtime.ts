@@ -149,29 +149,36 @@ export function createWorkspaceAgentTools(
   emitEvent?: (event: WorkspaceAgentRunEvent) => void,
 ) {
   let emit = emitEvent ?? (() => {});
-  let calls = new Map<string, Promise<unknown>>();
+  let calls = new Map<string, { promise: Promise<unknown>; semanticKey: string }>();
   let staleRetryPending = false;
   let staleRetriesUsed = 0;
   let execute = <OUTPUT>(
     toolName: string,
+    toolInput: unknown,
     options: ToolExecutionOptions<unknown>,
     operation: () => OUTPUT | PromiseLike<OUTPUT>,
   ): Promise<OUTPUT> => {
     options.abortSignal?.throwIfAborted();
+    let semanticKey = `${toolName}:${JSON.stringify(toolInput)}`;
     let cached = calls.get(options.toolCallId);
     if (cached) {
+      if (cached.semanticKey != semanticKey) {
+        return Promise.reject(
+          new Error(`Tool call ID ${options.toolCallId} was reused with different semantics.`),
+        );
+      }
       emit({
         toolCallId: options.toolCallId,
         toolName,
         type: "tool-deduplicated",
       });
-      return cached as Promise<OUTPUT>;
+      return cached.promise as Promise<OUTPUT>;
     }
     let pending = Promise.resolve().then(() => {
       options.abortSignal?.throwIfAborted();
       return operation();
     });
-    calls.set(options.toolCallId, pending);
+    calls.set(options.toolCallId, { promise: pending, semanticKey });
     return pending;
   };
 
@@ -180,7 +187,7 @@ export function createWorkspaceAgentTools(
       description: "Get the bound workspace identity, active document, and available capabilities.",
       inputSchema: z.object({}),
       execute: (_input, options) =>
-        execute("get_workspace_context", options, () => host.getContext()),
+        execute("get_workspace_context", _input, options, () => host.getContext()),
     }),
     list_markdown_files: tool({
       description: "List Markdown files in a workspace directory with stable cursor pagination.",
@@ -190,7 +197,7 @@ export function createWorkspaceAgentTools(
         limit: z.number().int().positive().optional(),
       }),
       execute: (input, options) =>
-        execute("list_markdown_files", options, () =>
+        execute("list_markdown_files", input, options, () =>
           host.listMarkdown(input, options.abortSignal),
         ),
     }),
@@ -203,7 +210,9 @@ export function createWorkspaceAgentTools(
         startLine: z.number().int().positive().optional(),
       }),
       execute: (input, options) =>
-        execute("read_markdown", options, () => host.readMarkdown(input, options.abortSignal)),
+        execute("read_markdown", input, options, () =>
+          host.readMarkdown(input, options.abortSignal),
+        ),
     }),
     search_markdown: tool({
       description:
@@ -214,7 +223,9 @@ export function createWorkspaceAgentTools(
         query: z.string().min(1),
       }),
       execute: (input, options) =>
-        execute("search_markdown", options, () => host.searchMarkdown(input, options.abortSignal)),
+        execute("search_markdown", input, options, () =>
+          host.searchMarkdown(input, options.abortSignal),
+        ),
     }),
     apply_current_document_edits: tool({
       description:
@@ -232,7 +243,7 @@ export function createWorkspaceAgentTools(
         version: activeDocumentVersionSchema,
       }),
       execute: (input, options) =>
-        execute("apply_current_document_edits", options, () => {
+        execute("apply_current_document_edits", input, options, () => {
           if (staleRetryPending && staleRetriesUsed >= WORKSPACE_AGENT_MAX_STALE_RETRIES) {
             return {
               message: `The run used all ${WORKSPACE_AGENT_MAX_STALE_RETRIES} stale edit retries. Start a new run after reviewing the document.`,

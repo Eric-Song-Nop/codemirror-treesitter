@@ -22,6 +22,7 @@ import {
 } from "./limits.ts";
 import {
   collectWorkspaceMarkdownCatalog,
+  compareWorkspaceAgentPaths,
   normalizeWorkspaceAgentDirectory,
 } from "./workspace-catalog.ts";
 import {
@@ -80,7 +81,7 @@ class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
           }
         : null,
       capabilities: {
-        applyCurrentDocumentEdits: Boolean(this.activeEditor),
+        applyCurrentDocumentEdits: Boolean(active),
         listMarkdown: true,
         readMarkdown: true,
         searchMarkdown: true,
@@ -117,7 +118,7 @@ class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
     let limit = Math.min(requestedLimit, this.limits.list.maxPageSize);
     let cursor = input.cursor ?? "";
     let start = cursor
-      ? catalog.files.findIndex((file) => compareCursor(file.path, cursor) > 0)
+      ? catalog.files.findIndex((file) => compareWorkspaceAgentPaths(file.path, cursor) > 0)
       : 0;
     if (start < 0) start = catalog.files.length;
     let files = catalog.files.slice(start, start + limit);
@@ -170,8 +171,4 @@ class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
 
 function positiveInteger(value: number | undefined, fallback: number) {
   return value == null || !Number.isSafeInteger(value) || value < 1 ? fallback : value;
-}
-
-function compareCursor(path: string, cursor: string) {
-  return path.localeCompare(cursor, undefined, { numeric: true, sensitivity: "base" });
 }

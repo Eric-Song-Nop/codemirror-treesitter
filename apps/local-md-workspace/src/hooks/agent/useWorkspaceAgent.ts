@@ -72,7 +72,6 @@ export function useWorkspaceAgent({
   let [toolActivity, setToolActivity] = useState<readonly WorkspaceAgentToolActivity[]>([]);
   let [error, setError] = useState<string | null>(null);
   let [errorCode, setErrorCode] = useState<WorkspaceAgentErrorCode | null>(null);
-  let [running, setRunning] = useState(false);
   let [status, setStatus] = useState<WorkspaceAgentRunStatus>("idle");
 
   let apiKeyRef = useRef("");
@@ -127,7 +126,6 @@ export function useWorkspaceAgent({
         activity.status == "running" ? { ...activity, status: "cancelled" } : activity,
       ),
     );
-    setRunning(false);
     setStatus("cancelled");
   }, [removeEmptyAssistantMessage]);
 
@@ -144,7 +142,7 @@ export function useWorkspaceAgent({
     }
     setError(null);
     setErrorCode(null);
-    setStatus("idle");
+    if (!activeRunRef.current) setStatus("idle");
   }, []);
 
   let stop = useCallback(() => cancelActiveRun(), [cancelActiveRun]);
@@ -160,6 +158,7 @@ export function useWorkspaceAgent({
 
   let send = useCallback(
     async (prompt: string, createHost: () => WorkspaceAgentHost | null) => {
+      if (activeRunRef.current) return false;
       let content = prompt.trim();
       if (!content) {
         setError(missingPromptMessage);
@@ -174,8 +173,6 @@ export function useWorkspaceAgent({
         setStatus("error");
         return false;
       }
-      if (activeRunRef.current) return false;
-
       let host = createHost();
       if (!host) {
         setError(missingWorkspaceMessage);
@@ -202,7 +199,6 @@ export function useWorkspaceAgent({
       setToolActivity([]);
       setError(null);
       setErrorCode(null);
-      setRunning(true);
       setStatus("running");
 
       let run: ActiveRun = {
@@ -242,7 +238,6 @@ export function useWorkspaceAgent({
         activeRunRef.current = null;
         cancelAgentFrame(run.frameHandle);
         updateAssistantMessage(run.assistantMessageId, result.message.content);
-        setRunning(false);
         setStatus("success");
         return true;
       } catch (runError) {
@@ -257,7 +252,6 @@ export function useWorkspaceAgent({
               : activity,
           ),
         );
-        setRunning(false);
         if (!run.abortController.signal.aborted) {
           setError(safeErrorMessage(runError, apiKey));
           setErrorCode(null);
@@ -303,7 +297,7 @@ export function useWorkspaceAgent({
     messages,
     model,
     newChat,
-    running,
+    running: status == "running",
     send,
     stop,
     status,

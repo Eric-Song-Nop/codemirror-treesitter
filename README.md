@@ -18,6 +18,9 @@ GroveMd is built for a small set of workflows that should stay simple:
   file access for real local files.
 - **Collaboration**: share a single file link through the Grove relay so guests
   can co-edit without access to the owner's local folder or cloud workspace.
+- **Browser Agent**: use your own OpenAI API key to search and read the active
+  workspace or apply version-checked edits to its open Markdown document. The
+  Agent orchestration and tools stay in the page.
 - **Instant live Markdown**: headings, tables, task lists, code fences, KaTeX,
   Mermaid, and images render inline while the document remains editable.
 
@@ -63,6 +66,10 @@ collaboration flows.
   Durable Object persistence, WebSocket sync, Wrangler, and the Cloudflare Vite
   plugin. The `collab-editor` app remains a separate Cloudflare collaboration
   demo.
+- **Browser Agent layer**: Grove uses Vercel AI SDK Core with a lazy OpenAI
+  adapter. A user-provided key remains in page memory while workspace tools
+  list, read, and search Markdown and dispatch version-checked edits through the
+  active CodeMirror/Loro document.
 
 ## Quickstart
 
@@ -112,6 +119,9 @@ await editor.ready;
   `<live-md-editor>`.
 - Optional LiveMD collaboration bindings for Loro documents, presence, custom
   text containers, and collaborative undo/redo.
+- A browser-resident Grove Markdown Agent with OpenAI BYOK, bounded workspace
+  read/search tools, streamed responses, and current-document-only edits that
+  reuse normal CodeMirror, Loro, and workspace persistence paths.
 - Validation tooling and apps that check public export parity, package
   dependency boundaries, language-data coverage, example coverage, benchmark
   coverage, and runtime behavior against official CodeMirror/Lezer packages.
@@ -161,6 +171,11 @@ this repository replace the language-aware layers above those primitives.
    guest UI, `apps/grove-relay` hosts Grove shared-file relay APIs with
    Cloudflare Durable Objects and WebSocket transport, and `apps/collab-editor`
    remains a separate shareable collaborative editor demo.
+7. **Browser Agent surface**:
+   Local MD Workspace owns a provider-neutral Agent host and a lazy Vercel AI
+   SDK/OpenAI adapter. Reads go through the active `WorkspaceRuntime`; writes
+   dispatch one version-checked CodeMirror transaction so the main Loro peer,
+   ordinary undo, and existing persistence paths remain authoritative.
 
 ## Workspace Structure
 
@@ -213,8 +228,9 @@ entry points, dependency boundaries, source layout, and validation notes.
   supports image insert/paste/drop through sibling `assets/` directories,
   supports file/folder create, rename, delete, tree browsing, and autosave, can
   export standalone HTML or open a browser print view for saving as PDF with
-  scoped LiveMD document styling, and can host or join Grove shared-file
-  sessions through `apps/grove-relay`.
+  scoped LiveMD document styling, can host or join Grove shared-file sessions
+  through `apps/grove-relay`, and includes a browser-resident OpenAI BYOK Agent
+  for workspace Markdown search/read and active-document editing.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, share create/session/rotate/revoke APIs, WebSocket Loro sync,
   bounded relay queues, share expiration cleanup, and Wrangler deploy/types
@@ -536,8 +552,10 @@ vp run @codemirror-treesitter/live-md#build
 vp run @codemirror-treesitter/opendal-wasm-browser#auth:dropbox-token
 vp run @codemirror-treesitter/opendal-wasm-browser#validate:dropbox
 vp run local-md-workspace#dev
+vp run local-md-workspace#bundle:check
 vp run local-md-workspace#i18n:check
 vp run local-md-workspace#test
+vp run local-md-workspace#smoke:agent
 vp run local-md-workspace#smoke:ui
 vp run grove-relay#dev
 vp run grove-relay#test
@@ -602,5 +620,7 @@ standard app path or the Playwright browser cache.
 - `apps/local-md-workspace/COLLABORATION_PLAN.md`: owner-backed single-file
   collaboration plan, Dropbox workspace semantics, and cleanup/implementation
   phases.
+- `apps/local-md-workspace/BROWSER_AGENT_PLAN.md`: browser Agent architecture,
+  tool and edit contracts, budgets, and exclusions.
 - This README: repository-level architecture, workspace structure, apps, and
   LiveMD web component/API reference.

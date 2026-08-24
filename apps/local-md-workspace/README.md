@@ -24,6 +24,9 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   authoritative polling fallback shared with cloud runtimes.
 - Open a command palette with `Cmd/Ctrl+Shift+P` for file navigation and core
   workspace actions.
+- Run a browser-resident Markdown Agent that can list, read, and search the
+  active local or Dropbox workspace and apply version-checked exact
+  replacements to the active workspace document.
 - Insert pasted, dropped, or selected image files into sibling `assets/`
   directories and resolve Markdown image previews through blob URLs.
 - Export Markdown files to standalone HTML through LiveMD's Tree-sitter
@@ -91,6 +94,12 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   relay protocol/client/connection, share storage, Markdown hashing, and
   document sync helpers. `markdown-document.ts` is a lightweight facade; it loads
   `markdown-document-runtime.ts` only when a file is opened.
+- `src/lib/agent/*`: SDK-independent workspace tool contracts and limits,
+  active-document version checks, the CodeMirror edit bridge, the lazy runtime
+  facade, and the Vercel AI SDK/OpenAI adapter.
+- `src/hooks/agent/*` and `src/components/workspace/WorkspaceAgent*`: the
+  run-scoped workspace capability, in-memory conversation controller, and
+  responsive Agent panel.
 - `src/components/ui/*`: local shadcn/radix UI primitives.
 - `scripts/dev.mjs`: starts the local Grove relay when needed, then starts the
   frontend with `VITE_LOCAL_MD_SHARE_RELAY_ORIGIN`.
@@ -107,9 +116,8 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   implemented browser operator, workspace object storage, explicit source
   states, path-scoped persistence, and current-document reconciliation
   contracts.
-- [Browser Agent Implementation Plan](./BROWSER_AGENT_PLAN.md): staged delivery
-  contract for browser-side workspace search, active-document Agent editing,
-  BYOK model access, UI integration, and end-to-end validation.
+- [Browser Agent Architecture](./BROWSER_AGENT_PLAN.md): browser-side workspace
+  tools, active-document editing, BYOK boundaries, and resource budgets.
 
 ## Configuration
 
@@ -130,6 +138,51 @@ If the relay origin is local, `vp run local-md-workspace#dev` starts
 `apps/grove-relay` automatically unless an existing relay responds at
 `/__debug`.
 
+## Browser Agent
+
+The workspace header opens an Agent panel whose orchestration and tools run in
+the page. The first model adapter uses Vercel AI SDK Core and calls the fixed
+OpenAI API origin directly. Enter an OpenAI API key in the panel; there is no
+build-time or product API-key environment variable. The key and selected model
+remain in page memory and are cleared by a reload; **Forget key** clears the key
+without storing it elsewhere. Neither value is written to browser storage,
+URLs, telemetry, or logs. The default model is `gpt-5.4-mini`.
+
+The available tools are:
+
+- `get_workspace_context`
+- `list_markdown_files`
+- `read_markdown`
+- `search_markdown`
+- `apply_current_document_edits`
+
+Listing, reading, and literal search can inspect Markdown files across the
+active local or Dropbox workspace. The unsaved active document is read from the
+live editor; inactive files are read-only. Writes are limited to exact unique
+replacements in the workspace document bound when the run starts. The host
+validates workspace, document, path, editor, generation, version, and content
+hash immediately before applying all replacements in one transaction.
+
+Agent writes use
+`EditorView.dispatch({ changes, userEvent: "input.agent" })`.
+The existing `loro-codemirror` binding commits that input on the main Loro peer,
+which preserves ordinary undo and routes the update through the existing
+IndexedDB pending log, BroadcastChannel, Grove Relay, autosave, and OpenDAL
+materialization paths. There is no separate Agent CRDT peer, selective Agent
+undo, edit approval queue, or cross-file write path.
+
+The current Agent is available only for local/cloud workspace routes. Guest
+shared files and standalone-file drafts do not receive an Agent capability. It
+does not provide arbitrary web fetch, shell, JavaScript evaluation, DOM
+automation, file create/rename/delete, WebLLM, embeddings, or a persistent
+conversation/index.
+
+The `ai` and OpenAI provider implementation is dynamically imported on the
+first run. Production bundle validation keeps that runtime entry's emitted
+chunk outside the launcher static bundle. The optional Agent chunk is not
+required in the offline app-shell precache, and OpenAI inference always requires
+network access.
+
 ## PWA Support
 
 The app ships `public/site.webmanifest` and `public/service-worker.js`. The
@@ -140,16 +193,22 @@ to test installability and offline app-shell loading.
 
 The service worker caches same-origin GET navigations and static assets. Cloud
 storage requests, relay API mutations, and relay WebSockets remain network-only.
-The initial app shell does not execute or compile Loro: collaboration code and
-its WASM runtime are loaded only when a workspace file is opened or a shared-file
-route is entered. Production builds inject the launcher and collaboration
-static closures, Loro WASM, the Tree-sitter runtime, the Markdown block and
-inline grammars, and their highlight-query dependencies into a content-keyed
-offline precache. Installation fails closed if a critical asset is unavailable.
-`vp run local-md-workspace#bundle:check` verifies that boundary and caps bundled
-Tree-sitter grammars to LiveMD's focused set. Code-fence parsers are fetched and
-compiled only after a supported fence alias appears in the document and remain
-outside the critical offline precache.
+The initial app shell does not execute or compile Loro, AI SDK, or the OpenAI
+provider. Collaboration code and its WASM runtime load only when a workspace
+file or shared-file route is opened; the Agent runtime loads only when a run
+starts. Production builds inject the launcher and collaboration static
+closures, Loro WASM, the Tree-sitter runtime, the Markdown block and inline
+grammars, and their highlight-query dependencies into a content-keyed offline
+precache. The optional Agent chunk is not part of the required offline closure.
+Installation fails closed if a critical asset is unavailable.
+`vp run local-md-workspace#bundle:check` verifies these boundaries and caps
+bundled Tree-sitter grammars to LiveMD's focused set. Code-fence parsers are
+fetched and compiled only after a supported fence alias appears in the document
+and remain outside the critical offline precache.
+
+Run `vp run local-md-workspace#smoke:agent` for the focused Chromium fake-model,
+IndexedDB reopen, and page-memory credential checks. The broader
+`vp run local-md-workspace#smoke:ui` includes the same Agent assertions.
 
 On Android browsers that support the Web Share Target API for installed PWAs,
 Grove registers as a share target for Markdown files. Shared `.md` and
@@ -169,6 +228,7 @@ vp run local-md-workspace#bundle:check
 vp run local-md-workspace#i18n:check
 vp run local-md-workspace#test
 vp run local-md-workspace#preview
+vp run local-md-workspace#smoke:agent
 vp run local-md-workspace#smoke:ui
 ```
 
