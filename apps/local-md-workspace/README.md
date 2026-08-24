@@ -116,9 +116,8 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   implemented browser operator, workspace object storage, explicit source
   states, path-scoped persistence, and current-document reconciliation
   contracts.
-- [Browser Agent Implementation Plan](./BROWSER_AGENT_PLAN.md): staged delivery
-  contract for browser-side workspace search, active-document Agent editing,
-  BYOK model access, UI integration, and end-to-end validation.
+- [Browser Agent Architecture](./BROWSER_AGENT_PLAN.md): browser-side workspace
+  tools, active-document editing, BYOK boundaries, and resource budgets.
 
 ## Configuration
 

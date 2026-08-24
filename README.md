@@ -621,7 +621,6 @@ standard app path or the Playwright browser cache.
   collaboration plan, Dropbox workspace semantics, and cleanup/implementation
   phases.
 - `apps/local-md-workspace/BROWSER_AGENT_PLAN.md`: browser Agent architecture,
-  tool and edit contracts, budgets, exclusions, stacked pull requests, and
-  validation matrix.
+  tool and edit contracts, budgets, and exclusions.
 - This README: repository-level architecture, workspace structure, apps, and
   LiveMD web component/API reference.

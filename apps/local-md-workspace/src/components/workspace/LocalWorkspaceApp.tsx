@@ -817,7 +817,6 @@ export function LocalWorkspaceApp() {
           dirtyRef={dirtyRef}
           documentTargetGenerationRef={documentTargetGenerationRef}
           editorElementRef={editorElementRef}
-          editorValueRef={editorValueRef}
           editVersionRef={editVersionRef}
           open={agentOpen}
           scopeKey={agentScopeKey}

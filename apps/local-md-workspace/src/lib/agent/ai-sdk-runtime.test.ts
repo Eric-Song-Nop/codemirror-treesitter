@@ -122,6 +122,13 @@ describe("AI SDK workspace Agent adapter", () => {
       toolName: "search_markdown",
       type: "tool-deduplicated",
     });
+    await expect(
+      tools.search_markdown.execute({ query: "different" }, searchOptions),
+    ).rejects.toThrow(/reused with different semantics/);
+    await expect(tools.read_markdown.execute({ path: "draft.md" }, searchOptions)).rejects.toThrow(
+      /reused with different semantics/,
+    );
+    expect(mocks.readMarkdown).not.toHaveBeenCalled();
 
     mocks.applyCurrentDocumentEdits.mockReturnValue(staleResult());
     let editInput = {

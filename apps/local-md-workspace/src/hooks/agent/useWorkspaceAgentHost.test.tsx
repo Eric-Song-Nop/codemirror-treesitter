@@ -251,7 +251,6 @@ function createRefs() {
     dirtyRef: { current: false },
     documentTargetGenerationRef: { current: 5 },
     editorElementRef: { current: editor },
-    editorValueRef: { current: document.value },
     editVersionRef: { current: 7 },
     selectedFileSourceRef: { current: runtime as ActiveDocumentSource },
     selectedFileRef: { current: markdownFile() },
@@ -265,7 +264,6 @@ function createRefs() {
     runtime,
     setValue(value: string) {
       document.value = value;
-      refs.editorValueRef.current = value;
       view.dispatch({ changes: { from: 0, insert: value, to: view.state.doc.length } });
     },
     view,

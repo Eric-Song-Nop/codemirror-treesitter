@@ -79,7 +79,6 @@ export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAg
       dirtyRef,
       documentTargetGenerationRef: { current: 1 },
       editorElementRef: { current: { view } as LiveMdEditorElement },
-      editorValueRef,
       editVersionRef,
       selectedFileSourceRef: { current: runtime },
       selectedFileRef: {

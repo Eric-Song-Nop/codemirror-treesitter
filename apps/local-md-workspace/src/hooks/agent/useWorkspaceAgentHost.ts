@@ -23,7 +23,6 @@ export type WorkspaceAgentHostRefs = {
   dirtyRef: MutableRef<boolean>;
   documentTargetGenerationRef: MutableRef<number>;
   editorElementRef: MutableRef<LiveMdEditorElement | null>;
-  editorValueRef: MutableRef<string>;
   editVersionRef: MutableRef<number>;
   selectedFileSourceRef: MutableRef<ActiveDocumentSource | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
@@ -45,7 +44,6 @@ export function useWorkspaceAgentHost(input: WorkspaceAgentHostRefs): CreateWork
     dirtyRef,
     documentTargetGenerationRef,
     editorElementRef,
-    editorValueRef,
     editVersionRef,
     selectedFileSourceRef,
     selectedFileRef,
@@ -61,7 +59,6 @@ export function useWorkspaceAgentHost(input: WorkspaceAgentHostRefs): CreateWork
         dirtyRef,
         documentTargetGenerationRef,
         editorElementRef,
-        editorValueRef,
         editVersionRef,
         selectedFileSourceRef,
         selectedFileRef,
@@ -74,7 +71,6 @@ export function useWorkspaceAgentHost(input: WorkspaceAgentHostRefs): CreateWork
       dirtyRef,
       documentTargetGenerationRef,
       editorElementRef,
-      editorValueRef,
       editVersionRef,
       selectedFileSourceRef,
       selectedFileRef,

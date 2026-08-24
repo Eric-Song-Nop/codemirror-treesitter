@@ -69,7 +69,6 @@ describe("WorkspaceAgentPanel", () => {
         ]}
         model="gpt-test"
         open
-        running={false}
         runStatus="success"
         toolActivity={[{ name: "read_markdown", status: "success" }]}
         workspaceAvailable
@@ -110,6 +109,34 @@ describe("WorkspaceAgentPanel", () => {
     });
     expect(close).toHaveBeenCalledOnce();
   });
+
+  it("normalizes an empty model field to the runtime default", async () => {
+    let configure = vi.fn();
+    await render(
+      <WorkspaceAgentPanel
+        error={null}
+        hasApiKey
+        messages={[]}
+        model="gpt-test"
+        open
+        runStatus="idle"
+        toolActivity={[]}
+        workspaceAvailable
+        onClose={vi.fn()}
+        onConfigure={configure}
+        onNewChat={vi.fn()}
+        onSend={vi.fn(async () => true)}
+        onStop={vi.fn()}
+      />,
+    );
+    let model = document.querySelector<HTMLInputElement>("#workspace-agent-model")!;
+    model.value = "   ";
+
+    await act(async () => model.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+
+    expect(configure).toHaveBeenCalledWith({ model: "gpt-5.4-mini" });
+    expect(model.value).toBe("gpt-5.4-mini");
+  });
 });
 
 function KeyConfigurationHarness({ onConfigure }: { onConfigure: (value: unknown) => void }) {
@@ -121,7 +148,6 @@ function KeyConfigurationHarness({ onConfigure }: { onConfigure: (value: unknown
       messages={[]}
       model="gpt-5.4-mini"
       open
-      running={false}
       runStatus="idle"
       toolActivity={[]}
       workspaceAvailable

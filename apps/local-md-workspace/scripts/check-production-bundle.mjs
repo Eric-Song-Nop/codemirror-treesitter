@@ -49,13 +49,7 @@ if (isDirectInvocation()) {
   });
 
   const collaborationRootKeys = collaborationRoots.map((root) => {
-    const chunkName = path.basename(root, path.extname(root));
-    const key = Object.keys(manifest).find(
-      (candidate) =>
-        candidate == root ||
-        manifest[candidate].src == root ||
-        manifest[candidate].name == chunkName,
-    );
+    const key = findManifestRootKey(manifest, root);
     assert(key, `The production manifest is missing the lazy collaboration root ${root}.`);
     return key;
   });

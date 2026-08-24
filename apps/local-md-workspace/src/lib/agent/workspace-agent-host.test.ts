@@ -44,6 +44,20 @@ describe("workspace agent read host", () => {
     });
   });
 
+  it("pages through distinct paths that share the same natural-sort key", async () => {
+    let runtime = fakeRuntime({ files: { "A.md": "uppercase", "a.md": "lowercase" } });
+    let host = createWorkspaceAgentHost({
+      limits: { list: { defaultPageSize: 1 } },
+      runtime,
+    });
+
+    let first = await host.listMarkdown();
+    let second = await host.listMarkdown({ cursor: first.nextCursor });
+
+    expect([...first.files, ...second.files].map((file) => file.path)).toEqual(["A.md", "a.md"]);
+    expect(second.nextCursor).toBeUndefined();
+  });
+
   it("reads and searches the active dirty value instead of the persisted source", async () => {
     let values = { "draft.md": "persisted needle", "other.md": "Needle elsewhere" };
     let observe = vi.fn(async (path: string) =>
@@ -120,6 +134,56 @@ describe("workspace agent read host", () => {
     await expect(host.searchMarkdown({ query: "hit" }, controller.signal)).rejects.toMatchObject({
       name: "AbortError",
     });
+  });
+
+  it("skips known oversized search files before reading their contents", async () => {
+    let observe = vi.fn(async () => observation("large.md", "oversized hit"));
+    let runtime = fakeRuntime({
+      documents: { commit: vi.fn(), observe } satisfies WorkspaceDocumentPort,
+      files: { "large.md": "oversized hit" },
+    });
+    runtime.entries = {
+      probe: vi.fn(async () => ({
+        state: "present" as const,
+        value: { kind: "file" as const, metadata: { size: 1_000 } },
+      })),
+    };
+    let host = createWorkspaceAgentHost({
+      limits: { search: { maxFileBytes: 8 } },
+      runtime,
+    });
+
+    await expect(host.searchMarkdown({ query: "hit" })).resolves.toMatchObject({
+      readBytes: 0,
+      skippedLargeFiles: 1,
+      status: "truncated",
+      truncationReason: "max-file-bytes",
+    });
+    expect(observe).not.toHaveBeenCalled();
+  });
+
+  it("keeps the active document inside the search file budget", async () => {
+    let runtime = fakeRuntime({ files: { "other.md": "persisted hit" } });
+    let host = createWorkspaceAgentHost({
+      activeEditor: readOnlyActiveEditor("active hit"),
+      limits: { search: { maxFiles: 1 } },
+      runtime,
+    });
+
+    await expect(host.searchMarkdown({ query: "hit" })).resolves.toMatchObject({
+      matches: [{ path: "draft.md" }],
+      scannedFiles: 1,
+    });
+  });
+
+  it("advertises edits only while a matching active document is captured", () => {
+    let runtime = fakeRuntime({ files: {} });
+    let host = createWorkspaceAgentHost({
+      activeEditor: { getActiveEditor: () => null },
+      runtime,
+    });
+
+    expect(host.getContext().capabilities.applyCurrentDocumentEdits).toBe(false);
   });
 
   it("bounds read output by lines and bytes while preserving source metadata", async () => {

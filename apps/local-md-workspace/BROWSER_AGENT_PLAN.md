@@ -1,12 +1,9 @@
-# Browser Agent Implementation Plan
+# Browser Agent Architecture and Contracts
 
-This document records the implementation and delivery contract for Grove's
+This document records the lasting implementation contract for Grove's
 browser-resident Markdown Agent. The Agent orchestration, tools, conversation
 state, and UI run in Local MD Workspace. Model inference is the only remote
 part: the browser calls OpenAI directly with a user-provided API key.
-
-The work is delivered as a GitHub stacked-PR series. Each PR must remain useful,
-reviewable, and tested when checked out on top of its declared base branch.
 
 ## Product Decisions
 
@@ -182,105 +179,3 @@ measurements:
 Search is literal substring matching in the MVP. It reports scanned files,
 bytes, matches, partial failures, and the budget that truncated a result. The
 active document's unsaved value overrides its storage observation.
-
-## Stacked Pull Requests
-
-### PR 1: Plan and workspace read/search foundation
-
-- Branch: `feat/markdown-agent`
-- Base: `main`
-- Pull request: [#114](https://github.com/Eric-Song-Nop/codemirror-treesitter/pull/114)
-- Persists this plan and adds SDK-independent contracts, limits, catalog
-  traversal, active-document read override, bounded concurrent search, and
-  focused tests.
-
-### PR 2: Versioned current-document edit bridge
-
-- Branch: `feat/markdown-agent-edit`
-- Base: `feat/markdown-agent`
-- Pull request: [#115](https://github.com/Eric-Song-Nop/codemirror-treesitter/pull/115)
-- Adds compound active-document version tokens, exact replacement validation,
-  and one `input.agent` CodeMirror transaction.
-- Verifies immediate LiveMD updates, normal undo, local Loro updates, and stale
-  rejection without adding a second persistence or relay path.
-
-### PR 3: Browser AI SDK runtime
-
-- Branch: `feat/markdown-agent-runtime`
-- Base: `feat/markdown-agent-edit`
-- Pull request: [#116](https://github.com/Eric-Song-Nop/codemirror-treesitter/pull/116)
-- Adds `ai`, `@ai-sdk/openai`, schema validation, the provider-neutral runtime
-  facade, tool schemas, OpenAI BYOK, instructions, budgets, cancellation, and
-  tool-call deduplication.
-- Uses a scripted fake model to cover search, read, conflict, reread, edit, and
-  final response without a provider key.
-
-### PR 4: Agent panel and BYOK flow
-
-- Branch: `feat/markdown-agent-ui`
-- Base: `feat/markdown-agent-runtime`
-- Pull request: [#117](https://github.com/Eric-Song-Nop/codemirror-treesitter/pull/117)
-- Adds the header entry point, responsive Agent panel, messages, safe summarized
-  tool activity, in-memory API-key/model settings, Send, Stop, and New chat.
-- Binds a run to its starting workspace document and cancels it on panel close,
-  document switch, workspace replacement, or standalone-file transition.
-- Adds English/Chinese strings, keyboard and IME behavior, focus management,
-  modal semantics, and live status announcements.
-
-### PR 5: Integration, bundle, and release contract
-
-- Branch: `test/markdown-agent-integration`
-- Base: `feat/markdown-agent-ui`
-- Pull request: [#118](https://github.com/Eric-Song-Nop/codemirror-treesitter/pull/118)
-- Connect a scripted AI SDK model to the real workspace host,
-  LiveMD/CodeMirror, main Loro peer, and browser pending-update persistence.
-- Verify that an Agent edit emits one local Loro update and survives document
-  reopen, while a scope switch fails closed without an update.
-- Assert from the production Vite manifest that the AI SDK/OpenAI runtime entry
-  emits as a lazy JavaScript chunk outside the launcher static closure. Exercise
-  that rule with a synthetic-manifest regression without requiring the optional
-  Agent chunk in the offline precache.
-- Finish app/root documentation and agent-facing repository notes.
-
-## Required Validation
-
-Each PR runs its focused tests. Run this complete matrix at the top of the
-stack:
-
-```bash
-vp check
-vp run local-md-workspace#i18n:check
-vp run local-md-workspace#test
-vp run local-md-workspace#build
-vp run local-md-workspace#bundle:check
-vp run local-md-workspace#smoke:agent
-vp run local-md-workspace#smoke:ui
-vp run grove-relay#test
-vp run @codemirror-treesitter/live-md-loro#test
-vp run -r test
-```
-
-The focused `smoke:agent` task is the browser Agent gate. The broader `smoke:ui`
-also executes those Agent assertions before continuing through the app's
-unrelated workspace, collaboration, Dropbox, and LiveMD browser regressions.
-
-A real-provider smoke remains manual and non-PR-blocking because it requires a
-user-provided key. It must never print or persist that key. Deterministic CI and
-local integration tests use AI SDK's fake language model instead.
-
-## Definition of Done
-
-- The Agent can list, read, and search browser-local and cloud workspaces.
-- Unsaved active content takes precedence over the source file.
-- Only the run's active workspace document can be modified.
-- User, remote-peer, document, and workspace changes invalidate a stale write.
-- An Agent edit appears immediately in LiveMD and uses normal undo.
-- IndexedDB, BroadcastChannel, Relay, autosave, conflict recovery, and OpenDAL
-  writes continue through their existing paths.
-- Stop prevents any later tool execution; an already-dispatched edit remains.
-- The API key is page-memory-only and absent from URLs, logs, and browser
-  persistence.
-- The AI SDK/OpenAI runtime remains a lazy chunk outside the launcher static
-  closure. Offline precaching of that optional chunk is not required, and
-  remote inference always requires network access.
-- Existing workspace, collaboration, PWA, and LiveMD behavior has no regression.

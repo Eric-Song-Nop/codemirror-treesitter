@@ -207,7 +207,8 @@ export function workspaceAgentPathIsWithinDirectory(path: string, directory: str
 }
 
 export function compareWorkspaceAgentPaths(a: string, b: string) {
-  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+  let naturalOrder = a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+  return naturalOrder || (a < b ? -1 : a > b ? 1 : 0);
 }
 
 function normalizeWorkspaceAgentPath(rawPath: string) {
