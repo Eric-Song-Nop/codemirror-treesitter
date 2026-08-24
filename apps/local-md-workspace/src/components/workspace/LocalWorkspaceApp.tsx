@@ -1,7 +1,9 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import type { LiveMdConfig, LiveMdEditorElement } from "@codemirror-treesitter/live-md";
+import { useStore } from "zustand";
+import { useWorkspaceApplication } from "@/app/WorkspaceApplicationProvider";
+import { createWorkspaceAppSetters } from "@/app/workspace-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { WorkspaceDialogs } from "@/components/workspace/WorkspaceDialogs";
 import type { DocumentRecoveryAction } from "@/components/workspace/DocumentRecoveryDialogs";
 import { WorkspaceEditorPane } from "@/components/workspace/WorkspaceEditorPane";
@@ -32,38 +34,22 @@ import {
   type AccessDirectoryHandle,
   type AccessFileHandle,
 } from "@/lib/workspace/file-system";
-import {
-  findMarkdownFile,
-  type MarkdownDirectoryNode,
-  type MarkdownFileNode,
-} from "@/lib/workspace/tree";
+import { findMarkdownFile, type MarkdownFileNode } from "@/lib/workspace/tree";
 import { useI18n } from "@/lib/i18n";
 import { useLiveMdPreload } from "@/lib/editor/live-md-preload";
-import { defaultSidebarOpen, isMobileSidebarViewport } from "@/lib/workspace/constants";
+import { isMobileSidebarViewport } from "@/lib/workspace/constants";
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/providers/dropbox/config";
 import { errorToMessage } from "@/lib/workspace/errors";
 import { createEphemeralLocalWorkspaceRecord, saveStateLabel } from "@/lib/workspace/state";
 import type {
-  EditorDocument,
   ActiveDocumentSource,
   SaveState,
   SingleFileSource,
   SourceAutoSaveTask,
 } from "@/lib/workspace/types";
-import {
-  loadStoredDropboxWorkspaceConfig,
-  loadStoredWorkspaceKind,
-  rememberStoredLocalWorkspace,
-  saveStoredWorkspaceKind,
-  type StoredLocalWorkspaceRecord,
-  type StoredDropboxWorkspaceConfig,
-  type StoredWorkspaceKind,
-} from "@/lib/workspace/store";
+import { rememberStoredLocalWorkspace, saveStoredWorkspaceKind } from "@/lib/workspace/store";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
-import {
-  enqueueRuntimeTransition,
-  transitionWorkspaceRuntime,
-} from "@/lib/workspace/runtime/runtime-lifecycle";
+import { transitionWorkspaceRuntime } from "@/lib/workspace/runtime/runtime-lifecycle";
 
 const emptyLiveMdConfig: LiveMdConfig = {};
 const emptyLiveMdPlugins: NonNullable<LiveMdConfig["plugins"]> = [];
@@ -79,45 +65,56 @@ export function LocalWorkspaceApp() {
     retry: retryLiveMdPreload,
     retrying: liveMdPreloadRetrying,
   } = useLiveMdPreload();
-  let [workspaceRuntime, setWorkspaceRuntime] = useState<WorkspaceRuntime | null>(null);
-  let [storedLocalWorkspace, setStoredLocalWorkspace] = useState<StoredLocalWorkspaceRecord | null>(
-    null,
-  );
-  let [storedDropboxConfig, setStoredDropboxConfig] = useState<StoredDropboxWorkspaceConfig | null>(
-    () => loadStoredDropboxWorkspaceConfig(),
-  );
-  let [storedWorkspaceKind, setStoredWorkspaceKind] = useState<StoredWorkspaceKind | null>(() =>
-    loadStoredWorkspaceKind(),
-  );
-  let [tree, setTree] = useState<MarkdownDirectoryNode | null>(null);
-  let [selectedFile, setSelectedFile] = useState<MarkdownFileNode | null>(null);
-  let [treeSelection, setTreeSelection] = useState<FileTreeDeleteTarget | null>(null);
-  let [singleFileSource, setSingleFileSource] = useState<SingleFileSource | null>(null);
-  let [editorDocument, setEditorDocument] = useState<EditorDocument>({
-    path: "",
-    value: "",
-    version: 0,
-  });
-  let [collabDocument, setCollabDocument] = useState<CollabDocumentState | null>(null);
-  let [saveState, setSaveState] = useState<SaveState>("idle");
-  let [errorMessage, setErrorMessage] = useState("");
-  let [retryLoadPath, setRetryLoadPath] = useState<string | null>(null);
-  let [busy, setBusy] = useState(false);
-  let [dropboxConnecting, setDropboxConnecting] = useState(false);
-  let [restoreChecking, setRestoreChecking] = useState(false);
-  let [recoveryDialogAction, setRecoveryDialogAction] = useState<DocumentRecoveryAction | null>(
-    null,
-  );
-  let [recoveryCopyPath, setRecoveryCopyPath] = useState("");
-  let [recoveryDialogError, setRecoveryDialogError] = useState("");
-  let [sidebarOpen, setSidebarOpen] = useState(() => defaultSidebarOpen());
-  let [agentActivated, setAgentActivated] = useState(false);
-  let [agentOpen, setAgentOpen] = useState(false);
+  let { runtime: workspaceEffectRuntime, store: workspaceAppStore } = useWorkspaceApplication();
+  let {
+    agentActivated,
+    agentOpen,
+    busy,
+    collabDocument,
+    dropboxConnecting,
+    editorDocument,
+    errorMessage,
+    recoveryCopyPath,
+    recoveryDialogAction,
+    recoveryDialogError,
+    restoreChecking,
+    retryLoadPath,
+    saveState,
+    selectedFile,
+    sidebarOpen,
+    singleFileSource,
+    storedDropboxConfig,
+    storedLocalWorkspace,
+    storedWorkspaceKind,
+    tree,
+    treeSelection,
+    workspaceRuntime,
+  } = useStore(workspaceAppStore);
+  let {
+    setAgentActivated,
+    setAgentOpen,
+    setBusy,
+    setDropboxConnecting,
+    setEditorDocument,
+    setErrorMessage,
+    setRecoveryCopyPath,
+    setRecoveryDialogAction,
+    setRecoveryDialogError,
+    setRestoreChecking,
+    setRetryLoadPath,
+    setSaveState,
+    setSidebarOpen,
+    setStoredDropboxConfig,
+    setStoredLocalWorkspace,
+    setStoredWorkspaceKind,
+    setTree,
+    setTreeSelection,
+    setWorkspaceRuntime,
+  } = useMemo(() => createWorkspaceAppSetters(workspaceAppStore), [workspaceAppStore]);
 
   let editorElementRef = useRef<LiveMdEditorElement | null>(null);
   let agentButtonRef = useRef<HTMLButtonElement | null>(null);
   let workspaceRuntimeRef = useRef<WorkspaceRuntime | null>(null);
-  let workspaceRuntimeTransitionRef = useRef<Promise<void>>(Promise.resolve());
   let selectedFileSourceRef = useRef<ActiveDocumentSource | null>(null);
   let selectedFileRef = useRef<MarkdownFileNode | null>(null);
   let singleFileSourceRef = useRef<SingleFileSource | null>(null);
@@ -168,10 +165,6 @@ export function LocalWorkspaceApp() {
     workspaceRuntime,
   });
 
-  useEffect(() => {
-    workspaceRuntimeRef.current = workspaceRuntime;
-  }, [workspaceRuntime]);
-
   useEffect(
     () => () => {
       void workspaceRuntimeRef.current?.dispose();
@@ -179,18 +172,6 @@ export function LocalWorkspaceApp() {
     },
     [],
   );
-
-  useEffect(() => {
-    selectedFileRef.current = selectedFile;
-  }, [selectedFile]);
-
-  useEffect(() => {
-    singleFileSourceRef.current = singleFileSource;
-  }, [singleFileSource]);
-
-  useEffect(() => {
-    collabDocumentRef.current = collabDocument;
-  }, [collabDocument]);
 
   useWorkspacePersistenceLifecycle({
     autoSaveTaskRef,
@@ -326,34 +307,31 @@ export function LocalWorkspaceApp() {
     sendHostSaveAck,
     setActiveShareRecord,
     setBusy,
-    setCollabDocument,
     setCreatedShare,
     setEditorDocument,
     setErrorMessage,
     setRetryLoadPath,
     setSaveStateSynced,
-    setSelectedFile,
-    setSingleFileSource,
-    setTreeSelection,
     singleFileSourceRef,
     startOwnerShareHost,
     stopOwnerShareHost,
+    workspaceAppStore,
   });
 
   let replaceWorkspaceRuntime = useCallback(
     (nextRuntime: WorkspaceRuntime) =>
-      enqueueRuntimeTransition(workspaceRuntimeTransitionRef, () =>
+      workspaceEffectRuntime.runPromise(
         transitionWorkspaceRuntime({
           activate: (runtime) => {
             workspaceRuntimeRef.current = runtime;
             setWorkspaceRuntime(runtime);
           },
           closeActiveDocument: clearActiveDocument,
-          current: workspaceRuntimeRef.current,
+          current: () => workspaceRuntimeRef.current,
           next: nextRuntime,
         }),
       ),
-    [clearActiveDocument],
+    [clearActiveDocument, setWorkspaceRuntime, workspaceEffectRuntime],
   );
 
   useEffect(() => {
