@@ -37,7 +37,10 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   `loro-codemirror`; `apps/local-md-workspace` uses React 19, shadcn/radix UI,
   i18next/react-i18next, the browser File System Access API, Dropbox OAuth
   PKCE, the OpenDAL browser WASM wrapper, Grove shared-file relay clients, and a
-  lazy Vercel AI SDK/OpenAI browser Agent with user-provided credentials;
+  lazy Vercel AI SDK `@ai-sdk/deepseek` browser Agent with user-provided
+  credentials, a fixed `https://api.deepseek.com` origin,
+  `deepseek-v4-flash` by default, and only `deepseek-v4-pro` as a manual model
+  choice;
   `apps/grove-relay` and `apps/collab-editor` use Cloudflare Workers, Durable
   Objects, WebSockets, Wrangler, and `@cloudflare/vite-plugin`.
 
@@ -85,7 +88,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `apps/local-md-workspace`: Grove React shadcn/radix local-first Markdown
   workspace using LiveMD, the browser File System Access API, optional Dropbox
   storage through OpenDAL WASM, local image asset handling, a browser-resident
-  OpenAI BYOK Agent, and optional Grove shared-file collaboration through
+  DeepSeek BYOK Agent, and optional Grove shared-file collaboration through
   `apps/grove-relay`.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, WebSocket Loro sync, share lifecycle APIs, and Wrangler deploy
@@ -123,8 +126,16 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   `apps/local-md-workspace`. Keep the SDK behind its dynamic runtime adapter;
   do not add model-provider assumptions or credentials to editor packages.
 - Agent credentials must remain in page memory and must not enter storage,
-  URLs, telemetry, or logs. Keep the provider origin fixed unless a separate
-  reviewed provider adapter deliberately expands that boundary.
+  URLs, telemetry, or logs. Keep the DeepSeek provider origin fixed to
+  `https://api.deepseek.com`, default to `deepseek-v4-flash`, and expose only
+  `deepseek-v4-pro` as a manual alternative.
+- DeepSeek's
+  [disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) is
+  enabled by default and has no documented client-side opt-out. Treat request
+  prefixes as remotely cached data even though credentials and conversation
+  state stay out of browser storage. DeepSeek documents per-user cache
+  isolation and cleanup of unused entries, typically within a few hours to
+  days.
 - Agent writes are current-workspace-document-only. Dispatch them through the
   active CodeMirror view so `loro-codemirror`, ordinary undo, collaboration,
   and source persistence remain authoritative; do not mutate storage or a

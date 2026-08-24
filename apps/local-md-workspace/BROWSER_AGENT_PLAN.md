@@ -3,18 +3,18 @@
 This document records the lasting implementation contract for Grove's
 browser-resident Markdown Agent. The Agent orchestration, tools, conversation
 state, and UI run in Local MD Workspace. Model inference is the only remote
-part: the browser calls OpenAI directly with a user-provided API key.
+part: the browser calls DeepSeek directly with a user-provided API key.
 
 ## Product Decisions
 
 - Use Vercel AI SDK Core's `ToolLoopAgent`, AI SDK UI `useChat`, and shadcn/ui
   primitives behind a provider-neutral local facade.
-- Start with the OpenAI provider, default to `gpt-5.4-mini`, and allow the user
-  to enter another OpenAI model ID.
+- Use `@ai-sdk/deepseek`, default to `deepseek-v4-flash`, and expose only
+  `deepseek-v4-pro` as a manual model choice. Do not accept free-form model IDs.
 - Keep the API key and model choice in page memory only. The key,
   `Authorization` header, and provider response bodies must not enter
   `localStorage`, `sessionStorage`, IndexedDB, URLs, telemetry, or logs. The
-  provider origin is fixed to `https://api.openai.com/v1`.
+  provider origin is fixed to `https://api.deepseek.com`.
 - Run the MVP Agent on the browser main thread. Remote streaming and workspace
   I/O are asynchronous; a Worker becomes relevant only for local inference or
   a CPU-heavy long-lived index.
@@ -38,7 +38,7 @@ part: the browser calls OpenAI directly with a user-provided API key.
 The MVP includes:
 
 - an Agent panel in the workspace route;
-- in-memory OpenAI API-key and model configuration with a fixed provider
+- in-memory DeepSeek API-key and two-model selection with a fixed provider
   origin;
 - streamed assistant text and summarized tool activity;
 - Stop and New chat actions;
@@ -72,7 +72,7 @@ features/workspace-agent
         |
         v (runtime.ts dynamic import)
 lib/agent/ai-sdk-runtime.ts composition root
-- providers/openai model binding
+- providers/deepseek `@ai-sdk/deepseek` model binding
 - adapters/ai-sdk ToolLoopAgent runner / schemas
         |
         v
@@ -100,6 +100,19 @@ an SDK adapter only supplies schemas and execution metadata. Workspace paths
 and Markdown are untrusted model input; the transport strips raw tool IDs,
 inputs, and outputs from `UIMessage` state. Agent UI and model code remain
 separate demand-loaded chunks outside the launcher static closure.
+
+## DeepSeek Context Cache
+
+DeepSeek's
+[disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) is enabled
+by default for API requests, and its public API documents no client-side
+opt-out. DeepSeek documents that each user's cache is isolated and logically
+invisible to other users, and that unused cache entries are normally cleared
+within a few hours to days. The page-memory-only credential and conversation
+policy therefore prevents Grove from persisting those values locally, but it
+does not prevent request prefixes from being retained temporarily in
+DeepSeek's server-side cache. The Agent UI must disclose this boundary before a
+user supplies a key.
 
 ## Tool Contract
 
@@ -179,9 +192,12 @@ measurements:
 | Replacements per write       |                  32 |
 | Edited document output       |             256 KiB |
 | Agent steps per run          |                  12 |
+| Unique tool calls per run    |                  12 |
 | Stale retries                |                   2 |
 | Default run timeout          |             120 sec |
 
 Search is literal substring matching in the MVP. It reports scanned files,
 bytes, matches, partial failures, and the budget that truncated a result. The
-active document's unsaved value overrides its storage observation.
+active document's unsaved value overrides its storage observation. The unique
+tool-call budget counts first-seen tool-call IDs; a deduplicated retry of the
+same ID does not consume another slot.

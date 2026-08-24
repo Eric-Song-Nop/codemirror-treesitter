@@ -2,13 +2,14 @@ import { convertArrayToReadableStream, MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { runWorkspaceAgentWithAiSdkModel } from "./adapters/ai-sdk/runner.ts";
 import type { WorkspaceAgentHost } from "./application/host-port.ts";
-import { WORKSPACE_AGENT_MAX_STEPS } from "./application/policy.ts";
+import { WORKSPACE_AGENT_MAX_STEPS, WORKSPACE_AGENT_MAX_TOOL_CALLS } from "./application/policy.ts";
 import { redactWorkspaceAgentError } from "./application/runtime-error.ts";
 import type { WorkspaceAgentRunEvent } from "./application/run-contracts.ts";
 import { createWorkspaceAgentToolSession } from "./application/tool-session.ts";
 import type { WorkspaceAgentActiveDocumentVersion } from "./domain/active-document.ts";
 import type { WorkspaceAgentApplyCurrentDocumentEditsResult } from "./domain/contracts.ts";
-import { createOpenAIWorkspaceAgentModel } from "./providers/openai/model.ts";
+import { DEFAULT_WORKSPACE_AGENT_MODEL } from "./providers/deepseek/config.ts";
+import { createDeepSeekWorkspaceAgentModel } from "./providers/deepseek/model.ts";
 
 describe("AI SDK workspace Agent adapter", () => {
   it("streams a deterministic search, read, edit, and final response tool loop", async () => {
@@ -48,7 +49,7 @@ describe("AI SDK workspace Agent adapter", () => {
       {
         model,
         modelId: "mock-markdown-agent",
-        providerOptions: { openai: { parallelToolCalls: false, store: false } },
+        providerOptions: { deepseek: { thinking: { type: "enabled" } } },
       },
     );
 
@@ -87,7 +88,7 @@ describe("AI SDK workspace Agent adapter", () => {
     );
     expect(model.doStreamCalls).toHaveLength(6);
     expect(model.doStreamCalls[0]?.providerOptions).toEqual({
-      openai: { parallelToolCalls: false, store: false },
+      deepseek: { thinking: { type: "enabled" } },
     });
     expect(model.doStreamCalls[0]?.prompt[0]).toMatchObject({
       role: "system",
@@ -168,6 +169,29 @@ describe("AI SDK workspace Agent adapter", () => {
     expect(result.finishReason).toBe("tool-calls");
   });
 
+  it("limits unique tool calls even when one model step schedules them in parallel", async () => {
+    let mocks = fakeHost();
+    let session = createWorkspaceAgentToolSession(mocks.host);
+    let allowed = Array.from({ length: WORKSPACE_AGENT_MAX_TOOL_CALLS }, (_, index) =>
+      session.searchMarkdown(
+        { query: `needle-${index}` },
+        toolExecution(`parallel-search-${index}`),
+      ),
+    );
+
+    await expect(Promise.all(allowed)).resolves.toHaveLength(WORKSPACE_AGENT_MAX_TOOL_CALLS);
+    await expect(
+      session.searchMarkdown(
+        { query: "over-budget" },
+        toolExecution("parallel-search-over-budget"),
+      ),
+    ).rejects.toThrow(/unique tool-call budget/);
+    await expect(
+      session.searchMarkdown({ query: "needle-0" }, toolExecution("parallel-search-0")),
+    ).resolves.toMatchObject({ status: "complete" });
+    expect(mocks.searchMarkdown).toHaveBeenCalledTimes(WORKSPACE_AGENT_MAX_TOOL_CALLS);
+  });
+
   it("honors AbortSignal before budget branches and passes it to the model", async () => {
     let mocks = fakeHost();
     let session = createWorkspaceAgentToolSession(mocks.host);
@@ -213,14 +237,19 @@ describe("AI SDK workspace Agent adapter", () => {
     expect(modelSignal.aborted).toBe(true);
   });
 
-  it("keeps OpenAI-specific model policy in the provider binding", () => {
-    let binding = createOpenAIWorkspaceAgentModel("sk-test", "  gpt-test  ");
+  it("binds only the supported DeepSeek V4 models with thinking enabled", () => {
+    let defaultBinding = createDeepSeekWorkspaceAgentModel("sk-test", undefined);
+    let proBinding = createDeepSeekWorkspaceAgentModel("sk-test", "deepseek-v4-pro");
 
-    expect(binding.modelId).toBe("gpt-test");
-    expect(binding.model).toBeDefined();
-    expect(binding.providerOptions).toEqual({
-      openai: { parallelToolCalls: false, store: false },
+    expect(defaultBinding.modelId).toBe(DEFAULT_WORKSPACE_AGENT_MODEL);
+    expect(defaultBinding.model).toBeDefined();
+    expect(defaultBinding.providerOptions).toEqual({
+      deepseek: { thinking: { type: "enabled" } },
     });
+    expect(proBinding.modelId).toBe("deepseek-v4-pro");
+    expect(() => createDeepSeekWorkspaceAgentModel("sk-test", "deepseek-chat")).toThrow(
+      /Unsupported DeepSeek model/,
+    );
   });
 
   it("redacts API keys from errors without retaining the provider cause", () => {

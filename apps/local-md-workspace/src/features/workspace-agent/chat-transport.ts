@@ -2,14 +2,21 @@ import { createUIMessageStream, type ChatTransport, type UIMessage, type UIMessa
 import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
 import { redactWorkspaceAgentErrorMessage } from "@/lib/agent/application/runtime-error";
 import type { WorkspaceAgentRunResult } from "@/lib/agent/application/run-contracts";
-import type { OpenAIWorkspaceAgentRunInput } from "@/lib/agent/providers/openai/config";
+import type {
+  DeepSeekWorkspaceAgentRunInput,
+  WorkspaceAgentModel,
+} from "@/lib/agent/providers/deepseek/config";
 
 type WorkspaceAgentRunner = (
-  input: OpenAIWorkspaceAgentRunInput,
+  input: DeepSeekWorkspaceAgentRunInput,
 ) => Promise<WorkspaceAgentRunResult>;
 
 type WorkspaceAgentTransportOptions = {
-  getConfiguration: () => { apiKey: string; host: WorkspaceAgentHost; model: string };
+  getConfiguration: () => {
+    apiKey: string;
+    host: WorkspaceAgentHost;
+    model: WorkspaceAgentModel;
+  };
   runner: WorkspaceAgentRunner;
 };
 

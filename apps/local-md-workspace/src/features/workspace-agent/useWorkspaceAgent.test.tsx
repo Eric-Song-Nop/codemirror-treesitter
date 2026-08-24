@@ -6,7 +6,7 @@ import { getToolName, isToolUIPart, type UIMessage } from "ai";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
 import type { WorkspaceAgentRunResult } from "@/lib/agent/application/run-contracts";
-import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/providers/openai/config";
+import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/providers/deepseek/config";
 import type { WorkspaceAgentRunInput } from "@/lib/agent/runtime";
 import {
   useWorkspaceAgent,
@@ -48,15 +48,15 @@ describe("useWorkspaceAgent", () => {
     expect(currentApi?.model).toBe(DEFAULT_WORKSPACE_AGENT_MODEL);
     expect(currentApi?.hasApiKey).toBe(false);
     expect(currentApi?.status).toBe("idle");
-    act(() => currentApi?.configure({ apiKey: "  sk-secret  ", model: "  gpt-test  " }));
+    act(() => currentApi?.configure({ apiKey: "  sk-secret  ", model: "deepseek-v4-pro" }));
     expect(currentApi?.hasApiKey).toBe(true);
-    expect(currentApi?.model).toBe("gpt-test");
+    expect(currentApi?.model).toBe("deepseek-v4-pro");
 
     await act(async () => {
       expect(await currentApi?.send("  Review this note  ", () => host)).toBe(true);
     });
 
-    expect(inputs[0]).toMatchObject({ apiKey: "sk-secret", model: "gpt-test" });
+    expect(inputs[0]).toMatchObject({ apiKey: "sk-secret", model: "deepseek-v4-pro" });
     expect(inputs[0]?.messages).toEqual([{ content: "Review this note", role: "user" }]);
     expect(currentApi?.messages.map((message) => [message.role, messageText(message)])).toEqual([
       ["user", "Review this note"],
@@ -212,11 +212,11 @@ describe("useWorkspaceAgent", () => {
       await Promise.resolve();
     });
     await act(async () => {
-      currentApi?.configure({ model: "gpt-next" });
+      currentApi?.configure({ model: "deepseek-v4-pro" });
       expect(await currentApi?.send("", () => host)).toBe(false);
     });
 
-    expect(currentApi?.model).toBe("gpt-next");
+    expect(currentApi?.model).toBe("deepseek-v4-pro");
     expect(currentApi?.error).toBeNull();
     expect(currentApi?.running).toBe(true);
     expect(currentApi?.status).toBe("running");

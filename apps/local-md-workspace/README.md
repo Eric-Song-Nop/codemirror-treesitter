@@ -98,8 +98,9 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   contracts, budgets, host/run ports, policies, workspace read/search use cases,
   and the run-scoped idempotency/retry session.
 - `src/lib/agent/adapters/{workspace,ai-sdk}` and
-  `src/lib/agent/providers/openai`: the CodeMirror/WorkspaceRuntime host, AI SDK
-  schemas and `ToolLoopAgent` runner, and the isolated OpenAI model binding.
+  `src/lib/agent/providers/deepseek`: the CodeMirror/WorkspaceRuntime host, AI
+  SDK schemas and `ToolLoopAgent` runner, and the isolated `@ai-sdk/deepseek`
+  model binding.
   Root `runtime.ts` and `ai-sdk-runtime.ts` remain the two small composition
   facades that preserve demand loading.
 - `src/features/workspace-agent`: the lazy React feature, run-host hook, safe AI
@@ -147,12 +148,23 @@ If the relay origin is local, `vp run local-md-workspace#dev` starts
 ## Browser Agent
 
 The workspace header opens an Agent panel whose orchestration and tools run in
-the page. The first model adapter uses Vercel AI SDK Core and calls the fixed
-OpenAI API origin directly. Enter an OpenAI API key in the panel; there is no
-build-time or product API-key environment variable. The key and selected model
-remain in page memory and are cleared by a reload; **Forget key** clears the key
-without storing it elsewhere. Neither value is written to browser storage,
-URLs, telemetry, or logs. The default model is `gpt-5.4-mini`.
+the page. The model adapter uses Vercel AI SDK Core's `@ai-sdk/deepseek`
+provider and calls the fixed `https://api.deepseek.com` origin directly. Enter
+a DeepSeek API key in the panel; there is no build-time or product API-key
+environment variable. The key and selected model remain in page memory and are
+cleared by a reload; **Forget key** clears the key without storing it elsewhere.
+Neither value is written to browser storage, URLs, telemetry, or logs. The
+default model is `deepseek-v4-flash`; `deepseek-v4-pro` is the only model the
+user can select manually.
+
+DeepSeek enables its
+[disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) by default
+for API requests, and its public API documents no client-side opt-out. DeepSeek
+documents that each user's cache is isolated and logically invisible to other
+users, and that unused entries are normally cleared within a few hours to days.
+Consequently, although Grove does not persist the key or conversation locally,
+request prefixes sent for inference can be retained temporarily in DeepSeek's
+server-side cache.
 
 The available tools are:
 
@@ -183,10 +195,10 @@ does not provide arbitrary web fetch, shell, JavaScript evaluation, DOM
 automation, file create/rename/delete, WebLLM, embeddings, or a persistent
 conversation/index.
 
-The Agent UI loads on the first panel open; AI SDK Core's `ToolLoopAgent` and the
-OpenAI provider load on the first run. Production validation keeps the model
-runtime outside the launcher bundle and optional offline precache. OpenAI
-inference always requires network access.
+The Agent UI loads on the first panel open; AI SDK Core's `ToolLoopAgent` and
+the `@ai-sdk/deepseek` provider load on the first run. Production validation
+keeps the model runtime outside the launcher bundle and optional offline
+precache. DeepSeek inference always requires network access.
 
 ## PWA Support
 
@@ -198,12 +210,12 @@ to test installability and offline app-shell loading.
 
 The service worker caches same-origin GET navigations and static assets. Cloud
 storage requests, relay API mutations, and relay WebSockets remain network-only.
-The initial app shell does not execute or compile Loro, AI SDK, or the OpenAI
-provider. Collaboration code and its WASM runtime load only when a workspace
-file or shared-file route is opened; the Agent UI loads when its panel first
-opens, and the model runtime loads only when a run starts. Production builds
-inject the launcher and collaboration static closures, Loro WASM, the
-Tree-sitter runtime, the Markdown block and inline
+The initial app shell does not execute or compile Loro, AI SDK, or the
+`@ai-sdk/deepseek` provider. Collaboration code and its WASM runtime load only
+when a workspace file or shared-file route is opened; the Agent UI loads when
+its panel first opens, and the model runtime loads only when a run starts.
+Production builds inject the launcher and collaboration static closures, Loro
+WASM, the Tree-sitter runtime, the Markdown block and inline
 grammars, and their highlight-query dependencies into a content-keyed offline
 precache. The optional Agent chunks are not part of the required offline closure.
 Installation fails closed if a critical asset is unavailable.

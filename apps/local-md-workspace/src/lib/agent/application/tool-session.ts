@@ -1,4 +1,4 @@
-import { WORKSPACE_AGENT_MAX_STALE_RETRIES } from "./policy.ts";
+import { WORKSPACE_AGENT_MAX_STALE_RETRIES, WORKSPACE_AGENT_MAX_TOOL_CALLS } from "./policy.ts";
 import type {
   WorkspaceAgentApplyCurrentDocumentEditsInput,
   WorkspaceAgentApplyCurrentDocumentEditsResult,
@@ -82,6 +82,11 @@ export function createWorkspaceAgentToolSession(
         // Observers must not interrupt a tool transaction.
       }
       return cached.promise as Promise<OUTPUT>;
+    }
+    if (calls.size >= WORKSPACE_AGENT_MAX_TOOL_CALLS) {
+      return Promise.reject(
+        new Error(`The run reached its ${WORKSPACE_AGENT_MAX_TOOL_CALLS} unique tool-call budget.`),
+      );
     }
 
     let pending = Promise.resolve().then(() => {

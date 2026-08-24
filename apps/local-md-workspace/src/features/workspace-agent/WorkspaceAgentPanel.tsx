@@ -20,7 +20,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { TooltipIconButton } from "@/components/workspace/TooltipIconButton";
-import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/providers/openai/config";
+import {
+  WORKSPACE_AGENT_MODEL_OPTIONS,
+  type WorkspaceAgentModel,
+} from "@/lib/agent/providers/deepseek/config";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { isMobileSidebarViewport } from "@/lib/workspace/constants";
 import type { WorkspaceAgentRunStatus } from "./useWorkspaceAgent";
@@ -29,12 +32,12 @@ type WorkspaceAgentPanelProps = {
   error: string | null;
   hasApiKey: boolean;
   messages: readonly UIMessage[];
-  model: string;
+  model: WorkspaceAgentModel;
   open: boolean;
   runStatus: WorkspaceAgentRunStatus;
   workspaceAvailable: boolean;
   onClose: () => void;
-  onConfigure: (input: { apiKey?: string; model?: string }) => void;
+  onConfigure: (input: { apiKey?: string; model?: WorkspaceAgentModel }) => void;
   onNewChat: () => void;
   onSend: (prompt: string) => Promise<boolean>;
   onStop: () => void;
@@ -59,7 +62,7 @@ export function WorkspaceAgentPanel({
   let [prompt, setPrompt] = useState("");
   let followOutputRef = useRef(true);
   let keyInputRef = useRef<HTMLInputElement | null>(null);
-  let modelInputRef = useRef<HTMLInputElement | null>(null);
+  let modelSelectRef = useRef<HTMLSelectElement | null>(null);
   let promptRef = useRef<HTMLTextAreaElement | null>(null);
   let scrollEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -75,7 +78,7 @@ export function WorkspaceAgentPanel({
     let focusTarget = hasApiKey
       ? workspaceAvailable
         ? promptRef.current
-        : modelInputRef.current
+        : modelSelectRef.current
       : keyInputRef.current;
     let frame = requestAnimationFrame(() => focusTarget?.focus());
     return () => cancelAnimationFrame(frame);
@@ -223,20 +226,22 @@ export function WorkspaceAgentPanel({
             <Field orientation="horizontal" className="items-end">
               <div className="min-w-0 flex-1 space-y-1">
                 <FieldLabel htmlFor="workspace-agent-model">{t("agent.model.label")}</FieldLabel>
-                <Input
-                  ref={modelInputRef}
+                <select
+                  ref={modelSelectRef}
                   id="workspace-agent-model"
-                  defaultValue={model}
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={running}
-                  autoComplete="off"
-                  spellCheck={false}
-                  onBlur={(event) => {
-                    let nextModel =
-                      event.currentTarget.value.trim() || DEFAULT_WORKSPACE_AGENT_MODEL;
-                    event.currentTarget.value = nextModel;
-                    onConfigure({ model: nextModel });
+                  value={model}
+                  onChange={(event) => {
+                    onConfigure({ model: event.currentTarget.value as WorkspaceAgentModel });
                   }}
-                />
+                >
+                  {WORKSPACE_AGENT_MODEL_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
               </div>
               {hasApiKey ? (
                 <Button
