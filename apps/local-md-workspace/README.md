@@ -96,10 +96,10 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
   `markdown-document-runtime.ts` only when a file is opened.
 - `src/lib/agent/*`: SDK-independent workspace tool contracts and limits,
   active-document version checks, the CodeMirror edit bridge, the lazy runtime
-  facade, and the Vercel AI SDK/OpenAI adapter.
+  facade, the safe AI SDK UI transport, and the Vercel AI SDK/OpenAI adapter.
 - `src/hooks/agent/*` and `src/components/workspace/WorkspaceAgent*`: the
-  run-scoped workspace capability, in-memory conversation controller, and
-  responsive Agent panel.
+  run-scoped capability, AI SDK UI `useChat` controller, and shadcn-based panel;
+  component tests use `@shadcn/helpers/ai-sdk` fixtures.
 - `src/components/ui/*`: local shadcn/radix UI primitives.
 - `scripts/dev.mjs`: starts the local Grove relay when needed, then starts the
   frontend with `VITE_LOCAL_MD_SHARE_RELAY_ORIGIN`.
@@ -177,11 +177,10 @@ does not provide arbitrary web fetch, shell, JavaScript evaluation, DOM
 automation, file create/rename/delete, WebLLM, embeddings, or a persistent
 conversation/index.
 
-The `ai` and OpenAI provider implementation is dynamically imported on the
-first run. Production bundle validation keeps that runtime entry's emitted
-chunk outside the launcher static bundle. The optional Agent chunk is not
-required in the offline app-shell precache, and OpenAI inference always requires
-network access.
+The Agent UI loads on the first panel open; AI SDK Core's `ToolLoopAgent` and the
+OpenAI provider load on the first run. Production validation keeps the model
+runtime outside the launcher bundle and optional offline precache. OpenAI
+inference always requires network access.
 
 ## PWA Support
 
@@ -195,11 +194,12 @@ The service worker caches same-origin GET navigations and static assets. Cloud
 storage requests, relay API mutations, and relay WebSockets remain network-only.
 The initial app shell does not execute or compile Loro, AI SDK, or the OpenAI
 provider. Collaboration code and its WASM runtime load only when a workspace
-file or shared-file route is opened; the Agent runtime loads only when a run
-starts. Production builds inject the launcher and collaboration static
-closures, Loro WASM, the Tree-sitter runtime, the Markdown block and inline
+file or shared-file route is opened; the Agent UI loads when its panel first
+opens, and the model runtime loads only when a run starts. Production builds
+inject the launcher and collaboration static closures, Loro WASM, the
+Tree-sitter runtime, the Markdown block and inline
 grammars, and their highlight-query dependencies into a content-keyed offline
-precache. The optional Agent chunk is not part of the required offline closure.
+precache. The optional Agent chunks are not part of the required offline closure.
 Installation fails closed if a critical asset is unavailable.
 `vp run local-md-workspace#bundle:check` verifies these boundaries and caps
 bundled Tree-sitter grammars to LiveMD's focused set. Code-fence parsers are

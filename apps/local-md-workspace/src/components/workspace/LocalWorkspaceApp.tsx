@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LiveMdConfig, LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { WorkspaceDialogs } from "@/components/workspace/WorkspaceDialogs";
-import { WorkspaceAgentFeature } from "@/components/workspace/WorkspaceAgentFeature";
 import type { DocumentRecoveryAction } from "@/components/workspace/DocumentRecoveryDialogs";
 import { WorkspaceEditorPane } from "@/components/workspace/WorkspaceEditorPane";
 import { WorkspaceErrorBanner } from "@/components/workspace/WorkspaceErrorBanner";
@@ -68,6 +67,10 @@ import {
 
 const emptyLiveMdConfig: LiveMdConfig = {};
 const emptyLiveMdPlugins: NonNullable<LiveMdConfig["plugins"]> = [];
+const WorkspaceAgentFeature = lazy(async () => {
+  let module = await import("@/components/workspace/WorkspaceAgentFeature");
+  return { default: module.WorkspaceAgentFeature };
+});
 
 export function LocalWorkspaceApp() {
   let { locale, t, toggleLocale } = useI18n();
@@ -108,6 +111,7 @@ export function LocalWorkspaceApp() {
   let [recoveryCopyPath, setRecoveryCopyPath] = useState("");
   let [recoveryDialogError, setRecoveryDialogError] = useState("");
   let [sidebarOpen, setSidebarOpen] = useState(() => defaultSidebarOpen());
+  let [agentActivated, setAgentActivated] = useState(false);
   let [agentOpen, setAgentOpen] = useState(false);
 
   let editorElementRef = useRef<LiveMdEditorElement | null>(null);
@@ -563,6 +567,7 @@ export function LocalWorkspaceApp() {
   }, []);
 
   let toggleAgent = useCallback(() => {
+    setAgentActivated(true);
     setAgentOpen((open) => !open);
   }, []);
 
@@ -811,23 +816,27 @@ export function LocalWorkspaceApp() {
           />
         </main>
 
-        <WorkspaceAgentFeature
-          activeDocumentGenerationRef={activeDocumentGenerationRef}
-          collabDocumentRef={collabDocumentRef}
-          dirtyRef={dirtyRef}
-          documentTargetGenerationRef={documentTargetGenerationRef}
-          editorElementRef={editorElementRef}
-          editVersionRef={editVersionRef}
-          open={agentOpen}
-          scopeKey={agentScopeKey}
-          selectedFileRef={selectedFileRef}
-          selectedFileSourceRef={selectedFileSourceRef}
-          singleFileSourceRef={singleFileSourceRef}
-          workspaceAvailable={Boolean(workspaceRuntime && !singleFileSource)}
-          workspaceKey={agentWorkspaceKey}
-          workspaceRuntimeRef={workspaceRuntimeRef}
-          onClose={closeAgent}
-        />
+        {agentActivated ? (
+          <Suspense fallback={null}>
+            <WorkspaceAgentFeature
+              activeDocumentGenerationRef={activeDocumentGenerationRef}
+              collabDocumentRef={collabDocumentRef}
+              dirtyRef={dirtyRef}
+              documentTargetGenerationRef={documentTargetGenerationRef}
+              editorElementRef={editorElementRef}
+              editVersionRef={editVersionRef}
+              open={agentOpen}
+              scopeKey={agentScopeKey}
+              selectedFileRef={selectedFileRef}
+              selectedFileSourceRef={selectedFileSourceRef}
+              singleFileSourceRef={singleFileSourceRef}
+              workspaceAvailable={Boolean(workspaceRuntime && !singleFileSource)}
+              workspaceKey={agentWorkspaceKey}
+              workspaceRuntimeRef={workspaceRuntimeRef}
+              onClose={closeAgent}
+            />
+          </Suspense>
+        ) : null}
 
         <WorkspaceDialogs
           fileNameDialog={{

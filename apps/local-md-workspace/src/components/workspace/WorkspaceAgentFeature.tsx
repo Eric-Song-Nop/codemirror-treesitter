@@ -25,19 +25,8 @@ export function WorkspaceAgentFeature({
 }: WorkspaceAgentFeatureProps) {
   let { t } = useI18n();
   let createRunHost = useWorkspaceAgentHost(hostRefs);
-  let {
-    configure,
-    error,
-    errorCode,
-    hasApiKey,
-    messages,
-    model,
-    newChat,
-    send,
-    stop,
-    status,
-    toolActivity,
-  } = useWorkspaceAgent({ scopeKey, workspaceKey });
+  let { configure, error, errorCode, hasApiKey, messages, model, newChat, send, stop, status } =
+    useWorkspaceAgent({ scopeKey, workspaceKey });
   let displayedError = errorCode ? t(`agent.error.${errorCode}`) : error;
 
   useEffect(() => {
@@ -62,7 +51,6 @@ export function WorkspaceAgentFeature({
       model={model}
       open={open}
       runStatus={status}
-      toolActivity={toolActivity}
       workspaceAvailable={workspaceAvailable}
       onClose={close}
       onConfigure={configure}

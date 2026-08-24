@@ -1,39 +1,37 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { getToolName, isToolUIPart, type UIMessage } from "ai";
 import {
-  CheckIcon,
   CircleAlertIcon,
   KeyRoundIcon,
   PlusIcon,
   SendIcon,
   SparklesIcon,
   SquareIcon,
+  WrenchIcon,
   XIcon,
 } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Empty } from "@/components/ui/empty";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import { TooltipIconButton } from "@/components/workspace/TooltipIconButton";
-import type {
-  WorkspaceAgentControllerMessage,
-  WorkspaceAgentRunStatus,
-  WorkspaceAgentToolActivity,
-  WorkspaceAgentToolStatus,
-} from "@/hooks/agent/useWorkspaceAgent";
+import type { WorkspaceAgentRunStatus } from "@/hooks/agent/useWorkspaceAgent";
 import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/runtime-contracts";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
 import { isMobileSidebarViewport } from "@/lib/workspace/constants";
 
 type WorkspaceAgentPanelProps = {
   error: string | null;
   hasApiKey: boolean;
-  messages: readonly WorkspaceAgentControllerMessage[];
+  messages: readonly UIMessage[];
   model: string;
   open: boolean;
   runStatus: WorkspaceAgentRunStatus;
-  toolActivity: readonly WorkspaceAgentToolActivity[];
   workspaceAvailable: boolean;
   onClose: () => void;
   onConfigure: (input: { apiKey?: string; model?: string }) => void;
@@ -49,7 +47,6 @@ export function WorkspaceAgentPanel({
   model,
   open,
   runStatus,
-  toolActivity,
   workspaceAvailable,
   onClose,
   onConfigure,
@@ -58,10 +55,10 @@ export function WorkspaceAgentPanel({
   onStop,
 }: WorkspaceAgentPanelProps) {
   let { t } = useI18n();
-  let [prompt, setPrompt] = useState("");
   let [mobile, setMobile] = useState(() => isMobileSidebarViewport());
-  let keyInputRef = useRef<HTMLInputElement | null>(null);
+  let [prompt, setPrompt] = useState("");
   let followOutputRef = useRef(true);
+  let keyInputRef = useRef<HTMLInputElement | null>(null);
   let modelInputRef = useRef<HTMLInputElement | null>(null);
   let promptRef = useRef<HTMLTextAreaElement | null>(null);
   let scrollEndRef = useRef<HTMLDivElement | null>(null);
@@ -74,6 +71,7 @@ export function WorkspaceAgentPanel({
 
   useEffect(() => {
     if (!open) return;
+    followOutputRef.current = true;
     let focusTarget = hasApiKey
       ? workspaceAvailable
         ? promptRef.current
@@ -84,31 +82,24 @@ export function WorkspaceAgentPanel({
   }, [hasApiKey, mobile, open, workspaceAvailable]);
 
   useEffect(() => {
-    if (open) followOutputRef.current = true;
-  }, [open]);
-
-  useEffect(() => {
-    if (!open || !followOutputRef.current || (!messages.length && !toolActivity.length && !error))
-      return;
+    if (!open || !followOutputRef.current || (!messages.length && !error)) return;
     scrollEndRef.current?.scrollIntoView({ block: "end" });
-  }, [error, messages, open, toolActivity]);
+  }, [error, messages, open]);
 
   if (!open) return null;
 
   let running = runStatus == "running";
   let submitPrompt = async () => {
     let value = prompt.trim();
-    if (!value || running || !hasApiKey || !workspaceAvailable) return;
+    if (!value || running || !workspaceAvailable) return;
     setPrompt("");
     await onSend(value);
   };
-
   let handlePromptKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key != "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
     void submitPrompt();
   };
-
   let handleKeySubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     let input = keyInputRef.current;
@@ -171,8 +162,8 @@ export function WorkspaceAgentPanel({
               variant="ghost"
               onClick={() => {
                 followOutputRef.current = true;
-                onNewChat();
                 setPrompt("");
+                onNewChat();
               }}
             >
               <PlusIcon />
@@ -196,64 +187,24 @@ export function WorkspaceAgentPanel({
                 viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 48;
             }}
           >
-            <div
-              aria-label={t("agent.panel.title")}
-              className="space-y-5 px-4 py-5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-              role="region"
-              tabIndex={0}
-            >
+            <div aria-label={t("agent.panel.title")} className="space-y-5 px-4 py-5" role="log">
               {messages.length ? (
                 <div className="space-y-4">
-                  {messages.map((message) => (
-                    <article
+                  {messages.map((message, index) => (
+                    <WorkspaceAgentMessage
                       key={message.id}
-                      className={cn(
-                        "text-sm leading-6",
-                        message.role == "user"
-                          ? "ml-7 rounded-lg bg-muted/70 px-3 py-2.5"
-                          : "border-l-2 border-primary/30 pl-3",
-                      )}
-                    >
-                      <div className="mb-1 text-[0.68rem] font-medium tracking-wide text-muted-foreground uppercase">
-                        {message.role == "user" ? t("agent.message.you") : t("agent.message.agent")}
-                      </div>
-                      <div className="wrap-break-word whitespace-pre-wrap">{message.content}</div>
-                      {running && message.role == "assistant" && !message.content ? (
-                        <Spinner aria-hidden className="size-3.5 text-muted-foreground" />
-                      ) : null}
-                    </article>
+                      message={message}
+                      status={index == messages.length - 1 ? runStatus : "success"}
+                    />
                   ))}
                 </div>
               ) : (
-                <div className="rounded-lg border border-dashed px-4 py-6">
-                  <div className="mb-3 flex items-center gap-2 text-sm font-medium">
-                    <SparklesIcon className="size-4 text-muted-foreground" aria-hidden />
-                    {t("agent.empty.title")}
-                  </div>
-                  <p className="text-sm leading-6 text-muted-foreground">
-                    {t("agent.empty.description")}
-                  </p>
-                </div>
+                <Empty className="min-h-56 border">
+                  <SparklesIcon className="size-5" />
+                  <strong className="text-sm font-medium">{t("agent.empty.title")}</strong>
+                  <p className="text-sm text-muted-foreground">{t("agent.empty.description")}</p>
+                </Empty>
               )}
-
-              {toolActivity.length ? (
-                <section aria-label={t("agent.tool.activity")} className="space-y-1.5">
-                  {toolActivity.slice(-10).map((activity, index) => (
-                    <div
-                      key={`${activity.name}:${index}`}
-                      className="grid grid-cols-[1rem_1fr_auto] items-center gap-2 border-l pl-2 text-xs"
-                    >
-                      <ToolStatusIcon status={activity.status} />
-                      <span className="truncate font-mono text-[0.7rem]">
-                        {toolLabel(activity.name, t)}
-                      </span>
-                      <span className="text-muted-foreground">
-                        {t(`agent.tool.${activity.status}` as TranslationKey)}
-                      </span>
-                    </div>
-                  ))}
-                </section>
-              ) : null}
 
               {error ? (
                 <div
@@ -269,13 +220,12 @@ export function WorkspaceAgentPanel({
           </ScrollArea>
 
           <div className="space-y-3 border-t bg-muted/15 p-3">
-            <div className="grid grid-cols-[1fr_auto] items-end gap-2">
-              <label className="grid gap-1 text-xs font-medium" htmlFor="workspace-agent-model">
-                {t("agent.model.label")}
+            <Field orientation="horizontal" className="items-end">
+              <div className="min-w-0 flex-1 space-y-1">
+                <FieldLabel htmlFor="workspace-agent-model">{t("agent.model.label")}</FieldLabel>
                 <Input
                   ref={modelInputRef}
                   id="workspace-agent-model"
-                  name="workspace-agent-model"
                   defaultValue={model}
                   disabled={running}
                   autoComplete="off"
@@ -287,7 +237,7 @@ export function WorkspaceAgentPanel({
                     onConfigure({ model: nextModel });
                   }}
                 />
-              </label>
+              </div>
               {hasApiKey ? (
                 <Button
                   type="button"
@@ -299,27 +249,60 @@ export function WorkspaceAgentPanel({
                   {t("agent.actions.forgetKey")}
                 </Button>
               ) : null}
-            </div>
+            </Field>
 
             {hasApiKey ? (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <KeyRoundIcon className="size-3.5" aria-hidden />
-                <span>{t("agent.status.keyReady")}</span>
-              </div>
+              <form
+                className="space-y-2 rounded-lg border bg-background p-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void submitPrompt();
+                }}
+              >
+                <Field>
+                  <FieldLabel className="sr-only" htmlFor="workspace-agent-prompt">
+                    {t("agent.prompt.label")}
+                  </FieldLabel>
+                  <Textarea
+                    ref={promptRef}
+                    id="workspace-agent-prompt"
+                    className="max-h-40 min-h-20 resize-y border-0 bg-transparent shadow-none focus-visible:ring-0"
+                    value={prompt}
+                    disabled={!workspaceAvailable || running}
+                    placeholder={t("agent.prompt.placeholder")}
+                    onChange={(event) => setPrompt(event.currentTarget.value)}
+                    onKeyDown={handlePromptKeyDown}
+                  />
+                </Field>
+                <div className="flex items-center justify-between gap-2 px-1">
+                  <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                    <KeyRoundIcon className="size-3.5 shrink-0" aria-hidden />
+                    <span className="truncate">{t("agent.status.keyReady")}</span>
+                  </div>
+                  <Button
+                    type={running ? "button" : "submit"}
+                    size="icon-sm"
+                    variant={running ? "outline" : "default"}
+                    aria-label={running ? t("agent.actions.stop") : t("agent.actions.send")}
+                    disabled={!running && (!workspaceAvailable || !prompt.trim())}
+                    onClick={running ? onStop : undefined}
+                  >
+                    {running ? <SquareIcon /> : <SendIcon />}
+                  </Button>
+                </div>
+              </form>
             ) : (
               <form
-                className="space-y-2 rounded-lg border bg-background p-3"
+                className="space-y-3 rounded-lg border bg-background p-3"
                 onSubmit={handleKeySubmit}
               >
-                <label
-                  className="grid gap-1.5 text-xs font-medium"
-                  htmlFor="workspace-agent-api-key"
-                >
-                  {t("agent.apiKey.label")}
+                <Field>
+                  <FieldLabel htmlFor="workspace-agent-api-key">
+                    {t("agent.apiKey.label")}
+                  </FieldLabel>
                   <Input
                     ref={keyInputRef}
                     id="workspace-agent-api-key"
-                    name="workspace-agent-api-key"
                     type="password"
                     aria-describedby="workspace-agent-api-key-description"
                     autoComplete="off"
@@ -327,57 +310,16 @@ export function WorkspaceAgentPanel({
                     required
                     spellCheck={false}
                   />
-                </label>
-                <p
-                  id="workspace-agent-api-key-description"
-                  className="text-xs leading-5 text-muted-foreground"
-                >
-                  {t("agent.apiKey.description")}
-                </p>
+                  <FieldDescription id="workspace-agent-api-key-description" className="text-xs">
+                    {t("agent.apiKey.description")}
+                  </FieldDescription>
+                </Field>
                 <Button type="submit" className="w-full" size="sm">
                   <KeyRoundIcon data-icon="inline-start" />
                   {t("agent.actions.configureKey")}
                 </Button>
               </form>
             )}
-
-            {hasApiKey ? (
-              <form
-                className="space-y-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void submitPrompt();
-                }}
-              >
-                <label className="sr-only" htmlFor="workspace-agent-prompt">
-                  {t("agent.prompt.label")}
-                </label>
-                <textarea
-                  ref={promptRef}
-                  id="workspace-agent-prompt"
-                  name="workspace-agent-prompt"
-                  className="min-h-20 max-h-40 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-                  value={prompt}
-                  disabled={!workspaceAvailable || running}
-                  placeholder={t("agent.prompt.placeholder")}
-                  onChange={(event) => setPrompt(event.currentTarget.value)}
-                  onKeyDown={handlePromptKeyDown}
-                />
-                <div className="flex justify-end">
-                  {running ? (
-                    <Button type="button" variant="outline" onClick={onStop}>
-                      <SquareIcon data-icon="inline-start" />
-                      {t("agent.actions.stop")}
-                    </Button>
-                  ) : (
-                    <Button type="submit" disabled={!workspaceAvailable || !prompt.trim()}>
-                      <SendIcon data-icon="inline-start" />
-                      {t("agent.actions.send")}
-                    </Button>
-                  )}
-                </div>
-              </form>
-            ) : null}
           </div>
 
           <div className="sr-only" role="status" aria-live="polite">
@@ -397,12 +339,65 @@ export function WorkspaceAgentPanel({
   );
 }
 
-function ToolStatusIcon({ status }: { status: WorkspaceAgentToolStatus }) {
-  if (status == "running") return <Spinner aria-hidden className="size-3" />;
-  if (status == "error") return <CircleAlertIcon className="size-3 text-destructive" aria-hidden />;
-  if (status == "cancelled")
-    return <SquareIcon className="size-3 text-muted-foreground" aria-hidden />;
-  return <CheckIcon className="size-3 text-muted-foreground" aria-hidden />;
+function WorkspaceAgentMessage({
+  message,
+  status,
+}: {
+  message: UIMessage;
+  status: WorkspaceAgentRunStatus;
+}) {
+  let { t } = useI18n();
+  let text = message.parts
+    .filter((part) => part.type == "text")
+    .map((part) => part.text)
+    .join("");
+  let tools = message.parts.filter(isToolUIPart);
+
+  return (
+    <article
+      className={
+        message.role == "user"
+          ? "ml-7 rounded-lg bg-muted/70 px-3 py-2.5 text-sm leading-6"
+          : "border-l-2 border-primary/30 pl-3 text-sm leading-6"
+      }
+    >
+      <div className="mb-1 text-[0.68rem] font-medium text-muted-foreground uppercase">
+        {message.role == "user" ? t("agent.message.you") : t("agent.message.agent")}
+      </div>
+      <div className="space-y-2">
+        {text ? <div className="wrap-break-word whitespace-pre-wrap">{text}</div> : null}
+        {tools.map((part) => {
+          let toolStatus = workspaceAgentToolStatus(part, status);
+          return (
+            <Badge
+              className="flex w-full gap-2 p-2"
+              key={part.toolCallId}
+              variant={toolStatus == "error" ? "destructive" : "secondary"}
+            >
+              <WrenchIcon aria-hidden />
+              <span className="min-w-0 truncate">{toolLabel(getToolName(part), t)}</span>
+              <span className="ml-auto">{t(`agent.tool.${toolStatus}` as TranslationKey)}</span>
+            </Badge>
+          );
+        })}
+        {status == "running" && !text && !tools.length ? (
+          <Spinner aria-label={t("agent.status.running")} className="size-3.5" />
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function workspaceAgentToolStatus(
+  part: Parameters<typeof getToolName>[0],
+  runStatus: WorkspaceAgentRunStatus,
+) {
+  if (part.state == "output-error") return "error";
+  if (part.state != "output-available")
+    return runStatus == "running" ? "running" : runStatus == "error" ? "error" : "cancelled";
+  return (part.output as { status?: unknown } | null)?.status == "deduplicated"
+    ? "deduplicated"
+    : "success";
 }
 
 function toolLabel(name: string, t: ReturnType<typeof useI18n>["t"]) {
