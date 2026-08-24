@@ -1,36 +1,9 @@
-import type { SourceRevision, WorkspaceStorageErrorCode } from "../workspace/storage/types.ts";
-import type { WorkspaceIdentity } from "../workspace/runtime/types.ts";
-import type { EditorView } from "@codemirror/view";
-
-export type WorkspaceAgentActiveDocument = {
-  documentGeneration: number;
-  documentId: string;
-  dirty: boolean;
-  editVersion: number;
-  path: string;
-  targetGeneration: number;
-  value: string;
-  workspaceId: string;
-};
-
-export type WorkspaceAgentActiveDocumentVersion = {
-  contentHash: string;
-  documentGeneration: number;
-  documentId: string;
-  editVersion: number;
-  path: string;
-  targetGeneration: number;
-  version: 1;
-  workspaceId: string;
-};
-
-export type WorkspaceAgentActiveEditor = WorkspaceAgentActiveDocument & {
-  view: EditorView;
-};
-
-export interface WorkspaceAgentActiveEditorCapability {
-  getActiveEditor(): WorkspaceAgentActiveEditor | null;
-}
+import type { WorkspaceIdentity } from "../../workspace/runtime/types.ts";
+import type { SourceRevision, WorkspaceStorageErrorCode } from "../../workspace/storage/types.ts";
+import type {
+  WorkspaceAgentActiveDocumentVersion,
+  WorkspaceAgentVersionConflict,
+} from "./active-document.ts";
 
 export type WorkspaceAgentIssue = {
   code?: WorkspaceStorageErrorCode;
@@ -154,17 +127,6 @@ export type WorkspaceAgentApplyCurrentDocumentEditsInput = {
   edits: WorkspaceAgentTextEdit[];
   version: WorkspaceAgentActiveDocumentVersion;
 };
-
-export type WorkspaceAgentVersionConflict =
-  | "contentHash"
-  | "documentGeneration"
-  | "documentId"
-  | "editVersion"
-  | "editorValue"
-  | "path"
-  | "targetGeneration"
-  | "version"
-  | "workspaceId";
 
 export type WorkspaceAgentEditFailureReason =
   | "aborted"

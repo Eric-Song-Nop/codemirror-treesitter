@@ -1,9 +1,12 @@
 import { useChat } from "@ai-sdk/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
+import {
+  DEFAULT_WORKSPACE_AGENT_MODEL,
+  type WorkspaceAgentModel,
+} from "@/lib/agent/providers/deepseek/config";
 import { runWorkspaceAgent } from "@/lib/agent/runtime";
-import { createWorkspaceAgentChatTransport } from "@/lib/agent/ui-transport";
-import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/runtime-contracts";
-import type { WorkspaceAgentHost } from "@/lib/agent/workspace-agent-host";
+import { createWorkspaceAgentChatTransport } from "./chat-transport";
 
 export type WorkspaceAgentErrorCode = "missing-api-key" | "missing-prompt" | "missing-workspace";
 
@@ -18,12 +21,12 @@ export type UseWorkspaceAgentOptions = {
 
 export type WorkspaceAgentConfiguration = {
   apiKey?: string;
-  model?: string;
+  model?: WorkspaceAgentModel;
 };
 
 export type WorkspaceAgentRunner = typeof runWorkspaceAgent;
 
-const missingApiKeyMessage = "Enter an OpenAI API key before running the Agent.";
+const missingApiKeyMessage = "Enter a DeepSeek API key before running the Agent.";
 const missingPromptMessage = "Enter a message for the Agent.";
 const missingWorkspaceMessage = "Open a workspace before running the Agent.";
 
@@ -33,7 +36,7 @@ export function useWorkspaceAgent({
   throttleMs = 16,
   workspaceKey,
 }: UseWorkspaceAgentOptions) {
-  let [model, setModel] = useState(DEFAULT_WORKSPACE_AGENT_MODEL);
+  let [model, setModel] = useState<WorkspaceAgentModel>(DEFAULT_WORKSPACE_AGENT_MODEL);
   let [hasApiKey, setHasApiKey] = useState(false);
   let [validation, setValidation] = useState<{
     code: WorkspaceAgentErrorCode;
@@ -107,7 +110,7 @@ export function useWorkspaceAgent({
         setHasApiKey(Boolean(apiKey));
       }
       if ("model" in configuration) {
-        let nextModel = configuration.model?.trim() || DEFAULT_WORKSPACE_AGENT_MODEL;
+        let nextModel = configuration.model ?? DEFAULT_WORKSPACE_AGENT_MODEL;
         modelRef.current = nextModel;
         setModel(nextModel);
       }

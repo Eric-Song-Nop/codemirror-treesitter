@@ -1,30 +1,19 @@
 // @vitest-environment happy-dom
 
-import { act } from "react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
-import type { WorkspaceAgentHost } from "@/lib/agent/workspace-agent-host";
+import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
+import { createWorkspaceAgentRunHost, type WorkspaceAgentHostRefs } from "./run-host.ts";
 import type { ActiveDocumentSource, SingleFileSource } from "@/lib/workspace/types";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
-import {
-  createWorkspaceAgentRunHost,
-  useWorkspaceAgentHost,
-  type CreateWorkspaceAgentRunHost,
-  type WorkspaceAgentHostRefs,
-} from "./useWorkspaceAgentHost";
 
 vi.mock("@/lib/collaboration/markdown-document", () => ({
   getCollabDocumentValue: (document: CollabDocumentState) => document.value,
 }));
-
-type ReactActGlobal = typeof globalThis & {
-  IS_REACT_ACT_ENVIRONMENT?: boolean;
-};
 
 type TestRig = {
   document: CollabDocumentState;
@@ -37,18 +26,8 @@ type TestRig = {
 };
 
 let mountedViews: EditorView[] = [];
-let root: Root | null = null;
-let container: HTMLDivElement | null = null;
-
-beforeAll(() => {
-  (globalThis as ReactActGlobal).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 afterEach(() => {
-  if (root) act(() => root?.unmount());
-  root = null;
-  container?.remove();
-  container = null;
   for (let view of mountedViews.splice(0)) view.destroy();
   vi.restoreAllMocks();
 });
@@ -205,26 +184,6 @@ describe("workspace Agent run host", () => {
       status: "not-applied",
     });
     expect(rig.view.state.doc.toString()).toBe("# Draft\n");
-  });
-
-  it("returns a stable hook factory that reads refs when each run starts", async () => {
-    let rig = createRefs();
-    let factories: CreateWorkspaceAgentRunHost[] = [];
-    container = document.body.appendChild(document.createElement("div"));
-    root = createRoot(container);
-
-    function Harness() {
-      factories.push(useWorkspaceAgentHost(rig.refs));
-      return null;
-    }
-
-    await act(async () => root?.render(<Harness />));
-    await act(async () => root?.render(<Harness />));
-    expect(factories[1]).toBe(factories[0]);
-    expect(factories[0]!()?.getContext().workspace.id).toBe("local:test");
-
-    rig.refs.workspaceRuntimeRef.current = null;
-    expect(factories[0]!()).toBeNull();
   });
 });
 

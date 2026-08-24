@@ -1,10 +1,4 @@
-import type { WorkspaceAgentHost } from "./workspace-agent-host.ts";
-
-export const DEFAULT_WORKSPACE_AGENT_MODEL = "gpt-5.4-mini";
-export const DEFAULT_WORKSPACE_AGENT_RUN_TIMEOUT_MS = 120_000;
-export const MAX_WORKSPACE_AGENT_RUN_TIMEOUT_MS = 10 * 60_000;
-export const WORKSPACE_AGENT_MAX_STEPS = 12;
-export const WORKSPACE_AGENT_MAX_STALE_RETRIES = 2;
+import type { WorkspaceAgentHost } from "./host-port.ts";
 
 export type WorkspaceAgentMessage = {
   content: string;
@@ -67,11 +61,9 @@ export type WorkspaceAgentRunEvent =
       usage: WorkspaceAgentUsage;
     };
 
-export type WorkspaceAgentRunInput = {
-  apiKey: string;
+export type WorkspaceAgentRunRequest = {
   host: WorkspaceAgentHost;
   messages: readonly WorkspaceAgentMessage[];
-  model?: string;
   onEvent?: (event: WorkspaceAgentRunEvent) => void;
   signal?: AbortSignal;
   timeoutMs?: number;

@@ -1,16 +1,15 @@
 import { convertArrayToReadableStream, MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vite-plus/test";
-import type {
-  WorkspaceAgentActiveDocumentVersion,
-  WorkspaceAgentApplyCurrentDocumentEditsResult,
-} from "./contracts.ts";
-import {
-  createWorkspaceAgentTools,
-  redactWorkspaceAgentError,
-  runWorkspaceAgentWithLanguageModel,
-} from "./ai-sdk-runtime.ts";
-import type { WorkspaceAgentRunEvent } from "./runtime-contracts.ts";
-import type { WorkspaceAgentHost } from "./workspace-agent-host.ts";
+import { runWorkspaceAgentWithAiSdkModel } from "./adapters/ai-sdk/runner.ts";
+import type { WorkspaceAgentHost } from "./application/host-port.ts";
+import { WORKSPACE_AGENT_MAX_STEPS, WORKSPACE_AGENT_MAX_TOOL_CALLS } from "./application/policy.ts";
+import { redactWorkspaceAgentError } from "./application/runtime-error.ts";
+import type { WorkspaceAgentRunEvent } from "./application/run-contracts.ts";
+import { createWorkspaceAgentToolSession } from "./application/tool-session.ts";
+import type { WorkspaceAgentActiveDocumentVersion } from "./domain/active-document.ts";
+import type { WorkspaceAgentApplyCurrentDocumentEditsResult } from "./domain/contracts.ts";
+import { DEFAULT_WORKSPACE_AGENT_MODEL } from "./providers/deepseek/config.ts";
+import { createDeepSeekWorkspaceAgentModel } from "./providers/deepseek/model.ts";
 
 describe("AI SDK workspace Agent adapter", () => {
   it("streams a deterministic search, read, edit, and final response tool loop", async () => {
@@ -41,14 +40,17 @@ describe("AI SDK workspace Agent adapter", () => {
     });
     let events: WorkspaceAgentRunEvent[] = [];
 
-    let result = await runWorkspaceAgentWithLanguageModel(
+    let result = await runWorkspaceAgentWithAiSdkModel(
       {
         host: mocks.host,
         messages: [{ content: "Find the needle and update it.", role: "user" }],
-        modelId: "mock-markdown-agent",
         onEvent: (event) => events.push(event),
       },
-      model,
+      {
+        model,
+        modelId: "mock-markdown-agent",
+        providerOptions: { deepseek: { thinking: { type: "enabled" } } },
+      },
     );
 
     expect(result).toEqual({
@@ -86,7 +88,7 @@ describe("AI SDK workspace Agent adapter", () => {
     );
     expect(model.doStreamCalls).toHaveLength(6);
     expect(model.doStreamCalls[0]?.providerOptions).toEqual({
-      openai: { parallelToolCalls: false, store: false },
+      deepseek: { thinking: { type: "enabled" } },
     });
     expect(model.doStreamCalls[0]?.prompt[0]).toMatchObject({
       role: "system",
@@ -109,11 +111,11 @@ describe("AI SDK workspace Agent adapter", () => {
   it("deduplicates toolCallId executions and enforces two post-conflict stale retries", async () => {
     let mocks = fakeHost();
     let deduplicated: WorkspaceAgentRunEvent[] = [];
-    let tools = createWorkspaceAgentTools(mocks.host, (event) => deduplicated.push(event));
-    let searchOptions = toolOptions("same-search");
+    let session = createWorkspaceAgentToolSession(mocks.host, (event) => deduplicated.push(event));
+    let searchExecution = toolExecution("same-search");
 
-    let firstSearch = tools.search_markdown.execute({ query: "needle" }, searchOptions);
-    let secondSearch = tools.search_markdown.execute({ query: "needle" }, searchOptions);
+    let firstSearch = session.searchMarkdown({ query: "needle" }, searchExecution);
+    let secondSearch = session.searchMarkdown({ query: "needle" }, searchExecution);
     await expect(firstSearch).resolves.toMatchObject({ status: "complete" });
     await expect(secondSearch).resolves.toMatchObject({ status: "complete" });
     expect(mocks.searchMarkdown).toHaveBeenCalledOnce();
@@ -122,10 +124,10 @@ describe("AI SDK workspace Agent adapter", () => {
       toolName: "search_markdown",
       type: "tool-deduplicated",
     });
-    await expect(
-      tools.search_markdown.execute({ query: "different" }, searchOptions),
-    ).rejects.toThrow(/reused with different semantics/);
-    await expect(tools.read_markdown.execute({ path: "draft.md" }, searchOptions)).rejects.toThrow(
+    await expect(session.searchMarkdown({ query: "different" }, searchExecution)).rejects.toThrow(
+      /reused with different semantics/,
+    );
+    await expect(session.readMarkdown({ path: "draft.md" }, searchExecution)).rejects.toThrow(
       /reused with different semantics/,
     );
     expect(mocks.readMarkdown).not.toHaveBeenCalled();
@@ -137,25 +139,69 @@ describe("AI SDK workspace Agent adapter", () => {
     };
     for (let index = 0; index < 3; index++) {
       await expect(
-        tools.apply_current_document_edits.execute(editInput, toolOptions(`stale-${index}`)),
+        session.applyCurrentDocumentEdits(editInput, toolExecution(`stale-${index}`)),
       ).resolves.toMatchObject({ reason: "stale-version", status: "not-applied" });
     }
     await expect(
-      tools.apply_current_document_edits.execute(editInput, toolOptions("stale-limit")),
+      session.applyCurrentDocumentEdits(editInput, toolExecution("stale-limit")),
     ).resolves.toMatchObject({ reason: "stale-retry-limit", status: "not-applied" });
     expect(mocks.applyCurrentDocumentEdits).toHaveBeenCalledTimes(3);
   });
 
+  it("stops the model loop at the product step budget", async () => {
+    let mocks = fakeHost();
+    let model = new MockLanguageModelV4({
+      doStream: Array.from({ length: WORKSPACE_AGENT_MAX_STEPS + 1 }, (_, index) =>
+        toolCallStream(`search-${index}`, "search_markdown", { query: `needle-${index}` }),
+      ),
+    });
+
+    let result = await runWorkspaceAgentWithAiSdkModel(
+      {
+        host: mocks.host,
+        messages: [{ content: "Keep searching.", role: "user" }],
+      },
+      { model, modelId: "mock-step-budget" },
+    );
+
+    expect(model.doStreamCalls).toHaveLength(WORKSPACE_AGENT_MAX_STEPS);
+    expect(mocks.searchMarkdown).toHaveBeenCalledTimes(WORKSPACE_AGENT_MAX_STEPS);
+    expect(result.finishReason).toBe("tool-calls");
+  });
+
+  it("limits unique tool calls even when one model step schedules them in parallel", async () => {
+    let mocks = fakeHost();
+    let session = createWorkspaceAgentToolSession(mocks.host);
+    let allowed = Array.from({ length: WORKSPACE_AGENT_MAX_TOOL_CALLS }, (_, index) =>
+      session.searchMarkdown(
+        { query: `needle-${index}` },
+        toolExecution(`parallel-search-${index}`),
+      ),
+    );
+
+    await expect(Promise.all(allowed)).resolves.toHaveLength(WORKSPACE_AGENT_MAX_TOOL_CALLS);
+    await expect(
+      session.searchMarkdown(
+        { query: "over-budget" },
+        toolExecution("parallel-search-over-budget"),
+      ),
+    ).rejects.toThrow(/unique tool-call budget/);
+    await expect(
+      session.searchMarkdown({ query: "needle-0" }, toolExecution("parallel-search-0")),
+    ).resolves.toMatchObject({ status: "complete" });
+    expect(mocks.searchMarkdown).toHaveBeenCalledTimes(WORKSPACE_AGENT_MAX_TOOL_CALLS);
+  });
+
   it("honors AbortSignal before budget branches and passes it to the model", async () => {
     let mocks = fakeHost();
-    let tools = createWorkspaceAgentTools(mocks.host);
+    let session = createWorkspaceAgentToolSession(mocks.host);
     let stopped = new AbortController();
     stopped.abort(new DOMException("Stopped", "AbortError"));
 
     expect(() =>
-      tools.apply_current_document_edits.execute(
+      session.applyCurrentDocumentEdits(
         { edits: [{ newText: "updated", oldText: "needle" }], version: activeVersion },
-        toolOptions("stopped-tool", stopped.signal),
+        toolExecution("stopped-tool", stopped.signal),
       ),
     ).toThrowError(expect.objectContaining({ name: "AbortError" }));
     expect(mocks.applyCurrentDocumentEdits).not.toHaveBeenCalled();
@@ -176,20 +222,34 @@ describe("AI SDK workspace Agent adapter", () => {
         throw new Error("unreachable");
       },
     });
-    let run = runWorkspaceAgentWithLanguageModel(
+    let run = runWorkspaceAgentWithAiSdkModel(
       {
         host: mocks.host,
         messages: [{ content: "Stop this run.", role: "user" }],
-        modelId: "mock-abort",
         signal: controller.signal,
       },
-      model,
+      { model, modelId: "mock-abort" },
     );
     let modelSignal = await started;
     expect(modelSignal.aborted).toBe(false);
     controller.abort(new DOMException("Stopped", "AbortError"));
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
     expect(modelSignal.aborted).toBe(true);
+  });
+
+  it("binds only the supported DeepSeek V4 models with thinking enabled", () => {
+    let defaultBinding = createDeepSeekWorkspaceAgentModel("sk-test", undefined);
+    let proBinding = createDeepSeekWorkspaceAgentModel("sk-test", "deepseek-v4-pro");
+
+    expect(defaultBinding.modelId).toBe(DEFAULT_WORKSPACE_AGENT_MODEL);
+    expect(defaultBinding.model).toBeDefined();
+    expect(defaultBinding.providerOptions).toEqual({
+      deepseek: { thinking: { type: "enabled" } },
+    });
+    expect(proBinding.modelId).toBe("deepseek-v4-pro");
+    expect(() => createDeepSeekWorkspaceAgentModel("sk-test", "deepseek-chat")).toThrow(
+      /Unsupported DeepSeek model/,
+    );
   });
 
   it("redacts API keys from errors without retaining the provider cause", () => {
@@ -308,12 +368,10 @@ function staleResult(): WorkspaceAgentApplyCurrentDocumentEditsResult {
   };
 }
 
-function toolOptions(toolCallId: string, abortSignal?: AbortSignal) {
+function toolExecution(callId: string, signal?: AbortSignal) {
   return {
-    abortSignal,
-    context: {},
-    messages: [],
-    toolCallId,
+    callId,
+    signal,
   };
 }
 

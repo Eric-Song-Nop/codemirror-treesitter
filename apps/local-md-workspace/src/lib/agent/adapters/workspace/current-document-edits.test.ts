@@ -5,13 +5,14 @@ import { EditorState, Transaction, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { LoroDoc, UndoManager } from "loro-crdt";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import type { WorkspaceAgentHost } from "../../application/host-port.ts";
+import type { WorkspaceAgentReadRuntime } from "../../application/workspace-search.ts";
+import type { WorkspaceAgentActiveDocumentVersion } from "../../domain/active-document.ts";
 import type {
-  WorkspaceAgentActiveDocumentVersion,
   WorkspaceAgentActiveEditor,
   WorkspaceAgentActiveEditorCapability,
-} from "./contracts.ts";
-import { createWorkspaceAgentHost, type WorkspaceAgentHost } from "./workspace-agent-host.ts";
-import type { WorkspaceAgentReadRuntime } from "./workspace-search.ts";
+} from "./active-editor.ts";
+import { createWorkspaceAgentHost } from "./host.ts";
 
 let mountedViews: EditorView[] = [];
 let resourceCleanups: Array<() => void> = [];

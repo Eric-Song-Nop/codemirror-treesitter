@@ -1,16 +1,16 @@
 import type { ChangeSpec } from "@codemirror/state";
 import {
   captureWorkspaceAgentActiveEditor,
-  workspaceAgentVersionConflicts,
-} from "./active-document.ts";
+  workspaceAgentActiveEditorConflicts,
+  type WorkspaceAgentActiveEditorCapability,
+} from "./active-editor.ts";
 import type {
-  WorkspaceAgentActiveEditorCapability,
   WorkspaceAgentApplyCurrentDocumentEditsInput,
   WorkspaceAgentApplyCurrentDocumentEditsResult,
   WorkspaceAgentEditFailureReason,
   WorkspaceAgentTextEdit,
-} from "./contracts.ts";
-import type { WorkspaceAgentLimits } from "./limits.ts";
+} from "../../domain/contracts.ts";
+import type { WorkspaceAgentLimits } from "../../domain/limits.ts";
 
 type ResolvedWorkspaceAgentTextEdit = {
   change: ChangeSpec;
@@ -146,7 +146,7 @@ export function applyWorkspaceAgentCurrentDocumentEdits(input: {
       "The bound workspace document is no longer active.",
     );
   }
-  let initialConflicts = workspaceAgentVersionConflicts({
+  let initialConflicts = workspaceAgentActiveEditorConflicts({
     capture: initial,
     expected: input.request.version,
   });
@@ -179,7 +179,7 @@ export function applyWorkspaceAgentCurrentDocumentEdits(input: {
       "The bound workspace document is no longer active.",
     );
   }
-  let conflicts = workspaceAgentVersionConflicts({
+  let conflicts = workspaceAgentActiveEditorConflicts({
     capture: current,
     expected: input.request.version,
   });

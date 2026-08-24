@@ -1,11 +1,22 @@
 import { createUIMessageStream, type ChatTransport, type UIMessage, type UIMessageChunk } from "ai";
-import type { WorkspaceAgentRunInput, WorkspaceAgentRunResult } from "./runtime-contracts.ts";
-import type { WorkspaceAgentHost } from "./workspace-agent-host.ts";
+import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
+import { redactWorkspaceAgentErrorMessage } from "@/lib/agent/application/runtime-error";
+import type { WorkspaceAgentRunResult } from "@/lib/agent/application/run-contracts";
+import type {
+  DeepSeekWorkspaceAgentRunInput,
+  WorkspaceAgentModel,
+} from "@/lib/agent/providers/deepseek/config";
 
-type WorkspaceAgentRunner = (input: WorkspaceAgentRunInput) => Promise<WorkspaceAgentRunResult>;
+type WorkspaceAgentRunner = (
+  input: DeepSeekWorkspaceAgentRunInput,
+) => Promise<WorkspaceAgentRunResult>;
 
 type WorkspaceAgentTransportOptions = {
-  getConfiguration: () => { apiKey: string; host: WorkspaceAgentHost; model: string };
+  getConfiguration: () => {
+    apiKey: string;
+    host: WorkspaceAgentHost;
+    model: WorkspaceAgentModel;
+  };
   runner: WorkspaceAgentRunner;
 };
 
@@ -19,7 +30,7 @@ export function createWorkspaceAgentChatTransport({
       let configuration = getConfiguration();
       let responseId = `workspace-agent-${messages.length}`;
       return createUIMessageStream({
-        onError: (error) => redactedErrorMessage(error, configuration.apiKey),
+        onError: (error) => redactWorkspaceAgentErrorMessage(error, configuration.apiKey),
         execute: async ({ writer }) => {
           let text = "";
           let toolIds = new Map<string, string>();
@@ -91,9 +102,4 @@ function textMessages(messages: UIMessage[]) {
     let content = message.parts.flatMap((part) => (part.type == "text" ? part.text : [])).join("");
     return content ? [{ content, role: message.role }] : [];
   });
-}
-
-function redactedErrorMessage(error: unknown, apiKey: string) {
-  let message = error instanceof Error ? error.message : "The Agent request failed.";
-  return apiKey ? message.split(apiKey).join("[redacted]") : message;
 }

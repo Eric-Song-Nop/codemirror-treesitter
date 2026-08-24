@@ -15,7 +15,7 @@
     "smoke:ui": "node smoke/ui-smoke.mjs"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^4.0.46",
+    "@ai-sdk/deepseek": "^3.0.31",
     "@ai-sdk/react": "^4.0.80",
     "@codemirror-treesitter/language": "workspace:*",
     "@codemirror-treesitter/live-md": "workspace:*",

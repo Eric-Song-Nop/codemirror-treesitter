@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { createChat } from "@shadcn/helpers/ai-sdk";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/providers/deepseek/config";
 import { WorkspaceAgentPanel } from "./WorkspaceAgentPanel";
 
 type ReactActGlobal = typeof globalThis & {
@@ -65,7 +66,7 @@ describe("WorkspaceAgentPanel", () => {
         error={null}
         hasApiKey
         messages={agentMessages()}
-        model="gpt-test"
+        model={DEFAULT_WORKSPACE_AGENT_MODEL}
         open
         runStatus="success"
         workspaceAvailable
@@ -107,14 +108,14 @@ describe("WorkspaceAgentPanel", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it("normalizes an empty model field to the runtime default", async () => {
+  it("defaults to V4 Flash and allows switching to V4 Pro", async () => {
     let configure = vi.fn();
     await render(
       <WorkspaceAgentPanel
         error={null}
         hasApiKey
         messages={[]}
-        model="gpt-test"
+        model={DEFAULT_WORKSPACE_AGENT_MODEL}
         open
         runStatus="idle"
         workspaceAvailable
@@ -125,13 +126,17 @@ describe("WorkspaceAgentPanel", () => {
         onStop={vi.fn()}
       />,
     );
-    let model = document.querySelector<HTMLInputElement>("#workspace-agent-model")!;
-    model.value = "   ";
+    let model = document.querySelector<HTMLSelectElement>("#workspace-agent-model")!;
+    expect(model.value).toBe("deepseek-v4-flash");
+    expect(Array.from(model.options, (option) => option.value)).toEqual([
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
+    ]);
+    model.value = "deepseek-v4-pro";
 
-    await act(async () => model.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    await act(async () => model.dispatchEvent(new Event("change", { bubbles: true })));
 
-    expect(configure).toHaveBeenCalledWith({ model: "gpt-5.4-mini" });
-    expect(model.value).toBe("gpt-5.4-mini");
+    expect(configure).toHaveBeenCalledWith({ model: "deepseek-v4-pro" });
   });
 });
 
@@ -142,7 +147,7 @@ function KeyConfigurationHarness({ onConfigure }: { onConfigure: (value: unknown
       error={null}
       hasApiKey={hasApiKey}
       messages={[]}
-      model="gpt-5.4-mini"
+      model={DEFAULT_WORKSPACE_AGENT_MODEL}
       open
       runStatus="idle"
       workspaceAvailable

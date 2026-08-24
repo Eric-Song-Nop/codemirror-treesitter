@@ -1,55 +1,33 @@
 import type {
-  WorkspaceAgentActiveEditorCapability,
   WorkspaceAgentApplyCurrentDocumentEditsInput,
-  WorkspaceAgentApplyCurrentDocumentEditsResult,
   WorkspaceAgentContext,
   WorkspaceAgentListMarkdownInput,
   WorkspaceAgentListMarkdownResult,
   WorkspaceAgentReadMarkdownInput,
-  WorkspaceAgentReadMarkdownResult,
   WorkspaceAgentSearchMarkdownInput,
-  WorkspaceAgentSearchResult,
-} from "./contracts.ts";
+} from "../../domain/contracts.ts";
+import { workspaceAgentActiveDocumentVersion } from "../../domain/active-document.ts";
+import type { WorkspaceAgentHost } from "../../application/host-port.ts";
 import {
   captureWorkspaceAgentActiveEditor,
-  workspaceAgentActiveDocumentVersion,
-} from "./active-document.ts";
+  type WorkspaceAgentActiveEditorCapability,
+} from "./active-editor.ts";
 import { applyWorkspaceAgentCurrentDocumentEdits } from "./current-document-edits.ts";
 import {
   resolveWorkspaceAgentLimits,
   type WorkspaceAgentLimitOverrides,
   type WorkspaceAgentLimits,
-} from "./limits.ts";
+} from "../../domain/limits.ts";
 import {
   collectWorkspaceMarkdownCatalog,
   compareWorkspaceAgentPaths,
   normalizeWorkspaceAgentDirectory,
-} from "./workspace-catalog.ts";
+} from "../../application/workspace-catalog.ts";
 import {
   readWorkspaceMarkdown,
   searchWorkspaceMarkdown,
   type WorkspaceAgentReadRuntime,
-} from "./workspace-search.ts";
-
-export interface WorkspaceAgentHost {
-  applyCurrentDocumentEdits(
-    input: WorkspaceAgentApplyCurrentDocumentEditsInput,
-    signal?: AbortSignal,
-  ): WorkspaceAgentApplyCurrentDocumentEditsResult;
-  getContext(): WorkspaceAgentContext;
-  listMarkdown(
-    input?: WorkspaceAgentListMarkdownInput,
-    signal?: AbortSignal,
-  ): Promise<WorkspaceAgentListMarkdownResult>;
-  readMarkdown(
-    input: WorkspaceAgentReadMarkdownInput,
-    signal?: AbortSignal,
-  ): Promise<WorkspaceAgentReadMarkdownResult>;
-  searchMarkdown(
-    input: WorkspaceAgentSearchMarkdownInput,
-    signal?: AbortSignal,
-  ): Promise<WorkspaceAgentSearchResult>;
-}
+} from "../../application/workspace-search.ts";
 
 export function createWorkspaceAgentHost(input: {
   activeEditor?: WorkspaceAgentActiveEditorCapability;

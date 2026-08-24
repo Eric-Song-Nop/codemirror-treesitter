@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { EditorView } from "@codemirror/view";
-import type { MarkdownDirectoryNode, MarkdownTreeNode } from "../workspace/tree.ts";
+import type { MarkdownDirectoryNode, MarkdownTreeNode } from "../../../workspace/tree.ts";
 import type {
   WorkspaceDocumentPort,
   WorkspaceTreePort,
   WorkspaceTextSnapshot,
-} from "../workspace/runtime/types.ts";
-import type { SourceObservation } from "../workspace/storage/types.ts";
-import { createWorkspaceAgentHost } from "./workspace-agent-host.ts";
-import type { WorkspaceAgentReadRuntime } from "./workspace-search.ts";
-import type { WorkspaceAgentActiveEditorCapability } from "./contracts.ts";
+} from "../../../workspace/runtime/types.ts";
+import type { SourceObservation } from "../../../workspace/storage/types.ts";
+import type { WorkspaceAgentReadRuntime } from "../../application/workspace-search.ts";
+import type { WorkspaceAgentActiveEditorCapability } from "./active-editor.ts";
+import { createWorkspaceAgentHost } from "./host.ts";
 
 describe("workspace agent read host", () => {
   it("lists the filtered Markdown tree recursively with stable pagination", async () => {

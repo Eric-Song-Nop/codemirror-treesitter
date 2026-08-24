@@ -487,6 +487,53 @@ async function assertAgentApiKeyMemoryOnly(client, sessionId) {
     `Boolean(document.querySelector("#workspace-agent-api-key"))`,
     sessionId,
   );
+  let configuration = await client.evaluate(
+    `
+      (() => {
+        let keyLabel = document.querySelector('label[for="workspace-agent-api-key"]');
+        let keyDescription = document.querySelector("#workspace-agent-api-key-description");
+        let model = document.querySelector("#workspace-agent-model");
+        if (!(model instanceof HTMLSelectElement)) {
+          throw new Error("Agent model select was not found.");
+        }
+        return {
+          keyLabel: keyLabel?.textContent.trim() ?? "",
+          keyDescription: keyDescription?.textContent.trim() ?? "",
+          model: model.value,
+          modelOptions: Array.from(model.options, (option) => option.value)
+        };
+      })()
+    `,
+    sessionId,
+  );
+  if (
+    configuration.keyLabel != "DeepSeek API key" ||
+    !configuration.keyDescription.includes("DeepSeek") ||
+    !configuration.keyDescription.includes("context-caching policies") ||
+    configuration.model != "deepseek-v4-flash" ||
+    JSON.stringify(configuration.modelOptions) !=
+      JSON.stringify(["deepseek-v4-flash", "deepseek-v4-pro"])
+  ) {
+    throw new Error(
+      `Agent provider configuration was unexpected: ${JSON.stringify(configuration)}`,
+    );
+  }
+
+  await client.evaluate(
+    `
+      (() => {
+        let model = document.querySelector("#workspace-agent-model");
+        let setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
+        setter.call(model, "deepseek-v4-pro");
+        model.dispatchEvent(new Event("change", { bubbles: true }));
+      })()
+    `,
+    sessionId,
+  );
+  await client.waitForPredicate(
+    `document.querySelector("#workspace-agent-model")?.value == "deepseek-v4-pro"`,
+    sessionId,
+  );
   await client.evaluate(
     `
       (() => {
@@ -513,13 +560,28 @@ async function assertAgentApiKeyMemoryOnly(client, sessionId) {
         ),
         sessionStorageContainsSecret: Object.values(sessionStorage).some((value) =>
           String(value).includes(${JSON.stringify(secret)})
-        )
+        ),
+        localStorageContainsModel: ["deepseek-v4-flash", "deepseek-v4-pro"].some((model) =>
+          Object.values(localStorage).some((value) => String(value).includes(model))
+        ),
+        sessionStorageContainsModel: ["deepseek-v4-flash", "deepseek-v4-pro"].some((model) =>
+          Object.values(sessionStorage).some((value) => String(value).includes(model))
+        ),
+        selectedModel: document.querySelector("#workspace-agent-model")?.value ?? null
       }))()
     `,
     sessionId,
   );
-  if (Object.values(state).some(Boolean)) {
-    throw new Error(`Agent API key escaped tab memory: ${JSON.stringify(state)}`);
+  if (
+    state.bodyContainsSecret ||
+    state.htmlContainsSecret ||
+    state.localStorageContainsSecret ||
+    state.sessionStorageContainsSecret ||
+    state.localStorageContainsModel ||
+    state.sessionStorageContainsModel ||
+    state.selectedModel != "deepseek-v4-pro"
+  ) {
+    throw new Error(`Agent configuration escaped tab memory: ${JSON.stringify(state)}`);
   }
 
   await client.evaluate(

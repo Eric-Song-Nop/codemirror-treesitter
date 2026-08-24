@@ -1,11 +1,8 @@
 import { useCallback, useEffect } from "react";
 import { useI18n } from "@/lib/i18n";
-import { useWorkspaceAgent } from "@/hooks/agent/useWorkspaceAgent";
-import {
-  useWorkspaceAgentHost,
-  type WorkspaceAgentHostRefs,
-} from "@/hooks/agent/useWorkspaceAgentHost";
+import { useWorkspaceAgentHost, type WorkspaceAgentHostRefs } from "./useWorkspaceAgentHost";
 import { WorkspaceAgentPanel } from "./WorkspaceAgentPanel";
+import { useWorkspaceAgent } from "./useWorkspaceAgent";
 
 type WorkspaceAgentFeatureProps = WorkspaceAgentHostRefs & {
   open: boolean;

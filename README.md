@@ -18,9 +18,10 @@ GroveMd is built for a small set of workflows that should stay simple:
   file access for real local files.
 - **Collaboration**: share a single file link through the Grove relay so guests
   can co-edit without access to the owner's local folder or cloud workspace.
-- **Browser Agent**: use your own OpenAI API key to search and read the active
-  workspace or apply version-checked edits to its open Markdown document. The
-  Agent orchestration and tools stay in the page.
+- **Browser Agent**: use your own DeepSeek API key with
+  `deepseek-v4-flash` by default, or manually select `deepseek-v4-pro`, to
+  search and read the active workspace or apply version-checked edits to its
+  open Markdown document. The Agent orchestration and tools stay in the page.
 - **Instant live Markdown**: headings, tables, task lists, code fences, KaTeX,
   Mermaid, and images render inline while the document remains editable.
 
@@ -66,10 +67,15 @@ collaboration flows.
   Durable Object persistence, WebSocket sync, Wrangler, and the Cloudflare Vite
   plugin. The `collab-editor` app remains a separate Cloudflare collaboration
   demo.
-- **Browser Agent layer**: Grove uses Vercel AI SDK Core with a lazy OpenAI
-  adapter. A user-provided key remains in page memory while workspace tools
-  list, read, and search Markdown and dispatch version-checked edits through the
-  active CodeMirror/Loro document.
+- **Browser Agent layer**: Grove uses Vercel AI SDK Core with a lazy
+  `@ai-sdk/deepseek` adapter fixed to `https://api.deepseek.com`. A
+  user-provided key remains in page memory while workspace tools list, read,
+  and search Markdown and dispatch version-checked edits through the active
+  CodeMirror/Loro document. DeepSeek's
+  [disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) runs by
+  default, and its public API documents no client-side opt-out. DeepSeek
+  documents per-user isolation and automatic cleanup of unused entries,
+  typically within a few hours to days.
 
 ## Quickstart
 
@@ -119,7 +125,7 @@ await editor.ready;
   `<live-md-editor>`.
 - Optional LiveMD collaboration bindings for Loro documents, presence, custom
   text containers, and collaborative undo/redo.
-- A browser-resident Grove Markdown Agent with OpenAI BYOK, bounded workspace
+- A browser-resident Grove Markdown Agent with DeepSeek BYOK, bounded workspace
   read/search tools, streamed responses, and current-document-only edits that
   reuse normal CodeMirror, Loro, and workspace persistence paths.
 - Validation tooling and apps that check public export parity, package
@@ -173,9 +179,12 @@ this repository replace the language-aware layers above those primitives.
    remains a separate shareable collaborative editor demo.
 7. **Browser Agent surface**:
    Local MD Workspace owns a provider-neutral Agent host and a lazy Vercel AI
-   SDK/OpenAI adapter. Reads go through the active `WorkspaceRuntime`; writes
-   dispatch one version-checked CodeMirror transaction so the main Loro peer,
-   ordinary undo, and existing persistence paths remain authoritative.
+   SDK `@ai-sdk/deepseek` adapter fixed to `https://api.deepseek.com`.
+   `deepseek-v4-flash` is the default, and `deepseek-v4-pro` is the only model
+   the user can select manually. Reads go through the active
+   `WorkspaceRuntime`; writes dispatch one version-checked CodeMirror
+   transaction so the main Loro peer, ordinary undo, and existing persistence
+   paths remain authoritative.
 
 ## Workspace Structure
 
@@ -229,8 +238,8 @@ entry points, dependency boundaries, source layout, and validation notes.
   supports file/folder create, rename, delete, tree browsing, and autosave, can
   export standalone HTML or open a browser print view for saving as PDF with
   scoped LiveMD document styling, can host or join Grove shared-file sessions
-  through `apps/grove-relay`, and includes a browser-resident OpenAI BYOK Agent
-  for workspace Markdown search/read and active-document editing.
+  through `apps/grove-relay`, and includes a browser-resident DeepSeek BYOK
+  Agent for workspace Markdown search/read and active-document editing.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, share create/session/rotate/revoke APIs, WebSocket Loro sync,
   bounded relay queues, share expiration cleanup, and Wrangler deploy/types
