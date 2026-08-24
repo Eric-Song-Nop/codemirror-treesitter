@@ -1,5 +1,10 @@
 export type {
   WorkspaceAgentActiveDocument,
+  WorkspaceAgentActiveDocumentVersion,
+  WorkspaceAgentActiveEditor,
+  WorkspaceAgentActiveEditorCapability,
+  WorkspaceAgentApplyCurrentDocumentEditsInput,
+  WorkspaceAgentApplyCurrentDocumentEditsResult,
   WorkspaceAgentCatalogResult,
   WorkspaceAgentContext,
   WorkspaceAgentIssue,
@@ -10,6 +15,8 @@ export type {
   WorkspaceAgentSearchMarkdownInput,
   WorkspaceAgentSearchMatch,
   WorkspaceAgentSearchResult,
+  WorkspaceAgentTextEdit,
+  WorkspaceAgentVersionConflict,
 } from "./contracts.ts";
 export {
   DEFAULT_WORKSPACE_AGENT_LIMITS,
@@ -18,3 +25,4 @@ export {
   type WorkspaceAgentLimits,
 } from "./limits.ts";
 export { createWorkspaceAgentHost, type WorkspaceAgentHost } from "./workspace-agent-host.ts";
+export { resolveWorkspaceAgentTextEdits } from "./current-document-edits.ts";

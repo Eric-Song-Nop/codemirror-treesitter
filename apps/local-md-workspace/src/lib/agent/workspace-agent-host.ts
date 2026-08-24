@@ -1,5 +1,7 @@
 import type {
-  WorkspaceAgentActiveDocument,
+  WorkspaceAgentActiveEditorCapability,
+  WorkspaceAgentApplyCurrentDocumentEditsInput,
+  WorkspaceAgentApplyCurrentDocumentEditsResult,
   WorkspaceAgentContext,
   WorkspaceAgentListMarkdownInput,
   WorkspaceAgentListMarkdownResult,
@@ -8,6 +10,11 @@ import type {
   WorkspaceAgentSearchMarkdownInput,
   WorkspaceAgentSearchResult,
 } from "./contracts.ts";
+import {
+  captureWorkspaceAgentActiveEditor,
+  workspaceAgentActiveDocumentVersion,
+} from "./active-document.ts";
+import { applyWorkspaceAgentCurrentDocumentEdits } from "./current-document-edits.ts";
 import {
   resolveWorkspaceAgentLimits,
   type WorkspaceAgentLimitOverrides,
@@ -24,6 +31,10 @@ import {
 } from "./workspace-search.ts";
 
 export interface WorkspaceAgentHost {
+  applyCurrentDocumentEdits(
+    input: WorkspaceAgentApplyCurrentDocumentEditsInput,
+    signal?: AbortSignal,
+  ): WorkspaceAgentApplyCurrentDocumentEditsResult;
   getContext(): WorkspaceAgentContext;
   listMarkdown(
     input?: WorkspaceAgentListMarkdownInput,
@@ -40,14 +51,14 @@ export interface WorkspaceAgentHost {
 }
 
 export function createWorkspaceAgentHost(input: {
-  getActiveDocument?: () => WorkspaceAgentActiveDocument | null;
+  activeEditor?: WorkspaceAgentActiveEditorCapability;
   limits?: WorkspaceAgentLimitOverrides;
   runtime: WorkspaceAgentReadRuntime;
 }): WorkspaceAgentHost {
   return new DefaultWorkspaceAgentHost(
     input.runtime,
     resolveWorkspaceAgentLimits(input.limits),
-    input.getActiveDocument ?? (() => null),
+    input.activeEditor,
   );
 }
 
@@ -55,20 +66,21 @@ class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
   constructor(
     private readonly runtime: WorkspaceAgentReadRuntime,
     private readonly limits: WorkspaceAgentLimits,
-    private readonly getActiveDocumentSnapshot: () => WorkspaceAgentActiveDocument | null,
+    private readonly activeEditor: WorkspaceAgentActiveEditorCapability | undefined,
   ) {}
 
   getContext(): WorkspaceAgentContext {
-    let active = this.getActiveDocumentSnapshot();
+    let active = this.captureActiveDocument();
     return {
       activeDocument: active
         ? {
             dirty: active.dirty,
             path: active.path,
-            version: active.version,
+            version: workspaceAgentActiveDocumentVersion(active),
           }
         : null,
       capabilities: {
+        applyCurrentDocumentEdits: Boolean(this.activeEditor),
         listMarkdown: true,
         readMarkdown: true,
         searchMarkdown: true,
@@ -119,7 +131,7 @@ class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
 
   readMarkdown(input: WorkspaceAgentReadMarkdownInput, signal?: AbortSignal) {
     return readWorkspaceMarkdown({
-      activeDocument: this.getActiveDocumentSnapshot(),
+      activeDocument: this.captureActiveDocument(),
       limits: this.limits,
       request: input,
       runtime: this.runtime,
@@ -129,12 +141,30 @@ class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
 
   searchMarkdown(input: WorkspaceAgentSearchMarkdownInput, signal?: AbortSignal) {
     return searchWorkspaceMarkdown({
-      activeDocument: this.getActiveDocumentSnapshot(),
+      activeDocument: this.captureActiveDocument(),
       limits: this.limits,
       request: input,
       runtime: this.runtime,
       signal,
     });
+  }
+
+  applyCurrentDocumentEdits(
+    input: WorkspaceAgentApplyCurrentDocumentEditsInput,
+    signal?: AbortSignal,
+  ) {
+    return applyWorkspaceAgentCurrentDocumentEdits({
+      activeEditor: this.activeEditor,
+      limits: this.limits.write,
+      request: input,
+      signal,
+      workspaceId: this.runtime.identity.id,
+    });
+  }
+
+  private captureActiveDocument() {
+    let capture = captureWorkspaceAgentActiveEditor(this.activeEditor);
+    return capture?.document.workspaceId == this.runtime.identity.id ? capture.document : null;
   }
 }
 

@@ -22,6 +22,10 @@ export type WorkspaceAgentLimits = {
     minQueryCharacters: number;
     remoteConcurrency: number;
   };
+  write: {
+    maxOutputBytes: number;
+    maxReplacements: number;
+  };
 };
 
 export type WorkspaceAgentLimitOverrides = {
@@ -29,6 +33,7 @@ export type WorkspaceAgentLimitOverrides = {
   list?: Partial<WorkspaceAgentLimits["list"]>;
   read?: Partial<WorkspaceAgentLimits["read"]>;
   search?: Partial<WorkspaceAgentLimits["search"]>;
+  write?: Partial<WorkspaceAgentLimits["write"]>;
 };
 
 export const DEFAULT_WORKSPACE_AGENT_LIMITS: Readonly<WorkspaceAgentLimits> = Object.freeze({
@@ -55,6 +60,10 @@ export const DEFAULT_WORKSPACE_AGENT_LIMITS: Readonly<WorkspaceAgentLimits> = Ob
     minQueryCharacters: 2,
     remoteConcurrency: 2,
   }),
+  write: Object.freeze({
+    maxOutputBytes: 256 * 1_024,
+    maxReplacements: 32,
+  }),
 });
 
 export function resolveWorkspaceAgentLimits(
@@ -65,6 +74,7 @@ export function resolveWorkspaceAgentLimits(
     list: { ...DEFAULT_WORKSPACE_AGENT_LIMITS.list, ...overrides.list },
     read: { ...DEFAULT_WORKSPACE_AGENT_LIMITS.read, ...overrides.read },
     search: { ...DEFAULT_WORKSPACE_AGENT_LIMITS.search, ...overrides.search },
+    write: { ...DEFAULT_WORKSPACE_AGENT_LIMITS.write, ...overrides.write },
   };
 
   for (let [groupName, group] of Object.entries(limits)) {
