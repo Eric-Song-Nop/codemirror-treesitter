@@ -622,7 +622,8 @@ describe("tree-sitter language data", () => {
       let support = await languages.find((lang) => lang.name == name)!.load();
       let state = EditorState.create({ doc, extensions: [support.extension] });
 
-      expect(ensureSyntaxTree(state, state.doc.length)?.topNode.name).toBe(top);
+      let tree = ensureSyntaxTree(state, state.doc.length, 5_000);
+      expect(tree?.topNode.name, `${name}: parser did not finish`).toBe(top);
       expect(support.language.name).toBe(name.toLowerCase());
     }
   }, 20_000);
