@@ -3,6 +3,7 @@ import type { LiveMdConfig, LiveMdEditorElement } from "@codemirror-treesitter/l
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import { WorkspaceDialogs } from "@/components/workspace/WorkspaceDialogs";
+import { WorkspaceAgentFeature } from "@/components/workspace/WorkspaceAgentFeature";
 import type { DocumentRecoveryAction } from "@/components/workspace/DocumentRecoveryDialogs";
 import { WorkspaceEditorPane } from "@/components/workspace/WorkspaceEditorPane";
 import { WorkspaceErrorBanner } from "@/components/workspace/WorkspaceErrorBanner";
@@ -107,8 +108,10 @@ export function LocalWorkspaceApp() {
   let [recoveryCopyPath, setRecoveryCopyPath] = useState("");
   let [recoveryDialogError, setRecoveryDialogError] = useState("");
   let [sidebarOpen, setSidebarOpen] = useState(() => defaultSidebarOpen());
+  let [agentOpen, setAgentOpen] = useState(false);
 
   let editorElementRef = useRef<LiveMdEditorElement | null>(null);
+  let agentButtonRef = useRef<HTMLButtonElement | null>(null);
   let workspaceRuntimeRef = useRef<WorkspaceRuntime | null>(null);
   let workspaceRuntimeTransitionRef = useRef<Promise<void>>(Promise.resolve());
   let selectedFileSourceRef = useRef<ActiveDocumentSource | null>(null);
@@ -128,6 +131,15 @@ export function LocalWorkspaceApp() {
   let activeDocumentGenerationRef = useRef(0);
   let documentTargetGenerationRef = useRef(0);
   let loadFileRequestRef = useRef(0);
+  let agentWorkspaceKey = singleFileSource ? "" : (workspaceRuntime?.identity.id ?? "");
+  let agentScopeKey = [
+    agentWorkspaceKey,
+    selectedFile?.path ?? "",
+    collabDocument?.docId ?? "",
+    singleFileSource?.kind ?? "",
+    activeDocumentGenerationRef.current,
+    documentTargetGenerationRef.current,
+  ].join("\u0000");
   let {
     activeShareForSelectedFile,
     activeShareRecord,
@@ -550,6 +562,15 @@ export function LocalWorkspaceApp() {
     setSidebarOpen((open) => !open);
   }, []);
 
+  let toggleAgent = useCallback(() => {
+    setAgentOpen((open) => !open);
+  }, []);
+
+  let closeAgent = useCallback(() => {
+    setAgentOpen(false);
+    requestAnimationFrame(() => agentButtonRef.current?.focus());
+  }, []);
+
   let {
     closeDeleteDialog,
     closeFileDialog,
@@ -735,6 +756,8 @@ export function LocalWorkspaceApp() {
           />
           <WorkspaceHeader
             activeShare={Boolean(activeShareForSelectedFile)}
+            agentButtonRef={agentButtonRef}
+            agentOpen={agentOpen}
             busy={busy}
             canExport={Boolean(selectedFile)}
             canInsertImage={canInsertImage}
@@ -755,6 +778,7 @@ export function LocalWorkspaceApp() {
             onSaveAsLocal={() => void saveSingleFileAsLocal()}
             onShareFile={openShareDialog}
             onToggleSidebar={toggleSidebar}
+            onToggleAgent={toggleAgent}
           />
 
           <WorkspaceErrorBanner
@@ -786,6 +810,25 @@ export function LocalWorkspaceApp() {
             onInput={handleEditorInput}
           />
         </main>
+
+        <WorkspaceAgentFeature
+          activeDocumentGenerationRef={activeDocumentGenerationRef}
+          collabDocumentRef={collabDocumentRef}
+          dirtyRef={dirtyRef}
+          documentTargetGenerationRef={documentTargetGenerationRef}
+          editorElementRef={editorElementRef}
+          editorValueRef={editorValueRef}
+          editVersionRef={editVersionRef}
+          open={agentOpen}
+          scopeKey={agentScopeKey}
+          selectedFileRef={selectedFileRef}
+          selectedFileSourceRef={selectedFileSourceRef}
+          singleFileSourceRef={singleFileSourceRef}
+          workspaceAvailable={Boolean(workspaceRuntime && !singleFileSource)}
+          workspaceKey={agentWorkspaceKey}
+          workspaceRuntimeRef={workspaceRuntimeRef}
+          onClose={closeAgent}
+        />
 
         <WorkspaceDialogs
           fileNameDialog={{

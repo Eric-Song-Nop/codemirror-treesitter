@@ -1,0 +1,146 @@
+// @vitest-environment happy-dom
+
+import { act, useState } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { WorkspaceAgentPanel } from "./WorkspaceAgentPanel";
+
+type ReactActGlobal = typeof globalThis & {
+  IS_REACT_ACT_ENVIRONMENT?: boolean;
+};
+
+let container: HTMLDivElement | null = null;
+let root: Root | null = null;
+
+beforeAll(() => {
+  (globalThis as ReactActGlobal).IS_REACT_ACT_ENVIRONMENT = true;
+});
+
+beforeEach(() => {
+  vi.stubGlobal(
+    "requestAnimationFrame",
+    vi.fn((callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    }),
+  );
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  if (root) act(() => root?.unmount());
+  root = null;
+  container?.remove();
+  container = null;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("WorkspaceAgentPanel", () => {
+  it("moves a submitted API key out of the DOM and keeps it in the controller callback", async () => {
+    let configure = vi.fn();
+    await render(<KeyConfigurationHarness onConfigure={configure} />);
+    let input = document.querySelector<HTMLInputElement>("#workspace-agent-api-key")!;
+    let secret = "sk-browser-memory-only";
+
+    input.value = secret;
+    await act(async () => {
+      input.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    expect(configure).toHaveBeenCalledWith({ apiKey: secret });
+    expect(document.querySelector("#workspace-agent-api-key")).toBeNull();
+    expect(document.body.textContent).not.toContain(secret);
+    expect(document.body.textContent).toContain("API key ready for this tab");
+  });
+
+  it("renders message content as text, shows the activity ledger, and sends with Enter", async () => {
+    let send = vi.fn(async () => true);
+    let close = vi.fn();
+    await render(
+      <WorkspaceAgentPanel
+        error={null}
+        hasApiKey
+        messages={[
+          { content: "Please inspect this note.", id: 1, role: "user" },
+          { content: '<img src="x" onerror="alert(1)"> Done.', id: 2, role: "assistant" },
+        ]}
+        model="gpt-test"
+        open
+        running={false}
+        runStatus="success"
+        toolActivity={[{ name: "read_markdown", status: "success" }]}
+        workspaceAvailable
+        onClose={close}
+        onConfigure={vi.fn()}
+        onNewChat={vi.fn()}
+        onSend={send}
+        onStop={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector("img")).toBeNull();
+    expect(document.body.textContent).toContain('<img src="x" onerror="alert(1)"> Done.');
+    expect(document.body.textContent).toContain("Read Markdown");
+    expect(document.body.textContent).toContain("Complete");
+
+    let prompt = document.querySelector<HTMLTextAreaElement>("#workspace-agent-prompt")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(
+        prompt,
+        "Summarize the workspace",
+      );
+      prompt.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      prompt.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+      );
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledWith("Summarize the workspace");
+    expect(prompt.value).toBe("");
+
+    act(() => {
+      prompt.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+      );
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+});
+
+function KeyConfigurationHarness({ onConfigure }: { onConfigure: (value: unknown) => void }) {
+  let [hasApiKey, setHasApiKey] = useState(false);
+  return (
+    <WorkspaceAgentPanel
+      error={null}
+      hasApiKey={hasApiKey}
+      messages={[]}
+      model="gpt-5.4-mini"
+      open
+      running={false}
+      runStatus="idle"
+      toolActivity={[]}
+      workspaceAvailable
+      onClose={vi.fn()}
+      onConfigure={(input) => {
+        onConfigure(input);
+        if (input.apiKey) setHasApiKey(true);
+      }}
+      onNewChat={vi.fn()}
+      onSend={vi.fn(async () => true)}
+      onStop={vi.fn()}
+    />
+  );
+}
+
+async function render(element: React.ReactNode) {
+  container = document.body.appendChild(document.createElement("div"));
+  root = createRoot(container);
+  await act(async () => {
+    root?.render(<TooltipProvider>{element}</TooltipProvider>);
+  });
+}
