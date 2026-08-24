@@ -6,18 +6,31 @@ ordinary TypeScript without Effect or Zustand dependencies.
 
 ## Current checkpoint
 
-Phase 1 below is implemented. The sequential A → B → A persistence-fence
-regression is covered, but the document intent/session coordinator in phases 2
-and 3 is not. The remaining generation refs are compatibility machinery, not
-the target architecture; rapid tree loads, pickers, sharing, and mutations must
-move through one complete coordinator rather than receive entry-point-specific
-race patches.
+Phase 1 and the first vertical slice of phase 2 below are implemented. Direct
+workspace-document open, switch, close, and save now share one Effect document
+session coordinator. A synchronous lease identifies the user's intent; a
+scoped candidate is installed only while that lease is current; the previous
+persistence fence and collaboration document are finalized from one immutable
+session snapshot. The sequential A → B → A regression, stale preparation,
+replacement during a slow close, and app disposal during pending work are
+covered by deterministic tests.
+
+Zustand intentionally does not expose a large document-phase enum. It retains
+the active document projection and one small `openingDocument` marker, so React
+can keep the active identity coherent while showing that a newer candidate is
+being prepared. The remaining refs and generation counters are compatibility
+machinery, not a second intended authority. Rapid outer tree loads, pickers,
+sharing, mutations, and standalone-document ownership still need the later
+phases below.
 
 ## Responsibilities
 
 - Zustand vanilla stores own the application read model consumed by React.
 - Effect services own asynchronous orchestration, typed failures,
   interruption, serialization, and resource finalizers.
+- TanStack Query owns cacheable, repeatable reads such as workspace trees,
+  directories, and image bytes. It does not own live documents or imperative
+  resources.
 - React owns rendering and the lifecycle edges that start or dispose app
   services. `useEffect` remains appropriate for subscriptions and external
   resource cleanup; it is not used to mirror one state container into another.
@@ -56,10 +69,30 @@ The document migration therefore uses:
 
 - a synchronous intent lease;
 - a keyed `FiberMap` for replaceable preparation work;
-- a `SynchronizedRef`-guarded commit section for the active immutable session;
+- a `FiberSet` that also tracks superseded fibers until their finalizers finish;
+- a semaphore-serialized commit section and `SynchronizedRef` for the active
+  immutable session;
 - a child `Scope` or equivalent finalizer ownership for each candidate; and
 - a lease check before and after every asynchronous boundary and before atomic
   Zustand publication.
+
+The extra `FiberSet` is deliberate. Replacing a fixed `FiberMap` key interrupts
+the old fiber, but the map no longer retains that old entry while an
+uninterruptible browser acquisition or finalizer is still completing. App
+disposal must nevertheless wait for every such fiber.
+
+## TanStack Query boundary
+
+A Query value must be ordinary data that is safe to refetch, deduplicate,
+discard, and garbage-collect by key. Workspace tree/directory reads and image
+bytes meet that rule. A collaboration document does not: it owns Loro objects,
+subscriptions, pending persistence, and an asynchronous finalizer, and it must
+be exclusive with the active session. Consequently there is no document query
+key and document open/replace remains an Effect-managed resource transition.
+
+Likewise, `useMutation` may eventually expose pending/error presentation for a
+file operation, but it is not the authority for leases, rollback, or session
+finalization.
 
 ## Phases
 
@@ -75,12 +108,17 @@ The document migration therefore uses:
 
 ### 2. Document session runtime
 
-- Introduce the intent/fiber/commit coordinator described above.
-- Migrate open, switch, close, standalone draft activation, autosave ownership,
-  and collaboration-document finalization.
-- Remove `loadFileRequestRef`, active-document generation counters that have
-  become leases, and resource-ownership refs after all consumers use immutable
-  sessions.
+- Implemented: introduce the intent/fiber/commit coordinator described above.
+- Implemented: migrate direct workspace open, switch, close, collaboration
+  document finalization, broadcast cleanup, and save-target capture to the
+  coordinator's immutable active session.
+- Implemented: remove `loadFileRequestRef` and make app disposal wait for stale
+  candidates and active-session finalizers.
+- Remaining: move standalone draft/local-file activation, autosave journals,
+  source observers, and all remaining resource consumers fully into session
+  scopes.
+- Remove the remaining active-document generation counters and compatibility
+  refs only after all consumers use immutable sessions.
 
 ### 3. Outer document intents
 

@@ -72,6 +72,37 @@ describe("useWorkspaceEntryDialogs active document ordering", () => {
 
     expect(events).toEqual(["save", "close", "delete", "clear", "load:null"]);
   });
+
+  it("reopens the captured active path after its parent directory is renamed", async () => {
+    let events: string[] = [];
+    let options = createOptions(events);
+    let activeFile = { kind: "file" as const, name: "note.md", path: "folder/note.md" };
+    options.selectedFileRef.current = activeFile;
+    options.closeActiveDocumentSession = async () => {
+      events.push("close");
+      options.selectedFileRef.current = null;
+    };
+    options.workspaceRuntime!.entries.rename = vi.fn(async () => {
+      events.push("rename");
+      return { path: "renamed", result: { status: "applied" as const } };
+    });
+    await render(options);
+
+    await act(async () => {
+      result.openRenameDialog({ kind: "directory", name: "folder", path: "folder" });
+    });
+    await act(async () => {
+      await result.submitFileDialog("renamed");
+    });
+
+    expect(events).toEqual([
+      "save",
+      "close",
+      "rename",
+      "transition:renamed/note.md",
+      "load:renamed/note.md",
+    ]);
+  });
 });
 
 function Harness({ options }: { options: ReturnType<typeof createOptions> }) {
@@ -86,6 +117,7 @@ async function render(options: ReturnType<typeof createOptions>) {
 }
 
 function createOptions(events: string[]): HookOptions {
+  let nextIntentId = 0;
   let selectedFile = { kind: "file" as const, name: "note.md", path: "note.md" };
   let workspaceRuntime = createMemoryWorkspaceRuntime([["note.md", "# Note\n"]]);
   let revision = { kind: "etag" as const, validation: "atomic" as const, value: "revision-1" };
@@ -94,6 +126,7 @@ function createOptions(events: string[]): HookOptions {
     autoSaveTaskRef: { current: null },
     beginDocumentTransition: (path = "") => {
       events.push(`transition:${path}`);
+      return { id: ++nextIntentId, path };
     },
     clearActiveDocument: async () => {
       events.push("clear");
@@ -107,6 +140,7 @@ function createOptions(events: string[]): HookOptions {
       } as CollabDocumentState,
     },
     documentTargetGenerationRef: { current: 0 },
+    finishDocumentTransition: () => {},
     loadTree: async (_runtime, path) => {
       events.push(`load:${path ?? "null"}`);
     },

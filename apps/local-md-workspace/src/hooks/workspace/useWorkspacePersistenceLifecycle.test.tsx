@@ -123,13 +123,13 @@ describe("useWorkspacePersistenceLifecycle", () => {
     await act(async () => flushCompleted.resolve());
   });
 
-  it("flushes before disposing persistence resources on unmount", async () => {
+  it("flushes before disposing the source task without owning the collaboration document", async () => {
     let flushCompleted = createDeferred<void>();
+    let closeActiveDocument = vi.fn(async () => {});
     let sourceTask = createTestTask(() => flushCompleted.promise);
     let collabDocument = createTestDocument();
-    let collabSyncCleanup = vi.fn();
 
-    await renderLifecycle({ collabDocument, collabSyncCleanup, sourceTask });
+    await renderLifecycle({ closeActiveDocument, collabDocument, sourceTask });
     act(() => {
       root?.unmount();
       root = null;
@@ -137,26 +137,27 @@ describe("useWorkspacePersistenceLifecycle", () => {
 
     expect(sourceTask.flush).toHaveBeenCalledOnce();
     expect(sourceTask.dispose).not.toHaveBeenCalled();
+    expect(closeActiveDocument).not.toHaveBeenCalled();
     expect(collabDocument.dispose).not.toHaveBeenCalled();
-    expect(collabSyncCleanup).toHaveBeenCalledOnce();
 
     await act(async () => flushCompleted.resolve());
 
     expect(sourceTask.dispose).toHaveBeenCalledOnce();
-    expect(collabDocument.dispose).toHaveBeenCalledOnce();
+    expect(closeActiveDocument).toHaveBeenCalledOnce();
+    expect(collabDocument.dispose).not.toHaveBeenCalled();
   });
 });
 
 async function renderLifecycle({
+  closeActiveDocument = vi.fn(async () => {}),
   collabDocument = null,
-  collabSyncCleanup = vi.fn(),
   dirtyRef = { current: false },
   flushCollabDocument = vi.fn(async () => {}),
   setErrorMessage = vi.fn(),
   sourceTask = null,
 }: {
+  closeActiveDocument?: () => Promise<void>;
   collabDocument?: TestDocument | null;
-  collabSyncCleanup?: () => void;
   dirtyRef?: { current: boolean };
   flushCollabDocument?: (document: TestDocument) => Promise<void>;
   setErrorMessage?: (message: string) => void;
@@ -165,8 +166,8 @@ async function renderLifecycle({
   await act(async () => {
     root?.render(
       <LifecycleHarness
+        closeActiveDocument={closeActiveDocument}
         collabDocument={collabDocument}
-        collabSyncCleanup={collabSyncCleanup}
         dirtyRef={dirtyRef}
         flushCollabDocument={flushCollabDocument}
         setErrorMessage={setErrorMessage}
@@ -177,15 +178,15 @@ async function renderLifecycle({
 }
 
 function LifecycleHarness({
+  closeActiveDocument,
   collabDocument,
-  collabSyncCleanup,
   dirtyRef,
   flushCollabDocument,
   setErrorMessage,
   sourceTask,
 }: {
+  closeActiveDocument: () => Promise<void>;
   collabDocument: TestDocument | null;
-  collabSyncCleanup: () => void;
   dirtyRef: { current: boolean };
   flushCollabDocument: (document: TestDocument) => Promise<void>;
   setErrorMessage: (message: string) => void;
@@ -195,12 +196,11 @@ function LifecycleHarness({
     sourceTask ? { key: "local", task: sourceTask } : null,
   );
   let collabDocumentRef = useRef(collabDocument);
-  let collabSyncCleanupRef = useRef(collabSyncCleanup);
 
   useWorkspacePersistenceLifecycle({
     autoSaveTaskRef,
+    closeActiveDocument,
     collabDocumentRef,
-    collabSyncCleanupRef,
     dirtyRef,
     flushCollabDocument,
     setErrorMessage,

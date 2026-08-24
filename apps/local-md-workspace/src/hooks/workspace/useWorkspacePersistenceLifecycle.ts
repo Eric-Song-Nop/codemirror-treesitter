@@ -6,23 +6,19 @@ type MutableRef<T> = {
   current: T;
 };
 
-type DisposableDocument = {
-  dispose: () => Promise<void> | void;
-};
-
-type UseWorkspacePersistenceLifecycleOptions<Document extends DisposableDocument> = {
+type UseWorkspacePersistenceLifecycleOptions<Document> = {
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
+  closeActiveDocument: () => Promise<void>;
   collabDocumentRef: MutableRef<Document | null>;
-  collabSyncCleanupRef: MutableRef<() => void>;
   dirtyRef: MutableRef<boolean>;
   flushCollabDocument: (document: Document) => Promise<void>;
   setErrorMessage: (message: string) => void;
 };
 
-export function useWorkspacePersistenceLifecycle<Document extends DisposableDocument>({
+export function useWorkspacePersistenceLifecycle<Document>({
   autoSaveTaskRef,
+  closeActiveDocument,
   collabDocumentRef,
-  collabSyncCleanupRef,
   dirtyRef,
   flushCollabDocument,
   setErrorMessage,
@@ -71,23 +67,20 @@ export function useWorkspacePersistenceLifecycle<Document extends DisposableDocu
       window.removeEventListener("pagehide", handlePageHide);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
 
-      collabSyncCleanupRef.current();
       let sourceTask = autoSaveTaskRef.current?.task ?? null;
-      let collabDocument = collabDocumentRef.current;
 
       void flushActivePersistence(true)
         .catch(() => {})
         .finally(async () => {
           if (lifecycleGenerationRef.current != lifecycleGeneration) return;
           sourceTask?.dispose();
-          if (collabDocumentRef.current === collabDocument) collabDocumentRef.current = null;
-          if (collabDocument) await Promise.resolve(collabDocument.dispose()).catch(() => {});
+          await closeActiveDocument().catch(() => {});
         });
     };
   }, [
     autoSaveTaskRef,
+    closeActiveDocument,
     collabDocumentRef,
-    collabSyncCleanupRef,
     dirtyRef,
     flushCollabDocument,
     setErrorMessage,

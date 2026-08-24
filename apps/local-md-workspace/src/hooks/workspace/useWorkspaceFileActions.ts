@@ -1,5 +1,9 @@
 import { useCallback, useState, type RefObject } from "react";
 import type { LiveMdEditorElement, LiveMdMarkdownConfig } from "@codemirror-treesitter/live-md";
+import type {
+  WorkspaceDocumentIntentLease,
+  WorkspaceDocumentSessionController,
+} from "@/app/document-session-coordinator";
 import {
   getCollabDocumentValue,
   type CollabDocumentState,
@@ -55,11 +59,14 @@ type UseWorkspaceFileActionsOptions = {
     persistence: ActiveDocumentSource,
     file: MarkdownFileNode,
     value: string,
-  ) => void;
+    options: { intent: WorkspaceDocumentIntentLease; localFileHandle?: AccessFileHandle },
+  ) => Promise<boolean>;
+  beginDocumentTransition: (path?: string) => WorkspaceDocumentIntentLease;
   collabDocumentRef: MutableRef<CollabDocumentState | null>;
   createDropboxRuntime: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceRuntime>;
   discardMaterializedDraft: (source: SingleFileSource | null) => void;
   documentTargetGenerationRef: MutableRef<number>;
+  documentSessions: WorkspaceDocumentSessionController;
   editorElementRef: RefObject<LiveMdEditorElement | null>;
   editorValueRef: MutableRef<string>;
   loadTree: (
@@ -86,10 +93,12 @@ type UseWorkspaceFileActionsOptions = {
 
 export function useWorkspaceFileActions({
   activateSingleFileDocument,
+  beginDocumentTransition,
   collabDocumentRef,
   createDropboxRuntime,
   discardMaterializedDraft,
   documentTargetGenerationRef,
+  documentSessions,
   editorElementRef,
   editorValueRef,
   loadTree,
@@ -255,8 +264,7 @@ export function useWorkspaceFileActions({
 
     let source = singleFileSourceRef.current;
     let value = currentMarkdownValue();
-    documentTargetGenerationRef.current += 1;
-    setBusy(true);
+    let lease = beginDocumentTransition(file.path);
     setErrorMessage("");
     setRetryLoadPath(null);
     try {
@@ -266,26 +274,33 @@ export function useWorkspaceFileActions({
       });
       let nextName = handle.name || markdownDownloadFileName(source?.name ?? file.name);
       let nextFile = singleFileMarkdownNode(nextName);
-      localFileHandleRef.current = handle;
-      activateSingleFileDocument(
-        { kind: "local-file", name: nextName },
-        createLocalFileSource(handle),
-        nextFile,
-        value,
-      );
+      if (
+        !(await activateSingleFileDocument(
+          { kind: "local-file", name: nextName },
+          createLocalFileSource(handle),
+          nextFile,
+          value,
+          { intent: lease, localFileHandle: handle },
+        ))
+      ) {
+        return;
+      }
       discardMaterializedDraft(source);
       let runtime = workspaceRuntimeRef.current;
       if (runtime) await refreshWorkspaceForCurrentEditor(runtime);
     } catch (error) {
-      if (!isAbortError(error)) setErrorMessage(errorToMessage(error));
+      if (documentSessions.isCurrent(lease) && !isAbortError(error)) {
+        setErrorMessage(errorToMessage(error));
+      }
     } finally {
-      setBusy(false);
+      documentSessions.finish(lease);
     }
   }, [
     activateSingleFileDocument,
+    beginDocumentTransition,
     currentMarkdownValue,
     discardMaterializedDraft,
-    documentTargetGenerationRef,
+    documentSessions,
     downloadCurrentMarkdownCopy,
     localFileHandleRef,
     refreshWorkspaceForCurrentEditor,

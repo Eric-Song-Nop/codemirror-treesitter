@@ -16,6 +16,10 @@ export type DocumentSession = {
   sourceRef: DocumentSourceRef;
 };
 
+export type ActiveWorkspaceDocumentSession = DocumentSession & {
+  epoch: number;
+};
+
 export function createDocumentSession(
   runtime: WorkspaceRuntime,
   file: MarkdownFileNode,
@@ -28,6 +32,18 @@ export function createDocumentSession(
     id: documentSourceDocumentIdInput(sourceRef),
     runtime,
     sourceRef,
+  };
+}
+
+export function createActiveWorkspaceDocumentSession(
+  runtime: WorkspaceRuntime,
+  file: MarkdownFileNode,
+  collabDocument: CollabDocumentState,
+  epoch: number,
+): ActiveWorkspaceDocumentSession {
+  return {
+    ...createDocumentSession(runtime, file, collabDocument),
+    epoch,
   };
 }
 

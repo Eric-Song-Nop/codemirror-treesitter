@@ -5,6 +5,9 @@ the browser File System Access API, optional Dropbox storage through the OpenDAL
 WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
 Its application layer uses a Zustand vanilla store for the React read model and
 Effect services for typed asynchronous orchestration and resource lifecycles.
+TanStack Query is limited to repeatable, cacheable reads such as trees,
+directories, and image bytes; live collaboration documents remain scoped
+Effect resources rather than query data.
 Those dependencies are app-only and do not enter LiveMD or other reusable core
 packages.
 
@@ -57,7 +60,10 @@ packages.
 ## Source Layout
 
 - `src/app/workspace-store.ts`: app-owned Zustand vanilla state and atomic
-  document-view publication operations.
+  active/opening document-view publication operations.
+- `src/app/document-session-coordinator.ts`: Effect-owned latest-intent
+  workspace document preparation, serialized replacement, immutable active
+  session identity, and scoped resource finalization.
 - `src/app/workspace-application.ts` and
   `src/app/WorkspaceApplicationProvider.tsx`: the StrictMode-external app
   lifetime and stable React composition boundary.
@@ -92,6 +98,9 @@ packages.
   BrowserLocal/cloud runtime assembly; active-document observation; and the
   document persistence coordinator. Workspace runtime replacement is serialized
   by an Effect service rather than a component-owned Promise queue.
+- `src/lib/workspace/workspace-data-cache.ts` and `query-keys.ts`: the narrow
+  TanStack Query boundary for discardable workspace read data. They do not
+  cache active collaboration documents or runtime handles.
 - `src/hooks/workspace/use*WorkspaceRuntime.ts`: OAuth-aware provider runtime
   construction. Dropbox is used by the current Grove UI; Google Drive and
   OneDrive remain dormant.
