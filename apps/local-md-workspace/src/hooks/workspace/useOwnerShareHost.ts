@@ -111,11 +111,6 @@ export function useOwnerShareHost({
     [],
   );
 
-  let isOwnerShareHostPath = useCallback((runtime: WorkspaceRuntime, path: string) => {
-    let record = shareHostRecordRef.current;
-    return record ? isOwnerShareSource(record, runtime, path) : false;
-  }, []);
-
   let startOwnerShareHost = useCallback(
     async (
       record: OwnerShareRecord,
@@ -224,7 +219,6 @@ export function useOwnerShareHost({
     flushOwnerShareHost,
     sendHostDocumentUpdate,
     sendHostSaveAck,
-    isOwnerShareHostPath,
     startOwnerShareHost,
     stopOwnerShareHost,
   };

@@ -19,6 +19,13 @@ export type WorkspaceDocumentOpening = {
   path: string;
 };
 
+export type WorkspaceDocumentView = {
+  document: CollabDocumentState;
+  file: MarkdownFileNode;
+  saveState: SaveState;
+  value: string;
+};
+
 export type WorkspaceAppSnapshot = {
   agentActivated: boolean;
   agentOpen: boolean;
@@ -137,10 +144,7 @@ export function clearWorkspaceDocumentOpening(store: WorkspaceAppStore, intentId
   );
 }
 
-export function clearWorkspaceDocumentView(
-  store: WorkspaceAppStore,
-  options: { preserveOpening?: boolean } = {},
-) {
+export function clearWorkspaceDocumentView(store: WorkspaceAppStore, preserveOpening = false) {
   store.setState((state) => ({
     collabDocument: null,
     editorDocument: {
@@ -148,7 +152,7 @@ export function clearWorkspaceDocumentView(
       value: "",
       version: state.editorDocument.version + 1,
     },
-    openingDocument: options.preserveOpening ? state.openingDocument : null,
+    openingDocument: preserveOpening ? state.openingDocument : null,
     saveState: "idle",
     selectedFile: null,
     singleFileSource: null,
@@ -181,12 +185,7 @@ export function publishSingleFileDocumentView(
 
 export function publishWorkspaceDocumentView(
   store: WorkspaceAppStore,
-  input: {
-    document: CollabDocumentState;
-    file: MarkdownFileNode;
-    saveState: SaveState;
-    value: string;
-  },
+  input: WorkspaceDocumentView,
 ) {
   store.setState((state) => ({
     collabDocument: input.document,
@@ -204,27 +203,6 @@ export function publishWorkspaceDocumentView(
       name: input.file.name,
       path: input.file.path,
     },
-  }));
-}
-
-export function publishCollabDocumentView(
-  store: WorkspaceAppStore,
-  input: {
-    document: CollabDocumentState;
-    file: MarkdownFileNode;
-    saveState: SaveState;
-    value: string;
-  },
-) {
-  store.setState((state) => ({
-    collabDocument: input.document,
-    editorDocument: {
-      path: input.file.path,
-      value: input.value,
-      version: state.editorDocument.version + 1,
-    },
-    openingDocument: null,
-    saveState: input.saveState,
   }));
 }
 

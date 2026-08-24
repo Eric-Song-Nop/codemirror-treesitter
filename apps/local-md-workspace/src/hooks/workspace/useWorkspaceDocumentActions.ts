@@ -34,10 +34,7 @@ import {
 } from "@/lib/workspace/single-file-draft-store";
 import { sharedMarkdownDraftUnavailableMessage } from "@/lib/platform/share-target";
 import { errorToMessage } from "@/lib/workspace/errors";
-import {
-  createActiveWorkspaceDocumentSession,
-  type DocumentSession,
-} from "@/lib/workspace/document-session";
+import { createDocumentSession, type DocumentSession } from "@/lib/workspace/document-session";
 import { createSingleFileDraftSource, singleFileMarkdownNode } from "@/lib/workspace/single-file";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
 import type {
@@ -208,21 +205,18 @@ export function useWorkspaceDocumentActions({
     stopOwnerShareHost,
   ]);
 
-  let closeManagedDocumentSession = useCallback(async () => {
-    documentTargetGenerationRef.current += 1;
-    return documentSessions.close();
-  }, [documentSessions, documentTargetGenerationRef]);
-
-  let closeActiveDocumentSession = useCallback(async () => {
-    await closeManagedDocumentSession();
-  }, [closeManagedDocumentSession]);
-
   let clearActiveDocument = useCallback(async () => {
-    let outcome = await closeManagedDocumentSession();
-    if (outcome.status != "closed" || outcome.hadActiveSession) return;
+    documentTargetGenerationRef.current += 1;
+    let outcome = await documentSessions.close();
+    if (!outcome || outcome.hadActiveSession) return;
     clearCompatibilityDocument();
     clearWorkspaceDocumentView(workspaceAppStore);
-  }, [clearCompatibilityDocument, closeManagedDocumentSession, workspaceAppStore]);
+  }, [
+    clearCompatibilityDocument,
+    documentSessions,
+    documentTargetGenerationRef,
+    workspaceAppStore,
+  ]);
 
   let beginDocumentTransition = useCallback(
     (path = "") => {
@@ -244,7 +238,7 @@ export function useWorkspaceDocumentActions({
       },
     ) => {
       let outcome = await documentSessions.close(options.intent);
-      if (outcome.status != "closed" || !documentSessions.isCurrent(options.intent)) return false;
+      if (!outcome || !documentSessions.isCurrent(options.intent)) return false;
       if (!outcome.hadActiveSession) clearCompatibilityDocument();
       selectedFileSourceRef.current = persistence;
       selectedFileRef.current = file;
@@ -262,8 +256,6 @@ export function useWorkspaceDocumentActions({
         singleFileSource: singleFile,
         value,
       });
-      setActiveShareRecord(null);
-      setCreatedShare(null);
       setErrorMessage("");
       setRetryLoadPath(null);
       return true;
@@ -272,15 +264,12 @@ export function useWorkspaceDocumentActions({
       cleanValueRef,
       clearCompatibilityDocument,
       documentSessions,
-      documentTargetGenerationRef,
       dirtyRef,
       editVersionRef,
       editorValueRef,
       localFileHandleRef,
       selectedFileSourceRef,
       selectedFileRef,
-      setActiveShareRecord,
-      setCreatedShare,
       setErrorMessage,
       setRetryLoadPath,
       saveStateRef,
@@ -401,14 +390,11 @@ export function useWorkspaceDocumentActions({
                     saveStoredWorkspaceSelectedPath(selectedPathContext, file.path);
                   }
 
-                  let session = createActiveWorkspaceDocumentSession(
-                    runtime,
-                    file,
-                    document,
-                    activeDocumentGenerationRef.current,
-                  );
+                  let session = {
+                    ...createDocumentSession(runtime, file, document),
+                    epoch: activeDocumentGenerationRef.current,
+                  };
                   setActiveShareRecord(restoredShareRecord);
-                  setCreatedShare(null);
                   if (restoredShareRecord) {
                     void startOwnerShareHost(restoredShareRecord, session, {
                       shouldContinue: () =>
@@ -441,14 +427,11 @@ export function useWorkspaceDocumentActions({
                 }
               },
               dispose: () => document.dispose(),
-              document,
-              file,
-              saveState: nextSaveState,
-              value,
+              view: { document, file, saveState: nextSaveState, value },
             };
           },
         });
-        return outcome.status == "activated";
+        return outcome != null;
       } catch (error) {
         if (!documentSessions.isCurrent(lease)) return false;
         setErrorMessage(errorToMessage(error));
@@ -473,7 +456,6 @@ export function useWorkspaceDocumentActions({
       selectedFileSourceRef,
       selectedFileRef,
       setActiveShareRecord,
-      setCreatedShare,
       setErrorMessage,
       setRetryLoadPath,
       saveStateRef,
@@ -547,7 +529,6 @@ export function useWorkspaceDocumentActions({
     activateSingleFileDocument,
     beginDocumentTransition,
     clearActiveDocument,
-    closeActiveDocumentSession,
     discardMaterializedDraft,
     ensureSelectedCollabDocument,
     handleEditorInput,

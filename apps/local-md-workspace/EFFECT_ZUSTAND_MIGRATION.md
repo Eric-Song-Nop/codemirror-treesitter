@@ -48,9 +48,8 @@ phases below.
    from another.
 4. Active resources are closed from an immutable session snapshot, never by
    rereading UI state or refs after an `await`.
-5. Replaced preparation fibers are interrupted. If a stale operation acquired
-   a candidate resource, its finalizer runs exactly once before the winner is
-   published.
+5. A stale preparation may finish, but it cannot publish. Any candidate it
+   acquired is finalized exactly once.
 6. Persistence ownership is released before another session for the same
    workspace path becomes active.
 7. App runtime disposal interrupts pending work and waits for finalizers. React
@@ -68,18 +67,10 @@ arrives.
 The document migration therefore uses:
 
 - a synchronous intent lease;
-- a keyed `FiberMap` for replaceable preparation work;
-- a `FiberSet` that also tracks superseded fibers until their finalizers finish;
-- a semaphore-serialized commit section and `SynchronizedRef` for the active
-  immutable session;
-- a child `Scope` or equivalent finalizer ownership for each candidate; and
-- a lease check before and after every asynchronous boundary and before atomic
-  Zustand publication.
-
-The extra `FiberSet` is deliberate. Replacing a fixed `FiberMap` key interrupts
-the old fiber, but the map no longer retains that old entry while an
-uninterruptible browser acquisition or finalizer is still completing. App
-disposal must nevertheless wait for every such fiber.
+- a `FiberSet` so app disposal waits for pending candidate finalizers;
+- a semaphore-serialized commit section guarding one active session;
+- a child `Scope` for each candidate; and
+- a lease check before commit and again after closing the old session.
 
 ## TanStack Query boundary
 

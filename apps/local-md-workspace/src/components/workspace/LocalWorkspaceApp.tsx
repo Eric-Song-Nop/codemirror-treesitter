@@ -177,13 +177,9 @@ export function LocalWorkspaceApp() {
     [],
   );
 
-  let closeManagedDocumentOnUnmount = useCallback(async () => {
-    await documentSessions.close();
-  }, [documentSessions]);
-
   useWorkspacePersistenceLifecycle({
     autoSaveTaskRef,
-    closeActiveDocument: closeManagedDocumentOnUnmount,
+    closeActiveDocument: documentSessions.close,
     collabDocumentRef,
     dirtyRef,
     flushCollabDocument: flushCollabDocumentPersistence,
@@ -279,7 +275,6 @@ export function LocalWorkspaceApp() {
     activateSingleFileDocument,
     beginDocumentTransition,
     clearActiveDocument,
-    closeActiveDocumentSession,
     discardMaterializedDraft,
     ensureSelectedCollabDocument,
     handleEditorInput,
@@ -574,10 +569,9 @@ export function LocalWorkspaceApp() {
     autoSaveTaskRef,
     beginDocumentTransition,
     clearActiveDocument,
-    closeActiveDocumentSession,
     collabDocumentRef,
     documentTargetGenerationRef,
-    finishDocumentTransition: (lease) => documentSessions.finish(lease),
+    finishDocumentTransition: documentSessions.finish,
     loadTree,
     saveCurrentFile,
     saveOperationRef,
@@ -668,7 +662,6 @@ export function LocalWorkspaceApp() {
     editorElementRef,
     editorValueRef,
     loadTree,
-    localFileHandleRef,
     markdownConfig,
     refreshWorkspaceForCurrentEditor,
     resolveImageAssetFile,
