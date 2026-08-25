@@ -537,19 +537,7 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
     sessionId,
   );
 
-  await client.evaluate(
-    `
-      (() => {
-        let panel = document.querySelector("#workspace-agent-panel");
-        let settings = Array.from(panel?.querySelectorAll("button") ?? []).find(
-          (button) => button.textContent.trim() == "Open settings"
-        );
-        if (!settings) throw new Error("Agent Settings button was not found.");
-        settings.click();
-      })()
-    `,
-    sessionId,
-  );
+  await clickButtonByText(client, sessionId, "#workspace-agent-panel", "Open settings");
   await client.waitForPredicate(
     `Boolean(document.querySelector("#workspace-settings-dialog")) &&
       Boolean(document.querySelector("#settings-save-api-key")) &&
@@ -557,24 +545,11 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
       Boolean(document.querySelector("#settings-save-passphrase-confirmation"))`,
     sessionId,
   );
-  await client.evaluate(
-    `
-      (() => {
-        let apiKey = document.querySelector("#settings-save-api-key");
-        let passphrase = document.querySelector("#settings-save-passphrase");
-        let confirmation = document.querySelector("#settings-save-passphrase-confirmation");
-        let setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-        setter.call(apiKey, ${JSON.stringify(secret)});
-        setter.call(passphrase, ${JSON.stringify(passphrase)});
-        setter.call(confirmation, ${JSON.stringify(passphrase)});
-        apiKey.dispatchEvent(new InputEvent("input", { bubbles: true }));
-        passphrase.dispatchEvent(new InputEvent("input", { bubbles: true }));
-        confirmation.dispatchEvent(new InputEvent("input", { bubbles: true }));
-        apiKey.form.requestSubmit();
-      })()
-    `,
-    sessionId,
-  );
+  await submitUncontrolledSecretForm(client, sessionId, {
+    "#settings-save-api-key": secret,
+    "#settings-save-passphrase": passphrase,
+    "#settings-save-passphrase-confirmation": passphrase,
+  });
   await client.waitForPredicate(
     `!document.querySelector("#settings-save-api-key") &&
       document.querySelector("#workspace-settings-dialog")?.innerText.includes("Saved key unlocked") &&
@@ -611,35 +586,14 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
     throw new Error(`Agent model survived reload unexpectedly: ${JSON.stringify(lockedState)}`);
   }
 
-  await client.evaluate(
-    `
-      (() => {
-        let panel = document.querySelector("#workspace-agent-panel");
-        let settings = Array.from(panel?.querySelectorAll("button") ?? []).find(
-          (button) => button.textContent.trim() == "Open settings"
-        );
-        if (!settings) throw new Error("Locked Agent Settings button was not found.");
-        settings.click();
-      })()
-    `,
-    sessionId,
-  );
+  await clickButtonByText(client, sessionId, "#workspace-agent-panel", "Open settings");
   await client.waitForPredicate(
     `Boolean(document.querySelector("#settings-unlock-passphrase"))`,
     sessionId,
   );
-  await client.evaluate(
-    `
-      (() => {
-        let passphrase = document.querySelector("#settings-unlock-passphrase");
-        let setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-        setter.call(passphrase, ${JSON.stringify(passphrase)});
-        passphrase.dispatchEvent(new InputEvent("input", { bubbles: true }));
-        passphrase.form.requestSubmit();
-      })()
-    `,
-    sessionId,
-  );
+  await submitUncontrolledSecretForm(client, sessionId, {
+    "#settings-unlock-passphrase": passphrase,
+  });
   await client.waitForPredicate(
     `!document.querySelector("#settings-unlock-passphrase") &&
       document.querySelector("#workspace-settings-dialog")?.innerText.includes("Saved key unlocked") &&
@@ -651,36 +605,12 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
   let unlockedState = await inspectAgentCredentialVault(client, sessionId, secret, passphrase);
   assertEncryptedAgentCredential(unlockedState, "unlocked credential");
 
-  await client.evaluate(
-    `
-      (() => {
-        let dialog = document.querySelector("#workspace-settings-dialog");
-        let remove = Array.from(dialog?.querySelectorAll("button") ?? []).find(
-          (button) => button.textContent.trim() == "Delete saved key"
-        );
-        if (!remove) throw new Error("Delete saved key button was not found.");
-        remove.click();
-      })()
-    `,
-    sessionId,
-  );
+  await clickButtonByText(client, sessionId, "#workspace-settings-dialog", "Delete saved key");
   await client.waitForPredicate(
     `Boolean(document.querySelector('[role="alertdialog"]'))`,
     sessionId,
   );
-  await client.evaluate(
-    `
-      (() => {
-        let confirmation = document.querySelector('[role="alertdialog"]');
-        let remove = Array.from(confirmation?.querySelectorAll("button") ?? []).find(
-          (button) => button.textContent.trim() == "Delete saved key"
-        );
-        if (!remove) throw new Error("Delete confirmation button was not found.");
-        remove.click();
-      })()
-    `,
-    sessionId,
-  );
+  await clickButtonByText(client, sessionId, '[role="alertdialog"]', "Delete saved key");
   await client.waitForPredicate(
     `!document.querySelector('[role="alertdialog"]') &&
       Boolean(document.querySelector("#settings-save-api-key")) &&
@@ -698,33 +628,51 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
     throw new Error(`Agent credential was not deleted cleanly: ${JSON.stringify(deletedState)}`);
   }
 
-  await client.evaluate(
-    `
-      (() => {
-        let dialog = document.querySelector("#workspace-settings-dialog");
-        let close = Array.from(dialog?.querySelectorAll("button") ?? [])
-          .filter((button) => button.textContent.trim() == "Close")
-          .at(-1);
-        if (!close) throw new Error("Settings close button was not found.");
-        close.click();
-      })()
-    `,
-    sessionId,
-  );
+  await clickButtonByText(client, sessionId, "#workspace-settings-dialog", "Close", true);
   await client.waitForPredicate(`!document.querySelector("#workspace-settings-dialog")`, sessionId);
+  await clickButtonByText(client, sessionId, "#workspace-agent-panel", "Hide Agent");
+  await client.waitForPredicate(`!document.querySelector("#workspace-agent-panel")`, sessionId);
+}
+
+async function clickButtonByText(client, sessionId, scopeSelector, label, last = false) {
   await client.evaluate(
     `
       (() => {
-        let panel = document.querySelector("#workspace-agent-panel");
-        let close = Array.from(panel?.querySelectorAll("button") ?? []).find(
-          (button) => button.textContent.trim() == "Hide Agent"
+        let scope = document.querySelector(${JSON.stringify(scopeSelector)});
+        let buttons = Array.from(scope?.querySelectorAll("button") ?? []).filter(
+          (item) => item.textContent.trim() == ${JSON.stringify(label)} && !item.disabled
         );
-        close?.click();
+        let button = buttons.at(${last ? -1 : 0});
+        if (!button) throw new Error(${JSON.stringify(`${label} button was not found.`)});
+        button.click();
       })()
     `,
     sessionId,
   );
-  await client.waitForPredicate(`!document.querySelector("#workspace-agent-panel")`, sessionId);
+}
+
+async function submitUncontrolledSecretForm(client, sessionId, fields) {
+  await client.evaluate(
+    `
+      (() => {
+        let entries = ${JSON.stringify(Object.entries(fields))};
+        let setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        let form;
+        for (let [selector, value] of entries) {
+          let input = document.querySelector(selector);
+          if (!(input instanceof HTMLInputElement)) {
+            throw new Error(selector + " secret input was not found.");
+          }
+          form ??= input.form;
+          setter.call(input, value);
+          input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        }
+        if (!form) throw new Error("Secret form was not found.");
+        form.requestSubmit();
+      })()
+    `,
+    sessionId,
+  );
 }
 
 async function inspectAgentCredentialVault(client, sessionId, secret, passphrase) {

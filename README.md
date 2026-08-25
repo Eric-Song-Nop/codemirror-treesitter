@@ -20,12 +20,9 @@ GroveMd is built for a small set of workflows that should stay simple:
   can co-edit without access to the owner's local folder or cloud workspace.
 - **Browser Agent**: use your own DeepSeek API key with
   `deepseek-v4-flash` by default, or manually select `deepseek-v4-pro`, to
-  search and read the active workspace or apply version-checked edits to its
-  Markdown documents. Multiple page-memory conversations can run in parallel
-  and remain available from the Agent session switcher. The Agent orchestration
-  and tools stay in the page. An API key remains page-memory-only unless the
-  user explicitly saves it in Agent Settings; saved keys are encrypted in a
-  locked local vault and require the vault passphrase after every page reopen.
+  search, read, and apply version-checked edits across workspace Markdown.
+  Page-memory conversations can run in parallel and remain switchable. Keys
+  stay in page memory unless explicitly saved to a passphrase-locked vault.
 - **Instant live Markdown**: headings, tables, task lists, code fences, KaTeX,
   Mermaid, and images render inline while the document remains editable.
 
@@ -72,16 +69,14 @@ collaboration flows.
   plugin. The `collab-editor` app remains a separate Cloudflare collaboration
   demo.
 - **Browser Agent layer**: Grove uses Vercel AI SDK Core with a lazy
-  `@ai-sdk/deepseek` adapter fixed to `https://api.deepseek.com`. A
-  decrypted user-provided key and a registry of independently running
-  conversations remain in page memory while workspace tools list, read, and
-  search Markdown and dispatch version-checked edits through workspace-owned
-  Loro documents. Agent Settings may persist only a versioned AES-GCM
-  ciphertext in the dedicated `grove-agent-credentials` IndexedDB database;
-  its key is derived on each unlock from a non-persisted vault passphrase with
-  PBKDF2-HMAC-SHA256, 600,000 iterations, and a random salt. Reloading starts
-  locked, and missing Web Crypto or IndexedDB support and credential failures
-  have no plaintext fallback.
+  `@ai-sdk/deepseek` adapter fixed to `https://api.deepseek.com`. Conversations
+  stay in page memory, and workspace tools edit workspace-owned Loro documents.
+  Agent Settings may store only versioned AES-GCM ciphertext in the dedicated
+  `grove-agent-credentials` IndexedDB database. Its key is derived from a
+  non-persisted passphrase with PBKDF2-HMAC-SHA256, 600,000 iterations, and a
+  random salt; every page reopen starts locked, and failures have no plaintext
+  fallback. This protects the saved key at rest, but not from same-origin XSS,
+  browser extensions, a compromised profile, or code running after unlock.
   DeepSeek's
   [disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) runs by
   default, and its public API documents no client-side opt-out. DeepSeek
@@ -137,9 +132,8 @@ await editor.ready;
 - Optional LiveMD collaboration bindings for Loro documents, presence, custom
   text containers, and collaborative undo/redo.
 - A browser-resident Grove Markdown Agent with DeepSeek BYOK, bounded workspace
-  list/read/search tools, parallel switchable page-memory conversations,
-  streamed responses, and path-based exact edits through the workspace
-  collaborative-document registry.
+  list/read/search tools, streamed responses, and path-based exact edits through
+  the workspace collaborative-document registry.
 - Validation tooling and apps that check public export parity, package
   dependency boundaries, language-data coverage, example coverage, benchmark
   coverage, and runtime behavior against official CodeMirror/Lezer packages.
@@ -193,22 +187,11 @@ this repository replace the language-aware layers above those primitives.
    Local MD Workspace owns a provider-neutral Agent host and a lazy Vercel AI
    SDK `@ai-sdk/deepseek` adapter fixed to `https://api.deepseek.com`.
    `deepseek-v4-flash` is the default, and `deepseek-v4-pro` is the only model
-   the user can select manually. Independent conversation controllers allow
-   concurrent runs and session switching without aborting background work.
-   Agent Settings is the only credential-persistence surface: an explicit save
-   writes encrypted vault data, while unlock, lock, and delete control the
-   page-memory credential. Lock and delete stop every run and clear secret
-   material from memory.
-   Reads go through the active `WorkspaceRuntime`; writes dispatch exact edits
-   through workspace-owned collaborative documents so the main Loro peer,
-   ordinary undo, and existing persistence paths remain authoritative.
-
-The encrypted credential vault reduces exposure of a saved key at rest. It
-cannot protect a key after unlock from same-origin XSS, malicious browser
-extensions, a compromised browser profile, or other code executing in the
-unlocked page. API keys, vault passphrases, and derived keys are excluded from
-React/Zustand state, DOM refill, `localStorage`, `sessionStorage`, URLs, logs,
-telemetry, CacheStorage, and the service worker.
+   the user can select manually. A page-memory registry owns independent
+   conversation controllers. Reads go through the active `WorkspaceRuntime`;
+   writes dispatch exact edits through workspace-owned collaborative documents
+   so the main Loro peer, ordinary undo, and persistence stay authoritative.
+   Credential persistence stays behind Agent Settings' private vault boundary.
 
 ## Workspace Structure
 

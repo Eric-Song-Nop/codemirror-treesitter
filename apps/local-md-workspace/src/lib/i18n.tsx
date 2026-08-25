@@ -63,17 +63,10 @@ export function useI18n() {
     },
     [i18n],
   );
-  let toggleLocale = useCallback(() => {
-    let nextLocale: Locale = locale == "en" ? "zh-CN" : "en";
-    storeLocale(nextLocale);
-    void i18n.changeLanguage(nextLocale);
-  }, [i18n, locale]);
-
   return {
     locale,
     setLocale,
     t,
-    toggleLocale,
   };
 }
 

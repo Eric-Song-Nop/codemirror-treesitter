@@ -9,7 +9,6 @@ import {
   WORKSPACE_AGENT_CREDENTIAL_VAULT_DATABASE_NAME,
   WORKSPACE_AGENT_CREDENTIAL_VAULT_DATABASE_VERSION,
   WORKSPACE_AGENT_CREDENTIAL_VAULT_PBKDF2_ITERATIONS,
-  type WorkspaceAgentCredentialRecordReadResult,
   type WorkspaceAgentCredentialRecordStorage,
   type WorkspaceAgentCredentialVaultCrypto,
 } from "./encrypted-credential-vault.ts";
@@ -120,7 +119,7 @@ describe("encrypted Workspace Agent credential vault", () => {
 
     let failingWriteStorage: WorkspaceAgentCredentialRecordStorage = {
       delete: async () => {},
-      read: async () => ({ status: "empty" }),
+      read: async () => undefined,
       write: async () => {
         throw new Error(storageErrorSecret);
       },
@@ -142,7 +141,7 @@ describe("encrypted Workspace Agent credential vault", () => {
       secret,
       passphrase,
     ]);
-    expect(await storage.read()).toEqual({ status: "empty" });
+    expect(await storage.read()).toBeUndefined();
 
     let withoutStorage = createEncryptedWorkspaceAgentCredentialVault({
       crypto: webCrypto,
@@ -159,7 +158,7 @@ describe("encrypted Workspace Agent credential vault", () => {
     await expectVaultError(() => vault.save("   ", passphrase), "invalid-api-key");
     await expectVaultError(() => vault.save(secret, "too short"), "invalid-passphrase");
     await expectVaultError(() => vault.unlock("too short"), "invalid-passphrase");
-    expect(await storage.read()).toEqual({ status: "empty" });
+    expect(await storage.read()).toBeUndefined();
   });
 
   it("deletes the saved credential and reports an empty vault", async () => {
@@ -185,10 +184,8 @@ class MemoryCredentialRecordStorage implements WorkspaceAgentCredentialRecordSto
     this.value = missingRecord;
   }
 
-  async read(): Promise<WorkspaceAgentCredentialRecordReadResult> {
-    return this.value === missingRecord
-      ? { status: "empty" }
-      : { status: "stored", value: structuredClone(this.value) };
+  async read() {
+    return this.value === missingRecord ? undefined : structuredClone(this.value);
   }
 
   async write(value: unknown) {
@@ -215,10 +212,9 @@ type TestStoredRecord = {
 };
 
 function storedRecord(storage: MemoryCredentialRecordStorage) {
-  let result = storage.read();
-  return result.then((stored) => {
-    if (stored.status != "stored") throw new Error("Expected a stored credential record.");
-    return stored.value as TestStoredRecord;
+  return storage.read().then((stored) => {
+    if (stored === undefined) throw new Error("Expected a stored credential record.");
+    return stored as TestStoredRecord;
   });
 }
 

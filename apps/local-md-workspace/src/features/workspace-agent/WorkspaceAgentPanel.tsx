@@ -12,7 +12,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty } from "@/components/ui/empty";
@@ -31,42 +31,38 @@ import { isMobileSidebarViewport } from "@/lib/workspace/constants";
 import type { WorkspaceAgentRunStatus, WorkspaceAgentSessionSummary } from "./useWorkspaceAgent";
 
 type WorkspaceAgentPanelProps = {
-  activeSessionId?: string;
-  credentialLoading?: boolean;
-  credentialStored?: boolean;
+  activeSessionId: string;
+  credentialLoading: boolean;
+  credentialStored: boolean;
   error: string | null;
   hasApiKey: boolean;
   messages: readonly UIMessage[];
   model: WorkspaceAgentModel;
   open: boolean;
-  runStatus: WorkspaceAgentRunStatus;
-  sessions?: readonly WorkspaceAgentSessionSummary[];
+  sessions: readonly WorkspaceAgentSessionSummary[];
   workspaceAvailable: boolean;
   onClose: () => void;
-  onConfigure: (input: { apiKey?: string; model?: WorkspaceAgentModel }) => void;
-  onNewChat: () => string | void;
-  onOpenSettings?: () => void;
-  onSelectSession?: (sessionId: string) => void;
+  onModelChange: (model: WorkspaceAgentModel) => void;
+  onNewChat: () => void;
+  onOpenSettings: () => void;
+  onSelectSession: (sessionId: string) => void;
   onSend: (prompt: string) => Promise<boolean>;
   onStop: () => void;
 };
 
-const fallbackSessionId = "workspace-agent-current-session";
-
 export function WorkspaceAgentPanel({
   activeSessionId,
-  credentialLoading = false,
-  credentialStored = false,
+  credentialLoading,
+  credentialStored,
   error,
   hasApiKey,
   messages,
   model,
   open,
-  runStatus,
   sessions,
   workspaceAvailable,
   onClose,
-  onConfigure,
+  onModelChange,
   onNewChat,
   onOpenSettings,
   onSelectSession,
@@ -76,18 +72,11 @@ export function WorkspaceAgentPanel({
   let { t } = useI18n();
   let [mobile, setMobile] = useState(() => isMobileSidebarViewport());
   let [drafts, setDrafts] = useState<Record<string, string>>({});
-  let resolvedSessions = useMemo<readonly WorkspaceAgentSessionSummary[]>(
-    () =>
-      sessions?.length ? sessions : [{ id: fallbackSessionId, status: runStatus, title: null }],
-    [runStatus, sessions],
-  );
-  let resolvedActiveSessionId = resolvedSessions.some((session) => session.id == activeSessionId)
-    ? activeSessionId!
-    : resolvedSessions[0]!.id;
-  let activeSessionIndex = resolvedSessions.findIndex(
-    (session) => session.id == resolvedActiveSessionId,
-  );
-  let activeSession = resolvedSessions[activeSessionIndex]!;
+  let resolvedActiveSessionId = sessions.some((session) => session.id == activeSessionId)
+    ? activeSessionId
+    : sessions[0]!.id;
+  let activeSessionIndex = sessions.findIndex((session) => session.id == resolvedActiveSessionId);
+  let activeSession = sessions[activeSessionIndex]!;
   let activeSessionTitle =
     activeSession.title ?? t("agent.sessions.untitled", { number: activeSessionIndex + 1 });
   let prompt = drafts[resolvedActiveSessionId] ?? "";
@@ -106,13 +95,13 @@ export function WorkspaceAgentPanel({
   }, []);
 
   useEffect(() => {
-    let sessionIds = new Set(resolvedSessions.map((session) => session.id));
+    let sessionIds = new Set(sessions.map((session) => session.id));
     setDrafts((current) => {
       let entries = Object.entries(current).filter(([sessionId]) => sessionIds.has(sessionId));
       if (entries.length == Object.keys(current).length) return current;
       return Object.fromEntries(entries);
     });
-  }, [resolvedSessions]);
+  }, [sessions]);
 
   useEffect(() => {
     if (!open) return;
@@ -169,15 +158,15 @@ export function WorkspaceAgentPanel({
   let selectSession = (sessionId: string) => {
     if (sessionId == resolvedActiveSessionId) return;
     followOutputRef.current = true;
-    onSelectSession?.(sessionId);
+    onSelectSession(sessionId);
   };
   let handleSessionKeyDown = (event: KeyboardEvent<HTMLButtonElement>, sessionIndex: number) => {
     let nextIndex = sessionIndex;
-    if (event.key == "ArrowDown") nextIndex = (sessionIndex + 1) % resolvedSessions.length;
+    if (event.key == "ArrowDown") nextIndex = (sessionIndex + 1) % sessions.length;
     else if (event.key == "ArrowUp")
-      nextIndex = (sessionIndex - 1 + resolvedSessions.length) % resolvedSessions.length;
+      nextIndex = (sessionIndex - 1 + sessions.length) % sessions.length;
     else if (event.key == "Home") nextIndex = 0;
-    else if (event.key == "End") nextIndex = resolvedSessions.length - 1;
+    else if (event.key == "End") nextIndex = sessions.length - 1;
     else return;
 
     event.preventDefault();
@@ -185,7 +174,7 @@ export function WorkspaceAgentPanel({
       .closest("nav")
       ?.querySelectorAll<HTMLButtonElement>("[data-agent-session]");
     buttons?.[nextIndex]?.focus();
-    selectSession(resolvedSessions[nextIndex]!.id);
+    selectSession(sessions[nextIndex]!.id);
   };
 
   return (
@@ -264,7 +253,7 @@ export function WorkspaceAgentPanel({
               className="max-h-32 overflow-y-auto overscroll-contain px-2 pb-2"
             >
               <ul className="space-y-1" role="list">
-                {resolvedSessions.map((session, index) => {
+                {sessions.map((session, index) => {
                   let selected = session.id == resolvedActiveSessionId;
                   let title = session.title ?? t("agent.sessions.untitled", { number: index + 1 });
                   return (
@@ -351,7 +340,7 @@ export function WorkspaceAgentPanel({
                   disabled={running}
                   value={model}
                   onChange={(event) => {
-                    onConfigure({ model: event.currentTarget.value as WorkspaceAgentModel });
+                    onModelChange(event.currentTarget.value as WorkspaceAgentModel);
                   }}
                 >
                   {WORKSPACE_AGENT_MODEL_OPTIONS.map((option) => (
@@ -422,7 +411,7 @@ export function WorkspaceAgentPanel({
                         ? t("agent.status.keyChecking")
                         : credentialStored
                           ? t("agent.status.keyLocked")
-                          : t("agent.apiKey.label")}
+                          : t("settings.credentials.apiKey.label")}
                     </div>
                     <p className="text-xs text-muted-foreground">
                       {t("agent.apiKey.settingsDescription")}
@@ -438,14 +427,14 @@ export function WorkspaceAgentPanel({
                   onClick={onOpenSettings}
                 >
                   <KeyRoundIcon data-icon="inline-start" aria-hidden />
-                  {t("agent.actions.openSettings")}
+                  {t("actions.openSettings")}
                 </Button>
               </div>
             )}
           </div>
 
           <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-            {resolvedSessions
+            {sessions
               .map((session, index) => {
                 if (session.status == "idle") return null;
                 let title = session.title ?? t("agent.sessions.untitled", { number: index + 1 });

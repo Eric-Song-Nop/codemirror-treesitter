@@ -4,7 +4,7 @@ import { act, StrictMode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
 import type { WorkspaceAgentRunResult } from "@/lib/agent/application/run-contracts";
 import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/providers/deepseek/config";
@@ -22,9 +22,22 @@ type ReactActGlobal = typeof globalThis & {
 let currentApi: ReturnType<typeof useWorkspaceAgent> | null = null;
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
+let defaultApiKey: string | null = "sk-secret";
+let defaultCredentialListeners = new Set<() => void>();
+
+const defaultGetApiKey = () => defaultApiKey;
+const defaultSubscribeToCredentials = (listener: () => void) => {
+  defaultCredentialListeners.add(listener);
+  return () => defaultCredentialListeners.delete(listener);
+};
 
 beforeAll(() => {
   (globalThis as ReactActGlobal).IS_REACT_ACT_ENVIRONMENT = true;
+});
+
+beforeEach(() => {
+  defaultApiKey = "sk-secret";
+  defaultCredentialListeners.clear();
 });
 
 afterEach(() => {
@@ -44,12 +57,16 @@ describe("useWorkspaceAgent", () => {
       return completedRun("Done");
     };
     let localStorageWrite = vi.spyOn(Storage.prototype, "setItem");
+    defaultApiKey = null;
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
 
     expect(currentApi?.model).toBe(DEFAULT_WORKSPACE_AGENT_MODEL);
     expect(currentApi?.hasApiKey).toBe(false);
     expect(currentApi?.status).toBe("idle");
-    act(() => currentApi?.configure({ apiKey: "  sk-secret  ", model: "deepseek-v4-pro" }));
+    act(() => {
+      setDefaultApiKey("  sk-secret  ");
+      currentApi?.setModel("deepseek-v4-pro");
+    });
     expect(currentApi?.hasApiKey).toBe(true);
     expect(currentApi?.model).toBe("deepseek-v4-pro");
 
@@ -67,11 +84,16 @@ describe("useWorkspaceAgent", () => {
     expect(JSON.stringify(currentApi)).not.toContain("sk-secret");
     expect(localStorageWrite).not.toHaveBeenCalled();
 
-    act(() => currentApi?.configure({ apiKey: "" }));
+    act(() => setDefaultApiKey(null));
     expect(currentApi?.hasApiKey).toBe(false);
+    await act(async () => {
+      expect(await currentApi?.send("Must stay locked", () => host)).toBe(false);
+    });
+    expect(inputs).toHaveLength(1);
+    expect(currentApi?.errorCode).toBe("missing-api-key");
   });
 
-  it("re-reads a stable private credential getter on revision changes and snapshots each run", async () => {
+  it("re-reads a stable private credential getter on changes and snapshots each run", async () => {
     let firstRun = createDeferred<WorkspaceAgentRunResult>();
     let inputs: WorkspaceAgentRunInput[] = [];
     let runner: WorkspaceAgentRunner = (input) => {
@@ -80,24 +102,22 @@ describe("useWorkspaceAgent", () => {
         ? firstRun.promise
         : Promise.resolve(completedRun("Replacement credential response"));
     };
-    let credential = "sk-revision-first";
-    let getApiKey = vi.fn(() => credential);
+    let credentials = createCredentialSource("sk-revision-first");
     let options = {
-      credentialRevision: 1,
-      getApiKey,
+      getApiKey: credentials.getApiKey,
       runner,
       scopeKey: "doc-a",
+      subscribeToCredentials: credentials.subscribe,
       workspaceKey: "workspace-a",
     };
     await renderHook(options);
 
-    expect(getApiKey).toHaveBeenCalledOnce();
+    expect(credentials.getApiKey).toHaveBeenCalledOnce();
     expect(currentApi?.hasApiKey).toBe(true);
-    expect(JSON.stringify(currentApi)).not.toContain(credential);
+    expect(JSON.stringify(currentApi)).not.toContain("sk-revision-first");
 
-    credential = "sk-revision-replacement";
     await rerenderHook(options);
-    expect(getApiKey).toHaveBeenCalledOnce();
+    expect(credentials.getApiKey).toHaveBeenCalledOnce();
 
     let firstSend!: Promise<boolean>;
     await act(async () => {
@@ -107,8 +127,8 @@ describe("useWorkspaceAgent", () => {
     await waitUntil(() => inputs.length == 1);
     expect(inputs[0]).toMatchObject({ apiKey: "sk-revision-first", host: hostA });
 
-    await rerenderHook({ ...options, credentialRevision: 2 });
-    expect(getApiKey).toHaveBeenCalledTimes(2);
+    act(() => credentials.set("sk-revision-replacement"));
+    expect(credentials.getApiKey).toHaveBeenCalledTimes(2);
     expect(inputs[0]?.signal?.aborted).toBe(false);
 
     act(() => {
@@ -135,7 +155,6 @@ describe("useWorkspaceAgent", () => {
       return completedRun("Strict response");
     };
     await renderStrictHook({
-      credentialRevision: 1,
       getApiKey: () => "sk-strict-mode",
       runner,
       scopeKey: "doc-a",
@@ -150,76 +169,6 @@ describe("useWorkspaceAgent", () => {
     expect(inputs[0]?.apiKey).toBe("sk-strict-mode");
   });
 
-  it("stops every session when a credential revision locks the private key", async () => {
-    let firstRun = createDeferred<WorkspaceAgentRunResult>();
-    let secondRun = createDeferred<WorkspaceAgentRunResult>();
-    let inputs = new Map<string, WorkspaceAgentRunInput>();
-    let runner: WorkspaceAgentRunner = (input) => {
-      let prompt = input.messages.at(-1)?.content;
-      if (!prompt) throw new Error("Expected a prompt for the Agent run.");
-      inputs.set(prompt, input);
-      return prompt == "Credential run A" ? firstRun.promise : secondRun.promise;
-    };
-    let credential: string | null = "sk-lock-revision";
-    let getApiKey = vi.fn(() => credential);
-    let options = {
-      credentialRevision: 1,
-      getApiKey,
-      runner,
-      scopeKey: "doc-a",
-      workspaceKey: "workspace-a",
-    };
-    await renderHook(options);
-
-    let sessionA = currentApi!.activeSessionId;
-    let sendA!: Promise<boolean>;
-    await act(async () => {
-      sendA = currentApi!.send("Credential run A", () => hostA);
-      await Promise.resolve();
-    });
-    await waitUntil(() => inputs.has("Credential run A"));
-
-    act(() => {
-      currentApi!.newChat();
-    });
-    let sessionB = currentApi!.activeSessionId;
-    let sendB!: Promise<boolean>;
-    await act(async () => {
-      sendB = currentApi!.send("Credential run B", () => hostB);
-      await Promise.resolve();
-    });
-    await waitUntil(() => inputs.has("Credential run B"));
-
-    credential = null;
-    await rerenderHook({ ...options, credentialRevision: 2 });
-
-    expect(getApiKey).toHaveBeenCalledTimes(2);
-    expect(currentApi?.hasApiKey).toBe(false);
-    expect(inputs.get("Credential run A")?.signal?.aborted).toBe(true);
-    expect(inputs.get("Credential run B")?.signal?.aborted).toBe(true);
-    expect(currentApi?.sessions.find((session) => session.id == sessionA)?.status).toBe(
-      "cancelled",
-    );
-    expect(currentApi?.sessions.find((session) => session.id == sessionB)?.status).toBe(
-      "cancelled",
-    );
-    await act(async () => {
-      expect(await Promise.all([sendA, sendB])).toEqual([false, false]);
-    });
-
-    let runnerCount = inputs.size;
-    await act(async () => {
-      expect(await currentApi!.send("Must stay locked", () => host)).toBe(false);
-    });
-    expect(inputs.size).toBe(runnerCount);
-    expect(currentApi?.errorCode).toBe("missing-api-key");
-    expect(JSON.stringify(currentApi)).not.toContain("sk-lock-revision");
-
-    firstRun.resolve(completedRun("late A"));
-    secondRun.resolve(completedRun("late B"));
-    await act(async () => Promise.resolve());
-  });
-
   it("aborts every session synchronously when the credential subscription locks", async () => {
     let firstRun = createDeferred<WorkspaceAgentRunResult>();
     let secondRun = createDeferred<WorkspaceAgentRunResult>();
@@ -230,23 +179,15 @@ describe("useWorkspaceAgent", () => {
       inputs.set(prompt, input);
       return prompt == "Subscribed run A" ? firstRun.promise : secondRun.promise;
     };
-    let credential: string | null = "sk-subscribed-credential";
-    let credentialListeners = new Set<() => void>();
-    let subscribeToCredentials = vi.fn((listener: () => void) => {
-      credentialListeners.add(listener);
-      return () => {
-        credentialListeners.delete(listener);
-      };
-    });
+    let credentials = createCredentialSource("sk-subscribed-credential");
     await renderHook({
-      credentialRevision: 1,
-      getApiKey: () => credential,
+      getApiKey: credentials.getApiKey,
       runner,
       scopeKey: "doc-a",
-      subscribeToCredentials,
+      subscribeToCredentials: credentials.subscribe,
       workspaceKey: "workspace-a",
     });
-    expect(credentialListeners.size).toBe(1);
+    expect(credentials.listenerCount()).toBe(1);
 
     let sendA!: Promise<boolean>;
     await act(async () => {
@@ -265,15 +206,10 @@ describe("useWorkspaceAgent", () => {
     });
     await waitUntil(() => inputs.has("Subscribed run B"));
 
-    act(() => {
-      credential = null;
-      for (let listener of credentialListeners) {
-        listener();
-        expect(inputs.get("Subscribed run A")?.signal?.aborted).toBe(true);
-        expect(inputs.get("Subscribed run B")?.signal?.aborted).toBe(true);
-      }
-    });
+    act(() => credentials.set(null));
 
+    expect(inputs.get("Subscribed run A")?.signal?.aborted).toBe(true);
+    expect(inputs.get("Subscribed run B")?.signal?.aborted).toBe(true);
     expect(currentApi?.hasApiKey).toBe(false);
     expect(currentApi?.sessions.map((session) => session.status)).toEqual([
       "cancelled",
@@ -291,22 +227,22 @@ describe("useWorkspaceAgent", () => {
   it("cannot reconfigure or send through retained callbacks after unmount", async () => {
     let runner = vi.fn<WorkspaceAgentRunner>(async () => completedRun("Must not run"));
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
-    act(() => currentApi!.configure({ apiKey: "sk-before-unmount" }));
     expect(currentApi?.hasApiKey).toBe(true);
 
-    let retainedConfigure = currentApi!.configure;
+    let retainedSetModel = currentApi!.setModel;
     let retainedSend = currentApi!.send;
     await act(async () => {
       root?.unmount();
       root = null;
     });
 
-    retainedConfigure({ apiKey: "sk-after-unmount" });
+    retainedSetModel("deepseek-v4-pro");
     let createHost = vi.fn(() => host);
     await expect(retainedSend("Must remain disposed", createHost)).resolves.toBe(false);
 
     expect(createHost).not.toHaveBeenCalled();
     expect(runner).not.toHaveBeenCalled();
+    expect(currentApi?.model).toBe(DEFAULT_WORKSPACE_AGENT_MODEL);
   });
 
   it("redacts credentials from runner failures at the UI boundary", async () => {
@@ -314,7 +250,6 @@ describe("useWorkspaceAgent", () => {
       throw new Error("Provider response exposed sk-secret.");
     };
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
-    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
 
     await act(async () => {
       expect(await currentApi?.send("Fail safely", () => host)).toBe(false);
@@ -347,7 +282,6 @@ describe("useWorkspaceAgent", () => {
       return deferred.promise;
     };
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
-    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
 
     let sendPromise!: Promise<boolean>;
     await act(async () => {
@@ -381,7 +315,6 @@ describe("useWorkspaceAgent", () => {
       return deferred.promise;
     };
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
-    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
 
     let sendPromise!: Promise<boolean>;
     await act(async () => {
@@ -415,7 +348,6 @@ describe("useWorkspaceAgent", () => {
       return deferred.promise;
     };
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
-    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
 
     let sendPromise!: Promise<boolean>;
     await act(async () => {
@@ -443,7 +375,6 @@ describe("useWorkspaceAgent", () => {
     let deferred = createDeferred<WorkspaceAgentRunResult>();
     let runner = vi.fn<WorkspaceAgentRunner>(() => deferred.promise);
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
-    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
 
     let sendPromise!: Promise<boolean>;
     await act(async () => {
@@ -451,7 +382,7 @@ describe("useWorkspaceAgent", () => {
       await Promise.resolve();
     });
     await act(async () => {
-      currentApi?.configure({ model: "deepseek-v4-pro" });
+      currentApi?.setModel("deepseek-v4-pro");
       expect(await currentApi?.send("", () => host)).toBe(false);
     });
 
@@ -473,14 +404,13 @@ describe("useWorkspaceAgent", () => {
     let optionsA = { runner: runnerA, scopeKey: "doc-a", workspaceKey: "workspace-a" };
     let optionsB = { runner: runnerB, scopeKey: "doc-a", workspaceKey: "workspace-a" };
     await renderHook(optionsA);
-    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
 
     let sendA!: Promise<boolean>;
     await act(async () => {
       sendA = currentApi!.send("Use runner A", () => hostA);
       expect(runnerA).not.toHaveBeenCalled();
       flushSync(() => {
-        root?.render(<WorkspaceAgentHarness options={{ throttleMs: 0, ...optionsB }} />);
+        root?.render(<WorkspaceAgentHarness options={resolveTestOptions(optionsB)} />);
       });
       expect(runnerA).not.toHaveBeenCalled();
       expect(runnerB).not.toHaveBeenCalled();
@@ -515,7 +445,6 @@ describe("useWorkspaceAgent", () => {
       throw new Error(`Unexpected Agent prompt: ${prompt}`);
     };
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
-    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
 
     let sessionA = currentApi!.activeSessionId;
     let sendA!: Promise<boolean>;
@@ -620,7 +549,6 @@ describe("useWorkspaceAgent", () => {
       return prompt == "Stop A" ? deferredA.promise : deferredB.promise;
     };
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
-    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
 
     let sessionA = currentApi!.activeSessionId;
     let sendA!: Promise<boolean>;
@@ -683,7 +611,7 @@ describe("useWorkspaceAgent", () => {
       return prompt == "Workspace A" ? deferredA.promise : deferredB.promise;
     };
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
-    act(() => currentApi?.configure({ apiKey: "sk-secret", model: "deepseek-v4-pro" }));
+    act(() => currentApi?.setModel("deepseek-v4-pro"));
 
     let sessionA = currentApi!.activeSessionId;
     let sendA!: Promise<boolean>;
@@ -732,7 +660,6 @@ describe("useWorkspaceAgent", () => {
   it("preserves prior sessions for a new chat, resets them for a new workspace, and reports missing hosts", async () => {
     let runner = vi.fn<WorkspaceAgentRunner>(async () => completedRun("Answer"));
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
-    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
     let firstSessionId = currentApi!.activeSessionId;
 
     await act(async () => {
@@ -776,33 +703,70 @@ describe("useWorkspaceAgent", () => {
   });
 });
 
-async function renderHook(options: UseWorkspaceAgentOptions) {
+type TestWorkspaceAgentOptions = Omit<
+  UseWorkspaceAgentOptions,
+  "getApiKey" | "subscribeToCredentials"
+> &
+  Partial<Pick<UseWorkspaceAgentOptions, "getApiKey" | "subscribeToCredentials">>;
+
+function resolveTestOptions(options: TestWorkspaceAgentOptions): UseWorkspaceAgentOptions {
+  return {
+    getApiKey: defaultGetApiKey,
+    subscribeToCredentials: defaultSubscribeToCredentials,
+    throttleMs: 0,
+    ...options,
+  };
+}
+
+async function renderHook(options: TestWorkspaceAgentOptions) {
   container = document.body.appendChild(document.createElement("div"));
   root = createRoot(container);
   await rerenderHook(options);
 }
 
-async function renderStrictHook(options: UseWorkspaceAgentOptions) {
+async function renderStrictHook(options: TestWorkspaceAgentOptions) {
   container = document.body.appendChild(document.createElement("div"));
   root = createRoot(container);
   await act(async () => {
     root?.render(
       <StrictMode>
-        <WorkspaceAgentHarness options={{ throttleMs: 0, ...options }} />
+        <WorkspaceAgentHarness options={resolveTestOptions(options)} />
       </StrictMode>,
     );
   });
 }
 
-async function rerenderHook(options: UseWorkspaceAgentOptions) {
+async function rerenderHook(options: TestWorkspaceAgentOptions) {
   await act(async () => {
-    root?.render(<WorkspaceAgentHarness options={{ throttleMs: 0, ...options }} />);
+    root?.render(<WorkspaceAgentHarness options={resolveTestOptions(options)} />);
   });
 }
 
 function WorkspaceAgentHarness({ options }: { options: UseWorkspaceAgentOptions }) {
   currentApi = useWorkspaceAgent(options);
   return null;
+}
+
+function setDefaultApiKey(apiKey: string | null) {
+  defaultApiKey = apiKey;
+  for (let listener of defaultCredentialListeners) listener();
+}
+
+function createCredentialSource(initialApiKey: string | null) {
+  let apiKey = initialApiKey;
+  let listeners = new Set<() => void>();
+  return {
+    getApiKey: vi.fn(() => apiKey),
+    listenerCount: () => listeners.size,
+    set(nextApiKey: string | null) {
+      apiKey = nextApiKey;
+      for (let listener of listeners) listener();
+    },
+    subscribe: vi.fn((listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }),
+  };
 }
 
 function messageText(message: UIMessage | null | undefined) {

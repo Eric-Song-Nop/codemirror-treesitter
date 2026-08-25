@@ -28,7 +28,6 @@ export function WorkspaceAgentFeature({
   let createRunHost = useWorkspaceAgentHost(hostRefs);
   let {
     activeSessionId,
-    configure,
     error,
     errorCode,
     hasApiKey,
@@ -38,10 +37,9 @@ export function WorkspaceAgentFeature({
     selectSession,
     send,
     sessions,
-    status,
+    setModel,
     stop,
   } = useWorkspaceAgent({
-    credentialRevision: credentials.revision,
     getApiKey: credentials.getApiKey,
     scopeKey,
     subscribeToCredentials: credentials.subscribe,
@@ -64,11 +62,10 @@ export function WorkspaceAgentFeature({
       messages={messages}
       model={model}
       open={open}
-      runStatus={status}
       sessions={sessions}
       workspaceAvailable={workspaceAvailable}
       onClose={onClose}
-      onConfigure={configure}
+      onModelChange={setModel}
       onNewChat={newChat}
       onOpenSettings={onOpenSettings}
       onSelectSession={selectSession}

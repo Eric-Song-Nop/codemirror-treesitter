@@ -38,8 +38,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
-import { useWorkspaceAgentCredentials } from "@/features/workspace-agent/WorkspaceAgentCredentialsProvider";
-import { useI18n, type TFunction, type TranslationKey } from "@/lib/i18n";
+import {
+  useWorkspaceAgentCredentials,
+  type WorkspaceAgentCredentialSnapshot,
+} from "@/features/workspace-agent/WorkspaceAgentCredentialsProvider";
+import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { themeDefinitions, useTheme } from "@/theme";
 
@@ -358,7 +361,7 @@ function CredentialSettings() {
             >
               <SettingsPendingContent
                 pending={status == "forgetting"}
-                pendingLabel={t("settings.credentials.actions.deleting")}
+                pendingLabel={t("settings.credentials.status.forgetting")}
               >
                 {t("settings.credentials.actions.delete")}
               </SettingsPendingContent>
@@ -385,29 +388,26 @@ function CredentialSaveForm({
   ref,
 }: CredentialSaveFormProps & { ref?: React.Ref<HTMLFormElement> }) {
   let { t } = useI18n();
-  let apiKeyRef = useRef<HTMLInputElement>(null);
-  let confirmationRef = useRef<HTMLInputElement>(null);
-  let passphraseRef = useRef<HTMLInputElement>(null);
   let prefix = replace ? "settings-replace" : "settings-save";
 
   let submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     let form = event.currentTarget;
-    confirmationRef.current?.setCustomValidity("");
+    let confirmationInput = form.elements.namedItem("credential-passphrase-confirmation");
+    if (!(confirmationInput instanceof HTMLInputElement)) return;
+    confirmationInput.setCustomValidity("");
     if (!form.reportValidity()) return;
 
-    let apiKey = apiKeyRef.current?.value ?? "";
-    let passphrase = passphraseRef.current?.value ?? "";
-    let confirmation = confirmationRef.current?.value ?? "";
+    let formData = new FormData(form);
+    let apiKey = formDataText(formData, "deepseek-api-key");
+    let passphrase = formDataText(formData, "credential-passphrase");
+    let confirmation = formDataText(formData, "credential-passphrase-confirmation");
     if (passphrase != confirmation) {
-      confirmationRef.current?.setCustomValidity(t("settings.credentials.passphrase.mismatch"));
-      confirmationRef.current?.reportValidity();
+      confirmationInput.setCustomValidity(t("settings.credentials.passphrase.mismatch"));
+      confirmationInput.reportValidity();
       return;
     }
     form.reset();
-    if (apiKeyRef.current) apiKeyRef.current.value = "";
-    if (passphraseRef.current) passphraseRef.current.value = "";
-    if (confirmationRef.current) confirmationRef.current.value = "";
     let saved = await save(apiKey, passphrase);
     if (!saved) return;
     onSaved?.();
@@ -416,7 +416,6 @@ function CredentialSaveForm({
   return (
     <form ref={ref} className="grid gap-3" onSubmit={(event) => void submit(event)}>
       <SecretField
-        ref={apiKeyRef}
         autoComplete="off"
         description={t("settings.credentials.apiKey.description")}
         id={`${prefix}-api-key`}
@@ -426,7 +425,6 @@ function CredentialSaveForm({
         placeholder={t("settings.credentials.apiKey.placeholder")}
       />
       <SecretField
-        ref={passphraseRef}
         autoComplete="new-password"
         description={t("settings.credentials.passphrase.description")}
         id={`${prefix}-passphrase`}
@@ -437,7 +435,6 @@ function CredentialSaveForm({
         placeholder={t("settings.credentials.passphrase.createPlaceholder")}
       />
       <SecretField
-        ref={confirmationRef}
         autoComplete="new-password"
         description={t("settings.credentials.passphrase.confirmDescription")}
         id={`${prefix}-passphrase-confirmation`}
@@ -455,7 +452,7 @@ function CredentialSaveForm({
       >
         <SettingsPendingContent
           pending={pending}
-          pendingLabel={t("settings.credentials.actions.saving")}
+          pendingLabel={t("settings.credentials.status.saving")}
         >
           {replace
             ? t("settings.credentials.actions.saveReplacement")
@@ -474,24 +471,20 @@ function CredentialUnlockForm({
   unlock: (passphrase: string) => Promise<boolean>;
 }) {
   let { t } = useI18n();
-  let passphraseRef = useRef<HTMLInputElement>(null);
 
   let submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     let form = event.currentTarget;
     if (!form.reportValidity()) return;
 
-    let passphrase = passphraseRef.current?.value ?? "";
+    let passphrase = formDataText(new FormData(form), "credential-passphrase");
     form.reset();
-    if (passphraseRef.current) passphraseRef.current.value = "";
-    let unlocked = await unlock(passphrase);
-    if (!unlocked) return;
+    await unlock(passphrase);
   };
 
   return (
     <form className="grid gap-3" onSubmit={(event) => void submit(event)}>
       <SecretField
-        ref={passphraseRef}
         autoComplete="current-password"
         description={t("settings.credentials.passphrase.unlockDescription")}
         id="settings-unlock-passphrase"
@@ -508,7 +501,7 @@ function CredentialUnlockForm({
       >
         <SettingsPendingContent
           pending={pending}
-          pendingLabel={t("settings.credentials.actions.unlocking")}
+          pendingLabel={t("settings.credentials.status.unlocking")}
         >
           {t("settings.credentials.actions.unlock")}
         </SettingsPendingContent>
@@ -526,7 +519,6 @@ function SecretField({
   minLength,
   name,
   placeholder,
-  ref,
   onInput,
 }: {
   autoComplete: "current-password" | "new-password" | "off";
@@ -537,7 +529,6 @@ function SecretField({
   minLength?: number;
   name: string;
   placeholder: string;
-  ref: React.Ref<HTMLInputElement>;
   onInput?: React.FormEventHandler<HTMLInputElement>;
 }) {
   let descriptionId = `${id}-description`;
@@ -545,7 +536,6 @@ function SecretField({
     <div className="grid gap-1.5">
       <Label htmlFor={id}>{label}</Label>
       <Input
-        ref={ref}
         aria-describedby={descriptionId}
         autoCapitalize="none"
         autoComplete={autoComplete}
@@ -590,7 +580,7 @@ function CredentialLead({
   );
 }
 
-function CredentialStatus({ status }: { status: string }) {
+function CredentialStatus({ status }: { status: WorkspaceAgentCredentialSnapshot["status"] }) {
   let { t } = useI18n();
   let label = credentialStatusLabel(status, t);
   let positive = status == "unlocked";
@@ -725,64 +715,18 @@ function SettingsPendingContent({
   );
 }
 
-function credentialStatusLabel(status: string, t: TFunction) {
-  let key: TranslationKey;
-  switch (status) {
-    case "checking":
-      key = "settings.credentials.status.checking";
-      break;
-    case "empty":
-      key = "settings.credentials.status.empty";
-      break;
-    case "locked":
-      key = "settings.credentials.status.locked";
-      break;
-    case "unlocked":
-      key = "settings.credentials.status.unlocked";
-      break;
-    case "saving":
-      key = "settings.credentials.status.saving";
-      break;
-    case "unlocking":
-      key = "settings.credentials.status.unlocking";
-      break;
-    case "forgetting":
-      key = "settings.credentials.status.forgetting";
-      break;
-    default:
-      key = "settings.credentials.status.error";
-  }
-  return t(key);
+function credentialStatusLabel(
+  status: WorkspaceAgentCredentialSnapshot["status"],
+  t: ReturnType<typeof useI18n>["t"],
+) {
+  return t(`settings.credentials.status.${status}` as TranslationKey);
 }
 
-function credentialErrorMessage(errorCode: string, t: TFunction) {
-  let key: TranslationKey;
-  switch (errorCode) {
-    case "credential-not-found":
-      key = "settings.credentials.error.credential-not-found";
-      break;
-    case "crypto-unavailable":
-      key = "settings.credentials.error.crypto-unavailable";
-      break;
-    case "invalid-api-key":
-      key = "settings.credentials.error.invalid-api-key";
-      break;
-    case "invalid-passphrase":
-      key = "settings.credentials.error.invalid-passphrase";
-      break;
-    case "invalid-record":
-      key = "settings.credentials.error.invalid-record";
-      break;
-    case "storage-unavailable":
-      key = "settings.credentials.error.storage-unavailable";
-      break;
-    case "unlock-failed":
-      key = "settings.credentials.error.unlock-failed";
-      break;
-    default:
-      key = "settings.credentials.error.unknown";
-  }
-  return t(key);
+function credentialErrorMessage(
+  errorCode: NonNullable<WorkspaceAgentCredentialSnapshot["errorCode"]>,
+  t: ReturnType<typeof useI18n>["t"],
+) {
+  return t(`settings.credentials.error.${errorCode}` as TranslationKey);
 }
 
 function clearCredentialInputs(container: HTMLElement | null) {
@@ -790,4 +734,9 @@ function clearCredentialInputs(container: HTMLElement | null) {
     input.value = "";
     input.setCustomValidity("");
   }
+}
+
+function formDataText(formData: FormData, name: string) {
+  let value = formData.get(name);
+  return typeof value == "string" ? value : "";
 }

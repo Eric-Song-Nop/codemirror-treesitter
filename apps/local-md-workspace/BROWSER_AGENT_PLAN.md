@@ -11,20 +11,9 @@ part: the browser calls DeepSeek directly with a user-provided API key.
   primitives behind a provider-neutral local facade.
 - Use `@ai-sdk/deepseek`, default to `deepseek-v4-flash`, and expose only
   `deepseek-v4-pro` as a manual model choice. Do not accept free-form model IDs.
-- Keep the API key in page memory by default. Persist it only after an explicit
-  save in Agent Settings and only as a versioned AES-GCM ciphertext record in
-  the dedicated `grove-agent-credentials` IndexedDB database. Keep the model
-  choice in page memory. The provider origin is fixed to
-  `https://api.deepseek.com`.
-- Derive the vault AES-GCM key locally from a non-persisted vault passphrase
-  using PBKDF2-HMAC-SHA256, exactly 600,000 iterations, and a random salt. Every
-  newly opened or reloaded page starts locked and requires the passphrase to
-  unlock a saved credential.
-- Keep the API key, vault passphrase, derived key, `Authorization` header, and
-  provider response bodies out of React/Zustand state, DOM refill,
-  `localStorage`, `sessionStorage`, URLs, logs, telemetry, CacheStorage, and the
-  service worker. If Web Crypto or IndexedDB is unavailable, or a vault
-  operation fails, fail closed and never fall back to plaintext persistence.
+- Keep the model choice and API key in page memory except for explicit encrypted
+  saves governed by the [Credential Vault Contract](#credential-vault-contract).
+  Fix the provider origin to `https://api.deepseek.com`.
 - Run the MVP Agent on the browser main thread. Remote streaming and workspace
   I/O are asynchronous; a Worker becomes relevant only for local inference or
   a CPU-heavy long-lived index.
@@ -44,11 +33,8 @@ part: the browser calls DeepSeek directly with a user-provided API key.
   chat creates and selects a controller, session switching does not interrupt
   other controllers, and Stop targets only the selected session. Workspace
   replacement and app teardown stop the whole registry.
-- Keep unlocked API credentials and all vault secret material behind a private
-  imperative boundary and publish only safe, immutable credential and session
-  summaries through the React-facing Zustand store. Lock and delete clear
-  page-memory secret material and stop all running sessions; delete also
-  removes the encrypted vault record.
+- Keep session controllers and vault secrets behind private imperative
+  boundaries; publish only safe, immutable summaries through Zustand.
 
 ## MVP Scope
 
@@ -129,62 +115,49 @@ separate demand-loaded chunks outside the launcher static closure.
 ## Credential Vault Contract
 
 Agent Settings is the only surface allowed to persist a DeepSeek API key. A
-save creates a versioned record in the dedicated `grove-agent-credentials`
-IndexedDB database containing only AES-GCM ciphertext and the non-secret
-algorithm, KDF, random salt, and IV metadata required to unlock it. A fresh
-random salt and IV are used for each saved record. No plaintext credential is
-written to storage.
+save writes only versioned AES-GCM ciphertext and the non-secret version,
+algorithm, KDF, random salt, and IV metadata to the dedicated
+`grove-agent-credentials` IndexedDB database. Each record uses a fresh salt and
+IV; plaintext credentials are never written.
 
 The AES-GCM key is derived locally from the vault passphrase using
 PBKDF2-HMAC-SHA256 with exactly 600,000 iterations, matching the
 [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
-work factor for this algorithm. The passphrase and derived key are never
-persisted. A new page instance never auto-unlocks from stored data: it reports
-that a saved vault exists, remains locked, and requires the user to enter the
-passphrase before decrypting the API key into page memory.
+work factor. The passphrase and derived key are never persisted; every new or
+reloaded page remains locked until the passphrase decrypts the key into memory.
 
 The API key, passphrase, and derived key stay out of React and Zustand state,
 DOM value refill, `localStorage`, `sessionStorage`, URLs, logs, telemetry,
-CacheStorage, and service-worker messages or caches. UI state may contain only
-non-secret facts such as whether a saved vault exists, whether it is locked,
-and a sanitized operation error. Missing Web Crypto or IndexedDB support and
-any save, unlock, or delete failure are terminal for that operation: the UI
-reports the failure and never stores plaintext as a fallback.
+CacheStorage, and service-worker messages or caches. UI state contains only safe
+status summaries. Missing Web Crypto or IndexedDB support and any save, unlock,
+or delete failure fail closed without a plaintext fallback.
 
-Lock and delete first stop all Agent runs and clear the decrypted API key,
-passphrase, derived key, and other vault secret material from page memory.
-Delete also removes the encrypted record; if that removal fails, the UI reports
-that encrypted data may remain while the current page stays locked. The fixed
-DeepSeek origin and model allowlist apply equally to unlocked saved keys.
+Lock and delete stop all Agent runs and clear page-memory secrets. Delete also
+removes the encrypted record; if removal fails, the page stays locked and warns
+that ciphertext may remain. The fixed origin and model allowlist still apply.
 
-Save, replace, and delete broadcast a non-secret random revision to other tabs.
-BroadcastChannel is the primary transport; a `storage` event using
-`grove-agent-credentials:revision` is the fallback. That token contains no key,
-passphrase, ciphertext, or unlock capability. Receiving either signal locks the
-tab synchronously and stops all of its Agent runs.
+Save, replace, and delete broadcast a non-secret random revision through
+BroadcastChannel, with a `storage` event at
+`grove-agent-credentials:revision` as fallback. The token contains no
+credential or unlock capability; receiving it locks the tab and stops its runs.
 
-This vault is an at-rest protection boundary, not a claim that browser-held
-credentials are immune to hostile code; its resistance to offline guessing
-also depends on passphrase strength. The
+The vault protects saved credentials only at rest, and resistance to offline
+guessing depends on passphrase strength. The
 [Web Cryptography API security considerations](https://www.w3.org/TR/WebCryptoAPI/#security-considerations)
-explicitly warn that script injection can exfiltrate keys and data. Same-origin
-XSS, malicious extensions, a compromised browser profile, or code executing in
-an unlocked page can therefore still read or use secrets available to that
-page. The Settings UI must disclose these residual risks and make lock and
-delete outcomes explicit.
+warn that injected scripts can exfiltrate keys and data. Same-origin XSS,
+malicious extensions, a compromised profile, or code running after unlock can
+still use page secrets. Settings must disclose these risks and lock/delete
+outcomes.
 
 ## DeepSeek Context Cache
 
 DeepSeek's
 [disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) is enabled
-by default for API requests, and its public API documents no client-side
-opt-out. DeepSeek documents that each user's cache is isolated and logically
-invisible to other users, and that unused cache entries are normally cleared
-within a few hours to days. Grove's local vault can persist only encrypted
-credential data, and conversations remain page-memory-only, but neither rule
-prevents request prefixes from being retained temporarily in DeepSeek's
-server-side cache. The Agent UI must disclose this boundary before a user
-supplies or unlocks a key.
+by default, with no documented client-side opt-out. DeepSeek documents per-user
+isolation and cleanup of unused entries within a few hours to days. Local
+encrypted credentials and page-memory conversations do not prevent temporary
+server-side retention of request prefixes. The Agent UI must disclose this
+boundary before a user supplies or unlocks a key.
 
 ## Tool Contract
 

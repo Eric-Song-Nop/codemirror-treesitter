@@ -22,7 +22,6 @@ describe("WorkspaceAgentCredentialManager", () => {
       errorCode: null,
       hasApiKey: false,
       hasStoredKey: false,
-      revision: 0,
       status: "checking",
     });
 
@@ -106,10 +105,7 @@ describe("WorkspaceAgentCredentialManager", () => {
 
     expect(channel.postMessage).toHaveBeenCalledTimes(2);
     for (let [message] of channel.postMessage.mock.calls) {
-      expect(message).toEqual({
-        revision: expect.any(String),
-        type: "credential-changed",
-      });
+      expect(message).toEqual(expect.any(String));
       expect(JSON.stringify(message)).not.toContain(apiKey);
       expect(JSON.stringify(message)).not.toContain(passphrase);
     }
@@ -184,6 +180,26 @@ describe("WorkspaceAgentCredentialManager", () => {
       hasApiKey: false,
       hasStoredKey: false,
       status: "empty",
+    });
+  });
+
+  it("fails closed when replacing an unlocked credential fails", async () => {
+    let memory = createMemoryVault({ apiKey, passphrase });
+    memory.vault.save = vi.fn(async () => {
+      throw new WorkspaceAgentCredentialVaultError("storage-unavailable");
+    });
+    let manager = new WorkspaceAgentCredentialManager(memory.vault);
+    await manager.initialize();
+    await expect(manager.unlock(passphrase)).resolves.toBe(true);
+
+    await expect(manager.save(replacementApiKey, passphrase)).resolves.toBe(false);
+
+    expect(manager.getApiKey()).toBeNull();
+    expect(manager.getSnapshot()).toMatchObject({
+      errorCode: "storage-unavailable",
+      hasApiKey: false,
+      hasStoredKey: true,
+      status: "error",
     });
   });
 

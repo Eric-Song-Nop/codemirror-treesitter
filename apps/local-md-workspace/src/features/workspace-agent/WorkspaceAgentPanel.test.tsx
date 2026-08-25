@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act, useState } from "react";
+import { act, useState, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createChat } from "@shadcn/helpers/ai-sdk";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -44,7 +44,7 @@ describe("WorkspaceAgentPanel", () => {
   it("opens Settings for an empty credential without rendering a secret input", async () => {
     let openSettings = vi.fn();
     await render(
-      <WorkspaceAgentPanel
+      <TestWorkspaceAgentPanel
         error={null}
         hasApiKey={false}
         messages={[]}
@@ -53,7 +53,7 @@ describe("WorkspaceAgentPanel", () => {
         runStatus="idle"
         workspaceAvailable
         onClose={vi.fn()}
-        onConfigure={vi.fn()}
+        onModelChange={vi.fn()}
         onNewChat={vi.fn()}
         onOpenSettings={openSettings}
         onSend={vi.fn(async () => true)}
@@ -75,7 +75,7 @@ describe("WorkspaceAgentPanel", () => {
   it("shows a stored credential as locked and keeps prompting in Settings", async () => {
     let openSettings = vi.fn();
     await render(
-      <WorkspaceAgentPanel
+      <TestWorkspaceAgentPanel
         credentialStored
         error={null}
         hasApiKey={false}
@@ -85,7 +85,7 @@ describe("WorkspaceAgentPanel", () => {
         runStatus="idle"
         workspaceAvailable
         onClose={vi.fn()}
-        onConfigure={vi.fn()}
+        onModelChange={vi.fn()}
         onNewChat={vi.fn()}
         onOpenSettings={openSettings}
         onSend={vi.fn(async () => true)}
@@ -104,7 +104,7 @@ describe("WorkspaceAgentPanel", () => {
 
   it("disables the Settings entry while secure storage is still being checked", async () => {
     await render(
-      <WorkspaceAgentPanel
+      <TestWorkspaceAgentPanel
         credentialLoading
         error={null}
         hasApiKey={false}
@@ -114,7 +114,7 @@ describe("WorkspaceAgentPanel", () => {
         runStatus="idle"
         workspaceAvailable
         onClose={vi.fn()}
-        onConfigure={vi.fn()}
+        onModelChange={vi.fn()}
         onNewChat={vi.fn()}
         onOpenSettings={vi.fn()}
         onSend={vi.fn(async () => true)}
@@ -130,7 +130,7 @@ describe("WorkspaceAgentPanel", () => {
     let send = vi.fn(async () => true);
     let close = vi.fn();
     await render(
-      <WorkspaceAgentPanel
+      <TestWorkspaceAgentPanel
         error={null}
         hasApiKey
         messages={agentMessages()}
@@ -139,7 +139,7 @@ describe("WorkspaceAgentPanel", () => {
         runStatus="success"
         workspaceAvailable
         onClose={close}
-        onConfigure={vi.fn()}
+        onModelChange={vi.fn()}
         onNewChat={vi.fn()}
         onSend={send}
         onStop={vi.fn()}
@@ -179,7 +179,7 @@ describe("WorkspaceAgentPanel", () => {
   it("shows every session and requests a switch without mixing the active transcript", async () => {
     let selectSession = vi.fn();
     await render(
-      <WorkspaceAgentPanel
+      <TestWorkspaceAgentPanel
         activeSessionId="b"
         error={null}
         hasApiKey
@@ -190,7 +190,7 @@ describe("WorkspaceAgentPanel", () => {
         sessions={sessionSummaries}
         workspaceAvailable
         onClose={vi.fn()}
-        onConfigure={vi.fn()}
+        onModelChange={vi.fn()}
         onNewChat={vi.fn()}
         onSelectSession={selectSession}
         onSend={vi.fn(async () => true)}
@@ -268,7 +268,7 @@ describe("WorkspaceAgentPanel", () => {
   it("defaults to V4 Flash and allows switching to V4 Pro", async () => {
     let configure = vi.fn();
     await render(
-      <WorkspaceAgentPanel
+      <TestWorkspaceAgentPanel
         error={null}
         hasApiKey
         messages={[]}
@@ -277,7 +277,7 @@ describe("WorkspaceAgentPanel", () => {
         runStatus="idle"
         workspaceAvailable
         onClose={vi.fn()}
-        onConfigure={configure}
+        onModelChange={configure}
         onNewChat={vi.fn()}
         onSend={vi.fn(async () => true)}
         onStop={vi.fn()}
@@ -293,14 +293,50 @@ describe("WorkspaceAgentPanel", () => {
 
     await act(async () => model.dispatchEvent(new Event("change", { bubbles: true })));
 
-    expect(configure).toHaveBeenCalledWith({ model: "deepseek-v4-pro" });
+    expect(configure).toHaveBeenCalledWith("deepseek-v4-pro");
   });
 });
+
+type PanelProps = ComponentProps<typeof WorkspaceAgentPanel>;
+type DefaultedPanelProp =
+  | "activeSessionId"
+  | "credentialLoading"
+  | "credentialStored"
+  | "onOpenSettings"
+  | "onSelectSession"
+  | "sessions";
+type TestPanelProps = Omit<PanelProps, DefaultedPanelProp> &
+  Partial<Pick<PanelProps, DefaultedPanelProp>> & {
+    runStatus?: PanelProps["sessions"][number]["status"];
+  };
+
+function TestWorkspaceAgentPanel({
+  activeSessionId = "test-session",
+  credentialLoading = false,
+  credentialStored = false,
+  onOpenSettings = vi.fn(),
+  onSelectSession = vi.fn(),
+  runStatus = "idle",
+  sessions,
+  ...props
+}: TestPanelProps) {
+  return (
+    <WorkspaceAgentPanel
+      activeSessionId={activeSessionId}
+      credentialLoading={credentialLoading}
+      credentialStored={credentialStored}
+      sessions={sessions ?? [{ id: activeSessionId, status: runStatus, title: null }]}
+      onOpenSettings={onOpenSettings}
+      onSelectSession={onSelectSession}
+      {...props}
+    />
+  );
+}
 
 function SessionSwitchHarness() {
   let [activeSessionId, setActiveSessionId] = useState("b");
   return (
-    <WorkspaceAgentPanel
+    <TestWorkspaceAgentPanel
       activeSessionId={activeSessionId}
       error={null}
       hasApiKey
@@ -311,7 +347,7 @@ function SessionSwitchHarness() {
       sessions={draftSessionSummaries}
       workspaceAvailable
       onClose={vi.fn()}
-      onConfigure={vi.fn()}
+      onModelChange={vi.fn()}
       onNewChat={vi.fn()}
       onSelectSession={setActiveSessionId}
       onSend={vi.fn(async () => true)}
