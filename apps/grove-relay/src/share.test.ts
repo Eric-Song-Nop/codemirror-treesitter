@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   hashShareSecret,
   isShareActive,
@@ -18,6 +18,8 @@ const validSecret = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 const validHash = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
 
 describe("shared file relay inputs", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("parses a valid create-share request", () => {
     expect(
       parseCreateShareRequest({
@@ -53,6 +55,9 @@ describe("shared file relay inputs", () => {
   });
 
   it("rejects shares without a bounded lifetime or with oversized snapshots", () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
     expect(
       parseCreateShareRequest({
         ...validCreateShareRequest(),
@@ -62,7 +67,7 @@ describe("shared file relay inputs", () => {
     expect(
       parseCreateShareRequest({
         ...validCreateShareRequest(),
-        expiresAt: Date.now() + maxShareTtlMs + 1,
+        expiresAt: now + maxShareTtlMs + 1,
       }),
     ).toBeNull();
     expect(
@@ -74,6 +79,9 @@ describe("shared file relay inputs", () => {
   });
 
   it("requires rotated links to keep a bounded lifetime", () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
     expect(
       parseRotateShareRequest({
         expiresAt: null,
@@ -83,7 +91,7 @@ describe("shared file relay inputs", () => {
     ).toBeNull();
     expect(
       parseRotateShareRequest({
-        expiresAt: Date.now() + maxShareTtlMs + 1,
+        expiresAt: now + maxShareTtlMs + 1,
         hostSecret: validSecret,
         nextGuestSecretHash: validHash,
       }),
