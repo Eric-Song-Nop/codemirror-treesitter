@@ -20,9 +20,8 @@ GroveMd is built for a small set of workflows that should stay simple:
   can co-edit without access to the owner's local folder or cloud workspace.
 - **Browser Agent**: use your own DeepSeek API key with
   `deepseek-v4-flash` by default, or manually select `deepseek-v4-pro`, to
-  search, read, and apply version-checked edits across workspace Markdown.
-  Page-memory conversations can run in parallel and remain switchable. Keys
-  stay in page memory unless explicitly saved to a passphrase-locked vault.
+  edit workspace Markdown in parallel page-memory chats. Keys are optionally
+  saved only in a passphrase-locked local vault.
 - **Instant live Markdown**: headings, tables, task lists, code fences, KaTeX,
   Mermaid, and images render inline while the document remains editable.
 
@@ -69,15 +68,9 @@ collaboration flows.
   plugin. The `collab-editor` app remains a separate Cloudflare collaboration
   demo.
 - **Browser Agent layer**: Grove uses Vercel AI SDK Core with a lazy
-  `@ai-sdk/deepseek` adapter fixed to `https://api.deepseek.com`. Conversations
-  stay in page memory, and workspace tools edit workspace-owned Loro documents.
-  Agent Settings may store only versioned AES-GCM ciphertext in the dedicated
-  `grove-agent-credentials` IndexedDB database. Its key is derived from a
-  non-persisted passphrase with PBKDF2-HMAC-SHA256, 600,000 iterations, and a
-  random salt; every page reopen starts locked, and failures have no plaintext
-  fallback. This protects the saved key at rest, but not from same-origin XSS,
-  browser extensions, a compromised profile, or code running after unlock.
-  DeepSeek's
+  `@ai-sdk/deepseek` adapter, page-memory chats, workspace-owned Loro tools, and
+  an optional AES-GCM IndexedDB vault derived from a non-persisted passphrase.
+  Pages start locked and vault failures have no plaintext fallback. DeepSeek's
   [disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) runs by
   default, and its public API documents no client-side opt-out. DeepSeek
   documents per-user isolation and automatic cleanup of unused entries,
@@ -184,14 +177,9 @@ this repository replace the language-aware layers above those primitives.
    Cloudflare Durable Objects and WebSocket transport, and `apps/collab-editor`
    remains a separate shareable collaborative editor demo.
 7. **Browser Agent surface**:
-   Local MD Workspace owns a provider-neutral Agent host and a lazy Vercel AI
-   SDK `@ai-sdk/deepseek` adapter fixed to `https://api.deepseek.com`.
-   `deepseek-v4-flash` is the default, and `deepseek-v4-pro` is the only model
-   the user can select manually. A page-memory registry owns independent
-   conversation controllers. Reads go through the active `WorkspaceRuntime`;
-   writes dispatch exact edits through workspace-owned collaborative documents
-   so the main Loro peer, ordinary undo, and persistence stay authoritative.
-   Credential persistence stays behind Agent Settings' private vault boundary.
+   Local MD Workspace owns the fixed-origin DeepSeek adapter, page-memory
+   sessions, workspace-document tools, and private credential vault. The main
+   Loro peer, normal undo, and document persistence remain authoritative.
 
 ## Workspace Structure
 

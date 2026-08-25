@@ -32,11 +32,8 @@ packages.
   with cloud runtimes.
 - Open a command palette with `Cmd/Ctrl+Shift+P` for file navigation and core
   workspace actions.
-- Run a browser-resident Markdown Agent that can list, read, and search the
-  active local or Dropbox workspace, keep multiple page-memory conversations
-  running and switchable, and apply version-checked exact replacements to
-  workspace Markdown documents. Its Settings surface can optionally save the
-  DeepSeek key in a passphrase-locked encrypted local vault.
+- Run switchable page-memory Agent chats across local or Dropbox Markdown, with
+  exact writes and an optional passphrase-locked DeepSeek-key vault.
 - Insert pasted, dropped, or selected image files into sibling `assets/`
   directories and resolve Markdown image previews through blob URLs.
 - Export Markdown files to standalone HTML through LiveMD's Tree-sitter
@@ -128,17 +125,10 @@ packages.
 - `src/lib/agent/domain` and `src/lib/agent/application`: SDK-independent tool
   contracts, budgets, host/run ports, policies, workspace read/search use cases,
   and the run-scoped idempotency/retry session.
-- `src/lib/agent/adapters/{workspace,ai-sdk}` and
-  `src/lib/agent/providers/deepseek`: the CodeMirror/WorkspaceRuntime host, AI
-  SDK schemas and `ToolLoopAgent` runner, and the isolated `@ai-sdk/deepseek`
-  model binding.
-  Root `runtime.ts` and `ai-sdk-runtime.ts` remain the two small composition
-  facades that preserve demand loading.
-- `src/features/workspace-agent`: the lazy React feature, private multi-session
-  controller registry, private credential-vault boundary, run-host hook, safe
-  AI SDK chat transport, switchable panel, and their component tests. The pure
-  ref-to-host binding stays in the workspace adapter so browser smoke tests do
-  not import React hooks.
+- `src/lib/agent/adapters/{workspace,ai-sdk}` and `providers/deepseek`: workspace
+  host, AI SDK runner, isolated model binding, and demand-loaded facades.
+- `src/features/workspace-agent`: lazy panel, private sessions and credential
+  vault, run-host hook, safe chat transport, and component tests.
 - `src/components/ui/*`: local shadcn/radix UI primitives.
 - `scripts/dev.mjs`: starts the local Grove relay when needed, then starts the
   frontend with `VITE_LOCAL_MD_SHARE_RELAY_ORIGIN`.
@@ -185,81 +175,37 @@ If the relay origin is local, `vp run local-md-workspace#dev` starts
 
 ## Browser Agent
 
-The workspace header opens an Agent panel whose orchestration and tools run in
-the page. The model adapter uses Vercel AI SDK Core's `@ai-sdk/deepseek`
-provider and calls the fixed `https://api.deepseek.com` origin directly. Enter
-a DeepSeek API key in Agent Settings; there is no build-time or product key.
-The default model is `deepseek-v4-flash`, with only `deepseek-v4-pro` available
-as a manual alternative. The key stays in page memory unless **Save** explicitly
-writes a versioned AES-GCM ciphertext and its non-secret version, algorithm,
-KDF, random salt, and IV metadata to the dedicated
-`grove-agent-credentials` IndexedDB database. Plaintext is never persisted.
+The Agent runs in the page against the fixed `https://api.deepseek.com` origin.
+It defaults to `deepseek-v4-flash`; only `deepseek-v4-pro` is also allowed.
+Independent page-memory chats may stream concurrently, switching preserves
+their drafts, Stop affects only the selected chat, and workspace teardown stops
+all. Conversations are never persisted.
 
-The vault derives its key from a non-persisted passphrase with
-PBKDF2-HMAC-SHA256, exactly 600,000 iterations, and a random salt. Every new or
-reloaded page starts locked. The API key, passphrase, and derived key stay out
-of React/Zustand state, DOM refill, `localStorage`, `sessionStorage`, URLs,
-logs, telemetry, CacheStorage, and the service worker. Missing Web Crypto or
-IndexedDB support and any vault-operation failure fail closed without a
-plaintext fallback. Lock and delete stop all Agent runs and clear page-memory
-secrets; delete also removes the encrypted record. If removal fails, the page
-stays locked and warns that ciphertext may remain.
+Credentials stay in page memory unless Agent Settings explicitly saves
+AES-GCM ciphertext in dedicated IndexedDB. A non-persisted passphrase uses
+PBKDF2-HMAC-SHA256, 600,000 iterations, and random salt; every page starts
+locked. Secrets stay out of UI state, DOM refill, web storage, URLs, logs,
+caches, and service-worker data. Failures close safely without plaintext.
+Lock/delete stop all runs and clear memory; delete removes the record or warns.
 
-Save, replacement, and deletion notify other tabs through BroadcastChannel or
-a `storage`-event fallback containing only an opaque random revision token at
-`grove-agent-credentials:revision`. The token carries no credential or unlock
-capability; receiving it locks that tab and stops its Agent runs. The vault
-protects a saved key only at rest: same-origin XSS, malicious extensions, a
-compromised browser profile, or code running after unlock can still read or use
-page-memory secrets.
+Cross-tab changes carry only an opaque revision; receiving one locks the tab.
+The vault protects only at rest, not against XSS, extensions, a compromised
+profile, or unlocked-page code. DeepSeek's
+[disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) has no
+documented client opt-out, so request prefixes may be retained remotely.
 
-The panel keeps a page-memory conversation registry. **New chat** creates and
-selects an independent session; sessions can stream concurrently without
-mixing messages. **Stop** affects only the selected session, and switching or
-hiding the panel leaves background runs active. Changing workspaces or
-unmounting stops all sessions and resets the registry. Conversations are never
-written to browser storage.
+The bounded tools get workspace context, list/read/search Markdown, and apply
+exact edits. All content resolves through workspace-owned collaborative
+documents; selected and unselected files share the same Loro authority. Writes
+validate expected text atomically, then flush source projection separately from
+the applied logical edit. Guest shares, standalone drafts, arbitrary network,
+shell/eval/DOM automation, file lifecycle operations, persistent indexes, and
+conversation persistence are excluded.
 
-DeepSeek enables its
-[disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) by default
-for API requests, and its public API documents no client-side opt-out. DeepSeek
-documents per-user isolation and cleanup of unused entries within a few hours
-to days. The local vault and page-memory conversations do not change that
-remote boundary: request prefixes may still be retained temporarily in
-DeepSeek's server-side cache.
-
-The available tools are:
-
-- `get_workspace_context`
-- `list_markdown_files`
-- `read_file`
-- `search_markdown`
-- `write_file`
-
-Listing, reading, literal search, and exact writes operate across Markdown files
-in the active local or Dropbox workspace. Reads and searches resolve content
-through the workspace-owned `WorkspaceDocuments` registry, so selected and
-unselected views observe the same Loro authority. `read_file` returns absolute
-UTF-16 offsets; `write_file` validates `{ from, to, expectedText, insert }`
-edits against one current document snapshot before applying them atomically.
-
-Agent writes call `CollaborativeDocument.edit(...)` and then `flush()`. The
-document's marked local Loro transaction is projected into any bound CodeMirror
-view without an echo commit, while browser recovery, BroadcastChannel, Grove
-Relay, and source materialization remain document-owned. A successful logical
-edit remains `status: "applied"` even when the result separately reports that
-filesystem persistence is blocked or failed.
-
-The current Agent is available only for local/cloud workspace routes. Guest
-shared files and standalone-file drafts do not receive an Agent capability. It
-does not provide arbitrary web fetch, shell, JavaScript evaluation, DOM
-automation, file create/rename/delete, WebLLM, embeddings, or a persistent
-conversation or index.
-
-The Agent UI loads on the first panel open; AI SDK Core's `ToolLoopAgent` and
-the `@ai-sdk/deepseek` provider load on the first run. Production validation
-keeps the model runtime outside the launcher bundle and optional offline
-precache. DeepSeek inference always requires network access.
+The UI loads on first panel open and the AI SDK/DeepSeek adapter on first run;
+the model runtime stays outside the launcher and offline precache. See
+[Browser Agent Contracts](./BROWSER_AGENT_PLAN.md) for the authoritative
+security, tool, lifecycle, and budget rules.
 
 ## PWA Support
 

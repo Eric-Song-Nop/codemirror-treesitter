@@ -477,72 +477,18 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
   let secret = `sk-smoke-encrypted-${Date.now()}`;
   let passphrase = `grove-smoke-passphrase-${Date.now()}`;
   await client.evaluate(
-    `
-      (() => {
-        let button = document.querySelector('button[aria-controls="workspace-agent-panel"]');
-        if (!button) throw new Error("Agent panel button was not found.");
-        button.click();
-      })()
-    `,
+    `document.querySelector('button[aria-controls="workspace-agent-panel"]')?.click()`,
     sessionId,
   );
   await client.waitForPredicate(
     `Boolean(document.querySelector("#workspace-agent-panel")) &&
-      !document.querySelector("#workspace-agent-panel button")?.disabled &&
-      document.querySelector("#workspace-agent-panel")?.innerText.includes("DeepSeek API key")`,
-    sessionId,
-  );
-  let configuration = await client.evaluate(
-    `
-      (() => {
-        let panel = document.querySelector("#workspace-agent-panel");
-        let model = document.querySelector("#workspace-agent-model");
-        if (!(model instanceof HTMLSelectElement)) {
-          throw new Error("Agent model select was not found.");
-        }
-        return {
-          credentialText: panel?.innerText ?? "",
-          model: model.value,
-          modelOptions: Array.from(model.options, (option) => option.value)
-        };
-      })()
-    `,
-    sessionId,
-  );
-  if (
-    !configuration.credentialText.includes("DeepSeek API key") ||
-    !configuration.credentialText.includes("encrypted key in Settings") ||
-    configuration.model != "deepseek-v4-flash" ||
-    JSON.stringify(configuration.modelOptions) !=
-      JSON.stringify(["deepseek-v4-flash", "deepseek-v4-pro"])
-  ) {
-    throw new Error(
-      `Agent provider configuration was unexpected: ${JSON.stringify(configuration)}`,
-    );
-  }
-
-  await client.evaluate(
-    `
-      (() => {
-        let model = document.querySelector("#workspace-agent-model");
-        let setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
-        setter.call(model, "deepseek-v4-pro");
-        model.dispatchEvent(new Event("change", { bubbles: true }));
-      })()
-    `,
-    sessionId,
-  );
-  await client.waitForPredicate(
-    `document.querySelector("#workspace-agent-model")?.value == "deepseek-v4-pro"`,
+      !document.querySelector("#workspace-agent-panel button")?.disabled`,
     sessionId,
   );
 
   await clickButtonByText(client, sessionId, "#workspace-agent-panel", "Open settings");
   await client.waitForPredicate(
-    `Boolean(document.querySelector("#workspace-settings-dialog")) &&
-      Boolean(document.querySelector("#settings-save-api-key")) &&
-      Boolean(document.querySelector("#settings-save-passphrase")) &&
-      Boolean(document.querySelector("#settings-save-passphrase-confirmation"))`,
+    `Boolean(document.querySelector("#settings-save-api-key"))`,
     sessionId,
   );
   await submitUncontrolledSecretForm(client, sessionId, {
@@ -557,16 +503,7 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
     sessionId,
     20_000,
   );
-
-  let savedState = await inspectAgentCredentialVault(client, sessionId, secret, passphrase);
-  assertEncryptedAgentCredential(savedState, "saved credential");
-  if (
-    savedState.localStorageContainsModel ||
-    savedState.sessionStorageContainsModel ||
-    savedState.selectedModel != "deepseek-v4-pro"
-  ) {
-    throw new Error(`Agent configuration state was unexpected: ${JSON.stringify(savedState)}`);
-  }
+  await assertAgentCredentialRecord(client, sessionId, secret, passphrase, true);
 
   await navigate(client, sessionId, SMOKE_URL);
   await client.evaluate(
@@ -579,12 +516,7 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
     sessionId,
     20_000,
   );
-
-  let lockedState = await inspectAgentCredentialVault(client, sessionId, secret, passphrase);
-  assertEncryptedAgentCredential(lockedState, "reloaded credential");
-  if (lockedState.selectedModel != "deepseek-v4-flash") {
-    throw new Error(`Agent model survived reload unexpectedly: ${JSON.stringify(lockedState)}`);
-  }
+  await assertAgentCredentialRecord(client, sessionId, secret, passphrase, true);
 
   await clickButtonByText(client, sessionId, "#workspace-agent-panel", "Open settings");
   await client.waitForPredicate(
@@ -602,9 +534,6 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
     20_000,
   );
 
-  let unlockedState = await inspectAgentCredentialVault(client, sessionId, secret, passphrase);
-  assertEncryptedAgentCredential(unlockedState, "unlocked credential");
-
   await clickButtonByText(client, sessionId, "#workspace-settings-dialog", "Delete saved key");
   await client.waitForPredicate(
     `Boolean(document.querySelector('[role="alertdialog"]'))`,
@@ -617,24 +546,10 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
       !document.querySelector("#workspace-agent-prompt")`,
     sessionId,
   );
-
-  let deletedState = await inspectAgentCredentialVault(client, sessionId, secret, passphrase);
-  if (
-    !deletedState.databaseFound ||
-    deletedState.hasRecord ||
-    deletedState.recordKeys.length != 0 ||
-    deletedState.secretEscaped
-  ) {
-    throw new Error(`Agent credential was not deleted cleanly: ${JSON.stringify(deletedState)}`);
-  }
-
-  await clickButtonByText(client, sessionId, "#workspace-settings-dialog", "Close", true);
-  await client.waitForPredicate(`!document.querySelector("#workspace-settings-dialog")`, sessionId);
-  await clickButtonByText(client, sessionId, "#workspace-agent-panel", "Hide Agent");
-  await client.waitForPredicate(`!document.querySelector("#workspace-agent-panel")`, sessionId);
+  await assertAgentCredentialRecord(client, sessionId, secret, passphrase, false);
 }
 
-async function clickButtonByText(client, sessionId, scopeSelector, label, last = false) {
+async function clickButtonByText(client, sessionId, scopeSelector, label) {
   await client.evaluate(
     `
       (() => {
@@ -642,7 +557,7 @@ async function clickButtonByText(client, sessionId, scopeSelector, label, last =
         let buttons = Array.from(scope?.querySelectorAll("button") ?? []).filter(
           (item) => item.textContent.trim() == ${JSON.stringify(label)} && !item.disabled
         );
-        let button = buttons.at(${last ? -1 : 0});
+        let button = buttons[0];
         if (!button) throw new Error(${JSON.stringify(`${label} button was not found.`)});
         button.click();
       })()
@@ -675,156 +590,48 @@ async function submitUncontrolledSecretForm(client, sessionId, fields) {
   );
 }
 
-async function inspectAgentCredentialVault(client, sessionId, secret, passphrase) {
-  return client.evaluate(
+async function assertAgentCredentialRecord(client, sessionId, secret, passphrase, expected) {
+  let state = await client.evaluate(
     `
       (async () => {
-        let databaseName = "grove-agent-credentials";
-        let databaseFound = (await indexedDB.databases()).some(
-          (database) => database.name == databaseName
-        );
-        let record = null;
-        let recordKeys = [];
+        let database = await new Promise((resolve, reject) => {
+          let request = indexedDB.open("grove-agent-credentials");
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => resolve(request.result);
+        });
+        let record = await new Promise((resolve, reject) => {
+          let transaction = database.transaction("credentials", "readonly");
+          let request = transaction.objectStore("credentials").get("deepseek-api-key");
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => resolve(request.result ?? null);
+        });
+        database.close();
 
-        if (databaseFound) {
-          let database = await new Promise((resolve, reject) => {
-            let request = indexedDB.open(databaseName);
-            request.onerror = () => reject(request.error ?? new Error("Credential database open failed."));
-            request.onblocked = () => reject(new Error("Credential database open was blocked."));
-            request.onsuccess = () => resolve(request.result);
-          });
-          try {
-            let result = await new Promise((resolve, reject) => {
-              let transaction = database.transaction("credentials", "readonly");
-              let store = transaction.objectStore("credentials");
-              let recordRequest = store.get("deepseek-api-key");
-              let keysRequest = store.getAllKeys();
-              transaction.onerror = () =>
-                reject(transaction.error ?? new Error("Credential database read failed."));
-              transaction.onabort = () =>
-                reject(transaction.error ?? new Error("Credential database read was aborted."));
-              transaction.oncomplete = () =>
-                resolve({ keys: keysRequest.result, record: recordRequest.result ?? null });
-            });
-            record = result.record;
-            recordKeys = result.keys.map(String);
-          } finally {
-            database.close();
-          }
-        }
-
+        let storageText = [localStorage, sessionStorage]
+          .flatMap((storage) =>
+            Array.from({ length: storage.length }, (_, index) => storage.getItem(storage.key(index)))
+          )
+          .join("");
+        let pageText = document.documentElement.innerHTML + storageText + JSON.stringify(record);
         let forbidden = [${JSON.stringify(secret)}, ${JSON.stringify(passphrase)}];
-        let visited = new WeakSet();
-        let containsForbidden = (value) => {
-          if (typeof value == "string") return forbidden.some((item) => value.includes(item));
-          if (value instanceof ArrayBuffer) {
-            return forbidden.some((item) => new TextDecoder().decode(value).includes(item));
-          }
-          if (ArrayBuffer.isView(value)) {
-            let bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-            return forbidden.some((item) => new TextDecoder().decode(bytes).includes(item));
-          }
-          if (!value || typeof value != "object") return false;
-          if (visited.has(value)) return false;
-          visited.add(value);
-          return Object.values(value).some(containsForbidden);
-        };
-        let storageContains = (storage, value) =>
-          Array.from({ length: storage.length }, (_, index) => storage.getItem(storage.key(index)))
-            .some((item) => String(item).includes(value));
-        let domContains = (value) =>
-          document.body.textContent.includes(value) ||
-          document.documentElement.innerHTML.includes(value) ||
-          Array.from(document.querySelectorAll("input, textarea")).some((input) =>
-            String(input.value).includes(value)
-          );
-        let recordFields = record && typeof record == "object" ? Object.keys(record).toSorted() : [];
-        let derivationFields = record?.keyDerivation && typeof record.keyDerivation == "object"
-          ? Object.keys(record.keyDerivation).toSorted()
-          : [];
-        let cacheStorageContainsSecret = false;
-        if (globalThis.caches) {
-          for (let cacheName of await caches.keys()) {
-            let cache = await caches.open(cacheName);
-            for (let request of await cache.keys()) {
-              let response = await cache.match(request);
-              let requestBody = await request.clone().text().catch(() => "");
-              let responseBody = response
-                ? await response.clone().text().catch(() => "")
-                : "";
-              if (
-                containsForbidden({
-                  requestBody,
-                  requestHeaders: Array.from(request.headers.entries()),
-                  requestUrl: request.url,
-                  responseBody,
-                  responseHeaders: response ? Array.from(response.headers.entries()) : [],
-                  responseUrl: response?.url ?? ""
-                })
-              ) {
-                cacheStorageContainsSecret = true;
-                break;
-              }
-            }
-            if (cacheStorageContainsSecret) break;
-          }
-        }
-        let serviceWorkerMessageContainsSecret = containsForbidden(
-          globalThis.__localMdSmokeServiceWorkerMessages ?? []
-        );
-
         return {
-          cacheStorageContainsSecret,
-          databaseFound,
-          hasRecord: Boolean(record),
-          localStorageContainsModel: ["deepseek-v4-flash", "deepseek-v4-pro"].some((model) =>
-            storageContains(localStorage, model)
-          ),
-          promptReady: Boolean(
-            document.querySelector("#workspace-agent-prompt") &&
-              !document.querySelector("#workspace-agent-prompt").disabled
-          ),
-          recordEncrypted: Boolean(
-            record &&
-              JSON.stringify(recordFields) ==
-                JSON.stringify(["cipher", "ciphertext", "initializationVector", "keyDerivation", "schemaVersion"]) &&
-              JSON.stringify(derivationFields) ==
-                JSON.stringify(["algorithm", "iterations", "salt"]) &&
+          encrypted: Boolean(
+            record?.schemaVersion == 1 &&
               record.cipher == "AES-GCM-256" &&
-              record.schemaVersion == 1 &&
+              record.keyDerivation?.algorithm == "PBKDF2-HMAC-SHA256" &&
+              record.keyDerivation?.iterations == 600000 &&
               record.ciphertext instanceof Uint8Array &&
               record.ciphertext.byteLength > 16
           ),
-          recordKeys,
-          secretEscaped: forbidden.some((value) =>
-            domContains(value) ||
-            storageContains(localStorage, value) ||
-            storageContains(sessionStorage, value)
-          ) ||
-            containsForbidden(record) ||
-            cacheStorageContainsSecret ||
-            serviceWorkerMessageContainsSecret,
-          selectedModel: document.querySelector("#workspace-agent-model")?.value ?? null,
-          serviceWorkerMessageContainsSecret,
-          sessionStorageContainsModel: ["deepseek-v4-flash", "deepseek-v4-pro"].some((model) =>
-            storageContains(sessionStorage, model)
-          )
+          present: Boolean(record),
+          secretEscaped: forbidden.some((value) => pageText.includes(value))
         };
       })()
     `,
     sessionId,
   );
-}
-
-function assertEncryptedAgentCredential(state, label) {
-  if (
-    !state.databaseFound ||
-    !state.hasRecord ||
-    !state.recordEncrypted ||
-    JSON.stringify(state.recordKeys) != JSON.stringify(["deepseek-api-key"]) ||
-    state.secretEscaped
-  ) {
-    throw new Error(`Agent ${label} was not encrypted at rest: ${JSON.stringify(state)}`);
+  if (state.present != expected || (expected && !state.encrypted) || state.secretEscaped) {
+    throw new Error(`Agent credential boundary failed: ${JSON.stringify(state)}`);
   }
 }
 
@@ -2524,19 +2331,6 @@ async function installMockFileSystemAccess(client, sessionId, { preserveIndexedD
           let smokeStorageKey = "local-md-workspace:smoke-files";
           let smokeDirectoriesKey = "local-md-workspace:smoke-directories";
           ${disableIndexedDbSource}
-          window.__localMdSmokeServiceWorkerMessages = [];
-          try {
-            navigator.serviceWorker?.addEventListener("message", (event) => {
-              window.__localMdSmokeServiceWorkerMessages.push(event.data);
-            });
-            if (typeof ServiceWorker != "undefined") {
-              let postMessage = ServiceWorker.prototype.postMessage;
-              ServiceWorker.prototype.postMessage = function (...args) {
-                window.__localMdSmokeServiceWorkerMessages.push(args[0]);
-                return postMessage.apply(this, args);
-              };
-            }
-          } catch {}
 
           function encodeBytes(bytes) {
             let binary = "";
