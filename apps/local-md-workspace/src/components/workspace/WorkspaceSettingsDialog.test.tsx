@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import i18next from "i18next";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { WorkspaceAgentCredentialSnapshot } from "@/features/workspace-agent/WorkspaceAgentCredentialsProvider";
 import { I18nProvider } from "@/lib/i18n";
 import { ThemeProvider } from "@/theme";
 import { WorkspaceSettingsDialog } from "./WorkspaceSettingsDialog";
@@ -16,26 +17,10 @@ vi.mock("@/features/workspace-agent/WorkspaceAgentCredentialsProvider", () => ({
   useWorkspaceAgentCredentials: credentialHook.useCredentials,
 }));
 
-type ReactActGlobal = typeof globalThis & {
-  IS_REACT_ACT_ENVIRONMENT?: boolean;
-};
-
-type CredentialState = {
-  errorCode: string | null;
+type CredentialState = WorkspaceAgentCredentialSnapshot & {
   forget: ReturnType<typeof vi.fn<() => Promise<boolean>>>;
-  hasApiKey: boolean;
-  hasStoredKey: boolean;
   lock: ReturnType<typeof vi.fn<() => void>>;
   save: ReturnType<typeof vi.fn<(apiKey: string, passphrase: string) => Promise<boolean>>>;
-  status:
-    | "checking"
-    | "empty"
-    | "locked"
-    | "unlocked"
-    | "saving"
-    | "unlocking"
-    | "forgetting"
-    | "error";
   unlock: ReturnType<typeof vi.fn<(passphrase: string) => Promise<boolean>>>;
 };
 
@@ -44,13 +29,11 @@ let root: Root | null = null;
 let credentials: CredentialState;
 
 beforeAll(() => {
-  (globalThis as ReactActGlobal).IS_REACT_ACT_ENVIRONMENT = true;
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });
 
 beforeEach(async () => {
   await i18next.changeLanguage("en");
-  credentials = createCredentialState();
-  credentialHook.useCredentials.mockReturnValue(credentials);
 });
 
 afterEach(() => {
@@ -71,22 +54,14 @@ describe("WorkspaceSettingsDialog", () => {
     expect(document.body.textContent).toContain("Appearance");
     expect(document.body.textContent).toContain("Language");
 
-    let themes = Array.from(
-      document.querySelectorAll<HTMLInputElement>('input[name="settings-theme"]'),
-    );
-    let languages = Array.from(
-      document.querySelectorAll<HTMLInputElement>('input[name="settings-language"]'),
-    );
-    expect(themes).toHaveLength(5);
-    expect(languages).toHaveLength(2);
+    expect(document.querySelectorAll('input[name="settings-theme"]')).toHaveLength(5);
+    expect(document.querySelectorAll('input[name="settings-language"]')).toHaveLength(2);
     expect(document.querySelector<HTMLInputElement>("#settings-theme-gruvbox-dark")?.checked).toBe(
       true,
     );
     expect(document.querySelector<HTMLInputElement>("#settings-language-en")?.checked).toBe(true);
 
-    let apiKey = requiredInput("#settings-save-api-key");
-    let passphrase = requiredInput("#settings-save-passphrase");
-    let confirmation = requiredInput("#settings-save-passphrase-confirmation");
+    let { apiKey, passphrase, confirmation } = credentialFields("save");
     expect(apiKey.maxLength).toBe(512);
     expect(apiKey.autocomplete).toBe("off");
     expect(passphrase.minLength).toBe(12);
@@ -112,34 +87,26 @@ describe("WorkspaceSettingsDialog", () => {
   });
 
   it("saves an empty credential without putting secrets in React state or leaving them in the DOM", async () => {
-    credentials.save.mockResolvedValue(true);
     await renderSettings();
-    let apiKey = requiredInput("#settings-save-api-key");
-    let passphrase = requiredInput("#settings-save-passphrase");
-    let confirmation = requiredInput("#settings-save-passphrase-confirmation");
-    apiKey.value = "sk-settings-secret";
-    passphrase.value = "a secure passphrase";
-    confirmation.value = "a secure passphrase";
+    let fields = credentialFields("save", "sk-settings-secret", "a secure passphrase");
 
-    await submit(apiKey.form);
-    await waitFor(() => credentials.save.mock.calls.length == 1 && apiKey.value == "");
+    await submit(fields.apiKey.form);
+    await waitFor(() => credentials.save.mock.calls.length == 1 && fields.apiKey.value == "");
 
     expect(credentials.save).toHaveBeenCalledWith("sk-settings-secret", "a secure passphrase");
-    expect(apiKey.value).toBe("");
-    expect(passphrase.value).toBe("");
-    expect(confirmation.value).toBe("");
+    expectFieldsCleared(fields);
     expect(document.body.textContent).not.toContain("sk-settings-secret");
     expect(document.body.textContent).not.toContain("a secure passphrase");
   });
 
   it("rejects a mismatched confirmation without sending either passphrase to the provider", async () => {
     await renderSettings();
-    let apiKey = requiredInput("#settings-save-api-key");
-    let passphrase = requiredInput("#settings-save-passphrase");
-    let confirmation = requiredInput("#settings-save-passphrase-confirmation");
-    apiKey.value = "sk-settings-secret";
-    passphrase.value = "a secure passphrase";
-    confirmation.value = "a different passphrase";
+    let { apiKey, passphrase, confirmation } = credentialFields(
+      "save",
+      "sk-settings-secret",
+      "a secure passphrase",
+      "a different passphrase",
+    );
 
     await submit(apiKey.form);
 
@@ -153,10 +120,7 @@ describe("WorkspaceSettingsDialog", () => {
   });
 
   it("unlocks a stored credential and clears the passphrase after success", async () => {
-    credentials = createCredentialState({ hasStoredKey: true, status: "locked" });
-    credentials.unlock.mockResolvedValue(true);
-    credentialHook.useCredentials.mockReturnValue(credentials);
-    await renderSettings();
+    await renderSettings({ hasStoredKey: true, status: "locked" });
     let passphrase = requiredInput("#settings-unlock-passphrase");
     passphrase.value = "a secure passphrase";
 
@@ -168,27 +132,18 @@ describe("WorkspaceSettingsDialog", () => {
   });
 
   it("locks, replaces, and confirms deletion of an unlocked credential", async () => {
-    credentials = createCredentialState({
+    await renderSettings({
       hasApiKey: true,
       hasStoredKey: true,
       status: "unlocked",
     });
-    credentials.save.mockResolvedValue(true);
-    credentials.forget.mockResolvedValue(true);
-    credentialHook.useCredentials.mockReturnValue(credentials);
-    await renderSettings();
 
     await click(buttonNamed("Lock"));
     expect(credentials.lock).toHaveBeenCalledOnce();
 
     await click(buttonNamed("Replace"));
-    let apiKey = requiredInput("#settings-replace-api-key");
-    let passphrase = requiredInput("#settings-replace-passphrase");
-    let confirmation = requiredInput("#settings-replace-passphrase-confirmation");
-    apiKey.value = "sk-replacement-secret";
-    passphrase.value = "replacement passphrase";
-    confirmation.value = "replacement passphrase";
-    await submit(apiKey.form);
+    let fields = credentialFields("replace", "sk-replacement-secret", "replacement passphrase");
+    await submit(fields.apiKey.form);
     await waitFor(() => credentials.save.mock.calls.length == 1);
     expect(credentials.save).toHaveBeenCalledWith(
       "sk-replacement-secret",
@@ -206,13 +161,11 @@ describe("WorkspaceSettingsDialog", () => {
   });
 
   it("translates provider errors only from their stable error code", async () => {
-    credentials = createCredentialState({
+    await renderSettings({
       errorCode: "unlock-failed",
       hasStoredKey: true,
       status: "error",
     });
-    credentialHook.useCredentials.mockReturnValue(credentials);
-    await renderSettings();
 
     let alert = document.querySelector('[role="alert"]');
     expect(alert?.textContent).toBe(
@@ -223,23 +176,16 @@ describe("WorkspaceSettingsDialog", () => {
 
   it("clears every mounted credential field when the page is hidden", async () => {
     await renderSettings();
-    let apiKey = requiredInput("#settings-save-api-key");
-    let passphrase = requiredInput("#settings-save-passphrase");
-    let confirmation = requiredInput("#settings-save-passphrase-confirmation");
-    apiKey.value = "sk-pagehide-secret";
-    passphrase.value = "a pagehide passphrase";
-    confirmation.value = "a pagehide passphrase";
+    let fields = credentialFields("save", "sk-pagehide-secret", "a pagehide passphrase");
 
     await act(async () => window.dispatchEvent(new Event("pagehide")));
 
-    expect(apiKey.value).toBe("");
-    expect(passphrase.value).toBe("");
-    expect(confirmation.value).toBe("");
+    expectFieldsCleared(fields);
   });
 });
 
-function createCredentialState(overrides: Partial<CredentialState> = {}): CredentialState {
-  return {
+function mockCredentials(overrides: Partial<CredentialState> = {}) {
+  credentials = {
     errorCode: null,
     forget: vi.fn(async () => true),
     hasApiKey: false,
@@ -250,9 +196,11 @@ function createCredentialState(overrides: Partial<CredentialState> = {}): Creden
     unlock: vi.fn(async () => true),
     ...overrides,
   };
+  credentialHook.useCredentials.mockReturnValue(credentials);
 }
 
-async function renderSettings() {
+async function renderSettings(overrides: Partial<CredentialState> = {}) {
+  mockCredentials(overrides);
   container = document.body.appendChild(document.createElement("div"));
   root = createRoot(container);
   await act(async () => {
@@ -270,6 +218,27 @@ function requiredInput(selector: string) {
   let input = document.querySelector<HTMLInputElement>(selector);
   if (!input) throw new Error(`Input ${selector} was not found.`);
   return input;
+}
+
+function credentialFields(
+  action: "save" | "replace",
+  apiKeyValue = "",
+  passphraseValue = "",
+  confirmationValue = passphraseValue,
+) {
+  let fields = {
+    apiKey: requiredInput(`#settings-${action}-api-key`),
+    passphrase: requiredInput(`#settings-${action}-passphrase`),
+    confirmation: requiredInput(`#settings-${action}-passphrase-confirmation`),
+  };
+  fields.apiKey.value = apiKeyValue;
+  fields.passphrase.value = passphraseValue;
+  fields.confirmation.value = confirmationValue;
+  return fields;
+}
+
+function expectFieldsCleared(fields: ReturnType<typeof credentialFields>) {
+  for (let field of Object.values(fields)) expect(field.value).toBe("");
 }
 
 function buttonNamed(name: string, parent: ParentNode = document) {

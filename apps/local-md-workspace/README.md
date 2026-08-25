@@ -188,63 +188,44 @@ If the relay origin is local, `vp run local-md-workspace#dev` starts
 The workspace header opens an Agent panel whose orchestration and tools run in
 the page. The model adapter uses Vercel AI SDK Core's `@ai-sdk/deepseek`
 provider and calls the fixed `https://api.deepseek.com` origin directly. Enter
-a DeepSeek API key in Agent Settings; there is no build-time or product API-key
-environment variable. The key remains in page memory unless the user explicitly
-chooses **Save** in Settings. Saving writes only a versioned AES-GCM ciphertext
-record, plus the non-secret algorithm, KDF, random salt, and IV metadata needed
-to unlock it, to the dedicated `grove-agent-credentials` IndexedDB database.
-The selected model remains page-memory-only. The default model is
-`deepseek-v4-flash`; `deepseek-v4-pro` is the only model the user can select
-manually.
+a DeepSeek API key in Agent Settings; there is no build-time or product key.
+The default model is `deepseek-v4-flash`, with only `deepseek-v4-pro` available
+as a manual alternative. The key stays in page memory unless **Save** explicitly
+writes a versioned AES-GCM ciphertext and its non-secret version, algorithm,
+KDF, random salt, and IV metadata to the dedicated
+`grove-agent-credentials` IndexedDB database. Plaintext is never persisted.
 
-The vault derives its AES-GCM key locally from the user's vault passphrase with
-PBKDF2-HMAC-SHA256, 600,000 iterations, and a random salt. Neither the
-passphrase nor the derived key is persisted. Every newly opened or reloaded
-page starts locked; the user must enter the passphrase to decrypt the saved API
-key into page memory. Settings is the only credential-persistence surface and
-provides explicit save, unlock, lock, and delete actions. Lock and delete both
-stop all Agent runs and clear the API key, passphrase, and derived key material
-from page memory; delete also removes the encrypted IndexedDB record.
+The vault derives its key from a non-persisted passphrase with
+PBKDF2-HMAC-SHA256, exactly 600,000 iterations, and a random salt. Every new or
+reloaded page starts locked. The API key, passphrase, and derived key stay out
+of React/Zustand state, DOM refill, `localStorage`, `sessionStorage`, URLs,
+logs, telemetry, CacheStorage, and the service worker. Missing Web Crypto or
+IndexedDB support and any vault-operation failure fail closed without a
+plaintext fallback. Lock and delete stop all Agent runs and clear page-memory
+secrets; delete also removes the encrypted record. If removal fails, the page
+stays locked and warns that ciphertext may remain.
 
-The API key, vault passphrase, and derived key never enter React or Zustand
-state, are never refilled into the DOM, and are never written to
-`localStorage`, `sessionStorage`, URLs, logs, telemetry, CacheStorage, or the
-service worker. If Web Crypto or IndexedDB is unavailable, or saving,
-unlocking, or deleting fails, Grove fails closed and never falls back to
-plaintext persistence. Non-secret UI state may report whether a vault exists,
-whether it is locked, and whether an operation failed.
+Save, replacement, and deletion notify other tabs through BroadcastChannel or
+a `storage`-event fallback containing only an opaque random revision token at
+`grove-agent-credentials:revision`. The token carries no credential or unlock
+capability; receiving it locks that tab and stops its Agent runs. The vault
+protects a saved key only at rest: same-origin XSS, malicious extensions, a
+compromised browser profile, or code running after unlock can still read or use
+page-memory secrets.
 
-Credential replacement and deletion invalidate unlocked copies in other tabs
-through BroadcastChannel, with a `storage`-event fallback containing only an
-opaque random revision token (`grove-agent-credentials:revision`). The token is
-not a credential and cannot unlock the vault; receiving it immediately locks
-that tab and stops its Agent runs.
-
-The encrypted vault reduces exposure of a saved API key at rest; it is not a
-general browser sandbox, and resistance to offline guessing depends on the
-vault passphrase. Same-origin XSS, malicious browser extensions, a compromised
-browser profile, or any code executing while the vault is unlocked can still
-reach or use secrets available to the page. Users should lock the vault when
-they no longer need the Agent.
-
-The panel keeps a page-memory registry of conversations. **New chat** creates
-and selects a separate session instead of clearing the current one; the session
-switcher can return to any earlier conversation in the current workspace.
-Each session owns an independent AI SDK `Chat`, run host, status, cancellation,
-and draft, so different sessions can stream concurrently without mixing their
-messages. **Stop** affects only the selected session. Selecting another session
-or hiding the panel leaves background runs active; changing workspaces or
-unmounting the app stops them all and replaces the registry with one empty
-session. Conversations are never written to browser storage.
+The panel keeps a page-memory conversation registry. **New chat** creates and
+selects an independent session; sessions can stream concurrently without
+mixing messages. **Stop** affects only the selected session, and switching or
+hiding the panel leaves background runs active. Changing workspaces or
+unmounting stops all sessions and resets the registry. Conversations are never
+written to browser storage.
 
 DeepSeek enables its
 [disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) by default
 for API requests, and its public API documents no client-side opt-out. DeepSeek
-documents that each user's cache is isolated and logically invisible to other
-users, and that unused entries are normally cleared within a few hours to days.
-The local vault does not change that remote boundary. Grove can persist an API
-key only as encrypted vault data and does not persist conversations locally,
-but request prefixes sent for inference can still be retained temporarily in
+documents per-user isolation and cleanup of unused entries within a few hours
+to days. The local vault and page-memory conversations do not change that
+remote boundary: request prefixes may still be retained temporarily in
 DeepSeek's server-side cache.
 
 The available tools are:
@@ -273,8 +254,7 @@ The current Agent is available only for local/cloud workspace routes. Guest
 shared files and standalone-file drafts do not receive an Agent capability. It
 does not provide arbitrary web fetch, shell, JavaScript evaluation, DOM
 automation, file create/rename/delete, WebLLM, embeddings, or a persistent
-conversation/index. The switchable session registry exists only for the
-current page lifetime.
+conversation or index.
 
 The Agent UI loads on the first panel open; AI SDK Core's `ToolLoopAgent` and
 the `@ai-sdk/deepseek` provider load on the first run. Production validation

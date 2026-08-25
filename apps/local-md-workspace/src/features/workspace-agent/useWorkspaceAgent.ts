@@ -3,13 +3,9 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
 import { runWorkspaceAgent } from "@/lib/agent/runtime";
-import {
-  WorkspaceAgentSessionManager,
-  type WorkspaceAgentConfiguration,
-} from "./workspace-agent-session-manager";
+import { WorkspaceAgentSessionManager } from "./workspace-agent-session-manager";
 
 export type {
-  WorkspaceAgentConfiguration,
   WorkspaceAgentErrorCode,
   WorkspaceAgentRunner,
   WorkspaceAgentRunStatus,
@@ -17,17 +13,15 @@ export type {
 } from "./workspace-agent-session-manager";
 
 export type UseWorkspaceAgentOptions = {
-  credentialRevision?: number;
-  getApiKey?: () => string | null;
+  getApiKey: () => string | null;
   runner?: typeof runWorkspaceAgent;
   scopeKey: string;
-  subscribeToCredentials?: (listener: () => void) => () => void;
+  subscribeToCredentials: (listener: () => void) => () => void;
   throttleMs?: number;
   workspaceKey: string;
 };
 
 export function useWorkspaceAgent({
-  credentialRevision,
   getApiKey,
   runner = runWorkspaceAgent,
   scopeKey,
@@ -36,33 +30,31 @@ export function useWorkspaceAgent({
   workspaceKey,
 }: UseWorkspaceAgentOptions) {
   let [manager] = useState(() => createWorkspaceAgentSessionAccess(runner));
-  manager.setRunner(runner);
 
   let { activeSessionId, hasApiKey, model, sessions } = useStore(manager.store);
-  let activeChat = manager.chat(activeSessionId);
-  let { error: chatError, messages } = useChat({ chat: activeChat, throttle: throttleMs });
+  let activeChat = manager.chat();
+  let { messages } = useChat({ chat: activeChat, throttle: throttleMs });
   let previousScopeKeyRef = useRef(scopeKey);
   let previousWorkspaceKeyRef = useRef(workspaceKey);
   let activeSession = sessions.find((session) => session.id == activeSessionId)!;
   let running = activeSession.status == "running";
-  let error = manager.error(activeSessionId) ?? chatError?.message ?? null;
+  let error = manager.error();
 
-  let configure = useCallback(
-    (configuration: WorkspaceAgentConfiguration) =>
-      manager.configure(activeSessionId, configuration),
-    [activeSessionId, manager],
+  let setModel = useCallback(
+    (nextModel: Parameters<typeof manager.setModel>[0]) => manager.setModel(nextModel),
+    [manager],
   );
   let newChat = useCallback(() => manager.newSession(), [manager]);
   let selectSession = useCallback(
     (sessionId: string) => manager.selectSession(sessionId),
     [manager],
   );
-  let stop = useCallback(() => manager.stop(activeSessionId), [activeSessionId, manager]);
+  let stop = useCallback(() => manager.stop(), [manager]);
   let stopAll = useCallback(() => manager.stopAll(), [manager]);
   let send = useCallback(
     (prompt: string, createHost: () => WorkspaceAgentHost | null) =>
-      manager.send(activeSessionId, prompt, createHost),
-    [activeSessionId, manager],
+      manager.send(prompt, createHost),
+    [manager],
   );
 
   useLayoutEffect(() => {
@@ -71,12 +63,14 @@ export function useWorkspaceAgent({
   }, [manager]);
 
   useLayoutEffect(() => {
-    if (getApiKey) manager.syncApiKey(getApiKey());
-  }, [credentialRevision, getApiKey, manager]);
+    manager.setRunner(runner);
+  }, [manager, runner]);
 
   useLayoutEffect(() => {
-    if (!getApiKey || !subscribeToCredentials) return;
-    return subscribeToCredentials(() => manager.syncApiKey(getApiKey()));
+    let syncCredential = () => manager.syncApiKey(getApiKey());
+    let unsubscribe = subscribeToCredentials(syncCredential);
+    syncCredential();
+    return unsubscribe;
   }, [getApiKey, manager, subscribeToCredentials]);
 
   useLayoutEffect(() => {
@@ -90,9 +84,8 @@ export function useWorkspaceAgent({
 
   return {
     activeSessionId,
-    configure,
     error,
-    errorCode: manager.errorCode(activeSessionId),
+    errorCode: manager.errorCode(),
     hasApiKey,
     messages,
     model,
@@ -100,6 +93,7 @@ export function useWorkspaceAgent({
     running,
     selectSession,
     send,
+    setModel,
     sessions,
     status: activeSession.status,
     stop,
@@ -111,19 +105,19 @@ function createWorkspaceAgentSessionAccess(runner: typeof runWorkspaceAgent) {
   let manager = new WorkspaceAgentSessionManager(runner);
   return Object.freeze({
     activate: () => manager.activate(),
-    chat: (sessionId: string) => manager.chat(sessionId),
-    configure: (sessionId: string, configuration: WorkspaceAgentConfiguration) =>
-      manager.configure(sessionId, configuration),
-    error: (sessionId: string) => manager.error(sessionId),
-    errorCode: (sessionId: string) => manager.errorCode(sessionId),
+    chat: () => manager.chat(),
+    error: () => manager.error(),
+    errorCode: () => manager.errorCode(),
     deactivate: () => manager.deactivate(),
     newSession: () => manager.newSession(),
     resetSessions: () => manager.resetSessions(),
     selectSession: (sessionId: string) => manager.selectSession(sessionId),
-    send: (sessionId: string, prompt: string, createHost: () => WorkspaceAgentHost | null) =>
-      manager.send(sessionId, prompt, createHost),
+    send: (prompt: string, createHost: () => WorkspaceAgentHost | null) =>
+      manager.send(prompt, createHost),
+    setModel: (model: Parameters<WorkspaceAgentSessionManager["setModel"]>[0]) =>
+      manager.setModel(model),
     setRunner: (nextRunner: typeof runWorkspaceAgent) => manager.setRunner(nextRunner),
-    stop: (sessionId: string) => manager.stop(sessionId),
+    stop: () => manager.stop(),
     stopAll: () => manager.stopAll(),
     store: manager.store,
     syncApiKey: (apiKey: string | null) => manager.syncApiKey(apiKey),

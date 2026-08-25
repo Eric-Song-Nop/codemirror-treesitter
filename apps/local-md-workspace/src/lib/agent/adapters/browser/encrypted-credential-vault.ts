@@ -44,13 +44,9 @@ type ParsedEncryptedCredentialRecord = {
   salt: BrowserByteArray;
 };
 
-export type WorkspaceAgentCredentialRecordReadResult =
-  | { readonly status: "empty" }
-  | { readonly status: "stored"; readonly value: unknown };
-
 export interface WorkspaceAgentCredentialRecordStorage {
   delete(): Promise<void>;
-  read(): Promise<WorkspaceAgentCredentialRecordReadResult>;
+  read(): Promise<unknown>;
   write(value: unknown): Promise<void>;
 }
 
@@ -80,9 +76,9 @@ class EncryptedWorkspaceAgentCredentialVault implements WorkspaceAgentCredential
   ) {}
 
   async probe() {
-    let result = await this.readStoredRecord();
-    if (result.status == "empty") return { status: "empty" } as const;
-    parseStoredRecord(result.value);
+    let record = await this.readStoredRecord();
+    if (record === undefined) return { status: "empty" } as const;
+    parseStoredRecord(record);
     return { status: "locked" } as const;
   }
 
@@ -144,9 +140,9 @@ class EncryptedWorkspaceAgentCredentialVault implements WorkspaceAgentCredential
 
     try {
       validatePassphraseBytes(passphraseBytes);
-      let result = await this.readStoredRecord();
-      if (result.status == "empty") throw credentialVaultError("credential-not-found");
-      let record = parseStoredRecord(result.value);
+      let storedRecord = await this.readStoredRecord();
+      if (storedRecord === undefined) throw credentialVaultError("credential-not-found");
+      let record = parseStoredRecord(storedRecord);
       let cryptography = requireCryptography(this.cryptography);
 
       try {
@@ -185,10 +181,7 @@ class EncryptedWorkspaceAgentCredentialVault implements WorkspaceAgentCredential
   private async readStoredRecord() {
     let storage = requireStorage(this.storage);
     try {
-      let result = await storage.read();
-      if (result?.status == "empty") return result;
-      if (result?.status == "stored" && "value" in result) return result;
-      throw credentialVaultError("invalid-record");
+      return await storage.read();
     } catch (error) {
       if (error instanceof WorkspaceAgentCredentialVaultError) throw error;
       throw credentialVaultError("storage-unavailable");
@@ -408,9 +401,7 @@ function createIndexedDbCredentialRecordStorage(): WorkspaceAgentCredentialRecor
         let done = transactionComplete(transaction);
         let request = transaction.objectStore(databaseStoreName).get(deepSeekCredentialKey);
         let [value] = await Promise.all([requestResult<unknown>(request), done]);
-        return value === undefined
-          ? ({ status: "empty" } as const)
-          : ({ status: "stored", value } as const);
+        return value;
       } finally {
         db.close();
       }

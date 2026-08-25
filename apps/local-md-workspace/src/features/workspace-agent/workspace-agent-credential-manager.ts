@@ -18,19 +18,14 @@ export type WorkspaceAgentCredentialSnapshot = {
   errorCode: WorkspaceAgentCredentialVaultErrorCode | null;
   hasApiKey: boolean;
   hasStoredKey: boolean;
-  revision: number;
   status: WorkspaceAgentCredentialStatus;
-};
-
-type CredentialBroadcastMessage = {
-  revision: string;
-  type: "credential-changed";
 };
 
 type CredentialBroadcastChannel = Pick<BroadcastChannel, "close" | "onmessage" | "postMessage">;
 
 type WorkspaceAgentCredentialManagerOptions = {
   createBroadcastChannel?: (name: string) => CredentialBroadcastChannel | null;
+  createRevision?: () => string | null;
 };
 
 const broadcastChannelName = "grove-agent-credentials";
@@ -49,7 +44,6 @@ export class WorkspaceAgentCredentialManager {
     errorCode: null,
     hasApiKey: false,
     hasStoredKey: false,
-    revision: 0,
     status: "checking",
   };
 
@@ -88,35 +82,13 @@ export class WorkspaceAgentCredentialManager {
 
   initialize = () => {
     if (this.initializePromise) return this.initializePromise;
-    let operationEpoch = this.epoch;
-    this.initializePromise = this.enqueue(async () => {
-      try {
-        let result = await this.vault.probe();
-        if (operationEpoch != this.epoch) return;
-        this.#apiKey = null;
-        this.publish({
-          errorCode: null,
-          hasStoredKey: result.status == "locked",
-          status: result.status,
-        });
-      } catch (error) {
-        if (operationEpoch != this.epoch) return;
-        let errorCode = credentialErrorCode(error);
-        this.#apiKey = null;
-        this.publish({
-          errorCode,
-          hasStoredKey: errorCode == "invalid-record",
-          status: "error",
-        });
-      }
-    });
+    this.initializePromise = this.refreshFromVault(this.epoch);
     return this.initializePromise;
   };
 
   save = (apiKey: string, passphrase: string) => {
     let operationEpoch = ++this.epoch;
     return this.enqueue(async () => {
-      let previousApiKey = this.#apiKey;
       let previousStored = this.snapshot.hasStoredKey;
       this.publish({ errorCode: null, status: "saving" });
       try {
@@ -130,7 +102,7 @@ export class WorkspaceAgentCredentialManager {
         return !stale;
       } catch (error) {
         if (operationEpoch != this.epoch) return false;
-        this.#apiKey = previousApiKey;
+        this.#apiKey = null;
         this.publish({
           errorCode: credentialErrorCode(error),
           hasStoredKey: previousStored,
@@ -171,24 +143,7 @@ export class WorkspaceAgentCredentialManager {
       errorCode: null,
       status: this.snapshot.hasStoredKey ? "locked" : "empty",
     });
-    void this.enqueue(async () => {
-      try {
-        let result = await this.vault.probe();
-        if (operationEpoch != this.epoch) return;
-        this.publish({
-          errorCode: null,
-          hasStoredKey: result.status == "locked",
-          status: result.status,
-        });
-      } catch (error) {
-        if (operationEpoch != this.epoch) return;
-        this.publish({
-          errorCode: credentialErrorCode(error),
-          hasStoredKey: this.snapshot.hasStoredKey,
-          status: "error",
-        });
-      }
-    });
+    void this.refreshFromVault(operationEpoch, true);
   };
 
   forget = () => {
@@ -231,8 +186,7 @@ export class WorkspaceAgentCredentialManager {
     this.broadcastChannel = createChannel(broadcastChannelName);
     if (!this.broadcastChannel) return;
     this.broadcastChannel.onmessage = (event: MessageEvent<unknown>) => {
-      if (!isCredentialBroadcastMessage(event.data)) return;
-      this.receiveExternalRevision(event.data.revision);
+      if (typeof event.data == "string") this.receiveExternalRevision(event.data);
     };
   }
 
@@ -251,10 +205,28 @@ export class WorkspaceAgentCredentialManager {
     let operationEpoch = ++this.epoch;
     this.#apiKey = null;
     this.publish({ errorCode: null, status: "checking" });
-    void this.enqueue(async () => {
+    void this.refreshFromVault(operationEpoch);
+  }
+
+  private broadcastChange() {
+    let createRevision = this.options.createRevision ?? createCredentialRevision;
+    let revision = createRevision();
+    if (!revision) return;
+    this.lastRevision = revision;
+    try {
+      this.broadcastChannel?.postMessage(revision);
+    } catch {
+      // A broken BroadcastChannel must not block the storage-event fallback.
+    }
+    publishCredentialRevision(revision);
+  }
+
+  private refreshFromVault(operationEpoch: number, preserveStoredKeyOnError = false) {
+    return this.enqueue(async () => {
       try {
         let result = await this.vault.probe();
         if (operationEpoch != this.epoch) return;
+        this.#apiKey = null;
         this.publish({
           errorCode: null,
           hasStoredKey: result.status == "locked",
@@ -263,38 +235,26 @@ export class WorkspaceAgentCredentialManager {
       } catch (error) {
         if (operationEpoch != this.epoch) return;
         let errorCode = credentialErrorCode(error);
+        this.#apiKey = null;
         this.publish({
           errorCode,
-          hasStoredKey: errorCode == "invalid-record",
+          hasStoredKey: preserveStoredKeyOnError
+            ? this.snapshot.hasStoredKey
+            : errorCode == "invalid-record",
           status: "error",
         });
       }
     });
   }
 
-  private broadcastChange() {
-    let message: CredentialBroadcastMessage = {
-      revision: globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36),
-      type: "credential-changed",
-    };
-    this.lastRevision = message.revision;
-    try {
-      this.broadcastChannel?.postMessage(message);
-    } catch {
-      // A broken BroadcastChannel must not block the storage-event fallback.
-    }
-    publishCredentialRevision(message.revision);
-  }
-
   private publish(
     update: Pick<WorkspaceAgentCredentialSnapshot, "status"> &
-      Partial<Omit<WorkspaceAgentCredentialSnapshot, "hasApiKey" | "revision" | "status">>,
+      Partial<Omit<WorkspaceAgentCredentialSnapshot, "hasApiKey" | "status">>,
   ) {
     this.snapshot = {
       ...this.snapshot,
       ...update,
       hasApiKey: Boolean(this.#apiKey),
-      revision: this.snapshot.revision + 1,
     };
     for (let listener of this.listeners) {
       try {
@@ -330,8 +290,13 @@ function publishCredentialRevision(revision: string) {
   }
 }
 
-function isCredentialBroadcastMessage(value: unknown): value is CredentialBroadcastMessage {
-  if (!value || typeof value != "object") return false;
-  let message = value as Partial<CredentialBroadcastMessage>;
-  return message.type == "credential-changed" && typeof message.revision == "string";
+function createCredentialRevision() {
+  try {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    if (!globalThis.crypto?.getRandomValues) return null;
+    let bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return null;
+  }
 }

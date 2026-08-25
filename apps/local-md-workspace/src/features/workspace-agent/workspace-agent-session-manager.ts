@@ -14,11 +14,6 @@ export type WorkspaceAgentErrorCode = "missing-api-key" | "missing-prompt" | "mi
 
 export type WorkspaceAgentRunStatus = "cancelled" | "error" | "idle" | "running" | "success";
 
-export type WorkspaceAgentConfiguration = {
-  apiKey?: string;
-  model?: WorkspaceAgentModel;
-};
-
 export type WorkspaceAgentRunner = typeof runWorkspaceAgent;
 
 export type WorkspaceAgentSessionSummary = {
@@ -90,30 +85,25 @@ export class WorkspaceAgentSessionManager {
     this.#active = true;
   }
 
-  chat(sessionId: string) {
-    return this.requireSession(sessionId).chat;
+  chat() {
+    return this.activeSession().chat;
   }
 
-  error(sessionId: string) {
-    let session = this.requireSession(sessionId);
+  error() {
+    let session = this.activeSession();
     return (
       session.validation?.message ?? session.runtimeError ?? session.chat.error?.message ?? null
     );
   }
 
-  errorCode(sessionId: string) {
-    return this.requireSession(sessionId).validation?.code ?? null;
+  errorCode() {
+    return this.activeSession().validation?.code ?? null;
   }
 
-  configure(sessionId: string, configuration: WorkspaceAgentConfiguration) {
+  setModel(model: WorkspaceAgentModel) {
     if (!this.#active) return;
-    let session = this.requireSession(sessionId);
-    if ("apiKey" in configuration) {
-      this.setApiKey(configuration.apiKey ?? null, false);
-    }
-    if ("model" in configuration) {
-      this.model = configuration.model ?? DEFAULT_WORKSPACE_AGENT_MODEL;
-    }
+    let session = this.activeSession();
+    this.model = model;
     session.validation = null;
     session.runtimeError = null;
     session.chat.clearError();
@@ -142,12 +132,9 @@ export class WorkspaceAgentSessionManager {
     this.publish();
   }
 
-  async send(sessionId: string, prompt: string, createHost: () => WorkspaceAgentHost | null) {
-    let session = this.requireSession(sessionId);
-    if (!this.#active) {
-      this.rejectRun(session, "missing-api-key", missingApiKeyMessage);
-      return false;
-    }
+  async send(prompt: string, createHost: () => WorkspaceAgentHost | null) {
+    if (!this.#active) return false;
+    let session = this.activeSession();
     if (isSessionBusy(session)) return false;
 
     let content = prompt.trim();
@@ -200,8 +187,9 @@ export class WorkspaceAgentSessionManager {
     return session.lastRunSucceeded;
   }
 
-  stop(sessionId: string) {
-    let session = this.requireSession(sessionId);
+  stop() {
+    if (!this.#active) return;
+    let session = this.activeSession();
     if (!isSessionBusy(session) || session.cancelRequested) return;
     this.stopSession(session);
     this.publish();
@@ -318,6 +306,10 @@ export class WorkspaceAgentSessionManager {
     let session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Unknown Workspace Agent session: ${sessionId}`);
     return session;
+  }
+
+  private activeSession() {
+    return this.requireSession(this.activeSessionId);
   }
 
   private publish() {
