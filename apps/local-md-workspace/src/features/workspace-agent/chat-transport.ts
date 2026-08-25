@@ -16,19 +16,18 @@ type WorkspaceAgentTransportOptions = {
     apiKey: string;
     host: WorkspaceAgentHost;
     model: WorkspaceAgentModel;
+    runner: WorkspaceAgentRunner;
   };
-  runner: WorkspaceAgentRunner;
 };
 
 export function createWorkspaceAgentChatTransport({
   getConfiguration,
-  runner,
 }: WorkspaceAgentTransportOptions): ChatTransport<UIMessage> {
   return {
     reconnectToStream: async () => null,
-    sendMessages: async ({ messages, abortSignal }) => {
+    sendMessages: async ({ chatId, messages, abortSignal }) => {
       let configuration = getConfiguration();
-      let responseId = `workspace-agent-${messages.length}`;
+      let responseId = `${chatId}-response-${messages.length}`;
       return createUIMessageStream({
         onError: (error) => redactWorkspaceAgentErrorMessage(error, configuration.apiKey),
         execute: async ({ writer }) => {
@@ -59,7 +58,7 @@ export function createWorkspaceAgentChatTransport({
           };
 
           write({ messageId: responseId, type: "start" });
-          let result = await runner({
+          let result = await configuration.runner({
             apiKey: configuration.apiKey,
             host: configuration.host,
             messages: textMessages(messages),

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act } from "react";
+import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
@@ -228,10 +229,273 @@ describe("useWorkspaceAgent", () => {
     });
   });
 
-  it("clears the conversation for a new workspace or new chat and reports missing hosts", async () => {
+  it("snapshots the runner when a send starts before the transport microtask", async () => {
+    let runnerA = vi.fn<WorkspaceAgentRunner>(async () => completedRun("Runner A response"));
+    let runnerB = vi.fn<WorkspaceAgentRunner>(async () => completedRun("Runner B response"));
+    let optionsA = { runner: runnerA, scopeKey: "doc-a", workspaceKey: "workspace-a" };
+    let optionsB = { runner: runnerB, scopeKey: "doc-a", workspaceKey: "workspace-a" };
+    await renderHook(optionsA);
+    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
+
+    let sendA!: Promise<boolean>;
+    await act(async () => {
+      sendA = currentApi!.send("Use runner A", () => hostA);
+      expect(runnerA).not.toHaveBeenCalled();
+      flushSync(() => {
+        root?.render(<WorkspaceAgentHarness options={{ throttleMs: 0, ...optionsB }} />);
+      });
+      expect(runnerA).not.toHaveBeenCalled();
+      expect(runnerB).not.toHaveBeenCalled();
+    });
+
+    await act(async () => expect(await sendA).toBe(true));
+    expect(runnerA).toHaveBeenCalledOnce();
+    expect(runnerB).not.toHaveBeenCalled();
+    expect(messageText(currentApi?.messages.at(-1))).toBe("Runner A response");
+
+    act(() => {
+      currentApi!.newChat();
+    });
+    await act(async () => {
+      expect(await currentApi!.send("Use runner B", () => hostB)).toBe(true);
+    });
+    expect(runnerA).toHaveBeenCalledOnce();
+    expect(runnerB).toHaveBeenCalledOnce();
+    expect(messageText(currentApi?.messages.at(-1))).toBe("Runner B response");
+  });
+
+  it("keeps parallel sessions running while switching and routes background output to its owner", async () => {
+    let deferredA = createDeferred<WorkspaceAgentRunResult>();
+    let deferredB = createDeferred<WorkspaceAgentRunResult>();
+    let runnerInputs = new Map<string, WorkspaceAgentRunInput>();
+    let runner: WorkspaceAgentRunner = (input) => {
+      let prompt = input.messages.at(-1)?.content;
+      if (!prompt) throw new Error("Expected a prompt for the Agent run.");
+      runnerInputs.set(prompt, input);
+      if (prompt == "Run A") return deferredA.promise;
+      if (prompt == "Run B") return deferredB.promise;
+      throw new Error(`Unexpected Agent prompt: ${prompt}`);
+    };
+    await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
+    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
+
+    let sessionA = currentApi!.activeSessionId;
+    let sendA!: Promise<boolean>;
+    await act(async () => {
+      sendA = currentApi!.send("Run A", () => hostA);
+      await Promise.resolve();
+    });
+    await waitUntil(() => runnerInputs.has("Run A"));
+
+    await act(async () => {
+      currentApi!.newChat();
+      await Promise.resolve();
+    });
+    let sessionB = currentApi!.activeSessionId;
+    expect(sessionB).not.toBe(sessionA);
+    expect(currentApi?.sessions).toHaveLength(2);
+    expect(currentApi?.sessions.find((session) => session.id == sessionA)).toMatchObject({
+      status: "running",
+      title: "Run A",
+    });
+    expect(runnerInputs.get("Run A")?.signal?.aborted).toBe(false);
+
+    let sendB!: Promise<boolean>;
+    await act(async () => {
+      sendB = currentApi!.send("Run B", () => hostB);
+      await Promise.resolve();
+    });
+    await waitUntil(() => runnerInputs.has("Run B"));
+    expect(runnerInputs.get("Run A")?.host).toBe(hostA);
+    expect(runnerInputs.get("Run B")?.host).toBe(hostB);
+
+    await act(async () => {
+      currentApi!.selectSession(sessionA);
+      await Promise.resolve();
+    });
+    expect(currentApi?.activeSessionId).toBe(sessionA);
+    expect(currentApi?.status).toBe("running");
+    expect(runnerInputs.get("Run A")?.signal?.aborted).toBe(false);
+    expect(runnerInputs.get("Run B")?.signal?.aborted).toBe(false);
+
+    await act(async () => {
+      runnerInputs.get("Run B")?.onEvent?.({ delta: "B background", type: "text-delta" });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      deferredB.resolve(completedRun("B background complete"));
+      expect(await sendB).toBe(true);
+    });
+
+    expect(currentApi?.activeSessionId).toBe(sessionA);
+    expect(currentApi?.status).toBe("running");
+    expect(currentApi?.messages.map(messageText).join("\n")).not.toContain("B background");
+    expect(currentApi?.sessions.find((session) => session.id == sessionB)?.status).toBe("success");
+
+    await act(async () => {
+      currentApi!.selectSession(sessionB);
+      await Promise.resolve();
+    });
+    await waitUntil(() => messageText(currentApi?.messages.at(-1)) == "B background complete");
+    expect(currentApi?.status).toBe("success");
+    expect(currentApi?.messages.map((message) => [message.role, messageText(message)])).toEqual([
+      ["user", "Run B"],
+      ["assistant", "B background complete"],
+    ]);
+
+    await act(async () => {
+      currentApi!.selectSession(sessionA);
+      await Promise.resolve();
+    });
+    expect(currentApi?.status).toBe("running");
+    expect(currentApi?.messages.map(messageText).join("\n")).not.toContain("B background");
+
+    await act(async () => {
+      runnerInputs.get("Run A")?.onEvent?.({ delta: "A foreground", type: "text-delta" });
+      deferredA.resolve(completedRun("A foreground complete"));
+      expect(await sendA).toBe(true);
+    });
+    expect(currentApi?.status).toBe("success");
+    expect(currentApi?.messages.map((message) => [message.role, messageText(message)])).toEqual([
+      ["user", "Run A"],
+      ["assistant", "A foreground complete"],
+    ]);
+
+    await act(async () => {
+      currentApi!.selectSession(sessionB);
+      await Promise.resolve();
+    });
+    expect(currentApi?.messages.map((message) => [message.role, messageText(message)])).toEqual([
+      ["user", "Run B"],
+      ["assistant", "B background complete"],
+    ]);
+  });
+
+  it("stops only the active session while another session continues running", async () => {
+    let deferredA = createDeferred<WorkspaceAgentRunResult>();
+    let deferredB = createDeferred<WorkspaceAgentRunResult>();
+    let runnerInputs = new Map<string, WorkspaceAgentRunInput>();
+    let runner: WorkspaceAgentRunner = (input) => {
+      let prompt = input.messages.at(-1)?.content;
+      if (!prompt) throw new Error("Expected a prompt for the Agent run.");
+      runnerInputs.set(prompt, input);
+      return prompt == "Stop A" ? deferredA.promise : deferredB.promise;
+    };
+    await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
+    act(() => currentApi?.configure({ apiKey: "sk-secret" }));
+
+    let sessionA = currentApi!.activeSessionId;
+    let sendA!: Promise<boolean>;
+    await act(async () => {
+      sendA = currentApi!.send("Stop A", () => hostA);
+      await Promise.resolve();
+    });
+    await waitUntil(() => runnerInputs.has("Stop A"));
+
+    act(() => {
+      currentApi!.newChat();
+    });
+    let sessionB = currentApi!.activeSessionId;
+    let sendB!: Promise<boolean>;
+    await act(async () => {
+      sendB = currentApi!.send("Keep B", () => hostB);
+      await Promise.resolve();
+    });
+    await waitUntil(() => runnerInputs.has("Keep B"));
+
+    await act(async () => {
+      currentApi!.selectSession(sessionA);
+      await Promise.resolve();
+    });
+    act(() => currentApi!.stop());
+
+    expect(runnerInputs.get("Stop A")?.signal?.aborted).toBe(true);
+    expect(runnerInputs.get("Keep B")?.signal?.aborted).toBe(false);
+    expect(currentApi?.sessions.find((session) => session.id == sessionA)?.status).toBe(
+      "cancelled",
+    );
+    expect(currentApi?.sessions.find((session) => session.id == sessionB)?.status).toBe("running");
+    await act(async () => expect(await sendA).toBe(false));
+
+    await act(async () => {
+      currentApi!.selectSession(sessionB);
+      await Promise.resolve();
+    });
+    expect(currentApi?.status).toBe("running");
+    await act(async () => {
+      deferredB.resolve(completedRun("B completed"));
+      expect(await sendB).toBe(true);
+    });
+    expect(messageText(currentApi?.messages.at(-1))).toBe("B completed");
+    expect(currentApi?.status).toBe("success");
+
+    deferredA.resolve(completedRun("late A"));
+    await act(async () => Promise.resolve());
+    expect(messageText(currentApi?.messages.at(-1))).toBe("B completed");
+  });
+
+  it("stops every run and resets the session collection when the workspace changes", async () => {
+    let deferredA = createDeferred<WorkspaceAgentRunResult>();
+    let deferredB = createDeferred<WorkspaceAgentRunResult>();
+    let runnerInputs = new Map<string, WorkspaceAgentRunInput>();
+    let runner: WorkspaceAgentRunner = (input) => {
+      let prompt = input.messages.at(-1)?.content;
+      if (!prompt) throw new Error("Expected a prompt for the Agent run.");
+      runnerInputs.set(prompt, input);
+      return prompt == "Workspace A" ? deferredA.promise : deferredB.promise;
+    };
+    await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
+    act(() => currentApi?.configure({ apiKey: "sk-secret", model: "deepseek-v4-pro" }));
+
+    let sessionA = currentApi!.activeSessionId;
+    let sendA!: Promise<boolean>;
+    await act(async () => {
+      sendA = currentApi!.send("Workspace A", () => hostA);
+      await Promise.resolve();
+    });
+    await waitUntil(() => runnerInputs.has("Workspace A"));
+
+    act(() => {
+      currentApi!.newChat();
+    });
+    let sessionB = currentApi!.activeSessionId;
+    let sendB!: Promise<boolean>;
+    await act(async () => {
+      sendB = currentApi!.send("Workspace B", () => hostB);
+      await Promise.resolve();
+    });
+    await waitUntil(() => runnerInputs.has("Workspace B"));
+
+    await rerenderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-b" });
+    expect(runnerInputs.get("Workspace A")?.signal?.aborted).toBe(true);
+    expect(runnerInputs.get("Workspace B")?.signal?.aborted).toBe(true);
+    expect(currentApi?.sessions).toHaveLength(1);
+    expect(currentApi?.activeSessionId).not.toBe(sessionA);
+    expect(currentApi?.activeSessionId).not.toBe(sessionB);
+    expect(currentApi?.messages).toEqual([]);
+    expect(currentApi?.status).toBe("idle");
+    expect(currentApi?.error).toBeNull();
+    expect(currentApi?.hasApiKey).toBe(true);
+    expect(currentApi?.model).toBe("deepseek-v4-pro");
+
+    await act(async () => {
+      expect(await Promise.all([sendA, sendB])).toEqual([false, false]);
+    });
+    act(() => {
+      runnerInputs.get("Workspace A")?.onEvent?.({ delta: "late A", type: "text-delta" });
+      runnerInputs.get("Workspace B")?.onEvent?.({ delta: "late B", type: "text-delta" });
+      deferredA.resolve(completedRun("late A"));
+      deferredB.resolve(completedRun("late B"));
+    });
+    await act(async () => Promise.resolve());
+    expect(currentApi?.messages).toEqual([]);
+  });
+
+  it("preserves prior sessions for a new chat, resets them for a new workspace, and reports missing hosts", async () => {
     let runner = vi.fn<WorkspaceAgentRunner>(async () => completedRun("Answer"));
     await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
     act(() => currentApi?.configure({ apiKey: "sk-secret" }));
+    let firstSessionId = currentApi!.activeSessionId;
 
     await act(async () => {
       expect(await currentApi?.send("Question", () => null)).toBe(false);
@@ -245,13 +509,29 @@ describe("useWorkspaceAgent", () => {
       expect(await currentApi?.send("Question", () => host)).toBe(true);
     });
     expect(currentApi?.messages).toHaveLength(2);
-    act(() => currentApi?.newChat());
+    act(() => {
+      currentApi?.newChat();
+    });
+    let secondSessionId = currentApi!.activeSessionId;
+    expect(secondSessionId).not.toBe(firstSessionId);
+    expect(currentApi?.sessions).toHaveLength(2);
     expect(currentApi?.messages).toEqual([]);
+
+    await act(async () => {
+      currentApi!.selectSession(firstSessionId);
+      await Promise.resolve();
+    });
+    expect(currentApi?.messages.map((message) => [message.role, messageText(message)])).toEqual([
+      ["user", "Question"],
+      ["assistant", "Answer"],
+    ]);
+    act(() => currentApi!.selectSession(secondSessionId));
 
     await act(async () => {
       expect(await currentApi?.send("Another", () => host)).toBe(true);
     });
     await rerenderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-b" });
+    expect(currentApi?.sessions).toHaveLength(1);
     expect(currentApi?.messages).toEqual([]);
     expect(currentApi?.error).toBeNull();
     expect(currentApi?.hasApiKey).toBe(true);
@@ -306,3 +586,5 @@ function completedRun(content: string): WorkspaceAgentRunResult {
 }
 
 const host = {} as WorkspaceAgentHost;
+const hostA = {} as WorkspaceAgentHost;
+const hostB = {} as WorkspaceAgentHost;

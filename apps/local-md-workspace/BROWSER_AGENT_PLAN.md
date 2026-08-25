@@ -30,6 +30,12 @@ part: the browser calls DeepSeek directly with a user-provided API key.
   edit semantically correct when the user or another peer changed its base.
 - Keep Agent domain contracts SDK-independent; UI state retains only text and
   generic tool status so another browser runtime can replace AI SDK later.
+- Keep a page-memory registry of independent AI SDK `Chat` controllers. New
+  chat creates and selects a controller, session switching does not interrupt
+  other controllers, and Stop targets only the selected session. Workspace
+  replacement and app teardown stop the whole registry.
+- Keep API credentials private to the session manager and publish only safe,
+  immutable session summaries through the React-facing Zustand store.
 
 ## MVP Scope
 
@@ -39,7 +45,8 @@ The MVP includes:
 - in-memory DeepSeek API-key and two-model selection with a fixed provider
   origin;
 - streamed assistant text and summarized tool activity;
-- Stop and New chat actions;
+- concurrent page-memory conversations with visible switching, per-session
+  drafts, and session-scoped Stop and New chat actions;
 - workspace context, Markdown listing, reading, and bounded search;
 - reading selected or unselected files from their shared Loro documents;
 - expected-text exact edits to any exposed workspace Markdown file;
@@ -64,8 +71,9 @@ The MVP excludes:
 ```text
 features/workspace-agent
 - WorkspaceAgentFeature / WorkspaceAgentPanel (shadcn/ui)
-- useWorkspaceAgent / AI SDK UI useChat
-- safe UIMessage state / cancellation / transport
+- WorkspaceAgentSessionManager / Zustand session summaries
+- one AI SDK UI Chat per session / active useChat subscription
+- safe UIMessage state / session-scoped cancellation / transport
         |
         v (runtime.ts dynamic import)
 lib/agent/ai-sdk-runtime.ts composition root

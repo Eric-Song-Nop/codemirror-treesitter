@@ -1,6 +1,8 @@
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
 import {
+  CheckIcon,
   CircleAlertIcon,
+  CircleIcon,
   KeyRoundIcon,
   PlusIcon,
   SendIcon,
@@ -10,7 +12,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty } from "@/components/ui/empty";
@@ -25,46 +27,72 @@ import {
   type WorkspaceAgentModel,
 } from "@/lib/agent/providers/deepseek/config";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 import { isMobileSidebarViewport } from "@/lib/workspace/constants";
-import type { WorkspaceAgentRunStatus } from "./useWorkspaceAgent";
+import type { WorkspaceAgentRunStatus, WorkspaceAgentSessionSummary } from "./useWorkspaceAgent";
 
 type WorkspaceAgentPanelProps = {
+  activeSessionId?: string;
   error: string | null;
   hasApiKey: boolean;
   messages: readonly UIMessage[];
   model: WorkspaceAgentModel;
   open: boolean;
   runStatus: WorkspaceAgentRunStatus;
+  sessions?: readonly WorkspaceAgentSessionSummary[];
   workspaceAvailable: boolean;
   onClose: () => void;
   onConfigure: (input: { apiKey?: string; model?: WorkspaceAgentModel }) => void;
-  onNewChat: () => void;
+  onNewChat: () => string | void;
+  onSelectSession?: (sessionId: string) => void;
   onSend: (prompt: string) => Promise<boolean>;
   onStop: () => void;
 };
 
+const fallbackSessionId = "workspace-agent-current-session";
+
 export function WorkspaceAgentPanel({
+  activeSessionId,
   error,
   hasApiKey,
   messages,
   model,
   open,
   runStatus,
+  sessions,
   workspaceAvailable,
   onClose,
   onConfigure,
   onNewChat,
+  onSelectSession,
   onSend,
   onStop,
 }: WorkspaceAgentPanelProps) {
   let { t } = useI18n();
   let [mobile, setMobile] = useState(() => isMobileSidebarViewport());
-  let [prompt, setPrompt] = useState("");
+  let [drafts, setDrafts] = useState<Record<string, string>>({});
+  let resolvedSessions = useMemo<readonly WorkspaceAgentSessionSummary[]>(
+    () =>
+      sessions?.length ? sessions : [{ id: fallbackSessionId, status: runStatus, title: null }],
+    [runStatus, sessions],
+  );
+  let resolvedActiveSessionId = resolvedSessions.some((session) => session.id == activeSessionId)
+    ? activeSessionId!
+    : resolvedSessions[0]!.id;
+  let activeSessionIndex = resolvedSessions.findIndex(
+    (session) => session.id == resolvedActiveSessionId,
+  );
+  let activeSession = resolvedSessions[activeSessionIndex]!;
+  let activeSessionTitle =
+    activeSession.title ?? t("agent.sessions.untitled", { number: activeSessionIndex + 1 });
+  let prompt = drafts[resolvedActiveSessionId] ?? "";
   let followOutputRef = useRef(true);
+  let focusNewSessionRef = useRef(false);
   let keyInputRef = useRef<HTMLInputElement | null>(null);
   let modelSelectRef = useRef<HTMLSelectElement | null>(null);
   let promptRef = useRef<HTMLTextAreaElement | null>(null);
   let scrollEndRef = useRef<HTMLDivElement | null>(null);
+  let sessionListRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let update = () => setMobile(isMobileSidebarViewport());
@@ -73,29 +101,55 @@ export function WorkspaceAgentPanel({
   }, []);
 
   useEffect(() => {
+    let sessionIds = new Set(resolvedSessions.map((session) => session.id));
+    setDrafts((current) => {
+      let entries = Object.entries(current).filter(([sessionId]) => sessionIds.has(sessionId));
+      if (entries.length == Object.keys(current).length) return current;
+      return Object.fromEntries(entries);
+    });
+  }, [resolvedSessions]);
+
+  useEffect(() => {
     if (!open) return;
     followOutputRef.current = true;
-    let focusTarget = hasApiKey
-      ? workspaceAvailable
-        ? promptRef.current
-        : modelSelectRef.current
-      : keyInputRef.current;
+    let focusTarget = mobile
+      ? sessionListRef.current?.querySelector<HTMLElement>("[aria-current='true']")
+      : hasApiKey
+        ? workspaceAvailable
+          ? promptRef.current
+          : modelSelectRef.current
+        : keyInputRef.current;
     let frame = requestAnimationFrame(() => focusTarget?.focus());
     return () => cancelAnimationFrame(frame);
   }, [hasApiKey, mobile, open, workspaceAvailable]);
 
   useEffect(() => {
+    if (!open) return;
+    followOutputRef.current = true;
+    let activeButton = sessionListRef.current?.querySelector<HTMLElement>("[aria-current='true']");
+    activeButton?.scrollIntoView({ block: "nearest" });
+    if (!focusNewSessionRef.current) return;
+    focusNewSessionRef.current = false;
+    let frame = requestAnimationFrame(() => promptRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [open, resolvedActiveSessionId]);
+
+  useEffect(() => {
     if (!open || !followOutputRef.current || (!messages.length && !error)) return;
     scrollEndRef.current?.scrollIntoView({ block: "end" });
-  }, [error, messages, open]);
+  }, [error, messages, open, resolvedActiveSessionId]);
 
   if (!open) return null;
 
-  let running = runStatus == "running";
+  let running = activeSession.status == "running";
+  let anyRunning = resolvedSessions.some((session) => session.status == "running");
+  let updatePrompt = (value: string) => {
+    setDrafts((current) => ({ ...current, [resolvedActiveSessionId]: value }));
+  };
   let submitPrompt = async () => {
     let value = prompt.trim();
     if (!value || running || !workspaceAvailable) return;
-    setPrompt("");
+    updatePrompt("");
     await onSend(value);
   };
   let handlePromptKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -111,6 +165,32 @@ export function WorkspaceAgentPanel({
     onConfigure({ apiKey });
     if (input) input.value = "";
     requestAnimationFrame(() => promptRef.current?.focus());
+  };
+  let createSession = () => {
+    followOutputRef.current = true;
+    focusNewSessionRef.current = true;
+    onNewChat();
+  };
+  let selectSession = (sessionId: string) => {
+    if (sessionId == resolvedActiveSessionId) return;
+    followOutputRef.current = true;
+    onSelectSession?.(sessionId);
+  };
+  let handleSessionKeyDown = (event: KeyboardEvent<HTMLButtonElement>, sessionIndex: number) => {
+    let nextIndex = sessionIndex;
+    if (event.key == "ArrowDown") nextIndex = (sessionIndex + 1) % resolvedSessions.length;
+    else if (event.key == "ArrowUp")
+      nextIndex = (sessionIndex - 1 + resolvedSessions.length) % resolvedSessions.length;
+    else if (event.key == "Home") nextIndex = 0;
+    else if (event.key == "End") nextIndex = resolvedSessions.length - 1;
+    else return;
+
+    event.preventDefault();
+    let buttons = event.currentTarget
+      .closest("nav")
+      ?.querySelectorAll<HTMLButtonElement>("[data-agent-session]");
+    buttons?.[nextIndex]?.focus();
+    selectSession(resolvedSessions[nextIndex]!.id);
   };
 
   return (
@@ -139,7 +219,7 @@ export function WorkspaceAgentPanel({
       >
         <div
           id="workspace-agent-panel"
-          className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[28rem] flex-col border-l bg-background shadow-xl outline-none md:static md:z-auto md:w-[22.5rem] md:max-w-none md:shrink-0 md:shadow-none"
+          className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[28rem] flex-col overscroll-contain border-l bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-xl outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 md:static md:z-auto md:w-[22.5rem] md:max-w-none md:shrink-0 md:pt-0 md:pb-0 md:shadow-none"
         >
           <header className="flex min-h-12 items-center gap-2 border-b px-3">
             <div className="grid size-7 place-items-center rounded-md border bg-muted/50">
@@ -163,13 +243,9 @@ export function WorkspaceAgentPanel({
               label={t("agent.actions.newChat")}
               size="icon-sm"
               variant="ghost"
-              onClick={() => {
-                followOutputRef.current = true;
-                setPrompt("");
-                onNewChat();
-              }}
+              onClick={createSession}
             >
-              <PlusIcon />
+              <PlusIcon aria-hidden />
             </TooltipIconButton>
             <TooltipIconButton
               label={t("agent.actions.hide")}
@@ -177,9 +253,49 @@ export function WorkspaceAgentPanel({
               variant="ghost"
               onClick={onClose}
             >
-              <XIcon />
+              <XIcon aria-hidden />
             </TooltipIconButton>
           </header>
+
+          <section className="shrink-0 border-b bg-muted/15">
+            <h3 className="px-3 pt-2 pb-1 text-[0.68rem] font-medium text-muted-foreground uppercase">
+              {t("agent.sessions.title")}
+            </h3>
+            <nav
+              ref={sessionListRef}
+              aria-label={t("agent.sessions.label")}
+              className="max-h-32 overflow-y-auto overscroll-contain px-2 pb-2"
+            >
+              <ul className="space-y-1" role="list">
+                {resolvedSessions.map((session, index) => {
+                  let selected = session.id == resolvedActiveSessionId;
+                  let title = session.title ?? t("agent.sessions.untitled", { number: index + 1 });
+                  return (
+                    <li key={session.id}>
+                      <button
+                        type="button"
+                        aria-current={selected ? "true" : undefined}
+                        className={cn(
+                          "relative flex min-h-11 w-full touch-manipulation items-center gap-2 overflow-hidden rounded-md py-1.5 pr-2 pl-3 text-left text-xs outline-none transition-colors before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-transparent hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none md:min-h-9",
+                          selected &&
+                            "bg-accent text-accent-foreground before:bg-primary hover:bg-accent",
+                        )}
+                        data-agent-session
+                        tabIndex={selected ? 0 : -1}
+                        onClick={() => selectSession(session.id)}
+                        onKeyDown={(event) => handleSessionKeyDown(event, index)}
+                      >
+                        <span className="min-w-0 flex-1 truncate font-medium" dir="auto">
+                          {title}
+                        </span>
+                        <WorkspaceAgentSessionStatus status={session.status} />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
+          </section>
 
           <ScrollArea
             className="min-h-0 flex-1"
@@ -190,20 +306,24 @@ export function WorkspaceAgentPanel({
                 viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 48;
             }}
           >
-            <div aria-label={t("agent.panel.title")} className="space-y-5 px-4 py-5" role="log">
+            <div
+              aria-label={t("agent.sessions.transcript", { title: activeSessionTitle })}
+              className="space-y-5 px-4 py-5"
+              role="log"
+            >
               {messages.length ? (
                 <div className="space-y-4">
                   {messages.map((message, index) => (
                     <WorkspaceAgentMessage
                       key={message.id}
                       message={message}
-                      status={index == messages.length - 1 ? runStatus : "success"}
+                      status={index == messages.length - 1 ? activeSession.status : "success"}
                     />
                   ))}
                 </div>
               ) : (
                 <Empty className="min-h-56 border">
-                  <SparklesIcon className="size-5" />
+                  <SparklesIcon className="size-5" aria-hidden />
                   <strong className="text-sm font-medium">{t("agent.empty.title")}</strong>
                   <p className="text-sm text-muted-foreground">{t("agent.empty.description")}</p>
                 </Empty>
@@ -229,7 +349,8 @@ export function WorkspaceAgentPanel({
                 <select
                   ref={modelSelectRef}
                   id="workspace-agent-model"
-                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                  name="workspace-agent-model"
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={running}
                   value={model}
                   onChange={(event) => {
@@ -248,7 +369,7 @@ export function WorkspaceAgentPanel({
                   type="button"
                   size="sm"
                   variant="ghost"
-                  disabled={running}
+                  disabled={anyRunning}
                   onClick={() => onConfigure({ apiKey: "" })}
                 >
                   {t("agent.actions.forgetKey")}
@@ -271,11 +392,13 @@ export function WorkspaceAgentPanel({
                   <Textarea
                     ref={promptRef}
                     id="workspace-agent-prompt"
+                    name="workspace-agent-prompt"
+                    autoComplete="off"
                     className="max-h-40 min-h-20 resize-y border-0 bg-transparent shadow-none focus-visible:ring-0"
                     value={prompt}
                     disabled={!workspaceAvailable || running}
                     placeholder={t("agent.prompt.placeholder")}
-                    onChange={(event) => setPrompt(event.currentTarget.value)}
+                    onChange={(event) => updatePrompt(event.currentTarget.value)}
                     onKeyDown={handlePromptKeyDown}
                   />
                 </Field>
@@ -292,7 +415,7 @@ export function WorkspaceAgentPanel({
                     disabled={!running && (!workspaceAvailable || !prompt.trim())}
                     onClick={running ? onStop : undefined}
                   >
-                    {running ? <SquareIcon /> : <SendIcon />}
+                    {running ? <SquareIcon aria-hidden /> : <SendIcon aria-hidden />}
                   </Button>
                 </div>
               </form>
@@ -308,6 +431,7 @@ export function WorkspaceAgentPanel({
                   <Input
                     ref={keyInputRef}
                     id="workspace-agent-api-key"
+                    name="workspace-agent-api-key"
                     type="password"
                     aria-describedby="workspace-agent-api-key-description"
                     autoComplete="off"
@@ -320,28 +444,71 @@ export function WorkspaceAgentPanel({
                   </FieldDescription>
                 </Field>
                 <Button type="submit" className="w-full" size="sm">
-                  <KeyRoundIcon data-icon="inline-start" />
+                  <KeyRoundIcon data-icon="inline-start" aria-hidden />
                   {t("agent.actions.configureKey")}
                 </Button>
               </form>
             )}
           </div>
 
-          <div className="sr-only" role="status" aria-live="polite">
-            {runStatus == "running"
-              ? t("agent.status.running")
-              : runStatus == "success"
-                ? t("agent.status.complete")
-                : runStatus == "cancelled"
-                  ? t("agent.status.stopped")
-                  : runStatus == "error"
+          <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {resolvedSessions
+              .filter((session) => session.status != "idle")
+              .map((session, index) => {
+                let title = session.title ?? t("agent.sessions.untitled", { number: index + 1 });
+                let status =
+                  session.status == "error" && session.id == resolvedActiveSessionId && error
                     ? error
-                    : null}
+                    : workspaceAgentSessionStatusLabel(session.status, t);
+                return `${title}: ${status}`;
+              })
+              .join(". ")}
           </div>
         </div>
       </DialogPrimitive.Content>
     </DialogPrimitive.Root>
   );
+}
+
+function WorkspaceAgentSessionStatus({ status }: { status: WorkspaceAgentRunStatus }) {
+  let { t } = useI18n();
+  let label = workspaceAgentSessionStatusLabel(status, t);
+  let icon =
+    status == "running" ? (
+      <Spinner aria-hidden className="size-3 motion-reduce:animate-none" />
+    ) : status == "success" ? (
+      <CheckIcon aria-hidden className="size-3" />
+    ) : status == "error" ? (
+      <CircleAlertIcon aria-hidden className="size-3" />
+    ) : status == "cancelled" ? (
+      <SquareIcon aria-hidden className="size-3" />
+    ) : (
+      <CircleIcon aria-hidden className="size-2.5" />
+    );
+
+  return (
+    <span
+      className={cn(
+        "flex shrink-0 items-center gap-1 text-[0.65rem] text-muted-foreground",
+        status == "running" && "text-primary",
+        status == "error" && "text-destructive",
+      )}
+    >
+      {icon}
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function workspaceAgentSessionStatusLabel(
+  status: WorkspaceAgentRunStatus,
+  t: ReturnType<typeof useI18n>["t"],
+) {
+  if (status == "running") return t("agent.status.running");
+  if (status == "success") return t("agent.status.complete");
+  if (status == "error") return t("agent.status.failed");
+  if (status == "cancelled") return t("agent.status.stopped");
+  return t("agent.status.ready");
 }
 
 function WorkspaceAgentMessage({
@@ -386,7 +553,10 @@ function WorkspaceAgentMessage({
           );
         })}
         {status == "running" && !text && !tools.length ? (
-          <Spinner aria-label={t("agent.status.running")} className="size-3.5" />
+          <Spinner
+            aria-label={t("agent.status.running")}
+            className="size-3.5 motion-reduce:animate-none"
+          />
         ) : null}
       </div>
     </article>
