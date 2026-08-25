@@ -61,13 +61,15 @@ try {
 
   await client.send("Page.enable", {}, sessionId);
   await client.send("Runtime.enable", {}, sessionId);
-  if (!liveMdBoundariesOnly) await installMockFileSystemAccess(client, sessionId);
+  if (!liveMdBoundariesOnly) {
+    await installMockFileSystemAccess(client, sessionId, { preserveIndexedDb: agentOnly });
+  }
 
   if (agentOnly) {
     await assertWorkspaceAgentBrowserIntegration(client);
     await navigate(client, sessionId, SMOKE_URL);
     await openMockLocalWorkspace(client, sessionId);
-    await assertAgentApiKeyMemoryOnly(client, sessionId);
+    await assertAgentCredentialVaultFlow(client, sessionId);
     await client.send("Browser.close");
     console.log(`Browser Agent UI smoke passed at ${SMOKE_URL}`);
   } else if (liveMdBoundariesOnly) {
@@ -471,8 +473,9 @@ async function assertWorkspaceAgentBrowserIntegration(client) {
   console.log("Browser Agent fake-model integration smoke passed.");
 }
 
-async function assertAgentApiKeyMemoryOnly(client, sessionId) {
-  let secret = `sk-smoke-memory-only-${Date.now()}`;
+async function assertAgentCredentialVaultFlow(client, sessionId) {
+  let secret = `sk-smoke-encrypted-${Date.now()}`;
+  let passphrase = `grove-smoke-passphrase-${Date.now()}`;
   await client.evaluate(
     `
       (() => {
@@ -484,21 +487,21 @@ async function assertAgentApiKeyMemoryOnly(client, sessionId) {
     sessionId,
   );
   await client.waitForPredicate(
-    `Boolean(document.querySelector("#workspace-agent-api-key"))`,
+    `Boolean(document.querySelector("#workspace-agent-panel")) &&
+      !document.querySelector("#workspace-agent-panel button")?.disabled &&
+      document.querySelector("#workspace-agent-panel")?.innerText.includes("DeepSeek API key")`,
     sessionId,
   );
   let configuration = await client.evaluate(
     `
       (() => {
-        let keyLabel = document.querySelector('label[for="workspace-agent-api-key"]');
-        let keyDescription = document.querySelector("#workspace-agent-api-key-description");
+        let panel = document.querySelector("#workspace-agent-panel");
         let model = document.querySelector("#workspace-agent-model");
         if (!(model instanceof HTMLSelectElement)) {
           throw new Error("Agent model select was not found.");
         }
         return {
-          keyLabel: keyLabel?.textContent.trim() ?? "",
-          keyDescription: keyDescription?.textContent.trim() ?? "",
+          credentialText: panel?.innerText ?? "",
           model: model.value,
           modelOptions: Array.from(model.options, (option) => option.value)
         };
@@ -507,9 +510,8 @@ async function assertAgentApiKeyMemoryOnly(client, sessionId) {
     sessionId,
   );
   if (
-    configuration.keyLabel != "DeepSeek API key" ||
-    !configuration.keyDescription.includes("DeepSeek") ||
-    !configuration.keyDescription.includes("context-caching policies") ||
+    !configuration.credentialText.includes("DeepSeek API key") ||
+    !configuration.credentialText.includes("encrypted key in Settings") ||
     configuration.model != "deepseek-v4-flash" ||
     JSON.stringify(configuration.modelOptions) !=
       JSON.stringify(["deepseek-v4-flash", "deepseek-v4-pro"])
@@ -534,78 +536,348 @@ async function assertAgentApiKeyMemoryOnly(client, sessionId) {
     `document.querySelector("#workspace-agent-model")?.value == "deepseek-v4-pro"`,
     sessionId,
   );
+
   await client.evaluate(
     `
       (() => {
-        let input = document.querySelector("#workspace-agent-api-key");
-        let setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-        setter.call(input, ${JSON.stringify(secret)});
-        input.form.requestSubmit();
+        let panel = document.querySelector("#workspace-agent-panel");
+        let settings = Array.from(panel?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent.trim() == "Open settings"
+        );
+        if (!settings) throw new Error("Agent Settings button was not found.");
+        settings.click();
       })()
     `,
     sessionId,
   );
   await client.waitForPredicate(
-    `!document.querySelector("#workspace-agent-api-key") && Boolean(document.querySelector("#workspace-agent-prompt"))`,
+    `Boolean(document.querySelector("#workspace-settings-dialog")) &&
+      Boolean(document.querySelector("#settings-save-api-key")) &&
+      Boolean(document.querySelector("#settings-save-passphrase")) &&
+      Boolean(document.querySelector("#settings-save-passphrase-confirmation"))`,
     sessionId,
   );
-
-  let state = await client.evaluate(
+  await client.evaluate(
     `
-      (() => ({
-        bodyContainsSecret: document.body.textContent.includes(${JSON.stringify(secret)}),
-        htmlContainsSecret: document.documentElement.innerHTML.includes(${JSON.stringify(secret)}),
-        localStorageContainsSecret: Object.values(localStorage).some((value) =>
-          String(value).includes(${JSON.stringify(secret)})
-        ),
-        sessionStorageContainsSecret: Object.values(sessionStorage).some((value) =>
-          String(value).includes(${JSON.stringify(secret)})
-        ),
-        localStorageContainsModel: ["deepseek-v4-flash", "deepseek-v4-pro"].some((model) =>
-          Object.values(localStorage).some((value) => String(value).includes(model))
-        ),
-        sessionStorageContainsModel: ["deepseek-v4-flash", "deepseek-v4-pro"].some((model) =>
-          Object.values(sessionStorage).some((value) => String(value).includes(model))
-        ),
-        selectedModel: document.querySelector("#workspace-agent-model")?.value ?? null
-      }))()
+      (() => {
+        let apiKey = document.querySelector("#settings-save-api-key");
+        let passphrase = document.querySelector("#settings-save-passphrase");
+        let confirmation = document.querySelector("#settings-save-passphrase-confirmation");
+        let setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        setter.call(apiKey, ${JSON.stringify(secret)});
+        setter.call(passphrase, ${JSON.stringify(passphrase)});
+        setter.call(confirmation, ${JSON.stringify(passphrase)});
+        apiKey.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        passphrase.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        confirmation.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        apiKey.form.requestSubmit();
+      })()
     `,
     sessionId,
   );
+  await client.waitForPredicate(
+    `!document.querySelector("#settings-save-api-key") &&
+      document.querySelector("#workspace-settings-dialog")?.innerText.includes("Saved key unlocked") &&
+      Boolean(document.querySelector("#workspace-agent-prompt"))`,
+    sessionId,
+    20_000,
+  );
+
+  let savedState = await inspectAgentCredentialVault(client, sessionId, secret, passphrase);
+  assertEncryptedAgentCredential(savedState, "saved credential");
   if (
-    state.bodyContainsSecret ||
-    state.htmlContainsSecret ||
-    state.localStorageContainsSecret ||
-    state.sessionStorageContainsSecret ||
-    state.localStorageContainsModel ||
-    state.sessionStorageContainsModel ||
-    state.selectedModel != "deepseek-v4-pro"
+    savedState.localStorageContainsModel ||
+    savedState.sessionStorageContainsModel ||
+    savedState.selectedModel != "deepseek-v4-pro"
   ) {
-    throw new Error(`Agent configuration escaped tab memory: ${JSON.stringify(state)}`);
+    throw new Error(`Agent configuration state was unexpected: ${JSON.stringify(savedState)}`);
+  }
+
+  await navigate(client, sessionId, SMOKE_URL);
+  await client.evaluate(
+    `document.querySelector('button[aria-controls="workspace-agent-panel"]')?.click()`,
+    sessionId,
+  );
+  await client.waitForPredicate(
+    `document.querySelector("#workspace-agent-panel")?.innerText.includes("API key locked") &&
+      !document.querySelector("#workspace-agent-prompt")`,
+    sessionId,
+    20_000,
+  );
+
+  let lockedState = await inspectAgentCredentialVault(client, sessionId, secret, passphrase);
+  assertEncryptedAgentCredential(lockedState, "reloaded credential");
+  if (lockedState.selectedModel != "deepseek-v4-flash") {
+    throw new Error(`Agent model survived reload unexpectedly: ${JSON.stringify(lockedState)}`);
   }
 
   await client.evaluate(
     `
       (() => {
         let panel = document.querySelector("#workspace-agent-panel");
-        let forget = Array.from(panel?.querySelectorAll("button") ?? []).find(
-          (button) => button.textContent.trim() == "Forget key"
+        let settings = Array.from(panel?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent.trim() == "Open settings"
         );
-        if (!forget) throw new Error("Forget key button was not found.");
-        forget.click();
+        if (!settings) throw new Error("Locked Agent Settings button was not found.");
+        settings.click();
       })()
     `,
     sessionId,
   );
   await client.waitForPredicate(
-    `Boolean(document.querySelector("#workspace-agent-api-key"))`,
+    `Boolean(document.querySelector("#settings-unlock-passphrase"))`,
     sessionId,
   );
   await client.evaluate(
-    `document.querySelector('button[aria-controls="workspace-agent-panel"]')?.click()`,
+    `
+      (() => {
+        let passphrase = document.querySelector("#settings-unlock-passphrase");
+        let setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        setter.call(passphrase, ${JSON.stringify(passphrase)});
+        passphrase.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        passphrase.form.requestSubmit();
+      })()
+    `,
+    sessionId,
+  );
+  await client.waitForPredicate(
+    `!document.querySelector("#settings-unlock-passphrase") &&
+      document.querySelector("#workspace-settings-dialog")?.innerText.includes("Saved key unlocked") &&
+      Boolean(document.querySelector("#workspace-agent-prompt"))`,
+    sessionId,
+    20_000,
+  );
+
+  let unlockedState = await inspectAgentCredentialVault(client, sessionId, secret, passphrase);
+  assertEncryptedAgentCredential(unlockedState, "unlocked credential");
+
+  await client.evaluate(
+    `
+      (() => {
+        let dialog = document.querySelector("#workspace-settings-dialog");
+        let remove = Array.from(dialog?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent.trim() == "Delete saved key"
+        );
+        if (!remove) throw new Error("Delete saved key button was not found.");
+        remove.click();
+      })()
+    `,
+    sessionId,
+  );
+  await client.waitForPredicate(
+    `Boolean(document.querySelector('[role="alertdialog"]'))`,
+    sessionId,
+  );
+  await client.evaluate(
+    `
+      (() => {
+        let confirmation = document.querySelector('[role="alertdialog"]');
+        let remove = Array.from(confirmation?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent.trim() == "Delete saved key"
+        );
+        if (!remove) throw new Error("Delete confirmation button was not found.");
+        remove.click();
+      })()
+    `,
+    sessionId,
+  );
+  await client.waitForPredicate(
+    `!document.querySelector('[role="alertdialog"]') &&
+      Boolean(document.querySelector("#settings-save-api-key")) &&
+      !document.querySelector("#workspace-agent-prompt")`,
+    sessionId,
+  );
+
+  let deletedState = await inspectAgentCredentialVault(client, sessionId, secret, passphrase);
+  if (
+    !deletedState.databaseFound ||
+    deletedState.hasRecord ||
+    deletedState.recordKeys.length != 0 ||
+    deletedState.secretEscaped
+  ) {
+    throw new Error(`Agent credential was not deleted cleanly: ${JSON.stringify(deletedState)}`);
+  }
+
+  await client.evaluate(
+    `
+      (() => {
+        let dialog = document.querySelector("#workspace-settings-dialog");
+        let close = Array.from(dialog?.querySelectorAll("button") ?? [])
+          .filter((button) => button.textContent.trim() == "Close")
+          .at(-1);
+        if (!close) throw new Error("Settings close button was not found.");
+        close.click();
+      })()
+    `,
+    sessionId,
+  );
+  await client.waitForPredicate(`!document.querySelector("#workspace-settings-dialog")`, sessionId);
+  await client.evaluate(
+    `
+      (() => {
+        let panel = document.querySelector("#workspace-agent-panel");
+        let close = Array.from(panel?.querySelectorAll("button") ?? []).find(
+          (button) => button.textContent.trim() == "Hide Agent"
+        );
+        close?.click();
+      })()
+    `,
     sessionId,
   );
   await client.waitForPredicate(`!document.querySelector("#workspace-agent-panel")`, sessionId);
+}
+
+async function inspectAgentCredentialVault(client, sessionId, secret, passphrase) {
+  return client.evaluate(
+    `
+      (async () => {
+        let databaseName = "grove-agent-credentials";
+        let databaseFound = (await indexedDB.databases()).some(
+          (database) => database.name == databaseName
+        );
+        let record = null;
+        let recordKeys = [];
+
+        if (databaseFound) {
+          let database = await new Promise((resolve, reject) => {
+            let request = indexedDB.open(databaseName);
+            request.onerror = () => reject(request.error ?? new Error("Credential database open failed."));
+            request.onblocked = () => reject(new Error("Credential database open was blocked."));
+            request.onsuccess = () => resolve(request.result);
+          });
+          try {
+            let result = await new Promise((resolve, reject) => {
+              let transaction = database.transaction("credentials", "readonly");
+              let store = transaction.objectStore("credentials");
+              let recordRequest = store.get("deepseek-api-key");
+              let keysRequest = store.getAllKeys();
+              transaction.onerror = () =>
+                reject(transaction.error ?? new Error("Credential database read failed."));
+              transaction.onabort = () =>
+                reject(transaction.error ?? new Error("Credential database read was aborted."));
+              transaction.oncomplete = () =>
+                resolve({ keys: keysRequest.result, record: recordRequest.result ?? null });
+            });
+            record = result.record;
+            recordKeys = result.keys.map(String);
+          } finally {
+            database.close();
+          }
+        }
+
+        let forbidden = [${JSON.stringify(secret)}, ${JSON.stringify(passphrase)}];
+        let visited = new WeakSet();
+        let containsForbidden = (value) => {
+          if (typeof value == "string") return forbidden.some((item) => value.includes(item));
+          if (value instanceof ArrayBuffer) {
+            return forbidden.some((item) => new TextDecoder().decode(value).includes(item));
+          }
+          if (ArrayBuffer.isView(value)) {
+            let bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+            return forbidden.some((item) => new TextDecoder().decode(bytes).includes(item));
+          }
+          if (!value || typeof value != "object") return false;
+          if (visited.has(value)) return false;
+          visited.add(value);
+          return Object.values(value).some(containsForbidden);
+        };
+        let storageContains = (storage, value) =>
+          Array.from({ length: storage.length }, (_, index) => storage.getItem(storage.key(index)))
+            .some((item) => String(item).includes(value));
+        let domContains = (value) =>
+          document.body.textContent.includes(value) ||
+          document.documentElement.innerHTML.includes(value) ||
+          Array.from(document.querySelectorAll("input, textarea")).some((input) =>
+            String(input.value).includes(value)
+          );
+        let recordFields = record && typeof record == "object" ? Object.keys(record).toSorted() : [];
+        let derivationFields = record?.keyDerivation && typeof record.keyDerivation == "object"
+          ? Object.keys(record.keyDerivation).toSorted()
+          : [];
+        let cacheStorageContainsSecret = false;
+        if (globalThis.caches) {
+          for (let cacheName of await caches.keys()) {
+            let cache = await caches.open(cacheName);
+            for (let request of await cache.keys()) {
+              let response = await cache.match(request);
+              let requestBody = await request.clone().text().catch(() => "");
+              let responseBody = response
+                ? await response.clone().text().catch(() => "")
+                : "";
+              if (
+                containsForbidden({
+                  requestBody,
+                  requestHeaders: Array.from(request.headers.entries()),
+                  requestUrl: request.url,
+                  responseBody,
+                  responseHeaders: response ? Array.from(response.headers.entries()) : [],
+                  responseUrl: response?.url ?? ""
+                })
+              ) {
+                cacheStorageContainsSecret = true;
+                break;
+              }
+            }
+            if (cacheStorageContainsSecret) break;
+          }
+        }
+        let serviceWorkerMessageContainsSecret = containsForbidden(
+          globalThis.__localMdSmokeServiceWorkerMessages ?? []
+        );
+
+        return {
+          cacheStorageContainsSecret,
+          databaseFound,
+          hasRecord: Boolean(record),
+          localStorageContainsModel: ["deepseek-v4-flash", "deepseek-v4-pro"].some((model) =>
+            storageContains(localStorage, model)
+          ),
+          promptReady: Boolean(
+            document.querySelector("#workspace-agent-prompt") &&
+              !document.querySelector("#workspace-agent-prompt").disabled
+          ),
+          recordEncrypted: Boolean(
+            record &&
+              JSON.stringify(recordFields) ==
+                JSON.stringify(["cipher", "ciphertext", "initializationVector", "keyDerivation", "schemaVersion"]) &&
+              JSON.stringify(derivationFields) ==
+                JSON.stringify(["algorithm", "iterations", "salt"]) &&
+              record.cipher == "AES-GCM-256" &&
+              record.schemaVersion == 1 &&
+              record.ciphertext instanceof Uint8Array &&
+              record.ciphertext.byteLength > 16
+          ),
+          recordKeys,
+          secretEscaped: forbidden.some((value) =>
+            domContains(value) ||
+            storageContains(localStorage, value) ||
+            storageContains(sessionStorage, value)
+          ) ||
+            containsForbidden(record) ||
+            cacheStorageContainsSecret ||
+            serviceWorkerMessageContainsSecret,
+          selectedModel: document.querySelector("#workspace-agent-model")?.value ?? null,
+          serviceWorkerMessageContainsSecret,
+          sessionStorageContainsModel: ["deepseek-v4-flash", "deepseek-v4-pro"].some((model) =>
+            storageContains(sessionStorage, model)
+          )
+        };
+      })()
+    `,
+    sessionId,
+  );
+}
+
+function assertEncryptedAgentCredential(state, label) {
+  if (
+    !state.databaseFound ||
+    !state.hasRecord ||
+    !state.recordEncrypted ||
+    JSON.stringify(state.recordKeys) != JSON.stringify(["deepseek-api-key"]) ||
+    state.secretEscaped
+  ) {
+    throw new Error(`Agent ${label} was not encrypted at rest: ${JSON.stringify(state)}`);
+  }
 }
 
 async function assertLiveMdUiRegressions(client, sessionId) {
@@ -2285,7 +2557,17 @@ async function createCdpClient(browserWs) {
   };
 }
 
-async function installMockFileSystemAccess(client, sessionId) {
+async function installMockFileSystemAccess(client, sessionId, { preserveIndexedDb = false } = {}) {
+  let disableIndexedDbSource = preserveIndexedDb
+    ? ""
+    : `
+          try {
+            Object.defineProperty(window, "indexedDB", {
+              configurable: true,
+              value: undefined
+            });
+          } catch {}
+      `;
   await client.send(
     "Page.addScriptToEvaluateOnNewDocument",
     {
@@ -2293,11 +2575,19 @@ async function installMockFileSystemAccess(client, sessionId) {
         (() => {
           let smokeStorageKey = "local-md-workspace:smoke-files";
           let smokeDirectoriesKey = "local-md-workspace:smoke-directories";
+          ${disableIndexedDbSource}
+          window.__localMdSmokeServiceWorkerMessages = [];
           try {
-            Object.defineProperty(window, "indexedDB", {
-              configurable: true,
-              value: undefined
+            navigator.serviceWorker?.addEventListener("message", (event) => {
+              window.__localMdSmokeServiceWorkerMessages.push(event.data);
             });
+            if (typeof ServiceWorker != "undefined") {
+              let postMessage = ServiceWorker.prototype.postMessage;
+              ServiceWorker.prototype.postMessage = function (...args) {
+                window.__localMdSmokeServiceWorkerMessages.push(args[0]);
+                return postMessage.apply(this, args);
+              };
+            }
           } catch {}
 
           function encodeBytes(bytes) {

@@ -41,21 +41,89 @@ afterEach(() => {
 });
 
 describe("WorkspaceAgentPanel", () => {
-  it("moves a submitted API key out of the DOM and keeps it in the controller callback", async () => {
-    let configure = vi.fn();
-    await render(<KeyConfigurationHarness onConfigure={configure} />);
-    let input = document.querySelector<HTMLInputElement>("#workspace-agent-api-key")!;
-    let secret = "sk-browser-memory-only";
+  it("opens Settings for an empty credential without rendering a secret input", async () => {
+    let openSettings = vi.fn();
+    await render(
+      <WorkspaceAgentPanel
+        error={null}
+        hasApiKey={false}
+        messages={[]}
+        model={DEFAULT_WORKSPACE_AGENT_MODEL}
+        open
+        runStatus="idle"
+        workspaceAvailable
+        onClose={vi.fn()}
+        onConfigure={vi.fn()}
+        onNewChat={vi.fn()}
+        onOpenSettings={openSettings}
+        onSend={vi.fn(async () => true)}
+        onStop={vi.fn()}
+      />,
+    );
 
-    input.value = secret;
-    await act(async () => {
-      input.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    });
-
-    expect(configure).toHaveBeenCalledWith({ apiKey: secret });
     expect(document.querySelector("#workspace-agent-api-key")).toBeNull();
-    expect(document.body.textContent).not.toContain(secret);
-    expect(document.body.textContent).toContain("API key ready for this tab");
+    expect(document.querySelector("input[type='password']")).toBeNull();
+    expect(document.body.textContent).toContain("DeepSeek API key");
+    expect(document.body.textContent).toContain("Save or unlock the encrypted key in Settings.");
+    let settingsButton = buttonNamed("Open settings");
+    expect(document.activeElement).toBe(settingsButton);
+
+    act(() => settingsButton.click());
+    expect(openSettings).toHaveBeenCalledOnce();
+  });
+
+  it("shows a stored credential as locked and keeps prompting in Settings", async () => {
+    let openSettings = vi.fn();
+    await render(
+      <WorkspaceAgentPanel
+        credentialStored
+        error={null}
+        hasApiKey={false}
+        messages={[]}
+        model={DEFAULT_WORKSPACE_AGENT_MODEL}
+        open
+        runStatus="idle"
+        workspaceAvailable
+        onClose={vi.fn()}
+        onConfigure={vi.fn()}
+        onNewChat={vi.fn()}
+        onOpenSettings={openSettings}
+        onSend={vi.fn(async () => true)}
+        onStop={vi.fn()}
+      />,
+    );
+
+    expect(document.body.textContent).toContain("API key locked");
+    expect(document.body.textContent).not.toContain("API key ready for this tab");
+    expect(document.querySelector("#workspace-agent-prompt")).toBeNull();
+    expect(document.querySelector("#workspace-agent-api-key")).toBeNull();
+
+    act(() => buttonNamed("Open settings").click());
+    expect(openSettings).toHaveBeenCalledOnce();
+  });
+
+  it("disables the Settings entry while secure storage is still being checked", async () => {
+    await render(
+      <WorkspaceAgentPanel
+        credentialLoading
+        error={null}
+        hasApiKey={false}
+        messages={[]}
+        model={DEFAULT_WORKSPACE_AGENT_MODEL}
+        open
+        runStatus="idle"
+        workspaceAvailable
+        onClose={vi.fn()}
+        onConfigure={vi.fn()}
+        onNewChat={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onSend={vi.fn(async () => true)}
+        onStop={vi.fn()}
+      />,
+    );
+
+    expect(document.body.textContent).toContain("Checking secure storage…");
+    expect(buttonNamed("Open settings").disabled).toBe(true);
   });
 
   it("renders message content as text, shows the activity ledger, and sends with Enter", async () => {
@@ -229,29 +297,6 @@ describe("WorkspaceAgentPanel", () => {
   });
 });
 
-function KeyConfigurationHarness({ onConfigure }: { onConfigure: (value: unknown) => void }) {
-  let [hasApiKey, setHasApiKey] = useState(false);
-  return (
-    <WorkspaceAgentPanel
-      error={null}
-      hasApiKey={hasApiKey}
-      messages={[]}
-      model={DEFAULT_WORKSPACE_AGENT_MODEL}
-      open
-      runStatus="idle"
-      workspaceAvailable
-      onClose={vi.fn()}
-      onConfigure={(input) => {
-        onConfigure(input);
-        if (input.apiKey) setHasApiKey(true);
-      }}
-      onNewChat={vi.fn()}
-      onSend={vi.fn(async () => true)}
-      onStop={vi.fn()}
-    />
-  );
-}
-
 function SessionSwitchHarness() {
   let [activeSessionId, setActiveSessionId] = useState("b");
   return (
@@ -297,6 +342,14 @@ function sessionButton(title: string) {
     document.querySelectorAll<HTMLButtonElement>("[data-agent-session]"),
   ).find((candidate) => candidate.textContent?.includes(title));
   if (!button) throw new Error(`Agent session button was not found: ${title}`);
+  return button;
+}
+
+function buttonNamed(name: string) {
+  let button = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+    (candidate) => candidate.textContent?.trim() == name,
+  );
+  if (!button) throw new Error(`Button was not found: ${name}`);
   return button;
 }
 

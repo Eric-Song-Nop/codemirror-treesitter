@@ -35,7 +35,8 @@ packages.
 - Run a browser-resident Markdown Agent that can list, read, and search the
   active local or Dropbox workspace, keep multiple page-memory conversations
   running and switchable, and apply version-checked exact replacements to
-  workspace Markdown documents.
+  workspace Markdown documents. Its Settings surface can optionally save the
+  DeepSeek key in a passphrase-locked encrypted local vault.
 - Insert pasted, dropped, or selected image files into sibling `assets/`
   directories and resolve Markdown image previews through blob URLs.
 - Export Markdown files to standalone HTML through LiveMD's Tree-sitter
@@ -134,9 +135,10 @@ packages.
   Root `runtime.ts` and `ai-sdk-runtime.ts` remain the two small composition
   facades that preserve demand loading.
 - `src/features/workspace-agent`: the lazy React feature, private multi-session
-  controller registry, run-host hook, safe AI SDK chat transport, switchable
-  panel, and their component tests. The pure ref-to-host binding stays in the
-  workspace adapter so browser smoke tests do not import React hooks.
+  controller registry, private credential-vault boundary, run-host hook, safe
+  AI SDK chat transport, switchable panel, and their component tests. The pure
+  ref-to-host binding stays in the workspace adapter so browser smoke tests do
+  not import React hooks.
 - `src/components/ui/*`: local shadcn/radix UI primitives.
 - `scripts/dev.mjs`: starts the local Grove relay when needed, then starts the
   frontend with `VITE_LOCAL_MD_SHARE_RELAY_ORIGIN`.
@@ -186,12 +188,44 @@ If the relay origin is local, `vp run local-md-workspace#dev` starts
 The workspace header opens an Agent panel whose orchestration and tools run in
 the page. The model adapter uses Vercel AI SDK Core's `@ai-sdk/deepseek`
 provider and calls the fixed `https://api.deepseek.com` origin directly. Enter
-a DeepSeek API key in the panel; there is no build-time or product API-key
-environment variable. The key and selected model remain in page memory and are
-cleared by a reload; **Forget key** clears the key without storing it elsewhere.
-Neither value is written to browser storage, URLs, telemetry, or logs. The
-default model is `deepseek-v4-flash`; `deepseek-v4-pro` is the only model the
-user can select manually.
+a DeepSeek API key in Agent Settings; there is no build-time or product API-key
+environment variable. The key remains in page memory unless the user explicitly
+chooses **Save** in Settings. Saving writes only a versioned AES-GCM ciphertext
+record, plus the non-secret algorithm, KDF, random salt, and IV metadata needed
+to unlock it, to the dedicated `grove-agent-credentials` IndexedDB database.
+The selected model remains page-memory-only. The default model is
+`deepseek-v4-flash`; `deepseek-v4-pro` is the only model the user can select
+manually.
+
+The vault derives its AES-GCM key locally from the user's vault passphrase with
+PBKDF2-HMAC-SHA256, 600,000 iterations, and a random salt. Neither the
+passphrase nor the derived key is persisted. Every newly opened or reloaded
+page starts locked; the user must enter the passphrase to decrypt the saved API
+key into page memory. Settings is the only credential-persistence surface and
+provides explicit save, unlock, lock, and delete actions. Lock and delete both
+stop all Agent runs and clear the API key, passphrase, and derived key material
+from page memory; delete also removes the encrypted IndexedDB record.
+
+The API key, vault passphrase, and derived key never enter React or Zustand
+state, are never refilled into the DOM, and are never written to
+`localStorage`, `sessionStorage`, URLs, logs, telemetry, CacheStorage, or the
+service worker. If Web Crypto or IndexedDB is unavailable, or saving,
+unlocking, or deleting fails, Grove fails closed and never falls back to
+plaintext persistence. Non-secret UI state may report whether a vault exists,
+whether it is locked, and whether an operation failed.
+
+Credential replacement and deletion invalidate unlocked copies in other tabs
+through BroadcastChannel, with a `storage`-event fallback containing only an
+opaque random revision token (`grove-agent-credentials:revision`). The token is
+not a credential and cannot unlock the vault; receiving it immediately locks
+that tab and stops its Agent runs.
+
+The encrypted vault reduces exposure of a saved API key at rest; it is not a
+general browser sandbox, and resistance to offline guessing depends on the
+vault passphrase. Same-origin XSS, malicious browser extensions, a compromised
+browser profile, or any code executing while the vault is unlocked can still
+reach or use secrets available to the page. Users should lock the vault when
+they no longer need the Agent.
 
 The panel keeps a page-memory registry of conversations. **New chat** creates
 and selects a separate session instead of clearing the current one; the session
@@ -208,9 +242,10 @@ DeepSeek enables its
 for API requests, and its public API documents no client-side opt-out. DeepSeek
 documents that each user's cache is isolated and logically invisible to other
 users, and that unused entries are normally cleared within a few hours to days.
-Consequently, although Grove does not persist the key or conversation locally,
-request prefixes sent for inference can be retained temporarily in DeepSeek's
-server-side cache.
+The local vault does not change that remote boundary. Grove can persist an API
+key only as encrypted vault data and does not persist conversations locally,
+but request prefixes sent for inference can still be retained temporarily in
+DeepSeek's server-side cache.
 
 The available tools are:
 
@@ -271,8 +306,8 @@ fetched and compiled only after a supported fence alias appears in the document
 and remain outside the critical offline precache.
 
 Run `vp run local-md-workspace#smoke:agent` for the focused Chromium fake-model,
-IndexedDB reopen, and page-memory credential checks. The broader
-`vp run local-md-workspace#smoke:ui` includes the same Agent assertions.
+IndexedDB reopen, credential-vault lock/unlock, and secret-boundary checks. The
+broader `vp run local-md-workspace#smoke:ui` includes the same Agent assertions.
 
 On Android browsers that support the Web Share Target API for installed PWAs,
 Grove registers as a share target for Markdown files. Shared `.md` and

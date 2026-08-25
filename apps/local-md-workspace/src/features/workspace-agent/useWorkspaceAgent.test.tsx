@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
@@ -69,6 +69,244 @@ describe("useWorkspaceAgent", () => {
 
     act(() => currentApi?.configure({ apiKey: "" }));
     expect(currentApi?.hasApiKey).toBe(false);
+  });
+
+  it("re-reads a stable private credential getter on revision changes and snapshots each run", async () => {
+    let firstRun = createDeferred<WorkspaceAgentRunResult>();
+    let inputs: WorkspaceAgentRunInput[] = [];
+    let runner: WorkspaceAgentRunner = (input) => {
+      inputs.push(input);
+      return input.messages.at(-1)?.content == "First credential"
+        ? firstRun.promise
+        : Promise.resolve(completedRun("Replacement credential response"));
+    };
+    let credential = "sk-revision-first";
+    let getApiKey = vi.fn(() => credential);
+    let options = {
+      credentialRevision: 1,
+      getApiKey,
+      runner,
+      scopeKey: "doc-a",
+      workspaceKey: "workspace-a",
+    };
+    await renderHook(options);
+
+    expect(getApiKey).toHaveBeenCalledOnce();
+    expect(currentApi?.hasApiKey).toBe(true);
+    expect(JSON.stringify(currentApi)).not.toContain(credential);
+
+    credential = "sk-revision-replacement";
+    await rerenderHook(options);
+    expect(getApiKey).toHaveBeenCalledOnce();
+
+    let firstSend!: Promise<boolean>;
+    await act(async () => {
+      firstSend = currentApi!.send("First credential", () => hostA);
+      await Promise.resolve();
+    });
+    await waitUntil(() => inputs.length == 1);
+    expect(inputs[0]).toMatchObject({ apiKey: "sk-revision-first", host: hostA });
+
+    await rerenderHook({ ...options, credentialRevision: 2 });
+    expect(getApiKey).toHaveBeenCalledTimes(2);
+    expect(inputs[0]?.signal?.aborted).toBe(false);
+
+    act(() => {
+      currentApi!.newChat();
+    });
+    await act(async () => {
+      expect(await currentApi!.send("Replacement credential", () => hostB)).toBe(true);
+    });
+    expect(inputs[1]).toMatchObject({ apiKey: "sk-revision-replacement", host: hostB });
+    expect(inputs[0]?.signal?.aborted).toBe(false);
+    expect(JSON.stringify(currentApi)).not.toContain("sk-revision-first");
+    expect(JSON.stringify(currentApi)).not.toContain("sk-revision-replacement");
+
+    await act(async () => {
+      firstRun.resolve(completedRun("First credential response"));
+      expect(await firstSend).toBe(true);
+    });
+  });
+
+  it("reactivates its private controller after the StrictMode effect probe", async () => {
+    let inputs: WorkspaceAgentRunInput[] = [];
+    let runner: WorkspaceAgentRunner = async (input) => {
+      inputs.push(input);
+      return completedRun("Strict response");
+    };
+    await renderStrictHook({
+      credentialRevision: 1,
+      getApiKey: () => "sk-strict-mode",
+      runner,
+      scopeKey: "doc-a",
+      workspaceKey: "workspace-a",
+    });
+
+    expect(currentApi?.hasApiKey).toBe(true);
+    await act(async () => {
+      expect(await currentApi!.send("Strict request", () => host)).toBe(true);
+    });
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]?.apiKey).toBe("sk-strict-mode");
+  });
+
+  it("stops every session when a credential revision locks the private key", async () => {
+    let firstRun = createDeferred<WorkspaceAgentRunResult>();
+    let secondRun = createDeferred<WorkspaceAgentRunResult>();
+    let inputs = new Map<string, WorkspaceAgentRunInput>();
+    let runner: WorkspaceAgentRunner = (input) => {
+      let prompt = input.messages.at(-1)?.content;
+      if (!prompt) throw new Error("Expected a prompt for the Agent run.");
+      inputs.set(prompt, input);
+      return prompt == "Credential run A" ? firstRun.promise : secondRun.promise;
+    };
+    let credential: string | null = "sk-lock-revision";
+    let getApiKey = vi.fn(() => credential);
+    let options = {
+      credentialRevision: 1,
+      getApiKey,
+      runner,
+      scopeKey: "doc-a",
+      workspaceKey: "workspace-a",
+    };
+    await renderHook(options);
+
+    let sessionA = currentApi!.activeSessionId;
+    let sendA!: Promise<boolean>;
+    await act(async () => {
+      sendA = currentApi!.send("Credential run A", () => hostA);
+      await Promise.resolve();
+    });
+    await waitUntil(() => inputs.has("Credential run A"));
+
+    act(() => {
+      currentApi!.newChat();
+    });
+    let sessionB = currentApi!.activeSessionId;
+    let sendB!: Promise<boolean>;
+    await act(async () => {
+      sendB = currentApi!.send("Credential run B", () => hostB);
+      await Promise.resolve();
+    });
+    await waitUntil(() => inputs.has("Credential run B"));
+
+    credential = null;
+    await rerenderHook({ ...options, credentialRevision: 2 });
+
+    expect(getApiKey).toHaveBeenCalledTimes(2);
+    expect(currentApi?.hasApiKey).toBe(false);
+    expect(inputs.get("Credential run A")?.signal?.aborted).toBe(true);
+    expect(inputs.get("Credential run B")?.signal?.aborted).toBe(true);
+    expect(currentApi?.sessions.find((session) => session.id == sessionA)?.status).toBe(
+      "cancelled",
+    );
+    expect(currentApi?.sessions.find((session) => session.id == sessionB)?.status).toBe(
+      "cancelled",
+    );
+    await act(async () => {
+      expect(await Promise.all([sendA, sendB])).toEqual([false, false]);
+    });
+
+    let runnerCount = inputs.size;
+    await act(async () => {
+      expect(await currentApi!.send("Must stay locked", () => host)).toBe(false);
+    });
+    expect(inputs.size).toBe(runnerCount);
+    expect(currentApi?.errorCode).toBe("missing-api-key");
+    expect(JSON.stringify(currentApi)).not.toContain("sk-lock-revision");
+
+    firstRun.resolve(completedRun("late A"));
+    secondRun.resolve(completedRun("late B"));
+    await act(async () => Promise.resolve());
+  });
+
+  it("aborts every session synchronously when the credential subscription locks", async () => {
+    let firstRun = createDeferred<WorkspaceAgentRunResult>();
+    let secondRun = createDeferred<WorkspaceAgentRunResult>();
+    let inputs = new Map<string, WorkspaceAgentRunInput>();
+    let runner: WorkspaceAgentRunner = (input) => {
+      let prompt = input.messages.at(-1)?.content;
+      if (!prompt) throw new Error("Expected a prompt for the Agent run.");
+      inputs.set(prompt, input);
+      return prompt == "Subscribed run A" ? firstRun.promise : secondRun.promise;
+    };
+    let credential: string | null = "sk-subscribed-credential";
+    let credentialListeners = new Set<() => void>();
+    let subscribeToCredentials = vi.fn((listener: () => void) => {
+      credentialListeners.add(listener);
+      return () => {
+        credentialListeners.delete(listener);
+      };
+    });
+    await renderHook({
+      credentialRevision: 1,
+      getApiKey: () => credential,
+      runner,
+      scopeKey: "doc-a",
+      subscribeToCredentials,
+      workspaceKey: "workspace-a",
+    });
+    expect(credentialListeners.size).toBe(1);
+
+    let sendA!: Promise<boolean>;
+    await act(async () => {
+      sendA = currentApi!.send("Subscribed run A", () => hostA);
+      await Promise.resolve();
+    });
+    await waitUntil(() => inputs.has("Subscribed run A"));
+
+    act(() => {
+      currentApi!.newChat();
+    });
+    let sendB!: Promise<boolean>;
+    await act(async () => {
+      sendB = currentApi!.send("Subscribed run B", () => hostB);
+      await Promise.resolve();
+    });
+    await waitUntil(() => inputs.has("Subscribed run B"));
+
+    act(() => {
+      credential = null;
+      for (let listener of credentialListeners) {
+        listener();
+        expect(inputs.get("Subscribed run A")?.signal?.aborted).toBe(true);
+        expect(inputs.get("Subscribed run B")?.signal?.aborted).toBe(true);
+      }
+    });
+
+    expect(currentApi?.hasApiKey).toBe(false);
+    expect(currentApi?.sessions.map((session) => session.status)).toEqual([
+      "cancelled",
+      "cancelled",
+    ]);
+    await act(async () => {
+      expect(await Promise.all([sendA, sendB])).toEqual([false, false]);
+    });
+
+    firstRun.resolve(completedRun("late subscribed A"));
+    secondRun.resolve(completedRun("late subscribed B"));
+    await act(async () => Promise.resolve());
+  });
+
+  it("cannot reconfigure or send through retained callbacks after unmount", async () => {
+    let runner = vi.fn<WorkspaceAgentRunner>(async () => completedRun("Must not run"));
+    await renderHook({ runner, scopeKey: "doc-a", workspaceKey: "workspace-a" });
+    act(() => currentApi!.configure({ apiKey: "sk-before-unmount" }));
+    expect(currentApi?.hasApiKey).toBe(true);
+
+    let retainedConfigure = currentApi!.configure;
+    let retainedSend = currentApi!.send;
+    await act(async () => {
+      root?.unmount();
+      root = null;
+    });
+
+    retainedConfigure({ apiKey: "sk-after-unmount" });
+    let createHost = vi.fn(() => host);
+    await expect(retainedSend("Must remain disposed", createHost)).resolves.toBe(false);
+
+    expect(createHost).not.toHaveBeenCalled();
+    expect(runner).not.toHaveBeenCalled();
   });
 
   it("redacts credentials from runner failures at the UI boundary", async () => {
@@ -542,6 +780,18 @@ async function renderHook(options: UseWorkspaceAgentOptions) {
   container = document.body.appendChild(document.createElement("div"));
   root = createRoot(container);
   await rerenderHook(options);
+}
+
+async function renderStrictHook(options: UseWorkspaceAgentOptions) {
+  container = document.body.appendChild(document.createElement("div"));
+  root = createRoot(container);
+  await act(async () => {
+    root?.render(
+      <StrictMode>
+        <WorkspaceAgentHarness options={{ throttleMs: 0, ...options }} />
+      </StrictMode>,
+    );
+  });
 }
 
 async function rerenderHook(options: UseWorkspaceAgentOptions) {

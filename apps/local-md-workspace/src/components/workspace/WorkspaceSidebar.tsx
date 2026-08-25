@@ -1,11 +1,10 @@
-import { CloudIcon, FolderOpenIcon, LanguagesIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import { CloudIcon, FolderOpenIcon, PlusIcon, RefreshCwIcon, Settings2Icon } from "lucide-react";
 import {
   FileTree,
   type FileTreeCreateKind,
   type FileTreeDeleteTarget,
 } from "@/components/FileTree";
 import { GroveMark } from "@/components/GroveMark";
-import { ThemeSelector } from "@/components/ThemeSelector";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -24,7 +23,6 @@ type WorkspaceSidebarProps = {
   canRefresh: boolean;
   dropboxConnecting: boolean;
   dropboxRestoreAvailable: boolean;
-  languageToggleLabel: string;
   open: boolean;
   restoreAvailable: boolean;
   restoreChecking: boolean;
@@ -37,13 +35,13 @@ type WorkspaceSidebarProps = {
   onLoadDirectory: (path: string) => Promise<void>;
   onOpenDropbox: () => void;
   onOpenFolder: () => void;
+  onOpenSettings: () => void;
   onRefresh: () => void;
   onRenameEntry: (target?: FileTreeDeleteTarget) => void;
   onRestoreDropbox: () => void;
   onRestoreFolder: () => void;
   onSelectEntry: (target: FileTreeDeleteTarget | null) => void;
   onSelectFile: (file: MarkdownFileNode) => void;
-  onToggleLanguage: () => void;
 };
 
 export function WorkspaceSidebar({
@@ -52,7 +50,6 @@ export function WorkspaceSidebar({
   canRefresh,
   dropboxConnecting,
   dropboxRestoreAvailable,
-  languageToggleLabel,
   open,
   restoreAvailable,
   restoreChecking,
@@ -65,13 +62,13 @@ export function WorkspaceSidebar({
   onLoadDirectory,
   onOpenDropbox,
   onOpenFolder,
+  onOpenSettings,
   onRefresh,
   onRenameEntry,
   onRestoreDropbox,
   onRestoreFolder,
   onSelectEntry,
   onSelectFile,
-  onToggleLanguage,
 }: WorkspaceSidebarProps) {
   let { t } = useI18n();
 
@@ -145,9 +142,8 @@ export function WorkspaceSidebar({
       <WorkspaceSidebarUtilityBar
         busy={busy}
         canRefresh={canRefresh}
-        languageToggleLabel={languageToggleLabel}
+        onOpenSettings={onOpenSettings}
         onRefresh={onRefresh}
-        onToggleLanguage={onToggleLanguage}
       />
     </aside>
   );
@@ -176,32 +172,33 @@ function WorkspaceTreeSkeleton({ label }: { label: string }) {
 type WorkspaceSidebarUtilityBarProps = {
   busy: boolean;
   canRefresh: boolean;
-  languageToggleLabel: string;
+  onOpenSettings: () => void;
   onRefresh: () => void;
-  onToggleLanguage: () => void;
 };
 
 function WorkspaceSidebarUtilityBar({
   busy,
   canRefresh,
-  languageToggleLabel,
+  onOpenSettings,
   onRefresh,
-  onToggleLanguage,
 }: WorkspaceSidebarUtilityBarProps) {
   let { t } = useI18n();
 
   return (
     <div className="flex shrink-0 items-center gap-1 border-t border-sidebar-border p-2">
-      <ThemeSelector menuAlign="start" />
       <TooltipIconButton
-        label={languageToggleLabel}
+        aria-controls="workspace-settings-dialog"
+        aria-haspopup="dialog"
+        className="size-11 touch-manipulation md:size-7"
+        label={t("actions.openSettings")}
         size="icon-sm"
         variant="ghost"
-        onClick={onToggleLanguage}
+        onClick={onOpenSettings}
       >
-        <LanguagesIcon data-icon="inline-start" />
+        <Settings2Icon aria-hidden="true" data-icon="inline-start" />
       </TooltipIconButton>
       <TooltipIconButton
+        className="size-11 touch-manipulation md:size-7"
         label={t("actions.refresh")}
         size="icon-sm"
         variant="ghost"
@@ -212,7 +209,12 @@ function WorkspaceSidebarUtilityBar({
       </TooltipIconButton>
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button asChild className="ml-auto" size="icon-sm" variant="ghost">
+          <Button
+            asChild
+            className="ml-auto size-11 touch-manipulation md:size-7"
+            size="icon-sm"
+            variant="ghost"
+          >
             <a
               aria-label={t("actions.openGitHubRepository")}
               href={githubRepositoryUrl}

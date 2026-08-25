@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
 import { useWorkspaceAgentHost, type WorkspaceAgentHostRefs } from "./useWorkspaceAgentHost";
 import { WorkspaceAgentPanel } from "./WorkspaceAgentPanel";
+import { useWorkspaceAgentCredentials } from "./WorkspaceAgentCredentialsProvider";
 import { useWorkspaceAgent } from "./useWorkspaceAgent";
 
 type WorkspaceAgentFeatureProps = WorkspaceAgentHostRefs & {
@@ -10,6 +11,7 @@ type WorkspaceAgentFeatureProps = WorkspaceAgentHostRefs & {
   workspaceAvailable: boolean;
   workspaceKey: string;
   onClose: () => void;
+  onOpenSettings: () => void;
 };
 
 export function WorkspaceAgentFeature({
@@ -18,9 +20,11 @@ export function WorkspaceAgentFeature({
   workspaceAvailable,
   workspaceKey,
   onClose,
+  onOpenSettings,
   ...hostRefs
 }: WorkspaceAgentFeatureProps) {
   let { t } = useI18n();
+  let credentials = useWorkspaceAgentCredentials();
   let createRunHost = useWorkspaceAgentHost(hostRefs);
   let {
     activeSessionId,
@@ -36,7 +40,13 @@ export function WorkspaceAgentFeature({
     sessions,
     status,
     stop,
-  } = useWorkspaceAgent({ scopeKey, workspaceKey });
+  } = useWorkspaceAgent({
+    credentialRevision: credentials.revision,
+    getApiKey: credentials.getApiKey,
+    scopeKey,
+    subscribeToCredentials: credentials.subscribe,
+    workspaceKey,
+  });
   let displayedError = errorCode ? t(`agent.error.${errorCode}`) : error;
 
   let sendMessage = useCallback(
@@ -47,6 +57,8 @@ export function WorkspaceAgentFeature({
   return (
     <WorkspaceAgentPanel
       activeSessionId={activeSessionId}
+      credentialLoading={credentials.status == "checking"}
+      credentialStored={credentials.hasStoredKey}
       error={displayedError}
       hasApiKey={hasApiKey}
       messages={messages}
@@ -58,6 +70,7 @@ export function WorkspaceAgentFeature({
       onClose={onClose}
       onConfigure={configure}
       onNewChat={newChat}
+      onOpenSettings={onOpenSettings}
       onSelectSession={selectSession}
       onSend={sendMessage}
       onStop={stop}
