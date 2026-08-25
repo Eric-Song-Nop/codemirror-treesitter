@@ -631,5 +631,7 @@ standard app path or the Playwright browser cache.
   phases.
 - `apps/local-md-workspace/BROWSER_AGENT_PLAN.md`: browser Agent architecture,
   tool and edit contracts, budgets, and exclusions.
+- `apps/local-md-workspace/COLLABORATIVE_DOCUMENT_MIGRATION.md`: collaborative
+  document authority, lifecycle invariants, and stacked migration plan.
 - This README: repository-level architecture, workspace structure, apps, and
   LiveMD web component/API reference.

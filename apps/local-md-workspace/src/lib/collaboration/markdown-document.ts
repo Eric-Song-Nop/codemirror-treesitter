@@ -6,6 +6,7 @@ let runtimeRequest: Promise<MarkdownDocumentRuntime> | null = null;
 export { hashMarkdownText } from "./markdown-hash.ts";
 export type {
   CollabDocumentMaterialization,
+  CollabDocumentSource,
   CollabDocumentState,
   CollabExternalEditResolution,
   CollabSourceImportResult,

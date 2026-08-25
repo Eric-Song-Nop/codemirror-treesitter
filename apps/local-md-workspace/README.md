@@ -142,6 +142,9 @@ packages.
 
 ## Storage Architecture
 
+- [Collaborative Document Migration](./COLLABORATIVE_DOCUMENT_MIGRATION.md):
+  target document authority, lifecycle invariants, materializer semantics, and
+  stacked delivery plan.
 - [OpenDAL Workspace Storage Architecture](./OPENDAL_WORKSPACE_ARCHITECTURE.md):
   implemented browser operator, workspace object storage, explicit source
   states, path-scoped persistence, and current-document reconciliation
