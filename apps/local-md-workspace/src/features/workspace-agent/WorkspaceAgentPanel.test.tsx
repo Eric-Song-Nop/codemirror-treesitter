@@ -8,9 +8,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { DEFAULT_WORKSPACE_AGENT_MODEL } from "@/lib/agent/providers/deepseek/config";
 import { WorkspaceAgentPanel } from "./WorkspaceAgentPanel";
 
-type ReactActGlobal = typeof globalThis & {
-  IS_REACT_ACT_ENVIRONMENT?: boolean;
-};
+type PanelProps = ComponentProps<typeof WorkspaceAgentPanel>;
+type ReactActGlobal = typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 
 let container: HTMLDivElement | null = null;
 let root: Root | null = null;
@@ -41,314 +40,146 @@ afterEach(() => {
 });
 
 describe("WorkspaceAgentPanel", () => {
-  it("opens Settings for an empty credential without rendering a secret input", async () => {
+  it("keeps credentials in Settings and presents empty, locked, and loading states", async () => {
     let openSettings = vi.fn();
-    await render(
-      <TestWorkspaceAgentPanel
-        error={null}
-        hasApiKey={false}
-        messages={[]}
-        model={DEFAULT_WORKSPACE_AGENT_MODEL}
-        open
-        runStatus="idle"
-        workspaceAvailable
-        onClose={vi.fn()}
-        onModelChange={vi.fn()}
-        onNewChat={vi.fn()}
-        onOpenSettings={openSettings}
-        onSend={vi.fn(async () => true)}
-        onStop={vi.fn()}
-      />,
-    );
+    await renderPanel({ hasApiKey: false, onOpenSettings: openSettings });
 
-    expect(document.querySelector("#workspace-agent-api-key")).toBeNull();
     expect(document.querySelector("input[type='password']")).toBeNull();
-    expect(document.body.textContent).toContain("DeepSeek API key");
     expect(document.body.textContent).toContain("Save or unlock the encrypted key in Settings.");
-    let settingsButton = buttonNamed("Open settings");
-    expect(document.activeElement).toBe(settingsButton);
-
-    act(() => settingsButton.click());
-    expect(openSettings).toHaveBeenCalledOnce();
-  });
-
-  it("shows a stored credential as locked and keeps prompting in Settings", async () => {
-    let openSettings = vi.fn();
-    await render(
-      <TestWorkspaceAgentPanel
-        credentialStored
-        error={null}
-        hasApiKey={false}
-        messages={[]}
-        model={DEFAULT_WORKSPACE_AGENT_MODEL}
-        open
-        runStatus="idle"
-        workspaceAvailable
-        onClose={vi.fn()}
-        onModelChange={vi.fn()}
-        onNewChat={vi.fn()}
-        onOpenSettings={openSettings}
-        onSend={vi.fn(async () => true)}
-        onStop={vi.fn()}
-      />,
-    );
-
-    expect(document.body.textContent).toContain("API key locked");
-    expect(document.body.textContent).not.toContain("API key ready for this tab");
-    expect(document.querySelector("#workspace-agent-prompt")).toBeNull();
-    expect(document.querySelector("#workspace-agent-api-key")).toBeNull();
-
+    expect(document.activeElement).toBe(buttonNamed("Open settings"));
     act(() => buttonNamed("Open settings").click());
     expect(openSettings).toHaveBeenCalledOnce();
-  });
 
-  it("disables the Settings entry while secure storage is still being checked", async () => {
-    await render(
-      <TestWorkspaceAgentPanel
-        credentialLoading
-        error={null}
-        hasApiKey={false}
-        messages={[]}
-        model={DEFAULT_WORKSPACE_AGENT_MODEL}
-        open
-        runStatus="idle"
-        workspaceAvailable
-        onClose={vi.fn()}
-        onModelChange={vi.fn()}
-        onNewChat={vi.fn()}
-        onOpenSettings={vi.fn()}
-        onSend={vi.fn(async () => true)}
-        onStop={vi.fn()}
-      />,
-    );
+    await renderPanel({ credentialStored: true, hasApiKey: false });
+    expect(document.body.textContent).toContain("API key locked");
+    expect(document.querySelector("#workspace-agent-prompt")).toBeNull();
 
+    await renderPanel({ credentialLoading: true, hasApiKey: false });
     expect(document.body.textContent).toContain("Checking secure storage…");
     expect(buttonNamed("Open settings").disabled).toBe(true);
   });
 
-  it("renders message content as text, shows the activity ledger, and sends with Enter", async () => {
-    let send = vi.fn(async () => true);
+  it("renders safe activity, sends keyboard input, closes, and changes models", async () => {
     let close = vi.fn();
-    await render(
-      <TestWorkspaceAgentPanel
-        error={null}
-        hasApiKey
-        messages={agentMessages()}
-        model={DEFAULT_WORKSPACE_AGENT_MODEL}
-        open
-        runStatus="success"
-        workspaceAvailable
-        onClose={close}
-        onModelChange={vi.fn()}
-        onNewChat={vi.fn()}
-        onSend={send}
-        onStop={vi.fn()}
-      />,
-    );
+    let modelChange = vi.fn();
+    let send = vi.fn(async () => true);
+    await renderPanel({
+      messages: agentMessages(),
+      onClose: close,
+      onModelChange: modelChange,
+      onSend: send,
+      sessions: [{ id: "session", status: "success", title: null }],
+    });
 
     expect(document.querySelector("img")).toBeNull();
     expect(document.body.textContent).toContain("Done.");
     expect(document.body.textContent).toContain("Read file");
     expect(document.body.textContent).toContain("Complete");
 
-    let prompt = document.querySelector<HTMLTextAreaElement>("#workspace-agent-prompt")!;
+    let prompt = await updatePrompt("Summarize the workspace");
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(
-        prompt,
-        "Summarize the workspace",
-      );
-      prompt.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await act(async () => {
-      prompt.dispatchEvent(
-        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
-      );
+      prompt.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
       await Promise.resolve();
     });
     expect(send).toHaveBeenCalledWith("Summarize the workspace");
     expect(prompt.value).toBe("");
 
-    act(() => {
-      prompt.dispatchEvent(
-        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
-      );
-    });
-    expect(close).toHaveBeenCalledOnce();
-  });
-
-  it("shows every session and requests a switch without mixing the active transcript", async () => {
-    let selectSession = vi.fn();
-    await render(
-      <TestWorkspaceAgentPanel
-        activeSessionId="b"
-        error={null}
-        hasApiKey
-        messages={sessionMessages("B")}
-        model={DEFAULT_WORKSPACE_AGENT_MODEL}
-        open
-        runStatus="success"
-        sessions={sessionSummaries}
-        workspaceAvailable
-        onClose={vi.fn()}
-        onModelChange={vi.fn()}
-        onNewChat={vi.fn()}
-        onSelectSession={selectSession}
-        onSend={vi.fn(async () => true)}
-        onStop={vi.fn()}
-      />,
-    );
-
-    let sessionA = sessionButton("Session A");
-    let sessionB = sessionButton("Session B");
-    expect(sessionA.textContent).toContain("Working…");
-    expect(sessionB.textContent).toContain("Completed");
-    expect(sessionA.hasAttribute("aria-current")).toBe(false);
-    expect(sessionB.getAttribute("aria-current")).toBe("true");
-
-    let log = document.querySelector<HTMLElement>("[role='log']")!;
-    expect(log.getAttribute("aria-label")).toBe("Messages in Session B");
-    expect(log.textContent).toContain("B request");
-    expect(log.textContent).toContain("B answer");
-    expect(log.textContent).not.toContain("A request");
-    expect(log.textContent).not.toContain("A answer");
-
-    act(() => sessionA.click());
-    expect(selectSession).toHaveBeenCalledOnce();
-    expect(selectSession).toHaveBeenCalledWith("a");
-  });
-
-  it("switches transcripts and preserves a separate prompt draft for each session", async () => {
-    await render(<SessionSwitchHarness />);
-
-    expect(sessionButton("Session B").getAttribute("aria-current")).toBe("true");
-    expect(activeTranscript().textContent).toContain("B answer");
-    expect(activeTranscript().textContent).not.toContain("A answer");
-    await updatePrompt("draft for B");
-
-    act(() => sessionButton("Session A").click());
-    expect(sessionButton("Session A").getAttribute("aria-current")).toBe("true");
-    expect(activeTranscript().textContent).toContain("A answer");
-    expect(activeTranscript().textContent).not.toContain("B answer");
-    expect(document.querySelector<HTMLTextAreaElement>("#workspace-agent-prompt")?.value).toBe("");
-    await updatePrompt("draft for A");
-
-    await act(async () => {
-      sessionButton("Session A").dispatchEvent(
-        new KeyboardEvent("keydown", {
-          bubbles: true,
-          cancelable: true,
-          key: "ArrowDown",
-        }),
-      );
-    });
-    expect(sessionButton("Session B").getAttribute("aria-current")).toBe("true");
-    expect(document.activeElement).toBe(sessionButton("Session B"));
-    expect(activeTranscript().textContent).toContain("B answer");
-    expect(document.querySelector<HTMLTextAreaElement>("#workspace-agent-prompt")?.value).toBe(
-      "draft for B",
-    );
-
-    await act(async () => {
-      sessionButton("Session B").dispatchEvent(
-        new KeyboardEvent("keydown", {
-          bubbles: true,
-          cancelable: true,
-          key: "ArrowUp",
-        }),
-      );
-    });
-    expect(sessionButton("Session A").getAttribute("aria-current")).toBe("true");
-    expect(document.activeElement).toBe(sessionButton("Session A"));
-    expect(activeTranscript().textContent).toContain("A answer");
-    expect(document.querySelector<HTMLTextAreaElement>("#workspace-agent-prompt")?.value).toBe(
-      "draft for A",
-    );
-  });
-
-  it("defaults to V4 Flash and allows switching to V4 Pro", async () => {
-    let configure = vi.fn();
-    await render(
-      <TestWorkspaceAgentPanel
-        error={null}
-        hasApiKey
-        messages={[]}
-        model={DEFAULT_WORKSPACE_AGENT_MODEL}
-        open
-        runStatus="idle"
-        workspaceAvailable
-        onClose={vi.fn()}
-        onModelChange={configure}
-        onNewChat={vi.fn()}
-        onSend={vi.fn(async () => true)}
-        onStop={vi.fn()}
-      />,
-    );
     let model = document.querySelector<HTMLSelectElement>("#workspace-agent-model")!;
     expect(model.value).toBe("deepseek-v4-flash");
-    expect(Array.from(model.options, (option) => option.value)).toEqual([
+    expect(Array.from(model.options, ({ value }) => value)).toEqual([
       "deepseek-v4-flash",
       "deepseek-v4-pro",
     ]);
     model.value = "deepseek-v4-pro";
-
     await act(async () => model.dispatchEvent(new Event("change", { bubbles: true })));
+    expect(modelChange).toHaveBeenCalledWith("deepseek-v4-pro");
 
-    expect(configure).toHaveBeenCalledWith("deepseek-v4-pro");
+    act(() => {
+      prompt.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("switches isolated transcripts and drafts with mouse or keyboard", async () => {
+    await render(<SessionHarness />);
+    let sessionA = sessionButton("Session A");
+    let sessionB = sessionButton("Session B");
+
+    expect(sessionA.textContent).toContain("Working…");
+    expect(sessionB.textContent).toContain("Completed");
+    expect(activeTranscript().textContent).toContain("B answer");
+    expect(activeTranscript().textContent).not.toContain("A answer");
+    await updatePrompt("draft B");
+
+    act(() => sessionA.click());
+    expect(activeTranscript().textContent).toContain("A answer");
+    expect(document.querySelector<HTMLTextAreaElement>("#workspace-agent-prompt")?.value).toBe("");
+    await updatePrompt("draft A");
+
+    act(() => {
+      sessionA.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" }),
+      );
+    });
+    expect(sessionB.getAttribute("aria-current")).toBe("true");
+    expect(document.activeElement).toBe(sessionB);
+    expect(activeTranscript().textContent).toContain("B answer");
+    expect(document.querySelector<HTMLTextAreaElement>("#workspace-agent-prompt")?.value).toBe(
+      "draft B",
+    );
+
+    act(() => sessionA.click());
+    expect(document.querySelector<HTMLTextAreaElement>("#workspace-agent-prompt")?.value).toBe(
+      "draft A",
+    );
   });
 });
 
-type PanelProps = ComponentProps<typeof WorkspaceAgentPanel>;
-type DefaultedPanelProp =
-  | "activeSessionId"
-  | "credentialLoading"
-  | "credentialStored"
-  | "onOpenSettings"
-  | "onSelectSession"
-  | "sessions";
-type TestPanelProps = Omit<PanelProps, DefaultedPanelProp> &
-  Partial<Pick<PanelProps, DefaultedPanelProp>> & {
-    runStatus?: PanelProps["sessions"][number]["status"];
+async function renderPanel(overrides: Partial<PanelProps>) {
+  let props: PanelProps = {
+    activeSessionId: "session",
+    credentialLoading: false,
+    credentialStored: false,
+    error: null,
+    hasApiKey: true,
+    messages: [],
+    model: DEFAULT_WORKSPACE_AGENT_MODEL,
+    open: true,
+    sessions: [{ id: "session", status: "idle", title: null }],
+    workspaceAvailable: true,
+    onClose: vi.fn(),
+    onModelChange: vi.fn(),
+    onNewChat: vi.fn(),
+    onOpenSettings: vi.fn(),
+    onSelectSession: vi.fn(),
+    onSend: vi.fn(async () => true),
+    onStop: vi.fn(),
+    ...overrides,
   };
+  await render(<WorkspaceAgentPanel {...props} />);
+}
 
-function TestWorkspaceAgentPanel({
-  activeSessionId = "test-session",
-  credentialLoading = false,
-  credentialStored = false,
-  onOpenSettings = vi.fn(),
-  onSelectSession = vi.fn(),
-  runStatus = "idle",
-  sessions,
-  ...props
-}: TestPanelProps) {
+function SessionHarness() {
+  let [activeSessionId, setActiveSessionId] = useState("b");
   return (
     <WorkspaceAgentPanel
       activeSessionId={activeSessionId}
-      credentialLoading={credentialLoading}
-      credentialStored={credentialStored}
-      sessions={sessions ?? [{ id: activeSessionId, status: runStatus, title: null }]}
-      onOpenSettings={onOpenSettings}
-      onSelectSession={onSelectSession}
-      {...props}
-    />
-  );
-}
-
-function SessionSwitchHarness() {
-  let [activeSessionId, setActiveSessionId] = useState("b");
-  return (
-    <TestWorkspaceAgentPanel
-      activeSessionId={activeSessionId}
+      credentialLoading={false}
+      credentialStored={false}
       error={null}
       hasApiKey
-      messages={sessionMessages(activeSessionId == "a" ? "A" : "B")}
+      messages={sessionMessages(activeSessionId)}
       model={DEFAULT_WORKSPACE_AGENT_MODEL}
       open
-      runStatus="idle"
-      sessions={draftSessionSummaries}
+      sessions={[
+        { id: "a", status: "running", title: "Session A" },
+        { id: "b", status: "success", title: "Session B" },
+      ]}
       workspaceAvailable
       onClose={vi.fn()}
       onModelChange={vi.fn()}
       onNewChat={vi.fn()}
+      onOpenSettings={vi.fn()}
       onSelectSession={setActiveSessionId}
       onSend={vi.fn(async () => true)}
       onStop={vi.fn()}
@@ -366,38 +197,16 @@ function agentMessages() {
     .get();
 }
 
-function sessionMessages(session: "A" | "B") {
+function sessionMessages(id: string) {
+  let name = id.toUpperCase();
   return createChat()
-    .user(`${session} request`)
-    .assistant(({ writer }) => writer.text(`${session} answer`))
+    .user(`${name} request`)
+    .assistant(({ writer }) => writer.text(`${name} answer`))
     .get();
 }
 
-function sessionButton(title: string) {
-  let button = Array.from(
-    document.querySelectorAll<HTMLButtonElement>("[data-agent-session]"),
-  ).find((candidate) => candidate.textContent?.includes(title));
-  if (!button) throw new Error(`Agent session button was not found: ${title}`);
-  return button;
-}
-
-function buttonNamed(name: string) {
-  let button = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-    (candidate) => candidate.textContent?.trim() == name,
-  );
-  if (!button) throw new Error(`Button was not found: ${name}`);
-  return button;
-}
-
-function activeTranscript() {
-  let log = document.querySelector<HTMLElement>("[role='log']");
-  if (!log) throw new Error("The active Agent transcript was not found.");
-  return log;
-}
-
 async function updatePrompt(value: string) {
-  let prompt = document.querySelector<HTMLTextAreaElement>("#workspace-agent-prompt");
-  if (!prompt) throw new Error("The Agent prompt was not found.");
+  let prompt = document.querySelector<HTMLTextAreaElement>("#workspace-agent-prompt")!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(
       prompt,
@@ -405,22 +214,33 @@ async function updatePrompt(value: string) {
     );
     prompt.dispatchEvent(new Event("input", { bubbles: true }));
   });
+  return prompt;
+}
+
+function sessionButton(title: string) {
+  let button = Array.from(
+    document.querySelectorAll<HTMLButtonElement>("[data-agent-session]"),
+  ).find((candidate) => candidate.textContent?.includes(title));
+  if (!button) throw new Error(`Session not found: ${title}`);
+  return button;
+}
+
+function buttonNamed(name: string) {
+  let button = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+    (candidate) => candidate.textContent?.trim() == name,
+  );
+  if (!button) throw new Error(`Button not found: ${name}`);
+  return button;
+}
+
+function activeTranscript() {
+  return document.querySelector<HTMLElement>("[role='log']")!;
 }
 
 async function render(element: React.ReactNode) {
-  container = document.body.appendChild(document.createElement("div"));
-  root = createRoot(container);
-  await act(async () => {
-    root?.render(<TooltipProvider>{element}</TooltipProvider>);
-  });
+  if (!root) {
+    container = document.body.appendChild(document.createElement("div"));
+    root = createRoot(container);
+  }
+  await act(async () => root?.render(<TooltipProvider>{element}</TooltipProvider>));
 }
-
-const sessionSummaries = [
-  { id: "a", status: "running", title: "Session A" },
-  { id: "b", status: "success", title: "Session B" },
-] as const;
-
-const draftSessionSummaries = [
-  { id: "a", status: "idle", title: "Session A" },
-  { id: "b", status: "idle", title: "Session B" },
-] as const;

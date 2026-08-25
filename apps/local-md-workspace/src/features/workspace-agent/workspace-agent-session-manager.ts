@@ -29,8 +29,8 @@ export type WorkspaceAgentSessionsSnapshot = {
   sessions: readonly WorkspaceAgentSessionSummary[];
 };
 
-type WorkspaceAgentValidation = {
-  code: WorkspaceAgentErrorCode;
+type WorkspaceAgentFailure = {
+  code: WorkspaceAgentErrorCode | null;
   message: string;
 };
 
@@ -42,15 +42,11 @@ type WorkspaceAgentRunConfiguration = {
 };
 
 type WorkspaceAgentSessionRuntime = {
-  cancelRequested: boolean;
   chat: Chat<UIMessage>;
-  lastRunSucceeded: boolean;
-  outcome: Exclude<WorkspaceAgentRunStatus, "error" | "running">;
-  runConfiguration: WorkspaceAgentRunConfiguration | null;
-  runRequested: boolean;
-  runtimeError: string | null;
+  failure: WorkspaceAgentFailure | null;
+  run: { configuration: WorkspaceAgentRunConfiguration; succeeded: boolean } | null;
+  status: Exclude<WorkspaceAgentRunStatus, "error" | "running">;
   title: string | null;
-  validation: WorkspaceAgentValidation | null;
 };
 
 const missingApiKeyMessage = "Enter a DeepSeek API key before running the Agent.";
@@ -91,23 +87,20 @@ export class WorkspaceAgentSessionManager {
 
   error() {
     let session = this.activeSession();
-    return (
-      session.validation?.message ?? session.runtimeError ?? session.chat.error?.message ?? null
-    );
+    return session.failure?.message ?? session.chat.error?.message ?? null;
   }
 
   errorCode() {
-    return this.activeSession().validation?.code ?? null;
+    return this.activeSession().failure?.code ?? null;
   }
 
   setModel(model: WorkspaceAgentModel) {
     if (!this.#active) return;
     let session = this.activeSession();
     this.model = model;
-    session.validation = null;
-    session.runtimeError = null;
+    session.failure = null;
     session.chat.clearError();
-    if (!isSessionBusy(session)) session.outcome = "idle";
+    if (!isSessionBusy(session)) session.status = "idle";
     this.publish();
   }
 
@@ -152,45 +145,45 @@ export class WorkspaceAgentSessionManager {
       return false;
     }
 
-    let runConfiguration: WorkspaceAgentRunConfiguration = {
-      apiKey: this.#apiKey,
-      host,
-      model: this.model,
-      runner: this.runner,
+    let run = {
+      configuration: {
+        apiKey: this.#apiKey,
+        host,
+        model: this.model,
+        runner: this.runner,
+      },
+      succeeded: false,
     };
-    session.runConfiguration = runConfiguration;
-    session.lastRunSucceeded = false;
-    session.cancelRequested = false;
-    session.runRequested = true;
-    session.validation = null;
-    session.runtimeError = null;
+    session.run = run;
+    session.failure = null;
     session.chat.clearError();
-    session.outcome = "idle";
+    session.status = "idle";
     session.title ??= sessionTitle(content);
     this.publish();
 
     try {
       await session.chat.sendMessage({ text: content });
     } catch (error) {
-      if (!session.cancelRequested && (!(error instanceof Error) || error.name != "AbortError")) {
-        session.runtimeError = redactWorkspaceAgentErrorMessage(error, runConfiguration.apiKey);
+      if (session.run == run && (!(error instanceof Error) || error.name != "AbortError")) {
+        session.failure = {
+          code: null,
+          message: redactWorkspaceAgentErrorMessage(error, run.configuration.apiKey),
+        };
       }
-      session.lastRunSucceeded = false;
       return false;
     } finally {
-      if (session.runRequested) {
-        session.runRequested = false;
-        session.runConfiguration = null;
+      if (session.run == run) {
+        session.run = null;
         this.publish();
       }
     }
-    return session.lastRunSucceeded;
+    return run.succeeded;
   }
 
   stop() {
     if (!this.#active) return;
     let session = this.activeSession();
-    if (!isSessionBusy(session) || session.cancelRequested) return;
+    if (!isSessionBusy(session) || session.status == "cancelled") return;
     this.stopSession(session);
     this.publish();
   }
@@ -218,7 +211,7 @@ export class WorkspaceAgentSessionManager {
   private stopAllSessions(publish: boolean) {
     let changed = false;
     for (let session of this.sessions.values()) {
-      if (!isSessionBusy(session) || session.cancelRequested) continue;
+      if (!isSessionBusy(session) || session.status == "cancelled") continue;
       this.stopSession(session);
       changed = true;
     }
@@ -238,39 +231,31 @@ export class WorkspaceAgentSessionManager {
     let session: WorkspaceAgentSessionRuntime | undefined;
     let chat = new Chat<UIMessage>({
       onError: () => {
-        if (!session) return;
-        session.lastRunSucceeded = false;
+        if (session?.run) session.run.succeeded = false;
       },
       onFinish: ({ isAbort, isError }) => {
-        if (!session) return;
-        session.runConfiguration = null;
-        session.runRequested = false;
-        session.lastRunSucceeded = !isAbort && !isError;
-        if (!isAbort) {
-          session.cancelRequested = false;
-          session.outcome = isError ? "idle" : "success";
-        }
+        let run = session?.run;
+        if (!session || !run) return;
+        run.succeeded = !isAbort && !isError;
+        session.run = null;
+        session.status = isAbort ? "cancelled" : isError ? "idle" : "success";
         this.publish();
       },
       transport: createWorkspaceAgentChatTransport({
         getConfiguration: () => {
-          if (!session?.runConfiguration) {
+          if (!session?.run) {
             throw new Error("Workspace Agent run configuration is unavailable.");
           }
-          return session.runConfiguration;
+          return session.run.configuration;
         },
       }),
     });
     session = {
-      cancelRequested: false,
       chat,
-      lastRunSucceeded: false,
-      outcome: "idle",
-      runConfiguration: null,
-      runRequested: false,
-      runtimeError: null,
+      failure: null,
+      run: null,
+      status: "idle",
       title: null,
-      validation: null,
     };
     return session;
   }
@@ -280,9 +265,8 @@ export class WorkspaceAgentSessionManager {
     code: WorkspaceAgentErrorCode,
     message: string,
   ) {
-    session.validation = { code, message };
-    session.runtimeError = null;
-    session.outcome = "idle";
+    session.failure = { code, message };
+    session.status = "idle";
     this.publish();
   }
 
@@ -295,11 +279,8 @@ export class WorkspaceAgentSessionManager {
     session.chat.messages = session.chat.messages.filter(
       (message) => message.role != "assistant" || message.parts.length,
     );
-    session.runConfiguration = null;
-    session.runRequested = false;
-    session.lastRunSucceeded = false;
-    session.cancelRequested = true;
-    session.outcome = "cancelled";
+    session.run = null;
+    session.status = "cancelled";
   }
 
   private requireSession(sessionId: string) {
@@ -332,14 +313,14 @@ export class WorkspaceAgentSessionManager {
 
 function isSessionBusy(session: WorkspaceAgentSessionRuntime) {
   return (
-    session.runRequested || session.chat.status == "streaming" || session.chat.status == "submitted"
+    Boolean(session.run) || session.chat.status == "streaming" || session.chat.status == "submitted"
   );
 }
 
 function sessionStatus(session: WorkspaceAgentSessionRuntime): WorkspaceAgentRunStatus {
-  if (isSessionBusy(session) && !session.cancelRequested) return "running";
-  if (session.validation || session.runtimeError || session.chat.status == "error") return "error";
-  return session.outcome;
+  if (isSessionBusy(session) && session.status != "cancelled") return "running";
+  if (session.failure || session.chat.status == "error") return "error";
+  return session.status;
 }
 
 function sessionTitle(prompt: string) {

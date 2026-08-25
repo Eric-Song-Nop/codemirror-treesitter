@@ -132,27 +132,20 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Browser Agent code and AI SDK dependencies belong in
   `apps/local-md-workspace`. Keep the SDK behind its dynamic runtime adapter;
   do not add model-provider assumptions or credentials to editor packages.
-- Agent credentials remain in page memory unless an explicit Agent Settings
-  save writes a versioned AES-GCM ciphertext record to the dedicated
-  `grove-agent-credentials` IndexedDB database. Store only ciphertext and its
-  non-secret version, algorithm, KDF, random salt, and IV metadata.
-- Derive the AES-GCM key locally from a vault passphrase with
-  PBKDF2-HMAC-SHA256, exactly 600,000 iterations, and a random salt. Never
-  persist the passphrase or derived key; every new or reloaded page starts
-  locked.
-- The API key, vault passphrase, and derived key must not enter React or Zustand
-  state, be refilled into the DOM, or enter `localStorage`, `sessionStorage`,
-  URLs, logs, telemetry, CacheStorage, or the service worker. If Web Crypto or
-  IndexedDB is unavailable or an operation fails, fail closed without plaintext
-  fallback. Lock and delete must stop all runs and clear page-memory secrets;
-  delete must remove the record or remain locked and warn that it may remain.
-- Cross-tab changes use BroadcastChannel and a `storage`-event fallback that
-  writes only an opaque random revision token at
-  `grove-agent-credentials:revision`. It must contain no credential or unlock
-  capability; receiving it locks the tab and stops its runs.
-- The vault protects saved credentials only at rest, not from same-origin XSS,
-  browser extensions, a compromised profile, or code running after unlock. Fix
-  the provider origin to `https://api.deepseek.com`, default to
+- Agent credentials stay in page memory unless Agent Settings explicitly saves
+  versioned AES-GCM ciphertext and non-secret metadata to the dedicated
+  `grove-agent-credentials` IndexedDB database. Derive the key locally with
+  PBKDF2-HMAC-SHA256, exactly 600,000 iterations, and random salt; never persist
+  the passphrase or derived key, and start every page locked.
+- Keep the API key, passphrase, and derived key out of React/Zustand state, DOM
+  refill, web storage, URLs, logs, telemetry, CacheStorage, and service-worker
+  data. Unsupported or failed vault operations fail closed. Lock/delete stop all
+  runs and clear memory; delete removes the record or remains locked and warns.
+- Cross-tab changes carry only an opaque random revision through
+  BroadcastChannel or `grove-agent-credentials:revision`; receiving it locks the
+  tab and stops its runs. The vault protects only at rest, not against XSS,
+  extensions, compromised profiles, or code running while unlocked.
+- Fix the provider origin to `https://api.deepseek.com`, default to
   `deepseek-v4-flash`, and allow only `deepseek-v4-pro` as an alternative.
 - DeepSeek's
   [disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) is
