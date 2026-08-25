@@ -1,6 +1,6 @@
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import type { DocumentRecoveryAction } from "@/components/workspace/DocumentRecoveryDialogs";
-import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import { defaultSidebarOpen } from "@/lib/workspace/constants";
 import {
   loadStoredDropboxWorkspaceConfig,
@@ -20,7 +20,7 @@ export type WorkspaceDocumentOpening = {
 };
 
 export type WorkspaceDocumentView = {
-  document: CollabDocumentState;
+  document: WorkspaceCollaborativeDocument;
   file: MarkdownFileNode;
   saveState: SaveState;
   value: string;
@@ -30,7 +30,7 @@ export type WorkspaceAppSnapshot = {
   agentActivated: boolean;
   agentOpen: boolean;
   busy: boolean;
-  collabDocument: CollabDocumentState | null;
+  collabDocument: WorkspaceCollaborativeDocument | null;
   dropboxConnecting: boolean;
   editorDocument: EditorDocument;
   errorMessage: string;

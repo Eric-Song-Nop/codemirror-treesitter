@@ -1,5 +1,5 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
-import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import {
   createOwnerShare,
   revokeOwnerShare,
@@ -32,11 +32,11 @@ type StartOwnerShareHost = (
 
 type UseWorkspaceShareActionsOptions = {
   activeShareRecord: ActiveOwnerShareRecord | null;
-  collabDocumentRef: MutableRef<CollabDocumentState | null>;
+  collabDocumentRef: MutableRef<WorkspaceCollaborativeDocument | null>;
   ensureSelectedCollabDocument: (
     runtime: WorkspaceRuntime,
     file: MarkdownFileNode,
-  ) => Promise<CollabDocumentState>;
+  ) => Promise<WorkspaceCollaborativeDocument>;
   flushOwnerShareHost: () => void;
   saveCurrentFile: () => Promise<boolean>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
@@ -81,7 +81,7 @@ export function useWorkspaceShareActions({
       let document = await ensureSelectedCollabDocument(runtime, file);
       let share = await createOwnerShare({
         baseUrl: window.location.href,
-        document,
+        document: document.collabState,
         expiration: shareExpiration,
         file,
         identity: runtime.identity,

@@ -6,15 +6,10 @@ import {
   createWorkspaceAgentRunHost,
   type WorkspaceAgentHostRefs,
 } from "../src/lib/agent/adapters/workspace/run-host.ts";
-import {
-  getCollabDocumentValue,
-  openMarkdownCollabDocument,
-  savePendingCollabDocumentUpdates,
-  type CollabDocumentState,
-} from "../src/lib/collaboration/markdown-document.ts";
 import { runWorkspaceAgentWithAiSdkModel } from "../src/lib/agent/adapters/ai-sdk/runner.ts";
 import type { WorkspaceAgentRunEvent } from "../src/lib/agent/application/run-contracts.ts";
 import type { WorkspaceAgentApplyCurrentDocumentEditsResult } from "../src/lib/agent/domain/contracts.ts";
+import type { WorkspaceCollaborativeDocument } from "../src/lib/workspace/documents/contracts.ts";
 import { createMemoryWorkspaceRuntime } from "../src/test/memory-workspace-runtime.ts";
 
 export type WorkspaceAgentBrowserIntegrationResult = {
@@ -43,14 +38,12 @@ export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAg
     id: `agent-smoke:${suffix}`,
     name: "Agent smoke",
   });
-  let documentState: CollabDocumentState | null = null;
-  let reopened: CollabDocumentState | null = null;
   let view: EditorView | null = null;
   let parent: HTMLDivElement | null = null;
   let unsubscribeLocalUpdates: (() => void) | null = null;
 
   try {
-    documentState = await openMarkdownCollabDocument(runtime, path);
+    let documentState: WorkspaceCollaborativeDocument = await runtime.documents.document(path);
     let dirtyRef = { current: false };
     let editVersionRef = { current: 0 };
     let editorValueRef = { current: initialValue };
@@ -97,7 +90,7 @@ export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAg
     let version = read.source.version;
     let localUpdates = 0;
     await flushMicrotasks();
-    unsubscribeLocalUpdates = documentState.doc.subscribeLocalUpdates(() => localUpdates++);
+    unsubscribeLocalUpdates = documentState.loroDoc.subscribeLocalUpdates(() => localUpdates++);
     let events: WorkspaceAgentRunEvent[] = [];
     let model = new MockLanguageModelV4({
       modelId: "mock-browser-agent",
@@ -123,10 +116,9 @@ export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAg
     await flushMicrotasks();
 
     let editorValue = view.state.doc.toString();
-    let loroValue = getCollabDocumentValue(documentState);
-    await savePendingCollabDocumentUpdates(runtime, documentState);
-    reopened = await openMarkdownCollabDocument(runtime, path);
-    let persistedValue = getCollabDocumentValue(reopened);
+    let loroValue = documentState.read();
+    await documentState.flush();
+    let persistedValue = runtime.files.get(path) ?? "";
 
     refs.selectedFileRef.current = {
       kind: "file",
@@ -173,11 +165,7 @@ export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAg
     unsubscribeLocalUpdates?.();
     view?.destroy();
     parent?.remove();
-    try {
-      await reopened?.dispose();
-    } finally {
-      await documentState?.dispose();
-    }
+    await runtime.dispose();
   }
 }
 

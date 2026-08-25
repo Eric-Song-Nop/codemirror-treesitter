@@ -1,9 +1,4 @@
 import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
-import type { SerializedCollabVersionVector } from "@/lib/collaboration/collab-browser-store";
-import {
-  getCollabDocumentValue,
-  scheduleCollabDocumentSnapshotFlush,
-} from "@/lib/collaboration/markdown-document";
 import {
   configuredShareRelayOrigin,
   createRelayShareSession,
@@ -17,32 +12,17 @@ import {
   mergeOwnerShareStatus,
   readHostSecret,
 } from "@/lib/workspace/share-host";
-import type { ActiveOwnerShareRecord, SaveState } from "@/lib/workspace/types";
+import type { ActiveOwnerShareRecord } from "@/lib/workspace/types";
 import type { DocumentSession } from "@/lib/workspace/document-session";
-import { documentSourceRef, sameDocumentSourceRef } from "@/lib/workspace/source-identity";
-import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
-
-type MutableRef<T> = {
-  current: T;
-};
+import { sameDocumentSourceRef } from "@/lib/workspace/source-identity";
 
 type UseOwnerShareHostOptions = {
-  dirtyRef: MutableRef<boolean>;
-  editorValueRef: MutableRef<string>;
-  editVersionRef: MutableRef<number>;
-  scheduleAutoSaveRef: MutableRef<() => void>;
   setActiveShareRecord: Dispatch<SetStateAction<ActiveOwnerShareRecord | null>>;
-  setSaveStateSynced: (state: SaveState) => void;
   setShareError: (message: string) => void;
 };
 
 export function useOwnerShareHost({
-  dirtyRef,
-  editorValueRef,
-  editVersionRef,
-  scheduleAutoSaveRef,
   setActiveShareRecord,
-  setSaveStateSynced,
   setShareError,
 }: UseOwnerShareHostOptions) {
   let shareHostConnectionRef = useRef<ShareRelayConnection | null>(null);
@@ -65,48 +45,6 @@ export function useOwnerShareHost({
     () => () => {
       shareHostUpdateCleanupRef.current();
       shareHostConnectionRef.current?.close();
-    },
-    [],
-  );
-
-  let sendHostSaveAck = useCallback(
-    (
-      runtime: WorkspaceRuntime,
-      path: string,
-      value: string,
-      savedVersion: SerializedCollabVersionVector,
-    ) => {
-      let record = shareHostRecordRef.current;
-      let connection = shareHostConnectionRef.current;
-      if (!record || !connection || !isOwnerShareSource(record, runtime, path)) return;
-
-      let materializedHash = hashMarkdownText(value);
-      connection.enqueueHostSaveAck(
-        new TextEncoder().encode(
-          JSON.stringify({
-            materializedHash,
-            savedAt: Date.now(),
-            shareId: record.shareId,
-            versionVector: savedVersion,
-          }),
-        ),
-      );
-      setActiveShareRecord((current) =>
-        current?.shareId == record.shareId
-          ? { ...current, lastHostSavedVersion: materializedHash }
-          : current,
-      );
-    },
-    [setActiveShareRecord],
-  );
-
-  let sendHostDocumentUpdate = useCallback(
-    (runtime: WorkspaceRuntime, path: string, update: Uint8Array | null) => {
-      if (!update?.byteLength) return;
-      let record = shareHostRecordRef.current;
-      let connection = shareHostConnectionRef.current;
-      if (!record || !connection || !isOwnerShareSource(record, runtime, path)) return;
-      connection.enqueueDocumentUpdate(update);
     },
     [],
   );
@@ -155,15 +93,8 @@ export function useOwnerShareHost({
         );
         let connection = new ShareRelayConnection({
           clientId: getOrCreateOwnerShareClientId(),
-          doc: session.collabDocument.doc,
-          onDocumentImported: () => {
-            editorValueRef.current = getCollabDocumentValue(session.collabDocument);
-            editVersionRef.current += 1;
-            dirtyRef.current = true;
-            setSaveStateSynced("pending");
-            scheduleCollabDocumentSnapshotFlush(session.collabDocument);
-            scheduleAutoSaveRef.current();
-          },
+          doc: session.collabDocument.loroDoc,
+          onDocumentImported: () => {},
           onError: (message) => setShareError(message),
           onShareStatus: (status) => {
             setActiveShareRecord((current) =>
@@ -192,38 +123,50 @@ export function useOwnerShareHost({
         });
         shareHostConnectionRef.current = connection;
         shareHostRecordRef.current = record;
-        shareHostUpdateCleanupRef.current = session.collabDocument.doc.subscribeLocalUpdates(
-          (bytes) => {
-            connection.enqueueDocumentUpdate(bytes);
-          },
-        );
+        let stopLocalUpdates = session.collabDocument.loroDoc.subscribeLocalUpdates((bytes) => {
+          connection.enqueueDocumentUpdate(bytes);
+        });
+        let stopDocumentEvents = session.collabDocument.subscribe((event) => {
+          if (event.kind == "closed") {
+            if (shareHostConnectionRef.current == connection) stopOwnerShareHost();
+            return;
+          }
+          if (event.kind != "materialized") return;
+          if (event.sourceUpdate?.byteLength) connection.enqueueDocumentUpdate(event.sourceUpdate);
+
+          let materializedHash = hashMarkdownText(event.materialization.value);
+          connection.enqueueHostSaveAck(
+            new TextEncoder().encode(
+              JSON.stringify({
+                materializedHash,
+                savedAt: Date.now(),
+                shareId: record.shareId,
+                versionVector: event.materialization.versionVector,
+              }),
+            ),
+          );
+          setActiveShareRecord((current) =>
+            current?.shareId == record.shareId
+              ? { ...current, lastHostSavedVersion: materializedHash }
+              : current,
+          );
+        });
+        shareHostUpdateCleanupRef.current = () => {
+          stopLocalUpdates();
+          stopDocumentEvents();
+        };
         connection.connect();
       } catch (error) {
         if (options.shouldContinue && !options.shouldContinue()) return;
         setShareError(`${actionLabel}, but host sync did not start: ${errorToMessage(error)}`);
       }
     },
-    [
-      dirtyRef,
-      editorValueRef,
-      editVersionRef,
-      scheduleAutoSaveRef,
-      setActiveShareRecord,
-      setSaveStateSynced,
-      setShareError,
-      stopOwnerShareHost,
-    ],
+    [setActiveShareRecord, setShareError, stopOwnerShareHost],
   );
 
   return {
     flushOwnerShareHost,
-    sendHostDocumentUpdate,
-    sendHostSaveAck,
     startOwnerShareHost,
     stopOwnerShareHost,
   };
-}
-
-function isOwnerShareSource(record: OwnerShareRecord, runtime: WorkspaceRuntime, path: string) {
-  return sameDocumentSourceRef(record.sourceRef, documentSourceRef(runtime.identity, path));
 }

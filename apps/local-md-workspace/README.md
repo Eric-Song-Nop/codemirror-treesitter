@@ -6,8 +6,8 @@ WASM wrapper, and optional shared-file collaboration through `apps/grove-relay`.
 Its application layer uses a Zustand vanilla store for the React read model and
 Effect services for typed asynchronous orchestration and resource lifecycles.
 TanStack Query is limited to repeatable, cacheable reads such as trees,
-directories, and image bytes; live collaboration documents remain scoped
-Effect resources rather than query data.
+directories, and image bytes; live collaboration documents belong to the
+workspace runtime rather than query data or the selected editor view.
 Those dependencies are app-only and do not enter LiveMD or other reusable core
 packages.
 
@@ -20,15 +20,16 @@ packages.
   operations.
 - Route local-directory and cloud workspace content through one OpenDAL browser
   operator and `WorkspaceObjectStore`, with explicit revisions, conditional
-  writes, readback verification, path-scoped persistence ordering, and token
+  writes, readback verification, document-owned persistence ordering, and token
   renewal that never blindly replays an indeterminate mutation. OneDrive and
   Google Drive runtime construction exists in source, but those providers are
   not exposed in the current Grove UI.
-- Build a Markdown file tree, create/rename/delete files and folders, autosave
-  edits, and surface permission/storage errors. Only the active workspace
-  document is monitored: BrowserLocal uses a non-recursive
-  `FileSystemObserver` on its immediate parent when available, with an adaptive
-  authoritative polling fallback shared with cloud runtimes.
+- Build a Markdown file tree, create/rename/delete files and folders, materialize
+  collaborative edits, and surface permission/storage errors. Every opened
+  workspace document remains monitored for its workspace lifetime:
+  BrowserLocal uses a non-recursive `FileSystemObserver` on each immediate
+  parent when available, with an adaptive authoritative polling fallback shared
+  with cloud runtimes.
 - Open a command palette with `Cmd/Ctrl+Shift+P` for file navigation and core
   workspace actions.
 - Run a browser-resident Markdown Agent that can list, read, and search the
@@ -41,8 +42,9 @@ packages.
   snapshotting the current LiveMD theme variables for scoped document styling.
 - Open a browser print view for Markdown documents so users can print or save
   the rendered document as PDF through the browser.
-- Maintain optional Loro-backed document state for a selected file so local
-  edits can become a shared Grove file.
+- Maintain one Loro-backed document for every opened workspace path so local,
+  remote, cross-tab, and external-file changes share one content authority even
+  while the file is not selected.
 - Create, rotate, revoke, and host shared-file links through the Grove relay.
 - Open guest shared-file routes and sync through the relay without requiring
   access to the owner's local or cloud workspace.
@@ -62,8 +64,8 @@ packages.
 - `src/app/workspace-store.ts`: app-owned Zustand vanilla state and atomic
   active/opening document-view publication operations.
 - `src/app/document-session-coordinator.ts`: Effect-owned latest-intent
-  workspace document preparation, serialized replacement, immutable active
-  session identity, and scoped resource finalization.
+  workspace document preparation, serialized view replacement, and selected
+  subscription cleanup. It does not own document persistence or lifetime.
 - `src/app/workspace-application.ts` and
   `src/app/WorkspaceApplicationProvider.tsx`: the StrictMode-external app
   lifetime and stable React composition boundary.
@@ -88,19 +90,22 @@ packages.
 - `src/lib/workspace/*`: workspace tree/path rules, document and source state,
   browser file handles, single-file drafts, persistence metadata, status, and
   user-facing workspace errors.
+- `src/lib/workspace/documents/*`: normalized-path collaborative document
+  registry, Loro authority, browser recovery, external reconciliation, and the
+  coalescing filesystem materializer.
 - `src/lib/workspace/providers/*`: provider-specific OAuth, redirect drafts,
   configuration, and shared OpenDAL workspace identity. Dropbox, Google Drive,
   and OneDrive each own a dedicated provider directory.
 - `src/lib/workspace/storage/*`: provider-neutral object storage contract,
   exact OpenDAL operator lifetime, explicit revision/CAS policy, indeterminate
   outcomes, and cross-tab path locking.
-- `src/lib/workspace/runtime/*`: focused tree, entry, asset, and document ports;
-  BrowserLocal/cloud runtime assembly; active-document observation; and the
-  document persistence coordinator. Workspace runtime replacement is serialized
-  by an Effect service rather than a component-owned Promise queue.
+- `src/lib/workspace/runtime/*`: focused tree, entry, asset, and low-level source
+  ports; BrowserLocal/cloud runtime assembly; per-document observation; and
+  workspace-owned document-registry disposal. Workspace runtime replacement is
+  serialized by an Effect service rather than a component-owned Promise queue.
 - `src/lib/workspace/workspace-data-cache.ts` and `query-keys.ts`: the narrow
   TanStack Query boundary for discardable workspace read data. They do not
-  cache active collaboration documents or runtime handles.
+  cache collaboration documents or runtime handles.
 - `src/hooks/workspace/use*WorkspaceRuntime.ts`: OAuth-aware provider runtime
   construction. Dropbox is used by the current Grove UI; Google Drive and
   OneDrive remain dormant.

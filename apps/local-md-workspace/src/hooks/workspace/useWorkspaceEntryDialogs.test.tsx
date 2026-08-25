@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vite-plus/test";
-import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import type { TFunction } from "@/lib/i18n";
 import { createMemoryWorkspaceRuntime } from "../../test/memory-workspace-runtime";
 import { useWorkspaceEntryDialogs } from "./useWorkspaceEntryDialogs";
@@ -133,8 +133,10 @@ function createOptions(events: string[]): HookOptions {
     },
     collabDocumentRef: {
       current: {
-        source: { baseline: { contentHash: "hash-1", revision }, kind: "present" },
-      } as CollabDocumentState,
+        collabState: {
+          source: { baseline: { contentHash: "hash-1", revision }, kind: "present" },
+        },
+      } as WorkspaceCollaborativeDocument,
     },
     documentTargetGenerationRef: { current: 0 },
     finishDocumentTransition: () => {},

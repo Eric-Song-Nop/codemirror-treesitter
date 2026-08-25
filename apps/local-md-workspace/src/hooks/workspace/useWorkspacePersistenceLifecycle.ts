@@ -1,28 +1,29 @@
 import { useEffect, useRef } from "react";
 import { errorToMessage } from "@/lib/workspace/errors";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import type { SourceAutoSaveTask } from "@/lib/workspace/types";
 
 type MutableRef<T> = {
   current: T;
 };
 
-type UseWorkspacePersistenceLifecycleOptions<Document> = {
+type DocumentPersistenceTarget = Pick<WorkspaceCollaborativeDocument, "flush">;
+
+type UseWorkspacePersistenceLifecycleOptions = {
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   closeActiveDocument: () => Promise<unknown>;
-  collabDocumentRef: MutableRef<Document | null>;
+  collabDocumentRef: MutableRef<DocumentPersistenceTarget | null>;
   dirtyRef: MutableRef<boolean>;
-  flushCollabDocument: (document: Document) => Promise<void>;
   setErrorMessage: (message: string) => void;
 };
 
-export function useWorkspacePersistenceLifecycle<Document>({
+export function useWorkspacePersistenceLifecycle({
   autoSaveTaskRef,
   closeActiveDocument,
   collabDocumentRef,
   dirtyRef,
-  flushCollabDocument,
   setErrorMessage,
-}: UseWorkspacePersistenceLifecycleOptions<Document>) {
+}: UseWorkspacePersistenceLifecycleOptions) {
   let lifecycleGenerationRef = useRef(0);
 
   useEffect(() => {
@@ -35,7 +36,7 @@ export function useWorkspacePersistenceLifecycle<Document>({
 
       let document = collabDocumentRef.current;
       let sourceTask = autoSaveTaskRef.current?.task ?? null;
-      let operation = flushPersistence(document, sourceTask, flushCollabDocument);
+      let operation = flushPersistence(document, sourceTask);
       let trackedOperation = operation.finally(() => {
         if (flushInFlight === trackedOperation) flushInFlight = null;
       });
@@ -77,26 +78,18 @@ export function useWorkspacePersistenceLifecycle<Document>({
           await closeActiveDocument().catch(() => {});
         });
     };
-  }, [
-    autoSaveTaskRef,
-    closeActiveDocument,
-    collabDocumentRef,
-    dirtyRef,
-    flushCollabDocument,
-    setErrorMessage,
-  ]);
+  }, [autoSaveTaskRef, closeActiveDocument, collabDocumentRef, dirtyRef, setErrorMessage]);
 }
 
-async function flushPersistence<Document>(
-  document: Document | null,
+async function flushPersistence(
+  document: DocumentPersistenceTarget | null,
   sourceTask: SourceAutoSaveTask["task"] | null,
-  flushCollabDocument: (document: Document) => Promise<void>,
 ) {
   // Start both writes before yielding. A pagehide handler gets no guarantee that
   // the browser will keep the page alive long enough for one write to await the
   // other, and the two persistence layers protect different recovery paths.
   let operations: Promise<void>[] = [];
-  if (document) operations.push(flushCollabDocument(document));
+  if (document) operations.push(document.flush());
   if (sourceTask) operations.push(sourceTask.flush());
 
   let results = await Promise.allSettled(operations);

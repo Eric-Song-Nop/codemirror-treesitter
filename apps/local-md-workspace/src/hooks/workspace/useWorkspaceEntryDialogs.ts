@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import type { WorkspaceDocumentIntentLease } from "@/app/document-session-coordinator";
 import type { FileTreeCreateKind, FileTreeDeleteTarget } from "@/components/FileTree";
 import type { TFunction } from "@/lib/i18n";
-import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import { errorToMessage } from "@/lib/workspace/errors";
 import {
   defaultNewFilePath,
@@ -25,7 +25,7 @@ type UseWorkspaceEntryDialogsOptions = {
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   beginDocumentTransition: (path?: string) => WorkspaceDocumentIntentLease;
   clearActiveDocument: () => Promise<void>;
-  collabDocumentRef: MutableRef<CollabDocumentState | null>;
+  collabDocumentRef: MutableRef<WorkspaceCollaborativeDocument | null>;
   documentTargetGenerationRef: MutableRef<number>;
   finishDocumentTransition: (lease: WorkspaceDocumentIntentLease) => void;
   loadTree: (
@@ -305,8 +305,9 @@ function entryContainsPath(target: FileTreeDeleteTarget, path: string) {
     : path == target.path;
 }
 
-function activeDocumentRevision(document: CollabDocumentState | null) {
-  return document?.source.kind == "present" ? document.source.baseline.revision : undefined;
+function activeDocumentRevision(document: WorkspaceCollaborativeDocument | null) {
+  let source = document?.collabState.source;
+  return source?.kind == "present" ? source.baseline.revision : undefined;
 }
 
 function assertEntryMutationApplied(result: WorkspacePathMutationResult, path: string) {

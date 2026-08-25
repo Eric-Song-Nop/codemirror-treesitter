@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import type { WorkspaceStorageKind } from "@/lib/workspace/storage/types";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 import { createDocumentSession, documentSessionMatchesSource } from "./document-session.ts";
@@ -37,5 +37,5 @@ function fakeRuntime(kind: WorkspaceStorageKind, id: string): WorkspaceRuntime {
 }
 
 function fakeCollabDocument(path: string) {
-  return { path } as CollabDocumentState;
+  return { path } as WorkspaceCollaborativeDocument;
 }

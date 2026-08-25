@@ -2,13 +2,10 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { LoroDoc } from "loro-crdt";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createWorkspaceApplication } from "@/app/workspace-application";
-import {
-  createWorkspaceAppSetters,
-  type WorkspaceAppState,
-  type WorkspaceAppStore,
-} from "@/app/workspace-store";
+import { createWorkspaceAppSetters } from "@/app/workspace-store";
 import { resetBrowserCollabMemoryStoreForTests } from "@/lib/collaboration/collab-browser-store";
 import { resetOwnerShareRecordStoreForTests } from "@/lib/collaboration/share-storage";
 import type { AccessFileHandle } from "@/lib/workspace/file-system";
@@ -60,7 +57,7 @@ afterEach(async () => {
 });
 
 describe("useWorkspaceDocumentActions", () => {
-  it("reopens A after B while ignoring a stale A load", async () => {
+  it("reuses the same collaborative document across A, B, then A selection", async () => {
     let fileA = markdownFile("a.md");
     let fileB = markdownFile("b.md");
     runtime = createMemoryWorkspaceRuntime(
@@ -77,34 +74,30 @@ describe("useWorkspaceDocumentActions", () => {
       expect(await fixture?.api?.saveCurrentFile()).toBe(true);
     });
 
-    let slowAStarted = createTestGate();
-    let releaseSlowA = createTestGate();
-    let originalObserve = runtime.documents.observe.bind(runtime.documents);
-    vi.spyOn(runtime.documents, "observe").mockImplementationOnce(async (path) => {
-      slowAStarted.open();
-      await releaseSlowA.promise;
-      return originalObserve(path);
-    });
+    let firstA = fixture.application.documents.current()!.collabDocument;
+    let freeA = vi.spyOn(firstA.loroDoc, "free");
+    let originalValue = firstA.read();
+    firstA.edit([
+      {
+        expectedText: "",
+        from: originalValue.length,
+        insert: "Edited before switching.\n",
+        to: originalValue.length,
+      },
+    ]);
 
-    let staleA = fixture.api!.loadFile(runtime, fileA, { saveCurrent: false });
-    await slowAStarted.promise;
     await act(async () => {
       expect(await fixture!.api!.loadFile(runtime!, fileB, { saveCurrent: false })).toBe(true);
       expect(await fixture!.api!.loadFile(runtime!, fileA, { saveCurrent: false })).toBe(true);
     });
-    let replacementA = fixture.application.documents.current();
 
-    releaseSlowA.open();
-    await act(async () => {
-      expect(await staleA).toBe(false);
-      expect(await fixture!.api!.saveCurrentFile()).toBe(true);
-    });
-
-    expect(fixture.application.documents.current()).toBe(replacementA);
-    expect(replacementA?.file.path).toBe(fileA.path);
+    let reopenedA = fixture.application.documents.current()!;
+    expect(reopenedA.collabDocument).toBe(firstA);
+    expect(reopenedA.collabDocument.read()).toBe("# A\\nEdited before switching.\n");
+    expect(freeA).not.toHaveBeenCalled();
   });
 
-  it("finishes a save against immutable A while B retires it", async () => {
+  it("selects B without waiting for A's in-flight materialization", async () => {
     let fileA = markdownFile("a.md");
     let fileB = markdownFile("b.md");
     runtime = createMemoryWorkspaceRuntime(
@@ -120,64 +113,89 @@ describe("useWorkspaceDocumentActions", () => {
       await fixture?.api?.loadFile(runtime!, fileA, { saveCurrent: false });
     });
 
-    let sessionA = fixture.application.documents.current()!;
-    let releaseRetiredA = createTestGate();
-    let retiredAStarted = createTestGate();
-    let disposeA = sessionA.collabDocument.dispose.bind(sessionA.collabDocument);
-    sessionA.collabDocument.dispose = vi.fn(async () => {
-      retiredAStarted.open();
-      await releaseRetiredA.promise;
-      await disposeA();
-    });
-    let text = sessionA.collabDocument.doc.getText("markdown");
-    text.insert(text.toString().length, "Saved while switching.\\n");
-    sessionA.collabDocument.doc.commit();
-    let editedA = text.toString();
-    text.free();
-    act(() => fixture!.api!.handleEditorInput(editedA));
-    fixture.options.autoSaveTaskRef.current?.task.cancel();
+    let documentA = fixture.application.documents.current()!.collabDocument;
+    let valueA = documentA.read();
+    documentA.edit([
+      {
+        expectedText: "",
+        from: valueA.length,
+        insert: "Saved while switching.\\n",
+        to: valueA.length,
+      },
+    ]);
+    let editedA = documentA.read();
 
     let saveStarted = createTestGate();
     let releaseSave = createTestGate();
-    let originalObserve = runtime.documents.observe.bind(runtime.documents);
-    vi.spyOn(runtime.documents, "observe").mockImplementationOnce(async (path) => {
+    let originalObserve = runtime.documentSource.observe.bind(runtime.documentSource);
+    vi.spyOn(runtime.documentSource, "observe").mockImplementationOnce(async (path) => {
       saveStarted.open();
       await releaseSave.promise;
       return originalObserve(path);
     });
 
-    let saveRequest = fixture.api!.saveCurrentFile();
+    let saveRequest = documentA.flush();
     await saveStarted.promise;
-    let activeRetired = waitForStoreState(
-      fixture.store,
-      (state) => state.collabDocument == null && state.openingDocument?.path == fileB.path,
-    );
-    let loadB = fixture.api!.loadFile(runtime, fileB, { saveCurrent: false });
-    await activeRetired;
+    await act(async () => {
+      expect(await fixture!.api!.loadFile(runtime!, fileB, { saveCurrent: false })).toBe(true);
+    });
+    expect(fixture.application.documents.current()?.file.path).toBe(fileB.path);
 
     releaseSave.open();
     await act(async () => {
-      expect(await saveRequest).toBe(true);
+      await saveRequest;
     });
-    await retiredAStarted.promise;
 
     expect(runtime.files.get(fileA.path)).toBe(editedA);
     expect(runtime.files.get(fileB.path)).toBe("# B\\n");
-    expect(fixture.options.editorValueRef.current).toBe("");
-    expect(fixture.options.saveStateRef.current).toBe("idle");
-    expect(fixture.store.getState()).toMatchObject({
-      openingDocument: { path: fileB.path },
-      saveState: "idle",
-      selectedFile: null,
+    expect(fixture.options.editorValueRef.current).toBe("# B\\n");
+  });
+
+  it("keeps remote and external changes active for an unselected document", async () => {
+    let fileA = markdownFile("a.md");
+    let fileB = markdownFile("b.md");
+    runtime = createMemoryWorkspaceRuntime(
+      [
+        [fileA.path, "# A\n"],
+        [fileB.path, "# B\n"],
+      ],
+      { id: "memory:document-actions-inactive-updates" },
+    );
+    fixture = createDocumentActionsFixture();
+    await renderFixture(fixture);
+    await act(async () => {
+      await fixture!.api!.loadFile(runtime!, fileA, { saveCurrent: false });
+    });
+    let documentA = fixture.application.documents.current()!.collabDocument;
+    await act(async () => {
+      await fixture!.api!.loadFile(runtime!, fileB, { saveCurrent: false });
     });
 
-    releaseRetiredA.open();
-    await act(async () => {
-      expect(await loadB).toBe(true);
-    });
+    let remote = new LoroDoc();
+    let from = documentA.loroDoc.oplogVersion();
+    remote.import(documentA.loroDoc.export({ mode: "snapshot" }));
+    let remoteText = remote.getText("markdown");
+    remoteText.insert(remoteText.toString().length, "Remote.\n");
+    remote.commit();
+    documentA.applyRemoteUpdate(remote.export({ from, mode: "update" }));
+    remoteText.free();
+    from.free();
+    remote.free();
+    await documentA.flush();
 
     expect(fixture.application.documents.current()?.file.path).toBe(fileB.path);
-    expect(fixture.options.editorValueRef.current).toBe("# B\\n");
+    expect(runtime.files.get(fileA.path)).toBe("# A\nRemote.\n");
+
+    runtime.files.set(fileA.path, "# External\n");
+    await documentA.importExternalChange();
+
+    expect(fixture.application.documents.current()?.file.path).toBe(fileB.path);
+    expect(documentA.read()).toBe("# External\n");
+    await act(async () => {
+      await fixture!.api!.loadFile(runtime!, fileA, { saveCurrent: false });
+    });
+    expect(fixture.application.documents.current()!.collabDocument).toBe(documentA);
+    expect(fixture.options.editorValueRef.current).toBe("# External\n");
   });
 
   it("preserves a dirty local file and its handle when opening a workspace file aborts", async () => {
@@ -259,8 +277,6 @@ function createDocumentActionsFixture() {
     scheduleAutoSaveRef: { current: () => {} },
     selectedFileSourceRef: { current: null },
     selectedFileRef: { current: null },
-    sendHostDocumentUpdate: vi.fn(),
-    sendHostSaveAck: vi.fn(),
     setActiveShareRecord: vi.fn(),
     setCreatedShare: vi.fn(),
     setEditorDocument: setters.setEditorDocument,
@@ -272,7 +288,6 @@ function createDocumentActionsFixture() {
     },
     singleFileSourceRef: { current: null },
     startOwnerShareHost: vi.fn(async () => {}),
-    stopOwnerShareHost: vi.fn(),
     workspaceAppStore: store,
   };
   return {
@@ -295,21 +310,6 @@ function createTestGate() {
   let gate = { open, promise };
   testGates.add(gate);
   return gate;
-}
-
-function waitForStoreState(
-  store: WorkspaceAppStore,
-  predicate: (state: WorkspaceAppState) => boolean,
-) {
-  let current = store.getState();
-  if (predicate(current)) return Promise.resolve(current);
-  return new Promise<WorkspaceAppState>((resolve) => {
-    let unsubscribe = store.subscribe((state) => {
-      if (!predicate(state)) return;
-      unsubscribe();
-      resolve(state);
-    });
-  });
 }
 
 function createAccessFileHandle(

@@ -10,13 +10,13 @@ export async function ensureGoogleDriveAppWorkspaceRoot(runtime: {
 }
 
 export async function ensureGoogleDriveAppWorkspaceManifest(runtime: {
-  documents: Pick<WorkspaceDocumentPort, "commit" | "observe">;
+  documentSource: Pick<WorkspaceDocumentPort, "commit" | "observe">;
 }) {
-  let observation = await runtime.documents.observe(GOOGLE_DRIVE_APP_WORKSPACE_MANIFEST_PATH);
+  let observation = await runtime.documentSource.observe(GOOGLE_DRIVE_APP_WORKSPACE_MANIFEST_PATH);
   if (observation.state == "present") return;
   if (observation.state == "unavailable") throw observation.error;
 
-  let result = await runtime.documents.commit({
+  let result = await runtime.documentSource.commit({
     condition: { kind: "if-absent" },
     path: GOOGLE_DRIVE_APP_WORKSPACE_MANIFEST_PATH,
     value: googleDriveAppWorkspaceManifest(),

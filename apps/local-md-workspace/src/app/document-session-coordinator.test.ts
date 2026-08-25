@@ -1,6 +1,6 @@
 import { ManagedRuntime } from "effect";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import type { ActiveWorkspaceDocumentSession } from "@/lib/workspace/document-session";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import {
@@ -148,11 +148,11 @@ function createFixture() {
     } = {},
   ): CandidateProbe {
     let file = { kind: "file" as const, name: path, path };
+    let value = "# " + id + "\\n";
     let document = {
       docId: "document:" + id,
       path,
-      value: "# " + id + "\\n",
-    } as CollabDocumentState;
+    } as WorkspaceCollaborativeDocument;
     let session = { epoch: id.codePointAt(0) ?? 0, file } as ActiveWorkspaceDocumentSession;
     let probe: CandidateProbe;
     for (let gate of [options.prepareGate, options.disposeGate, options.activeReleaseGate]) {
@@ -177,7 +177,7 @@ function createFixture() {
         await options.disposeGate?.promise;
         if (options.disposeError) throw options.disposeError;
       },
-      view: { document, file, saveState: "saved", value: document.value },
+      view: { document, file, saveState: "saved", value },
     };
 
     return (probe = {

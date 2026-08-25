@@ -26,7 +26,7 @@ describe("Google Drive app workspace bootstrap", () => {
     let writes = new Map<string, string>();
 
     await ensureGoogleDriveAppWorkspaceManifest({
-      documents: {
+      documentSource: {
         commit: async ({ path, value }) => {
           writes.set(path, value);
           return {
@@ -50,7 +50,7 @@ describe("Google Drive app workspace bootstrap", () => {
     let writeCount = 0;
 
     await ensureGoogleDriveAppWorkspaceManifest({
-      documents: {
+      documentSource: {
         commit: async () => {
           writeCount += 1;
           return {

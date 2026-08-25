@@ -6,8 +6,8 @@ import { createDebouncedTask, type DebouncedTask } from "@/lib/scheduling/deboun
 import type { SourceObservation } from "@/lib/workspace/storage/types";
 import type {
   DocumentSourceState,
+  WorkspaceDocumentPort,
   WorkspaceIdentity,
-  WorkspaceRuntime,
   WorkspaceTextSnapshot,
 } from "@/lib/workspace/runtime/types";
 import {
@@ -125,7 +125,9 @@ type StoredCollabDocumentCandidate = BrowserCollabDocumentState & {
   snapshot: Uint8Array;
 };
 
-export type CollabDocumentSource = Pick<WorkspaceRuntime, "documents" | "identity">;
+export type CollabDocumentSource =
+  | { documentSource: WorkspaceDocumentPort; identity: WorkspaceIdentity }
+  | { documents: WorkspaceDocumentPort; identity: WorkspaceIdentity };
 
 export async function openMarkdownCollabDocument(
   backend: CollabDocumentSource,
@@ -405,7 +407,7 @@ export async function materializeCollabDocument(
   if (state.source.kind != "present") {
     throw new Error(`The source for ${state.path} must be reconciled before materialization.`);
   }
-  let result = await backend.documents.commit({
+  let result = await collabSourceDocuments(backend).commit({
     condition: { kind: "if-unchanged", revision: state.source.baseline.revision },
     path: state.path,
     value: materialization.value,
@@ -413,7 +415,7 @@ export async function materializeCollabDocument(
   if (result.status != "committed") {
     throw new Error(`Workspace materialization for ${state.path} ended with ${result.status}.`);
   }
-  let committed = await backend.documents.observe(state.path);
+  let committed = await collabSourceDocuments(backend).observe(state.path);
   if (committed.state != "present" || committed.value.value != materialization.value) {
     throw new Error(`Workspace materialization for ${state.path} could not be verified.`);
   }
@@ -709,7 +711,11 @@ function observeCollabSource(
   source: CollabDocumentSource,
   path: string,
 ): Promise<SourceObservation<WorkspaceTextSnapshot>> {
-  return source.documents.observe(path);
+  return collabSourceDocuments(source).observe(path);
+}
+
+function collabSourceDocuments(source: CollabDocumentSource) {
+  return "documentSource" in source ? source.documentSource : source.documents;
 }
 
 function sourceMetadataFields(snapshot: WorkspaceTextSnapshot) {

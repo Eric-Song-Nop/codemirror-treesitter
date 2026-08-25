@@ -5,18 +5,21 @@ import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
 import { createWorkspaceAgentRunHost, type WorkspaceAgentHostRefs } from "./run-host.ts";
 import type { ActiveDocumentSource, SingleFileSource } from "@/lib/workspace/types";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
-vi.mock("@/lib/collaboration/markdown-document", () => ({
-  getCollabDocumentValue: (document: CollabDocumentState) => document.value,
-}));
+type TestDocument = WorkspaceCollaborativeDocument & {
+  collabState: CollabDocumentState;
+  docId: string;
+  path: string;
+};
 
 type TestRig = {
-  document: CollabDocumentState;
+  document: TestDocument;
   editor: LiveMdEditorElement;
   host: WorkspaceAgentHost;
   refs: WorkspaceAgentHostRefs;
@@ -135,7 +138,10 @@ describe("workspace Agent run host", () => {
       (rig: TestRig) => {
         rig.refs.collabDocumentRef.current = {
           ...rig.document,
-          metadata: { ...rig.document.metadata },
+          collabState: {
+            ...rig.document.collabState,
+            metadata: { ...rig.document.collabState.metadata },
+          },
         };
       },
     ],
@@ -200,7 +206,7 @@ function createRefs() {
   let parent = documentBody().appendChild(globalThis.document.createElement("div"));
   let view = new EditorView({
     parent,
-    state: EditorState.create({ doc: document.value }),
+    state: EditorState.create({ doc: document.read() }),
   });
   mountedViews.push(view);
   let editor = { view } as LiveMdEditorElement;
@@ -222,15 +228,15 @@ function createRefs() {
     refs,
     runtime,
     setValue(value: string) {
-      document.value = value;
+      document.collabState.value = value;
       view.dispatch({ changes: { from: 0, insert: value, to: view.state.doc.length } });
     },
     view,
   };
 }
 
-function collabDocument(): CollabDocumentState {
-  return {
+function collabDocument(): TestDocument {
+  let collabState = {
     docId: "doc:notes/draft.md",
     metadata: {
       docId: "doc:notes/draft.md",
@@ -240,6 +246,12 @@ function collabDocument(): CollabDocumentState {
     path: "notes/draft.md",
     value: "# Draft\n",
   } as CollabDocumentState;
+  return {
+    collabState,
+    docId: collabState.docId,
+    path: collabState.path,
+    read: () => collabState.value,
+  } as TestDocument;
 }
 
 function markdownFile(path = "notes/draft.md"): MarkdownFileNode {
@@ -248,7 +260,7 @@ function markdownFile(path = "notes/draft.md"): MarkdownFileNode {
 
 function fakeRuntime(id = "local:test"): WorkspaceRuntime {
   return {
-    documents: {
+    documentSource: {
       commit: vi.fn(),
       observe: vi.fn(async () => ({ state: "missing" as const })),
     },
