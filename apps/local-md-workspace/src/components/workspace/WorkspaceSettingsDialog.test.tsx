@@ -22,8 +22,8 @@ type Credentials = WorkspaceAgentCredentialSnapshot & {
   unlock: ReturnType<typeof vi.fn<(passphrase: string) => Promise<boolean>>>;
 };
 
-let container: HTMLDivElement;
-let root: Root;
+let container: HTMLDivElement | undefined;
+let root: Root | undefined;
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -32,10 +32,45 @@ beforeAll(() => {
 afterEach(() => {
   act(() => root?.unmount());
   container?.remove();
+  root = undefined;
+  container = undefined;
   credentialHook.useCredentials.mockReset();
 });
 
 describe("WorkspaceSettingsDialog", () => {
+  it("keeps the body scrollable and exposes accessible secondary controls", async () => {
+    await i18next.changeLanguage("en");
+    await renderSettings();
+
+    let dialog = document.querySelector<HTMLElement>("#workspace-settings-dialog");
+    let scrollRegion = dialog?.querySelector<HTMLElement>(
+      '[data-slot="workspace-settings-scroll-region"]',
+    );
+    expect(dialog?.classList).toContain("h-[min(50rem,calc(100svh-2rem))]");
+    expect(dialog?.classList).toContain("max-h-[calc(100svh-2rem)]");
+    expect(dialog?.classList).toContain("grid-rows-[auto_minmax(0,1fr)_auto]");
+    expect(dialog?.classList).toContain("overflow-clip");
+    expect(scrollRegion?.classList).toContain("min-h-0");
+    expect(scrollRegion?.classList).toContain("overflow-y-auto");
+    expect(scrollRegion?.classList).toContain("overscroll-contain");
+
+    let secondaryText = dialog?.querySelectorAll<HTMLElement>(".text-xs") ?? [];
+    expect(secondaryText.length).toBeGreaterThan(0);
+    for (let element of secondaryText) {
+      expect(element.classList).toContain("text-foreground/80");
+      expect(element.classList).not.toContain("text-muted-foreground");
+    }
+
+    for (let choice of dialog?.querySelectorAll<HTMLInputElement>('input[type="radio"]') ?? []) {
+      let label = choice.closest("label");
+      expect(choice.classList).toContain("inset-0");
+      expect(choice.classList).toContain("size-full");
+      expect(choice.classList).toContain("opacity-0");
+      expect(label?.classList).toContain("has-[:focus-visible]:ring-3");
+      expect(label?.classList).toContain("has-[:focus-visible]:ring-ring/50");
+    }
+  });
+
   it("keeps save, unlock, and delete secrets outside rendered state", async () => {
     await i18next.changeLanguage("en");
     let empty = await renderSettings();
@@ -84,9 +119,9 @@ async function renderSettings(overrides: Partial<Credentials> = {}) {
   };
   credentialHook.useCredentials.mockReturnValue(credentials);
   container ??= document.body.appendChild(document.createElement("div"));
-  root ??= createRoot(container);
+  let settingsRoot = (root ??= createRoot(container));
   await act(async () => {
-    root.render(
+    settingsRoot.render(
       <I18nProvider>
         <ThemeProvider initialTheme="gruvbox-dark">
           <WorkspaceSettingsDialog open onOpenChange={vi.fn()} />

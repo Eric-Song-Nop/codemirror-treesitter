@@ -48,14 +48,17 @@ export function WorkspaceSettingsDialog({ open, onOpenChange }: WorkspaceSetting
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         id="workspace-settings-dialog"
-        className="overflow-hidden p-0 motion-reduce:data-open:animate-none motion-reduce:data-closed:animate-none sm:max-w-lg"
+        className="h-[min(50rem,calc(100svh-2rem))] max-h-[calc(100svh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-clip p-0 motion-reduce:data-open:animate-none motion-reduce:data-closed:animate-none sm:max-w-lg"
       >
         <DialogHeader className="border-b bg-muted/30 px-5 py-4 pr-12">
           <DialogTitle>{t("settings.title")}</DialogTitle>
           <DialogDescription>{t("settings.description")}</DialogDescription>
         </DialogHeader>
 
-        <div className="grid max-h-[min(680px,calc(100svh-10rem))] gap-5 overflow-y-auto px-5 py-4">
+        <div
+          data-slot="workspace-settings-scroll-region"
+          className="grid min-h-0 gap-5 overflow-y-auto overscroll-contain px-5 py-4"
+        >
           <CredentialSettings />
           <SettingsGroup
             description={t("settings.appearance.description")}
@@ -153,7 +156,7 @@ function CredentialSettings() {
           <span
             aria-live="polite"
             className={cn(
-              "rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground",
+              "rounded-full bg-muted px-2 py-1 text-xs text-foreground/80",
               status == "unlocked" && "bg-primary/10 text-primary",
               status == "error" && "bg-destructive/10 text-destructive",
             )}
@@ -161,9 +164,7 @@ function CredentialSettings() {
             {t(`settings.credentials.status.${status}` as TranslationKey)}
           </span>
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t("settings.credentials.description")}
-        </p>
+        <p className="mt-1 text-xs text-foreground/80">{t("settings.credentials.description")}</p>
       </div>
 
       <div aria-busy={pending} className="grid gap-3 rounded-lg border bg-muted/20 p-3">
@@ -279,7 +280,7 @@ function CredentialDescription({ mode }: { mode: "empty" | "locked" | "replace" 
       <h4 className="text-sm font-medium">
         {t(`settings.credentials.${mode}.title` as TranslationKey)}
       </h4>
-      <p className="mt-1 text-xs text-muted-foreground">
+      <p className="mt-1 text-xs text-foreground/80">
         {t(`settings.credentials.${mode}.description` as TranslationKey)}
       </p>
     </div>
@@ -408,7 +409,7 @@ function SecretInput({
         spellCheck={false}
         type="password"
       />
-      <p id={descriptionId} className="text-xs text-muted-foreground">
+      <p id={descriptionId} className="text-xs text-foreground/80">
         {description}
       </p>
     </div>
@@ -436,7 +437,7 @@ function SettingsGroup({
   return (
     <fieldset className="grid gap-2 border-t pt-5">
       <legend className="text-sm font-medium">{title}</legend>
-      <p className="text-xs text-muted-foreground">{description}</p>
+      <p className="text-xs text-foreground/80">{description}</p>
       {children}
     </fieldset>
   );
@@ -466,14 +467,14 @@ function SettingsChoice({
   return (
     <Label
       className={cn(
-        "flex cursor-pointer items-center gap-3 rounded-lg border p-3",
+        "relative flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-[border-color,background-color,box-shadow] has-[:focus-visible]:border-ring has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/50",
         active && "border-primary/40 bg-primary/5",
       )}
       htmlFor={id}
     >
       <input
         checked={active}
-        className="sr-only"
+        className="absolute inset-0 size-full cursor-pointer opacity-0"
         id={id}
         name={name}
         type="radio"
@@ -485,7 +486,7 @@ function SettingsChoice({
         <span className="block text-sm font-medium" lang={lang}>
           {label}
         </span>
-        <span className="block text-xs text-muted-foreground">{description}</span>
+        <span className="block text-xs text-foreground/80">{description}</span>
       </span>
       {active ? <CheckIcon aria-hidden="true" className="size-4 text-primary" /> : null}
     </Label>
