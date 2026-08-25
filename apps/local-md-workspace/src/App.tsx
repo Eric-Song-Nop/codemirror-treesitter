@@ -1,5 +1,6 @@
 import { Component, lazy, Suspense, type ElementType, type ReactNode } from "react";
 import { LocalWorkspaceApp } from "@/components/workspace/LocalWorkspaceApp";
+import { WorkspaceAgentCredentialsProvider } from "@/features/workspace-agent/WorkspaceAgentCredentialsProvider";
 import { isSharedFilePath } from "@/lib/collaboration/shared-file-route";
 import { I18nProvider, useI18n } from "@/lib/i18n";
 
@@ -21,7 +22,11 @@ function AppRoutes() {
     return <SharedFileRoute />;
   }
 
-  return <LocalWorkspaceApp />;
+  return (
+    <WorkspaceAgentCredentialsProvider>
+      <LocalWorkspaceApp />
+    </WorkspaceAgentCredentialsProvider>
+  );
 }
 
 export function SharedFileRoute({ editor: Editor = SharedFileEditor }: { editor?: ElementType }) {

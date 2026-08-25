@@ -66,7 +66,8 @@ const sessionTitleLimit = 48;
 export class WorkspaceAgentSessionManager {
   readonly store: StoreApi<WorkspaceAgentSessionsSnapshot>;
 
-  private apiKey = "";
+  #active = false;
+  #apiKey = "";
   private model: WorkspaceAgentModel = DEFAULT_WORKSPACE_AGENT_MODEL;
   private runner: WorkspaceAgentRunner;
   private sessions = new Map<string, WorkspaceAgentSessionRuntime>();
@@ -81,7 +82,12 @@ export class WorkspaceAgentSessionManager {
   }
 
   setRunner(runner: WorkspaceAgentRunner) {
+    if (!this.#active) return;
     this.runner = runner;
+  }
+
+  activate() {
+    this.#active = true;
   }
 
   chat(sessionId: string) {
@@ -100,11 +106,10 @@ export class WorkspaceAgentSessionManager {
   }
 
   configure(sessionId: string, configuration: WorkspaceAgentConfiguration) {
+    if (!this.#active) return;
     let session = this.requireSession(sessionId);
     if ("apiKey" in configuration) {
-      let apiKey = configuration.apiKey?.trim() ?? "";
-      if (!apiKey && this.apiKey) this.stopAllSessions(false);
-      this.apiKey = apiKey;
+      this.setApiKey(configuration.apiKey ?? null, false);
     }
     if ("model" in configuration) {
       this.model = configuration.model ?? DEFAULT_WORKSPACE_AGENT_MODEL;
@@ -116,7 +121,13 @@ export class WorkspaceAgentSessionManager {
     this.publish();
   }
 
+  syncApiKey(apiKey: string | null) {
+    if (!this.#active) return;
+    this.setApiKey(apiKey, true);
+  }
+
   newSession() {
+    if (!this.#active) return this.activeSessionId;
     let session = this.createSessionRuntime();
     this.sessions.set(session.chat.id, session);
     this.activeSessionId = session.chat.id;
@@ -125,6 +136,7 @@ export class WorkspaceAgentSessionManager {
   }
 
   selectSession(sessionId: string) {
+    if (!this.#active) return;
     if (!this.sessions.has(sessionId) || sessionId == this.activeSessionId) return;
     this.activeSessionId = sessionId;
     this.publish();
@@ -132,6 +144,10 @@ export class WorkspaceAgentSessionManager {
 
   async send(sessionId: string, prompt: string, createHost: () => WorkspaceAgentHost | null) {
     let session = this.requireSession(sessionId);
+    if (!this.#active) {
+      this.rejectRun(session, "missing-api-key", missingApiKeyMessage);
+      return false;
+    }
     if (isSessionBusy(session)) return false;
 
     let content = prompt.trim();
@@ -139,7 +155,7 @@ export class WorkspaceAgentSessionManager {
       this.rejectRun(session, "missing-prompt", missingPromptMessage);
       return false;
     }
-    if (!this.apiKey) {
+    if (!this.#apiKey) {
       this.rejectRun(session, "missing-api-key", missingApiKeyMessage);
       return false;
     }
@@ -150,7 +166,7 @@ export class WorkspaceAgentSessionManager {
     }
 
     let runConfiguration: WorkspaceAgentRunConfiguration = {
-      apiKey: this.apiKey,
+      apiKey: this.#apiKey,
       host,
       model: this.model,
       runner: this.runner,
@@ -196,10 +212,18 @@ export class WorkspaceAgentSessionManager {
   }
 
   resetSessions() {
+    if (!this.#active) return;
     this.stopAllSessions(false);
     let session = this.createSessionRuntime();
     this.sessions = new Map([[session.chat.id, session]]);
     this.activeSessionId = session.chat.id;
+    this.publish();
+  }
+
+  deactivate() {
+    this.#active = false;
+    this.#apiKey = "";
+    this.stopAllSessions(false);
     this.publish();
   }
 
@@ -211,6 +235,15 @@ export class WorkspaceAgentSessionManager {
       changed = true;
     }
     if (changed && publish) this.publish();
+  }
+
+  private setApiKey(apiKey: string | null, publish: boolean) {
+    let normalized = apiKey?.trim() ?? "";
+    if (normalized == this.#apiKey) return;
+    let revokeRuns = !normalized && Boolean(this.#apiKey);
+    this.#apiKey = normalized;
+    if (revokeRuns) this.stopAllSessions(false);
+    if (publish) this.publish();
   }
 
   private createSessionRuntime() {
@@ -266,7 +299,11 @@ export class WorkspaceAgentSessionManager {
   }
 
   private stopSession(session: WorkspaceAgentSessionRuntime) {
-    void session.chat.stop();
+    try {
+      void session.chat.stop().catch(() => undefined);
+    } catch {
+      // The local key and run configuration are still revoked below.
+    }
     session.chat.messages = session.chat.messages.filter(
       (message) => message.role != "assistant" || message.parts.length,
     );
@@ -290,7 +327,7 @@ export class WorkspaceAgentSessionManager {
   private snapshot(): WorkspaceAgentSessionsSnapshot {
     return {
       activeSessionId: this.activeSessionId,
-      hasApiKey: Boolean(this.apiKey),
+      hasApiKey: Boolean(this.#apiKey),
       model: this.model,
       sessions: Array.from(this.sessions, ([id, session]) => ({
         id,

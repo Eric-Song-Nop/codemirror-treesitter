@@ -132,17 +132,41 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Browser Agent code and AI SDK dependencies belong in
   `apps/local-md-workspace`. Keep the SDK behind its dynamic runtime adapter;
   do not add model-provider assumptions or credentials to editor packages.
-- Agent credentials must remain in page memory and must not enter storage,
-  URLs, telemetry, or logs. Keep the DeepSeek provider origin fixed to
-  `https://api.deepseek.com`, default to `deepseek-v4-flash`, and expose only
-  `deepseek-v4-pro` as a manual alternative.
+- Agent credentials remain in page memory by default. Persist a DeepSeek API
+  key only after an explicit save in Agent Settings, and only as a versioned
+  AES-GCM ciphertext record in the dedicated `grove-agent-credentials`
+  IndexedDB database. The record may include only the non-secret algorithm,
+  version, random salt, IV, and KDF metadata needed to unlock it.
+- Derive the AES-GCM key locally from a vault passphrase with
+  PBKDF2-HMAC-SHA256, exactly 600,000 iterations, and a random salt. Never
+  persist the passphrase or derived key. A newly opened or reloaded page starts
+  locked and requires the passphrase before the saved credential can be used.
+- The API key, vault passphrase, and derived key must not enter React or Zustand
+  state, be refilled into the DOM, or enter `localStorage`, `sessionStorage`,
+  URLs, logs, telemetry, CacheStorage, or the service worker. If Web Crypto or
+  IndexedDB is unavailable, or any credential operation fails, fail closed and
+  never fall back to plaintext storage. Locking or deleting the credential must
+  clear page-memory secret material and stop all Agent runs. Deletion must also
+  remove the encrypted record; if that removal fails, remain locked and report
+  that encrypted data may still exist.
+- Cross-tab credential changes use BroadcastChannel plus a `storage`-event
+  fallback. The fallback may write only an opaque random revision token under
+  `grove-agent-credentials:revision`; it must never contain credential material
+  or unlock a tab. Any received revision immediately locks that tab and stops
+  all of its Agent runs.
+- Treat the encrypted vault as protection for the saved credential at rest,
+  not as protection from same-origin XSS, browser extensions, a compromised
+  browser profile, or code executing while the page is unlocked. Keep the
+  DeepSeek provider origin fixed to `https://api.deepseek.com`, default to
+  `deepseek-v4-flash`, and expose only `deepseek-v4-pro` as a manual
+  alternative.
 - DeepSeek's
   [disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) is
   enabled by default and has no documented client-side opt-out. Treat request
-  prefixes as remotely cached data even though credentials and conversation
-  state stay out of browser storage. DeepSeek documents per-user cache
-  isolation and cleanup of unused entries, typically within a few hours to
-  days.
+  prefixes as remotely cached data even though conversation state stays out of
+  browser storage and any locally saved credential is encrypted. DeepSeek
+  documents per-user cache isolation and cleanup of unused entries, typically
+  within a few hours to days.
 - Agent reads and writes are current-workspace Markdown only. Resolve every
   content path through `WorkspaceRuntime.documents.document(path)` and apply
   exact edits to that shared Loro document; do not dispatch through a selected

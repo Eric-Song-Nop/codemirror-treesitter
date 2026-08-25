@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LiveMdConfig, LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import { useStore } from "zustand";
 import { useWorkspaceApplication } from "@/app/WorkspaceApplicationProvider";
@@ -9,6 +9,7 @@ import type { DocumentRecoveryAction } from "@/components/workspace/DocumentReco
 import { WorkspaceEditorPane } from "@/components/workspace/WorkspaceEditorPane";
 import { WorkspaceErrorBanner } from "@/components/workspace/WorkspaceErrorBanner";
 import { WorkspaceHeader } from "@/components/workspace/WorkspaceHeader";
+import { WorkspaceSettingsDialog } from "@/components/workspace/WorkspaceSettingsDialog";
 import { WorkspaceSidebar } from "@/components/workspace/WorkspaceSidebar";
 import { useDropboxWorkspaceRuntime } from "@/hooks/workspace/useDropboxWorkspaceRuntime";
 import { useOwnerShareHost } from "@/hooks/workspace/useOwnerShareHost";
@@ -56,7 +57,7 @@ const WorkspaceAgentFeature = lazy(async () => {
 });
 
 export function LocalWorkspaceApp() {
-  let { locale, t, toggleLocale } = useI18n();
+  let { t } = useI18n();
   let {
     error: liveMdPreloadError,
     retry: retryLiveMdPreload,
@@ -130,6 +131,7 @@ export function LocalWorkspaceApp() {
   let scheduleAutoSaveRef = useRef<() => void>(() => {});
   let saveOperationRef = useRef(0);
   let imageUploadAbortRef = useRef<AbortController | null>(null);
+  let [settingsOpen, setSettingsOpen] = useState(false);
   let agentWorkspaceKey = singleFileSource ? "" : (workspaceRuntime?.identity.id ?? "");
   let effectiveBusy = busy || openingDocument != null;
   let agentScopeKey = agentWorkspaceKey;
@@ -629,10 +631,9 @@ export function LocalWorkspaceApp() {
     () => saveStateLabel(saveState, selectedFile, singleFileSource, t),
     [saveState, selectedFile, singleFileSource, t],
   );
-  let languageToggleLabel =
-    locale == "en" ? t("actions.switchToChinese") : t("actions.switchToEnglish");
   let restoreAvailable = Boolean(storedLocalWorkspace);
   let dropboxRestoreAvailable = Boolean(storedDropboxConfig);
+  let openSettings = useCallback(() => setSettingsOpen(true), []);
 
   return (
     <TooltipProvider>
@@ -643,7 +644,6 @@ export function LocalWorkspaceApp() {
           canRefresh={canRefreshWorkspace}
           dropboxConnecting={dropboxConnecting}
           dropboxRestoreAvailable={dropboxRestoreAvailable}
-          languageToggleLabel={languageToggleLabel}
           open={sidebarOpen}
           restoreAvailable={restoreAvailable}
           restoreChecking={restoreChecking}
@@ -662,7 +662,7 @@ export function LocalWorkspaceApp() {
           onRestoreFolder={() => void restoreStoredWorkspace()}
           onSelectEntry={setTreeSelection}
           onSelectFile={selectFile}
-          onToggleLanguage={toggleLocale}
+          onOpenSettings={openSettings}
         />
 
         {sidebarOpen && (
@@ -752,9 +752,12 @@ export function LocalWorkspaceApp() {
               workspaceKey={agentWorkspaceKey}
               workspaceRuntimeRef={workspaceRuntimeRef}
               onClose={closeAgent}
+              onOpenSettings={openSettings}
             />
           </Suspense>
         ) : null}
+
+        <WorkspaceSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 
         <WorkspaceDialogs
           fileNameDialog={{
@@ -812,6 +815,7 @@ export function LocalWorkspaceApp() {
               fileDialogMode != null ||
               shareDialogOpen ||
               saveAsDropboxDialogOpen ||
+              settingsOpen ||
               recoveryDialogAction != null ||
               deleteTarget != null,
             dropboxConnecting,
