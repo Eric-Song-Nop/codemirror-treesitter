@@ -80,7 +80,7 @@ describe("WorkspaceAgentPanel", () => {
 
     expect(document.querySelector("img")).toBeNull();
     expect(document.body.textContent).toContain("Done.");
-    expect(document.body.textContent).toContain("Read Markdown");
+    expect(document.body.textContent).toContain("Read file");
     expect(document.body.textContent).toContain("Complete");
 
     let prompt = document.querySelector<HTMLTextAreaElement>("#workspace-agent-prompt")!;
@@ -167,7 +167,7 @@ function agentMessages() {
   return createChat()
     .user("Please inspect this note.")
     .assistant(({ writer }) => {
-      writer.tool("read_markdown", { input: {}, output: { status: "success" } });
+      writer.tool("read_file", { input: {}, output: { status: "success" } });
       writer.text('<img src="x" onerror="alert(1)"> Done.');
     })
     .get();

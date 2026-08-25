@@ -451,9 +451,9 @@ async function assertWorkspaceAgentBrowserIntegration(client) {
       state.result.loroValue != expectedValue ||
       state.result.persistedValue != expectedValue ||
       state.result.localUpdates != 1 ||
-      state.result.switchedWriteReason != "active-document-unavailable" ||
       !state.result.standaloneBlocked ||
-      JSON.stringify(state.result.userEvents) != JSON.stringify(["input.agent"])
+      state.result.unselectedValue != "unselected" ||
+      JSON.stringify(state.result.toolNames) != JSON.stringify(["read_file", "write_file"])
     ) {
       throw new Error(
         `Browser Agent integration did not converge through IndexedDB: ${JSON.stringify(state)}`,

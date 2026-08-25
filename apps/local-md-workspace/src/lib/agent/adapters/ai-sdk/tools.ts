@@ -1,12 +1,11 @@
 import { tool, type ToolExecutionOptions } from "ai";
 import { z } from "zod";
 import type {
-  WorkspaceAgentApplyCurrentDocumentEditsInput,
   WorkspaceAgentListMarkdownInput,
-  WorkspaceAgentReadMarkdownInput,
+  WorkspaceAgentReadFileInput,
   WorkspaceAgentSearchMarkdownInput,
+  WorkspaceAgentWriteFileInput,
 } from "../../domain/contracts.ts";
-import type { WorkspaceAgentActiveDocumentVersion } from "../../domain/active-document.ts";
 import type {
   WorkspaceAgentToolExecution,
   WorkspaceAgentToolSession,
@@ -18,11 +17,11 @@ const listMarkdownSchema = z.object({
   limit: z.number().int().positive().optional(),
 }) satisfies z.ZodType<WorkspaceAgentListMarkdownInput>;
 
-const readMarkdownSchema = z.object({
+const readFileSchema = z.object({
   lineCount: z.number().int().positive().optional(),
   path: z.string().min(1),
   startLine: z.number().int().positive().optional(),
-}) satisfies z.ZodType<WorkspaceAgentReadMarkdownInput>;
+}) satisfies z.ZodType<WorkspaceAgentReadFileInput>;
 
 const searchMarkdownSchema = z.object({
   caseSensitive: z.boolean().optional(),
@@ -30,34 +29,25 @@ const searchMarkdownSchema = z.object({
   query: z.string().min(1),
 }) satisfies z.ZodType<WorkspaceAgentSearchMarkdownInput>;
 
-const activeDocumentVersionSchema = z.object({
-  contentHash: z.string().min(1),
-  documentGeneration: z.number().int().nonnegative(),
-  documentId: z.string().min(1),
-  editVersion: z.number().int().nonnegative(),
-  path: z.string().min(1),
-  targetGeneration: z.number().int().nonnegative(),
-  version: z.literal(1),
-  workspaceId: z.string().min(1),
-}) satisfies z.ZodType<WorkspaceAgentActiveDocumentVersion>;
-
-const applyCurrentDocumentEditsSchema = z.object({
+const writeFileSchema = z.object({
   edits: z
     .array(
       z.object({
-        newText: z.string(),
-        oldText: z.string(),
+        expectedText: z.string(),
+        from: z.number().int().nonnegative(),
+        insert: z.string(),
+        to: z.number().int().nonnegative(),
       }),
     )
     .min(1)
     .max(32),
-  version: activeDocumentVersionSchema,
-}) satisfies z.ZodType<WorkspaceAgentApplyCurrentDocumentEditsInput>;
+  path: z.string().min(1),
+}) satisfies z.ZodType<WorkspaceAgentWriteFileInput>;
 
 export function createWorkspaceAgentTools(session: WorkspaceAgentToolSession) {
   return {
     get_workspace_context: tool({
-      description: "Get the bound workspace identity, active document, and available capabilities.",
+      description: "Get the bound workspace identity and available capabilities.",
       inputSchema: z.object({}),
       execute: (_input, options) => session.getContext(toolExecution(options)),
     }),
@@ -66,11 +56,11 @@ export function createWorkspaceAgentTools(session: WorkspaceAgentToolSession) {
       inputSchema: listMarkdownSchema,
       execute: (input, options) => session.listMarkdown(input, toolExecution(options)),
     }),
-    read_markdown: tool({
+    read_file: tool({
       description:
-        "Read a bounded line window from a Markdown file. Active-document reads include the version token required for edits.",
-      inputSchema: readMarkdownSchema,
-      execute: (input, options) => session.readMarkdown(input, toolExecution(options)),
+        "Read a bounded line window from a Markdown file, including absolute UTF-16 offsets for exact edits.",
+      inputSchema: readFileSchema,
+      execute: (input, options) => session.readFile(input, toolExecution(options)),
     }),
     search_markdown: tool({
       description:
@@ -78,11 +68,11 @@ export function createWorkspaceAgentTools(session: WorkspaceAgentToolSession) {
       inputSchema: searchMarkdownSchema,
       execute: (input, options) => session.searchMarkdown(input, toolExecution(options)),
     }),
-    apply_current_document_edits: tool({
+    write_file: tool({
       description:
-        "Apply exact unique replacements to the currently active document using a version token from read_markdown.",
-      inputSchema: applyCurrentDocumentEditsSchema,
-      execute: (input, options) => session.applyCurrentDocumentEdits(input, toolExecution(options)),
+        "Apply exact offset-based edits to any Markdown file in the current workspace and flush its filesystem projection.",
+      inputSchema: writeFileSchema,
+      execute: (input, options) => session.writeFile(input, toolExecution(options)),
     }),
   };
 }

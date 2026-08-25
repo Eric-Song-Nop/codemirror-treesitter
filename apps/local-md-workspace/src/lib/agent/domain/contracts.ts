@@ -1,5 +1,6 @@
 import type { WorkspaceIdentity } from "../../workspace/runtime/types.ts";
-import type { SourceRevision, WorkspaceStorageErrorCode } from "../../workspace/storage/types.ts";
+import type { WorkspaceStorageErrorCode } from "../../workspace/storage/types.ts";
+import type { EditConflictReason } from "../../workspace/documents/contracts.ts";
 import type {
   WorkspaceAgentActiveDocumentVersion,
   WorkspaceAgentVersionConflict,
@@ -40,32 +41,20 @@ export type WorkspaceAgentListMarkdownResult = WorkspaceAgentCatalogResult & {
   nextCursor?: string;
 };
 
-export type WorkspaceAgentReadMarkdownInput = {
+export type WorkspaceAgentReadFileInput = {
   lineCount?: number;
   path: string;
   startLine?: number;
 };
 
-export type WorkspaceAgentDocumentSource =
-  | {
-      dirty: boolean;
-      kind: "active-document";
-      version: WorkspaceAgentActiveDocumentVersion;
-    }
-  | {
-      capture: "bound" | "observed";
-      contentHash: string;
-      kind: "workspace-source";
-      revision: SourceRevision;
-    };
-
-export type WorkspaceAgentReadMarkdownResult =
+export type WorkspaceAgentReadFileResult =
   | {
       endLine: number;
+      endOffset: number;
       nextStartLine?: number;
       path: string;
-      source: WorkspaceAgentDocumentSource;
       startLine: number;
+      startOffset: number;
       status: "found";
       text: string;
       totalBytes: number;
@@ -76,10 +65,6 @@ export type WorkspaceAgentReadMarkdownResult =
       path: string;
       reason: "not-markdown" | "outside-workspace";
       status: "not-found";
-    }
-  | {
-      path: string;
-      status: "missing";
     }
   | {
       issue: WorkspaceAgentIssue;
@@ -119,15 +104,66 @@ export type WorkspaceAgentSearchResult = {
 };
 
 export type WorkspaceAgentTextEdit = {
+  expectedText: string;
+  from: number;
+  insert: string;
+  to: number;
+};
+
+export type WorkspaceAgentWriteFileInput = {
+  edits: WorkspaceAgentTextEdit[];
+  path: string;
+};
+
+export type WorkspaceAgentWriteFailureReason =
+  | EditConflictReason
+  | "aborted"
+  | "invalid-edit-count"
+  | "not-markdown"
+  | "outside-workspace"
+  | "output-too-large"
+  | "unavailable";
+
+export type WorkspaceAgentWriteFileResult =
+  | {
+      appliedEdits: number;
+      generation: number;
+      outputBytes: number;
+      path: string;
+      persistence: { status: "saved" } | { message: string; status: "blocked" | "error" };
+      status: "applied";
+    }
+  | {
+      editIndex?: number;
+      message: string;
+      path: string;
+      reason: WorkspaceAgentWriteFailureReason;
+      status: "not-applied";
+    };
+
+export type WorkspaceAgentContext = {
+  capabilities: {
+    listMarkdown: true;
+    readFile: true;
+    searchMarkdown: true;
+    writeFile: true;
+  };
+  workspace: Pick<WorkspaceIdentity, "id" | "kind" | "name">;
+};
+
+/** @deprecated Removed with the active-editor compatibility adapter in the cleanup PR. */
+export type WorkspaceAgentLegacyTextEdit = {
   newText: string;
   oldText: string;
 };
 
+/** @deprecated Removed with the active-editor compatibility adapter in the cleanup PR. */
 export type WorkspaceAgentApplyCurrentDocumentEditsInput = {
-  edits: WorkspaceAgentTextEdit[];
+  edits: WorkspaceAgentLegacyTextEdit[];
   version: WorkspaceAgentActiveDocumentVersion;
 };
 
+/** @deprecated Removed with the active-editor compatibility adapter in the cleanup PR. */
 export type WorkspaceAgentEditFailureReason =
   | "aborted"
   | "active-document-unavailable"
@@ -138,6 +174,7 @@ export type WorkspaceAgentEditFailureReason =
   | "overlapping-edits"
   | "stale-version";
 
+/** @deprecated Removed with the active-editor compatibility adapter in the cleanup PR. */
 export type WorkspaceAgentApplyCurrentDocumentEditsResult =
   | {
       appliedEdits: number;
@@ -153,18 +190,3 @@ export type WorkspaceAgentApplyCurrentDocumentEditsResult =
       reason: WorkspaceAgentEditFailureReason;
       status: "not-applied";
     };
-
-export type WorkspaceAgentContext = {
-  activeDocument: null | {
-    dirty: boolean;
-    path: string;
-    version: WorkspaceAgentActiveDocumentVersion;
-  };
-  capabilities: {
-    applyCurrentDocumentEdits: boolean;
-    listMarkdown: true;
-    readMarkdown: true;
-    searchMarkdown: true;
-  };
-  workspace: Pick<WorkspaceIdentity, "id" | "kind" | "name">;
-};

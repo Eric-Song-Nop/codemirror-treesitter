@@ -1,18 +1,13 @@
 import type {
-  WorkspaceAgentApplyCurrentDocumentEditsInput,
   WorkspaceAgentContext,
   WorkspaceAgentListMarkdownInput,
   WorkspaceAgentListMarkdownResult,
-  WorkspaceAgentReadMarkdownInput,
+  WorkspaceAgentReadFileInput,
   WorkspaceAgentSearchMarkdownInput,
+  WorkspaceAgentWriteFileInput,
 } from "../../domain/contracts.ts";
-import { workspaceAgentActiveDocumentVersion } from "../../domain/active-document.ts";
 import type { WorkspaceAgentHost } from "../../application/host-port.ts";
-import {
-  captureWorkspaceAgentActiveEditor,
-  type WorkspaceAgentActiveEditorCapability,
-} from "./active-editor.ts";
-import { applyWorkspaceAgentCurrentDocumentEdits } from "./current-document-edits.ts";
+import { writeWorkspaceAgentFile } from "./file-edits.ts";
 import {
   resolveWorkspaceAgentLimits,
   type WorkspaceAgentLimitOverrides,
@@ -24,45 +19,31 @@ import {
   normalizeWorkspaceAgentDirectory,
 } from "../../application/workspace-catalog.ts";
 import {
-  readWorkspaceMarkdown,
+  readWorkspaceFile,
   searchWorkspaceMarkdown,
   type WorkspaceAgentReadRuntime,
 } from "../../application/workspace-search.ts";
 
 export function createWorkspaceAgentHost(input: {
-  activeEditor?: WorkspaceAgentActiveEditorCapability;
   limits?: WorkspaceAgentLimitOverrides;
   runtime: WorkspaceAgentReadRuntime;
 }): WorkspaceAgentHost {
-  return new DefaultWorkspaceAgentHost(
-    input.runtime,
-    resolveWorkspaceAgentLimits(input.limits),
-    input.activeEditor,
-  );
+  return new DefaultWorkspaceAgentHost(input.runtime, resolveWorkspaceAgentLimits(input.limits));
 }
 
 class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
   constructor(
     private readonly runtime: WorkspaceAgentReadRuntime,
     private readonly limits: WorkspaceAgentLimits,
-    private readonly activeEditor: WorkspaceAgentActiveEditorCapability | undefined,
   ) {}
 
   getContext(): WorkspaceAgentContext {
-    let active = this.captureActiveDocument();
     return {
-      activeDocument: active
-        ? {
-            dirty: active.dirty,
-            path: active.path,
-            version: workspaceAgentActiveDocumentVersion(active),
-          }
-        : null,
       capabilities: {
-        applyCurrentDocumentEdits: Boolean(active),
         listMarkdown: true,
-        readMarkdown: true,
+        readFile: true,
         searchMarkdown: true,
+        writeFile: true,
       },
       workspace: {
         id: this.runtime.identity.id,
@@ -108,9 +89,8 @@ class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
     };
   }
 
-  readMarkdown(input: WorkspaceAgentReadMarkdownInput, signal?: AbortSignal) {
-    return readWorkspaceMarkdown({
-      activeDocument: this.captureActiveDocument(),
+  readFile(input: WorkspaceAgentReadFileInput, signal?: AbortSignal) {
+    return readWorkspaceFile({
       limits: this.limits,
       request: input,
       runtime: this.runtime,
@@ -120,7 +100,6 @@ class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
 
   searchMarkdown(input: WorkspaceAgentSearchMarkdownInput, signal?: AbortSignal) {
     return searchWorkspaceMarkdown({
-      activeDocument: this.captureActiveDocument(),
       limits: this.limits,
       request: input,
       runtime: this.runtime,
@@ -128,22 +107,13 @@ class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
     });
   }
 
-  applyCurrentDocumentEdits(
-    input: WorkspaceAgentApplyCurrentDocumentEditsInput,
-    signal?: AbortSignal,
-  ) {
-    return applyWorkspaceAgentCurrentDocumentEdits({
-      activeEditor: this.activeEditor,
-      limits: this.limits.write,
+  writeFile(input: WorkspaceAgentWriteFileInput, signal?: AbortSignal) {
+    return writeWorkspaceAgentFile({
+      limits: this.limits,
       request: input,
+      runtime: this.runtime,
       signal,
-      workspaceId: this.runtime.identity.id,
     });
-  }
-
-  private captureActiveDocument() {
-    let capture = captureWorkspaceAgentActiveEditor(this.activeEditor);
-    return capture?.document.workspaceId == this.runtime.identity.id ? capture.document : null;
   }
 }
 

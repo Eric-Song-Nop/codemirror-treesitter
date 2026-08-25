@@ -3,7 +3,16 @@ import { ViewPlugin, type EditorView } from "@codemirror/view";
 import type { LiveMdPlugin } from "@codemirror-treesitter/live-md";
 import { LoroExtensions, redo as loroRedo, undo as loroUndo } from "loro-codemirror";
 import { loroSyncAnnotation } from "loro-codemirror/sync";
-import type { EphemeralStore, LoroDoc, LoroText, UndoManager, Value } from "loro-crdt";
+import type {
+  EphemeralStore,
+  LoroDoc,
+  LoroEventBatch,
+  LoroText,
+  UndoManager,
+  Value,
+} from "loro-crdt";
+
+const liveMdExternalEditOrigin = "live-md:external-edit";
 
 export type LiveMdLoroTextSource = string | ((doc: LoroDoc) => LoroText);
 
@@ -32,8 +41,13 @@ export function liveMdLoroCollaboration(options: LiveMdLoroCollaborationOptions)
   return [
     markLoroSyncTransactionsRemote(),
     LoroExtensions(options.doc, options.presence, options.undoManager, getTextFromDoc),
+    syncExternalLocalLoroEdits(options.doc, getTextFromDoc),
     drainMatchingInitialLoroDispatch(options.doc, getTextFromDoc),
   ];
+}
+
+export function commitLiveMdLoroExternalEdit(doc: LoroDoc) {
+  doc.commit({ origin: liveMdExternalEditOrigin });
 }
 
 export function liveMdLoroCollaborationPlugin(
@@ -102,6 +116,53 @@ function drainMatchingInitialLoroDispatch(
       },
     };
   });
+}
+
+function syncExternalLocalLoroEdits(
+  doc: LoroDoc,
+  getTextFromDoc: (doc: LoroDoc) => LoroText,
+): Extension {
+  return ViewPlugin.define((view) => {
+    let unsubscribe = doc.subscribe((event) => {
+      if (event.by != "local" || event.origin != liveMdExternalEditOrigin) return;
+      for (let changes of externalEditChanges(event, doc, getTextFromDoc)) {
+        view.dispatch({
+          changes,
+          // loro-codemirror recognizes this sentinel as an already-synchronized
+          // transaction and will not write the view projection back into Loro.
+          annotations: [loroSyncAnnotation.of("undo")],
+        });
+      }
+    });
+    return { destroy: unsubscribe };
+  });
+}
+
+function externalEditChanges(
+  event: LoroEventBatch,
+  doc: LoroDoc,
+  getTextFromDoc: (doc: LoroDoc) => LoroText,
+) {
+  let batches: Array<Array<{ from: number; insert?: string; to: number }>> = [];
+  for (let { diff, target } of event.events) {
+    let text = getTextFromDoc(doc);
+    if (diff.type != "text" || target != text.id) continue;
+
+    let changes: Array<{ from: number; insert?: string; to: number }> = [];
+    let position = 0;
+    for (let delta of diff.diff) {
+      if (delta.insert) {
+        changes.push({ from: position, insert: delta.insert, to: position });
+      } else if (delta.delete) {
+        changes.push({ from: position, to: position + delta.delete });
+        position += delta.delete;
+      } else if (delta.retain != null) {
+        position += delta.retain;
+      }
+    }
+    if (changes.length) batches.push(changes);
+  }
+  return batches;
 }
 
 export const liveMdLoroUndo: (view: EditorView) => boolean = loroUndo;

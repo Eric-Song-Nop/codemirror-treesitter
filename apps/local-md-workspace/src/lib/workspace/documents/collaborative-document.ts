@@ -2,6 +2,7 @@ import {
   acknowledgeCollabDocumentSourceSaved,
   captureCollabDocumentMaterialization,
   collabDocumentNeedsSourceWrite,
+  commitCollabDocumentExternalEdit,
   flushCollabDocumentPersistence,
   getCollabDocumentValue,
   materializeCollabDocument,
@@ -139,7 +140,7 @@ export class ManagedCollaborativeDocument implements WorkspaceCollaborativeDocum
         if (edit.to > edit.from) text.delete(edit.from, edit.to - edit.from);
         if (edit.insert) text.insert(edit.from, edit.insert);
       }
-      this.options.state.doc.commit();
+      commitCollabDocumentExternalEdit(this.options.state);
     } finally {
       text.free();
     }

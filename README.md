@@ -220,7 +220,7 @@ this repository replace the language-aware layers above those primitives.
 | `packages/live-md-theme-gruvbox`    | `@codemirror-treesitter/live-md-theme-gruvbox`    | Gruvbox dark/light LiveMD prose, widget, table, Mermaid, and code-block container presentation themes.                                  |
 | `packages/live-md-theme-github`     | `@codemirror-treesitter/live-md-theme-github`     | GitHub Light LiveMD presentation theme.                                                                                                 |
 | `packages/live-md-theme-catppuccin` | `@codemirror-treesitter/live-md-theme-catppuccin` | Catppuccin Latte/Macchiato LiveMD presentation themes.                                                                                  |
-| `packages/live-md-loro`             | `@codemirror-treesitter/live-md-loro`             | Optional Loro collaboration bindings for LiveMD documents, presence, custom text containers, and collaborative undo/redo.               |
+| `packages/live-md-loro`             | `@codemirror-treesitter/live-md-loro`             | Optional Loro collaboration bindings for LiveMD documents, presence, custom text containers, direct actor edits, and undo/redo.         |
 | `packages/opendal-wasm-browser`     | `@codemirror-treesitter/opendal-wasm-browser`     | Experimental browser WASM wrapper for OpenDAL-backed cloud workspace storage.                                                           |
 
 Each package directory has its own README with local responsibilities, public
@@ -239,7 +239,7 @@ entry points, dependency boundaries, source layout, and validation notes.
   export standalone HTML or open a browser print view for saving as PDF with
   scoped LiveMD document styling, can host or join Grove shared-file sessions
   through `apps/grove-relay`, and includes a browser-resident DeepSeek BYOK
-  Agent for workspace Markdown search/read and active-document editing.
+  Agent for workspace Markdown listing, search, path-based reads, and exact edits.
 - `apps/grove-relay`: Grove shared-file relay Worker with Durable Object
   persistence, share create/session/rotate/revoke APIs, WebSocket Loro sync,
   bounded relay queues, share expiration cleanup, and Wrangler deploy/types
@@ -441,7 +441,10 @@ to a Loro CRDT document. The default LiveMD package does not import Loro.
 
 ```ts
 import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
-import { liveMdLoroCollaborationPlugin } from "@codemirror-treesitter/live-md-loro";
+import {
+  commitLiveMdLoroExternalEdit,
+  liveMdLoroCollaborationPlugin,
+} from "@codemirror-treesitter/live-md-loro";
 import { LoroDoc } from "loro-crdt";
 
 const doc = new LoroDoc();
@@ -456,6 +459,11 @@ createLiveMdEditor({
     plugins: [liveMdLoroCollaborationPlugin({ doc })],
   },
 });
+
+const actorText = doc.getText("markdown");
+actorText.insert(actorText.length, "\nEdited by another local actor.");
+commitLiveMdLoroExternalEdit(doc);
+actorText.free();
 ```
 
 Web Component users opt in through the JavaScript-only `config` property:
@@ -473,6 +481,10 @@ through `EphemeralStore`, and optional Loro undo managers. String text keys use
 short-lived handles owned by the adapter. Handles returned by custom getters or
 the low-level text helper exports remain caller-owned and must stay valid while
 the editor uses them.
+
+Use `commitLiveMdLoroExternalEdit(...)` for direct application-actor mutations
+of a bound Loro document. It projects that local Loro transaction into bound
+CodeMirror views without echoing the view update back into the CRDT.
 
 ## Implementation Notes
 

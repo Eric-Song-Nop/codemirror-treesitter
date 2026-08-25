@@ -1,17 +1,14 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { EditorView } from "@codemirror/view";
-import type { MarkdownDirectoryNode, MarkdownTreeNode } from "../../../workspace/tree.ts";
 import type {
-  WorkspaceDocumentPort,
-  WorkspaceTreePort,
-  WorkspaceTextSnapshot,
-} from "../../../workspace/runtime/types.ts";
-import type { SourceObservation } from "../../../workspace/storage/types.ts";
+  WorkspaceDocuments,
+  WorkspaceCollaborativeDocument,
+} from "../../../workspace/documents/contracts.ts";
+import type { WorkspaceTreePort } from "../../../workspace/runtime/types.ts";
+import type { MarkdownDirectoryNode, MarkdownTreeNode } from "../../../workspace/tree.ts";
 import type { WorkspaceAgentReadRuntime } from "../../application/workspace-search.ts";
-import type { WorkspaceAgentActiveEditorCapability } from "./active-editor.ts";
 import { createWorkspaceAgentHost } from "./host.ts";
 
-describe("workspace agent read host", () => {
+describe("workspace Agent host", () => {
   it("lists the filtered Markdown tree recursively with stable pagination", async () => {
     let runtime = fakeRuntime({
       files: {
@@ -45,82 +42,73 @@ describe("workspace agent read host", () => {
   });
 
   it("pages through distinct paths that share the same natural-sort key", async () => {
-    let runtime = fakeRuntime({ files: { "A.md": "uppercase", "a.md": "lowercase" } });
     let host = createWorkspaceAgentHost({
       limits: { list: { defaultPageSize: 1 } },
-      runtime,
+      runtime: fakeRuntime({ files: { "A.md": "uppercase", "a.md": "lowercase" } }),
     });
 
     let first = await host.listMarkdown();
     let second = await host.listMarkdown({ cursor: first.nextCursor });
 
-    expect([...first.files, ...second.files].map((file) => file.path)).toEqual(["A.md", "a.md"]);
+    expect([...first.files, ...second.files].map((entry) => entry.path)).toEqual(["A.md", "a.md"]);
     expect(second.nextCursor).toBeUndefined();
   });
 
-  it("reads and searches the active dirty value instead of the persisted source", async () => {
-    let values = { "draft.md": "persisted needle", "other.md": "Needle elsewhere" };
-    let observe = vi.fn(async (path: string) =>
-      observation(path, values[path as keyof typeof values]),
-    );
-    let runtime = fakeRuntime({
-      documents: { commit: vi.fn(), observe } satisfies WorkspaceDocumentPort,
-      files: { "draft.md": "persisted needle", "other.md": "Needle elsewhere" },
+  it("reads and searches authoritative collaborative document values", async () => {
+    let document = vi.fn((path: string) => {
+      let values: Record<string, string> = {
+        "draft.md": "# Draft\nunsaved Needle",
+        "other.md": "Needle elsewhere",
+      };
+      return Promise.resolve(fakeDocument(path, values[path]!));
     });
     let host = createWorkspaceAgentHost({
-      activeEditor: readOnlyActiveEditor("# Draft\nunsaved Needle"),
-      runtime,
+      runtime: fakeRuntime({
+        documents: { close: vi.fn(), document },
+        files: { "draft.md": "persisted", "other.md": "persisted" },
+      }),
     });
 
-    await expect(host.readMarkdown({ path: "draft.md" })).resolves.toMatchObject({
-      source: {
-        dirty: true,
-        kind: "active-document",
-        version: {
-          documentGeneration: 1,
-          documentId: "doc:draft.md",
-          editVersion: 7,
-          path: "draft.md",
-          targetGeneration: 1,
-          version: 1,
-          workspaceId: "local:test",
-        },
-      },
+    await expect(
+      host.readFile({ lineCount: 1, path: "draft.md", startLine: 2 }),
+    ).resolves.toMatchObject({
+      endOffset: 22,
+      startOffset: 8,
       status: "found",
-      text: "# Draft\nunsaved Needle",
+      text: "unsaved Needle",
     });
-    let search = await host.searchMarkdown({ query: "needle" });
-    expect(search).toMatchObject({
+    await expect(host.searchMarkdown({ query: "needle" })).resolves.toMatchObject({
       matches: [
         { line: 2, path: "draft.md", preview: "unsaved Needle" },
         { line: 1, path: "other.md", preview: "Needle elsewhere" },
       ],
       status: "complete",
     });
-    expect(observe).not.toHaveBeenCalledWith("draft.md");
+    expect(document).toHaveBeenCalledWith("draft.md");
+    expect(document).toHaveBeenCalledWith("other.md");
   });
 
-  it("never reads a Markdown-looking path that the filtered tree does not expose", async () => {
-    let observe = vi.fn(async () => observation(".git/private.md", "secret"));
-    let runtime = fakeRuntime({
-      documents: { commit: vi.fn(), observe } satisfies WorkspaceDocumentPort,
-      files: { "public.md": "public" },
+  it("never opens a Markdown-looking path that the filtered tree does not expose", async () => {
+    let document = vi.fn(async (path: string) => fakeDocument(path, "secret"));
+    let host = createWorkspaceAgentHost({
+      runtime: fakeRuntime({
+        documents: { close: vi.fn(), document },
+        files: { "public.md": "public" },
+      }),
     });
-    let host = createWorkspaceAgentHost({ runtime });
 
-    await expect(host.readMarkdown({ path: ".git/private.md" })).resolves.toEqual({
+    await expect(host.readFile({ path: ".git/private.md" })).resolves.toEqual({
       path: ".git/private.md",
       reason: "outside-workspace",
       status: "not-found",
     });
-    expect(observe).not.toHaveBeenCalled();
+    expect(document).not.toHaveBeenCalled();
   });
 
   it("reports search limits and responds to AbortSignal", async () => {
-    let runtime = fakeRuntime({ files: { "a.md": "hit hit", "b.md": "hit" } });
     let host = createWorkspaceAgentHost({
       limits: { search: { maxMatches: 2 } },
-      runtime,
+      runtime: fakeRuntime({ files: { "a.md": "hit hit", "b.md": "hit" } }),
     });
 
     await expect(host.searchMarkdown({ query: "hit" })).resolves.toMatchObject({
@@ -136,81 +124,51 @@ describe("workspace agent read host", () => {
     });
   });
 
-  it("skips known oversized search files before reading their contents", async () => {
-    let observe = vi.fn(async () => observation("large.md", "oversized hit"));
-    let runtime = fakeRuntime({
-      documents: { commit: vi.fn(), observe } satisfies WorkspaceDocumentPort,
-      files: { "large.md": "oversized hit" },
-    });
-    runtime.entries = {
-      probe: vi.fn(async () => ({
-        state: "present" as const,
-        value: { kind: "file" as const, metadata: { size: 1_000 } },
-      })),
-    };
+  it("bounds reads and oversized search documents by collaborative content", async () => {
     let host = createWorkspaceAgentHost({
-      limits: { search: { maxFileBytes: 8 } },
-      runtime,
+      limits: {
+        read: { maxBytes: 8, maxLines: 2 },
+        search: { maxFileBytes: 8 },
+      },
+      runtime: fakeRuntime({ files: { "long.md": "one\ntwo\nthree" } }),
     });
 
-    await expect(host.searchMarkdown({ query: "hit" })).resolves.toMatchObject({
-      readBytes: 0,
-      skippedLargeFiles: 1,
-      status: "truncated",
-      truncationReason: "max-file-bytes",
-    });
-    expect(observe).not.toHaveBeenCalled();
-  });
-
-  it("keeps the active document inside the search file budget", async () => {
-    let runtime = fakeRuntime({ files: { "other.md": "persisted hit" } });
-    let host = createWorkspaceAgentHost({
-      activeEditor: readOnlyActiveEditor("active hit"),
-      limits: { search: { maxFiles: 1 } },
-      runtime,
-    });
-
-    await expect(host.searchMarkdown({ query: "hit" })).resolves.toMatchObject({
-      matches: [{ path: "draft.md" }],
-      scannedFiles: 1,
-    });
-  });
-
-  it("advertises edits only while a matching active document is captured", () => {
-    let runtime = fakeRuntime({ files: {} });
-    let host = createWorkspaceAgentHost({
-      activeEditor: { getActiveEditor: () => null },
-      runtime,
-    });
-
-    expect(host.getContext().capabilities.applyCurrentDocumentEdits).toBe(false);
-  });
-
-  it("bounds read output by lines and bytes while preserving source metadata", async () => {
-    let runtime = fakeRuntime({ files: { "long.md": "one\ntwo\nthree" } });
-    let host = createWorkspaceAgentHost({
-      limits: { read: { maxBytes: 8, maxLines: 2 } },
-      runtime,
-    });
-
-    await expect(host.readMarkdown({ lineCount: 10, path: "long.md" })).resolves.toMatchObject({
+    await expect(host.readFile({ lineCount: 10, path: "long.md" })).resolves.toMatchObject({
       endLine: 2,
-      source: { contentHash: "hash:long.md", kind: "workspace-source" },
+      endOffset: 8,
       startLine: 1,
+      startOffset: 0,
       status: "found",
       text: "one\ntwo\n",
       totalLines: 3,
       truncated: true,
     });
+    await expect(host.searchMarkdown({ query: "three" })).resolves.toMatchObject({
+      readBytes: 0,
+      skippedLargeFiles: 1,
+      status: "truncated",
+      truncationReason: "max-file-bytes",
+    });
   });
 
-  it("can page to an empty final line", async () => {
-    let runtime = fakeRuntime({ files: { "trailing.md": "one\n" } });
-    let host = createWorkspaceAgentHost({ runtime });
+  it("advertises path-based file access and pages to an empty final line", async () => {
+    let host = createWorkspaceAgentHost({
+      runtime: fakeRuntime({ files: { "trailing.md": "one\n" } }),
+    });
 
-    await expect(host.readMarkdown({ path: "trailing.md", startLine: 2 })).resolves.toMatchObject({
+    expect(host.getContext()).toMatchObject({
+      capabilities: {
+        listMarkdown: true,
+        readFile: true,
+        searchMarkdown: true,
+        writeFile: true,
+      },
+    });
+    await expect(host.readFile({ path: "trailing.md", startLine: 2 })).resolves.toMatchObject({
       endLine: 2,
+      endOffset: 4,
       startLine: 2,
+      startOffset: 4,
       status: "found",
       text: "",
       totalLines: 2,
@@ -220,28 +178,28 @@ describe("workspace agent read host", () => {
 });
 
 function fakeRuntime(input: {
-  documents?: WorkspaceDocumentPort;
+  documents?: WorkspaceDocuments;
   files: Record<string, string>;
   tree?: WorkspaceTreePort;
 }): WorkspaceAgentReadRuntime {
-  let documents =
-    input.documents ??
-    ({
-      commit: vi.fn(),
-      observe: vi.fn(async (path: string) =>
-        path in input.files ? observation(path, input.files[path]!) : { state: "missing" as const },
-      ),
-    } satisfies WorkspaceDocumentPort);
   return {
-    documents,
+    documents:
+      input.documents ??
+      ({
+        close: vi.fn(),
+        document: vi.fn(async (path: string) => fakeDocument(path, input.files[path]!)),
+      } satisfies WorkspaceDocuments),
     identity: { id: "local:test", kind: "local", name: "Test" },
     tree: input.tree ?? flatTreePort(Object.keys(input.files)),
   };
 }
 
+function fakeDocument(path: string, value: string) {
+  return { path, read: () => value } as WorkspaceCollaborativeDocument;
+}
+
 function flatTreePort(paths: string[]): WorkspaceTreePort {
-  let directories = new Map<string, MarkdownTreeNode[]>();
-  directories.set("", []);
+  let directories = new Map<string, MarkdownTreeNode[]>([["", []]]);
   for (let path of paths) {
     let segments = path.split("/");
     let name = segments.pop()!;
@@ -257,10 +215,11 @@ function flatTreePort(paths: string[]): WorkspaceTreePort {
     }
     directories.get(parent)!.push({ kind: "file", name, path });
   }
-  let nodes = [...directories].map(([path, children]) =>
-    directory(path, path.split("/").at(-1) ?? "Test", children),
+  return treePort(
+    [...directories].map(([path, children]) =>
+      directory(path, path.split("/").at(-1) ?? "Test", children),
+    ),
   );
-  return treePort(nodes);
 }
 
 function treePort(nodes: MarkdownDirectoryNode[]): WorkspaceTreePort {
@@ -273,7 +232,7 @@ function treePort(nodes: MarkdownDirectoryNode[]): WorkspaceTreePort {
   let root = byPath.get("")!;
   return {
     listEntries: vi.fn(async () => []),
-    readDirectory: vi.fn(async (path) => byPath.get(path) ?? missingDirectory(path)),
+    readDirectory: vi.fn(async (path) => byPath.get(path) ?? directory(path, path, [])),
     readTree: vi.fn(async () => root),
   };
 }
@@ -286,42 +245,6 @@ function directory(
   return { children, childrenLoaded: true, kind: "directory", name, path };
 }
 
-function missingDirectory(path: string): MarkdownDirectoryNode {
-  return directory(path, path.split("/").at(-1) ?? "", []);
-}
-
 function file(path: string): MarkdownTreeNode {
   return { kind: "file", name: path.split("/").at(-1)!, path };
-}
-
-function observation(path: string, value: string): SourceObservation<WorkspaceTextSnapshot> {
-  return {
-    state: "present",
-    value: {
-      bytes: new TextEncoder().encode(value),
-      capture: "bound",
-      contentHash: `hash:${path}`,
-      metadata: {},
-      revision: { kind: "etag", validation: "atomic", value: `revision:${path}` },
-      value,
-    },
-  };
-}
-
-function readOnlyActiveEditor(value: string): WorkspaceAgentActiveEditorCapability {
-  return {
-    getActiveEditor: () => ({
-      documentGeneration: 1,
-      documentId: "doc:draft.md",
-      dirty: true,
-      editVersion: 7,
-      path: "draft.md",
-      targetGeneration: 1,
-      value,
-      view: {
-        state: { doc: { toString: () => value } },
-      } as EditorView,
-      workspaceId: "local:test",
-    }),
-  };
 }

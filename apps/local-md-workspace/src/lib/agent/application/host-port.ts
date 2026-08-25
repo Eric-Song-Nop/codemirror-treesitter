@@ -1,31 +1,31 @@
 import type {
-  WorkspaceAgentApplyCurrentDocumentEditsInput,
-  WorkspaceAgentApplyCurrentDocumentEditsResult,
   WorkspaceAgentContext,
   WorkspaceAgentListMarkdownInput,
   WorkspaceAgentListMarkdownResult,
-  WorkspaceAgentReadMarkdownInput,
-  WorkspaceAgentReadMarkdownResult,
+  WorkspaceAgentReadFileInput,
+  WorkspaceAgentReadFileResult,
   WorkspaceAgentSearchMarkdownInput,
   WorkspaceAgentSearchResult,
+  WorkspaceAgentWriteFileInput,
+  WorkspaceAgentWriteFileResult,
 } from "../domain/contracts.ts";
 
 export interface WorkspaceAgentHost {
-  applyCurrentDocumentEdits(
-    input: WorkspaceAgentApplyCurrentDocumentEditsInput,
-    signal?: AbortSignal,
-  ): WorkspaceAgentApplyCurrentDocumentEditsResult;
   getContext(): WorkspaceAgentContext;
   listMarkdown(
     input?: WorkspaceAgentListMarkdownInput,
     signal?: AbortSignal,
   ): Promise<WorkspaceAgentListMarkdownResult>;
-  readMarkdown(
-    input: WorkspaceAgentReadMarkdownInput,
+  readFile(
+    input: WorkspaceAgentReadFileInput,
     signal?: AbortSignal,
-  ): Promise<WorkspaceAgentReadMarkdownResult>;
+  ): Promise<WorkspaceAgentReadFileResult>;
   searchMarkdown(
     input: WorkspaceAgentSearchMarkdownInput,
     signal?: AbortSignal,
   ): Promise<WorkspaceAgentSearchResult>;
+  writeFile(
+    input: WorkspaceAgentWriteFileInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceAgentWriteFileResult>;
 }

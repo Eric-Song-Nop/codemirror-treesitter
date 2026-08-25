@@ -61,14 +61,6 @@ describe("useWorkspaceAgentHost", () => {
 function fakeRefs(): WorkspaceAgentHostRefs {
   let ref = { current: null };
   return {
-    activeDocumentGenerationRef: { current: 0 },
-    collabDocumentRef: ref,
-    dirtyRef: { current: false },
-    documentTargetGenerationRef: { current: 0 },
-    editorElementRef: ref,
-    editVersionRef: { current: 0 },
-    selectedFileRef: ref,
-    selectedFileSourceRef: ref,
     singleFileSourceRef: ref,
     workspaceRuntimeRef: ref,
   };

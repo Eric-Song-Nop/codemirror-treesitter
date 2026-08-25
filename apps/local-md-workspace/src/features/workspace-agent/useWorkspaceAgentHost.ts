@@ -9,48 +9,18 @@ export type { CreateWorkspaceAgentRunHost, WorkspaceAgentHostRefs };
 
 /**
  * Returns a stable factory. Calling it starts a new workspace-bound Agent run.
- * The refs stay live so an identity switch disables writes without treating
- * ordinary document edits as a switch.
+ * The refs stay live so workspace and standalone-file transitions are observed
+ * without coupling the run host to the selected editor view.
  */
 export function useWorkspaceAgentHost(input: WorkspaceAgentHostRefs): CreateWorkspaceAgentRunHost {
-  let {
-    activeDocumentGenerationRef,
-    collabDocumentRef,
-    dirtyRef,
-    documentTargetGenerationRef,
-    editorElementRef,
-    editVersionRef,
-    selectedFileSourceRef,
-    selectedFileRef,
-    singleFileSourceRef,
-    workspaceRuntimeRef,
-  } = input;
+  let { singleFileSourceRef, workspaceRuntimeRef } = input;
 
   return useCallback(
     () =>
       createWorkspaceAgentRunHost({
-        activeDocumentGenerationRef,
-        collabDocumentRef,
-        dirtyRef,
-        documentTargetGenerationRef,
-        editorElementRef,
-        editVersionRef,
-        selectedFileSourceRef,
-        selectedFileRef,
         singleFileSourceRef,
         workspaceRuntimeRef,
       }),
-    [
-      activeDocumentGenerationRef,
-      collabDocumentRef,
-      dirtyRef,
-      documentTargetGenerationRef,
-      editorElementRef,
-      editVersionRef,
-      selectedFileSourceRef,
-      selectedFileRef,
-      singleFileSourceRef,
-      workspaceRuntimeRef,
-    ],
+    [singleFileSourceRef, workspaceRuntimeRef],
   );
 }

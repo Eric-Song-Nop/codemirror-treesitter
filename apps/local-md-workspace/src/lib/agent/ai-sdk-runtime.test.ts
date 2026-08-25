@@ -6,35 +6,27 @@ import { WORKSPACE_AGENT_MAX_STEPS, WORKSPACE_AGENT_MAX_TOOL_CALLS } from "./app
 import { redactWorkspaceAgentError } from "./application/runtime-error.ts";
 import type { WorkspaceAgentRunEvent } from "./application/run-contracts.ts";
 import { createWorkspaceAgentToolSession } from "./application/tool-session.ts";
-import type { WorkspaceAgentActiveDocumentVersion } from "./domain/active-document.ts";
-import type { WorkspaceAgentApplyCurrentDocumentEditsResult } from "./domain/contracts.ts";
+import type { WorkspaceAgentWriteFileResult } from "./domain/contracts.ts";
 import { DEFAULT_WORKSPACE_AGENT_MODEL } from "./providers/deepseek/config.ts";
 import { createDeepSeekWorkspaceAgentModel } from "./providers/deepseek/model.ts";
 
 describe("AI SDK workspace Agent adapter", () => {
   it("streams a deterministic search, read, edit, and final response tool loop", async () => {
     let mocks = fakeHost();
-    mocks.readMarkdown
-      .mockResolvedValueOnce(activeReadResult(activeVersion))
-      .mockResolvedValueOnce(activeReadResult(activeVersion2));
-    mocks.applyCurrentDocumentEdits
-      .mockReturnValueOnce(staleResult())
-      .mockReturnValueOnce(appliedResult());
+    mocks.writeFile.mockResolvedValueOnce(conflictResult()).mockResolvedValueOnce(appliedResult());
+    let editInput = {
+      edits: [{ expectedText: "needle", from: 0, insert: "updated", to: 6 }],
+      path: "draft.md",
+    };
     let model = new MockLanguageModelV4({
       modelId: "mock-markdown-agent",
       provider: "mock",
       doStream: [
         toolCallStream("search-1", "search_markdown", { query: "needle" }),
-        toolCallStream("read-1", "read_markdown", { path: "draft.md" }),
-        toolCallStream("edit-1", "apply_current_document_edits", {
-          edits: [{ newText: "updated", oldText: "needle" }],
-          version: activeVersion,
-        }),
-        toolCallStream("reread-1", "read_markdown", { path: "draft.md" }),
-        toolCallStream("edit-2", "apply_current_document_edits", {
-          edits: [{ newText: "updated", oldText: "needle" }],
-          version: activeVersion2,
-        }),
+        toolCallStream("read-1", "read_file", { path: "draft.md" }),
+        toolCallStream("edit-1", "write_file", editInput),
+        toolCallStream("reread-1", "read_file", { path: "draft.md" }),
+        toolCallStream("edit-2", "write_file", editInput),
         textStream("Updated ", "draft.md."),
       ],
     });
@@ -58,34 +50,11 @@ describe("AI SDK workspace Agent adapter", () => {
       message: { content: "Updated draft.md.", role: "assistant" },
       usage: { inputTokens: 6, outputTokens: 6, totalTokens: 12 },
     });
-    expect(mocks.searchMarkdown).toHaveBeenCalledOnce();
     expect(mocks.searchMarkdown).toHaveBeenCalledWith({ query: "needle" }, expect.any(AbortSignal));
-    expect(mocks.readMarkdown).toHaveBeenNthCalledWith(
-      1,
-      { path: "draft.md" },
-      expect.any(AbortSignal),
-    );
-    expect(mocks.readMarkdown).toHaveBeenNthCalledWith(
-      2,
-      { path: "draft.md" },
-      expect.any(AbortSignal),
-    );
-    expect(mocks.applyCurrentDocumentEdits).toHaveBeenNthCalledWith(
-      1,
-      {
-        edits: [{ newText: "updated", oldText: "needle" }],
-        version: activeVersion,
-      },
-      expect.any(AbortSignal),
-    );
-    expect(mocks.applyCurrentDocumentEdits).toHaveBeenNthCalledWith(
-      2,
-      {
-        edits: [{ newText: "updated", oldText: "needle" }],
-        version: activeVersion2,
-      },
-      expect.any(AbortSignal),
-    );
+    expect(mocks.readFile).toHaveBeenCalledTimes(2);
+    expect(mocks.readFile).toHaveBeenCalledWith({ path: "draft.md" }, expect.any(AbortSignal));
+    expect(mocks.writeFile).toHaveBeenNthCalledWith(1, editInput, expect.any(AbortSignal));
+    expect(mocks.writeFile).toHaveBeenNthCalledWith(2, editInput, expect.any(AbortSignal));
     expect(model.doStreamCalls).toHaveLength(6);
     expect(model.doStreamCalls[0]?.providerOptions).toEqual({
       deepseek: { thinking: { type: "enabled" } },
@@ -108,7 +77,7 @@ describe("AI SDK workspace Agent adapter", () => {
     });
   });
 
-  it("deduplicates toolCallId executions and enforces two post-conflict stale retries", async () => {
+  it("deduplicates toolCallId executions by tool name and exact input", async () => {
     let mocks = fakeHost();
     let deduplicated: WorkspaceAgentRunEvent[] = [];
     let session = createWorkspaceAgentToolSession(mocks.host, (event) => deduplicated.push(event));
@@ -127,25 +96,28 @@ describe("AI SDK workspace Agent adapter", () => {
     await expect(session.searchMarkdown({ query: "different" }, searchExecution)).rejects.toThrow(
       /reused with different semantics/,
     );
-    await expect(session.readMarkdown({ path: "draft.md" }, searchExecution)).rejects.toThrow(
+    await expect(session.readFile({ path: "draft.md" }, searchExecution)).rejects.toThrow(
       /reused with different semantics/,
     );
-    expect(mocks.readMarkdown).not.toHaveBeenCalled();
+    expect(mocks.readFile).not.toHaveBeenCalled();
 
-    mocks.applyCurrentDocumentEdits.mockReturnValue(staleResult());
     let editInput = {
-      edits: [{ newText: "updated", oldText: "needle" }],
-      version: activeVersion,
+      edits: [{ expectedText: "needle", from: 0, insert: "updated", to: 6 }],
+      path: "draft.md",
     };
-    for (let index = 0; index < 3; index++) {
-      await expect(
-        session.applyCurrentDocumentEdits(editInput, toolExecution(`stale-${index}`)),
-      ).resolves.toMatchObject({ reason: "stale-version", status: "not-applied" });
-    }
+    let writeExecution = toolExecution("same-write");
     await expect(
-      session.applyCurrentDocumentEdits(editInput, toolExecution("stale-limit")),
-    ).resolves.toMatchObject({ reason: "stale-retry-limit", status: "not-applied" });
-    expect(mocks.applyCurrentDocumentEdits).toHaveBeenCalledTimes(3);
+      Promise.all([
+        session.writeFile(editInput, writeExecution),
+        session.writeFile(editInput, writeExecution),
+      ]),
+    ).resolves.toHaveLength(2);
+    expect(mocks.writeFile).toHaveBeenCalledOnce();
+    expect(deduplicated).toContainEqual({
+      toolCallId: "same-write",
+      toolName: "write_file",
+      type: "tool-deduplicated",
+    });
   });
 
   it("stops the model loop at the product step budget", async () => {
@@ -199,12 +171,15 @@ describe("AI SDK workspace Agent adapter", () => {
     stopped.abort(new DOMException("Stopped", "AbortError"));
 
     expect(() =>
-      session.applyCurrentDocumentEdits(
-        { edits: [{ newText: "updated", oldText: "needle" }], version: activeVersion },
+      session.writeFile(
+        {
+          edits: [{ expectedText: "needle", from: 0, insert: "updated", to: 6 }],
+          path: "draft.md",
+        },
         toolExecution("stopped-tool", stopped.signal),
       ),
     ).toThrowError(expect.objectContaining({ name: "AbortError" }));
-    expect(mocks.applyCurrentDocumentEdits).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
 
     let controller = new AbortController();
     let modelStarted: (signal: AbortSignal) => void = () => {};
@@ -268,16 +243,12 @@ describe("AI SDK workspace Agent adapter", () => {
 });
 
 function fakeHost() {
-  let applyCurrentDocumentEdits = vi.fn<WorkspaceAgentHost["applyCurrentDocumentEdits"]>(() =>
-    appliedResult(),
-  );
   let getContext = vi.fn<WorkspaceAgentHost["getContext"]>(() => ({
-    activeDocument: { dirty: false, path: "draft.md", version: activeVersion },
     capabilities: {
-      applyCurrentDocumentEdits: true,
       listMarkdown: true,
-      readMarkdown: true,
+      readFile: true,
       searchMarkdown: true,
+      writeFile: true,
     },
     workspace: { id: "local:test", kind: "local", name: "Test" },
   }));
@@ -288,9 +259,7 @@ function fakeHost() {
     scannedDirectories: 1,
     status: "complete" as const,
   }));
-  let readMarkdown = vi.fn<WorkspaceAgentHost["readMarkdown"]>(async () =>
-    activeReadResult(activeVersion),
-  );
+  let readFile = vi.fn<WorkspaceAgentHost["readFile"]>(async () => readResult());
   let searchMarkdown = vi.fn<WorkspaceAgentHost["searchMarkdown"]>(async () => ({
     directory: "",
     issues: [],
@@ -301,46 +270,24 @@ function fakeHost() {
     skippedLargeFiles: 0,
     status: "complete" as const,
   }));
+  let writeFile = vi.fn<WorkspaceAgentHost["writeFile"]>(async () => appliedResult());
   let host: WorkspaceAgentHost = {
-    applyCurrentDocumentEdits,
     getContext,
     listMarkdown,
-    readMarkdown,
+    readFile,
     searchMarkdown,
+    writeFile,
   };
-  return {
-    applyCurrentDocumentEdits,
-    getContext,
-    host,
-    listMarkdown,
-    readMarkdown,
-    searchMarkdown,
-  };
+  return { getContext, host, listMarkdown, readFile, searchMarkdown, writeFile };
 }
 
-const activeVersion = {
-  contentHash: "hash:needle",
-  documentGeneration: 1,
-  documentId: "doc:draft.md",
-  editVersion: 1,
-  path: "draft.md",
-  targetGeneration: 1,
-  version: 1,
-  workspaceId: "local:test",
-} satisfies WorkspaceAgentActiveDocumentVersion;
-
-const activeVersion2 = {
-  ...activeVersion,
-  contentHash: "hash:needle-v2",
-  editVersion: 2,
-} satisfies WorkspaceAgentActiveDocumentVersion;
-
-function activeReadResult(version: WorkspaceAgentActiveDocumentVersion) {
+function readResult() {
   return {
     endLine: 1,
+    endOffset: 6,
     path: "draft.md",
-    source: { dirty: false, kind: "active-document" as const, version },
     startLine: 1,
+    startOffset: 0,
     status: "found" as const,
     text: "needle",
     totalBytes: 6,
@@ -349,30 +296,29 @@ function activeReadResult(version: WorkspaceAgentActiveDocumentVersion) {
   };
 }
 
-function appliedResult(): WorkspaceAgentApplyCurrentDocumentEditsResult {
+function appliedResult(): WorkspaceAgentWriteFileResult {
   return {
     appliedEdits: 1,
+    generation: 1,
     outputBytes: 7,
     path: "draft.md",
+    persistence: { status: "saved" },
     status: "applied",
   };
 }
 
-function staleResult(): WorkspaceAgentApplyCurrentDocumentEditsResult {
+function conflictResult(): WorkspaceAgentWriteFileResult {
   return {
-    conflicts: ["editVersion"],
+    editIndex: 0,
     message: "Read again.",
     path: "draft.md",
-    reason: "stale-version",
+    reason: "expected-text-mismatch",
     status: "not-applied",
   };
 }
 
 function toolExecution(callId: string, signal?: AbortSignal) {
-  return {
-    callId,
-    signal,
-  };
+  return { callId, signal };
 }
 
 function toolCallStream(toolCallId: string, toolName: string, input: object) {

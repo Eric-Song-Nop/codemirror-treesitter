@@ -1,21 +1,10 @@
-import type {
-  WorkspaceDocumentPort,
-  WorkspaceEntryPort,
-  WorkspaceIdentity,
-  WorkspaceTreePort,
-  WorkspaceTextSnapshot,
-} from "../../workspace/runtime/types.ts";
-import type { SourceObservation } from "../../workspace/storage/types.ts";
+import type { WorkspaceIdentity, WorkspaceTreePort } from "../../workspace/runtime/types.ts";
+import type { WorkspaceDocuments } from "../../workspace/documents/contracts.ts";
 import { awaitWorkspaceAgentOperation, throwIfWorkspaceAgentAborted } from "./abort.ts";
-import {
-  workspaceAgentActiveDocumentVersion,
-  type WorkspaceAgentActiveDocument,
-} from "../domain/active-document.ts";
 import type {
-  WorkspaceAgentDocumentSource,
   WorkspaceAgentIssue,
-  WorkspaceAgentReadMarkdownInput,
-  WorkspaceAgentReadMarkdownResult,
+  WorkspaceAgentReadFileInput,
+  WorkspaceAgentReadFileResult,
   WorkspaceAgentSearchMarkdownInput,
   WorkspaceAgentSearchMatch,
   WorkspaceAgentSearchResult,
@@ -24,61 +13,29 @@ import type {
 import type { WorkspaceAgentLimits } from "../domain/limits.ts";
 import {
   collectWorkspaceMarkdownCatalog,
-  compareWorkspaceAgentPaths,
-  isWorkspaceAgentMarkdownPath,
   normalizeWorkspaceAgentDirectory,
-  normalizeWorkspaceAgentFilePath,
   resolveWorkspaceMarkdownFile,
-  workspaceAgentPathIsWithinDirectory,
 } from "./workspace-catalog.ts";
 
 export type WorkspaceAgentReadRuntime = {
-  documents: WorkspaceDocumentPort;
-  entries?: Pick<WorkspaceEntryPort, "probe">;
+  documents: WorkspaceDocuments;
   identity: WorkspaceIdentity;
   tree: WorkspaceTreePort;
 };
 
-export async function readWorkspaceMarkdown(input: {
-  activeDocument: WorkspaceAgentActiveDocument | null;
+export async function readWorkspaceFile(input: {
   limits: WorkspaceAgentLimits;
-  request: WorkspaceAgentReadMarkdownInput;
+  request: WorkspaceAgentReadFileInput;
   runtime: WorkspaceAgentReadRuntime;
   signal?: AbortSignal;
-}): Promise<WorkspaceAgentReadMarkdownResult> {
-  let path = normalizeWorkspaceAgentFilePath(input.request.path);
-  if (!path) {
-    return {
-      path: input.request.path,
-      reason: isWorkspaceAgentMarkdownPath(input.request.path)
-        ? "outside-workspace"
-        : "not-markdown",
-      status: "not-found",
-    };
-  }
-
-  let activeDocument = normalizedActiveDocument(input.activeDocument);
-  if (activeDocument?.path == path) {
-    return markdownReadResult({
-      request: input.request,
-      limits: input.limits,
-      path,
-      source: {
-        dirty: activeDocument.dirty,
-        kind: "active-document",
-        version: workspaceAgentActiveDocumentVersion(activeDocument),
-      },
-      totalBytes: utf8ByteLength(activeDocument.value),
-      value: activeDocument.value,
-    });
-  }
-
+}): Promise<WorkspaceAgentReadFileResult> {
   let resolved = await resolveWorkspaceMarkdownFile({
     limits: input.limits.catalog,
-    path,
+    path: input.request.path,
     signal: input.signal,
     tree: input.runtime.tree,
   });
+  let path = resolved.file?.path ?? input.request.path;
   if (resolved.issue) return { issue: resolved.issue, path, status: "unavailable" };
   if (!resolved.file) {
     return {
@@ -88,38 +45,25 @@ export async function readWorkspaceMarkdown(input: {
     };
   }
 
-  let observation: SourceObservation<WorkspaceTextSnapshot>;
   try {
-    observation = await awaitWorkspaceAgentOperation(
-      input.runtime.documents.observe(path),
+    let document = await awaitWorkspaceAgentOperation(
+      input.runtime.documents.document(path),
       input.signal,
     );
+    let value = document.read();
+    return fileReadResult({
+      limits: input.limits,
+      path,
+      request: input.request,
+      value,
+    });
   } catch (error) {
     throwIfWorkspaceAgentAborted(input.signal);
     return { issue: issueFromError(path, error), path, status: "unavailable" };
   }
-  if (observation.state == "missing") return { path, status: "missing" };
-  if (observation.state == "unavailable") {
-    return { issue: issueFromError(path, observation.error), path, status: "unavailable" };
-  }
-
-  return markdownReadResult({
-    request: input.request,
-    limits: input.limits,
-    path,
-    source: {
-      capture: observation.value.capture,
-      contentHash: observation.value.contentHash,
-      kind: "workspace-source",
-      revision: observation.value.revision,
-    },
-    totalBytes: observation.value.bytes.byteLength,
-    value: observation.value.value,
-  });
 }
 
 export async function searchWorkspaceMarkdown(input: {
-  activeDocument: WorkspaceAgentActiveDocument | null;
   limits: WorkspaceAgentLimits;
   request: WorkspaceAgentSearchMarkdownInput;
   runtime: WorkspaceAgentReadRuntime;
@@ -146,20 +90,7 @@ export async function searchWorkspaceMarkdown(input: {
     return emptySearch(query, directory, "not-found");
   }
 
-  let files = [...catalog.files];
-  let activeDocument = normalizedActiveDocument(input.activeDocument);
-  if (
-    activeDocument &&
-    workspaceAgentPathIsWithinDirectory(activeDocument.path, directory) &&
-    !files.some((file) => file.path == activeDocument.path)
-  ) {
-    if (files.length >= input.limits.search.maxFiles) files.pop();
-    files.push({
-      name: activeDocument.path.split("/").at(-1)!,
-      path: activeDocument.path,
-    });
-    files.sort((a, b) => compareWorkspaceAgentPaths(a.path, b.path));
-  }
+  let files = catalog.files;
 
   let issues = [...catalog.issues];
   let matches: WorkspaceAgentSearchMatch[] = [];
@@ -179,7 +110,6 @@ export async function searchWorkspaceMarkdown(input: {
       batch.map((file) =>
         readSearchDocument(
           file.path,
-          activeDocument,
           input.runtime,
           input.limits.search.maxFileBytes,
           input.signal,
@@ -253,37 +183,19 @@ type SearchDocumentResult =
 
 async function readSearchDocument(
   path: string,
-  activeDocument: WorkspaceAgentActiveDocument | null,
   runtime: WorkspaceAgentReadRuntime,
   maxFileBytes: number,
   signal?: AbortSignal,
 ): Promise<SearchDocumentResult> {
-  if (activeDocument?.path == path) {
-    return {
-      bytes: utf8ByteLength(activeDocument.value),
-      kind: "found",
-      value: activeDocument.value,
-    };
-  }
   try {
-    if (runtime.entries) {
-      let probe = await awaitWorkspaceAgentOperation(runtime.entries.probe(path), signal);
-      if (probe.state == "missing") return { kind: "missing" };
-      if (probe.state == "unavailable") {
-        return { issue: issueFromError(path, probe.error), kind: "issue" };
-      }
-      if ((probe.value.metadata.size ?? 0) > maxFileBytes) return { kind: "too-large" };
-    }
-
-    let observation = await awaitWorkspaceAgentOperation(runtime.documents.observe(path), signal);
-    if (observation.state == "missing") return { kind: "missing" };
-    if (observation.state == "unavailable") {
-      return { issue: issueFromError(path, observation.error), kind: "issue" };
-    }
+    let document = await awaitWorkspaceAgentOperation(runtime.documents.document(path), signal);
+    let value = document.read();
+    let bytes = utf8ByteLength(value);
+    if (bytes > maxFileBytes) return { kind: "too-large" };
     return {
-      bytes: observation.value.bytes.byteLength,
+      bytes,
       kind: "found",
-      value: observation.value.value,
+      value,
     };
   } catch (error) {
     throwIfWorkspaceAgentAborted(signal);
@@ -291,20 +203,19 @@ async function readSearchDocument(
   }
 }
 
-function markdownReadResult(input: {
+function fileReadResult(input: {
   limits: WorkspaceAgentLimits;
   path: string;
-  request: WorkspaceAgentReadMarkdownInput;
-  source: WorkspaceAgentDocumentSource;
-  totalBytes: number;
+  request: WorkspaceAgentReadFileInput;
   value: string;
-}): WorkspaceAgentReadMarkdownResult {
+}): WorkspaceAgentReadFileResult {
   let requestedStartLine = positiveInteger(input.request.startLine, 1);
   let requestedLineCount = positiveInteger(input.request.lineCount, input.limits.read.maxLines);
   let lineCount = Math.min(requestedLineCount, input.limits.read.maxLines);
   let lines = input.value.split("\n");
   let totalLines = lines.length;
   let startLine = Math.min(requestedStartLine, totalLines + 1);
+  let startOffset = lineStartOffset(input.value, startLine);
   let endExclusive = Math.min(startLine - 1 + lineCount, totalLines);
   let selected = lines.slice(startLine - 1, endExclusive).join("\n");
   if (endExclusive < totalLines && selected) selected += "\n";
@@ -321,17 +232,29 @@ function markdownReadResult(input: {
 
   return {
     endLine,
+    endOffset: startOffset + text.length,
     nextStartLine: hasMoreLines && !byteTruncated ? endLine + 1 : undefined,
     path: input.path,
-    source: input.source,
     startLine,
+    startOffset,
     status: "found",
     text,
-    totalBytes: input.totalBytes,
+    totalBytes: utf8ByteLength(input.value),
     totalLines,
     truncated:
       byteTruncated || requestedLineCount > input.limits.read.maxLines || endExclusive < totalLines,
   };
+}
+
+function lineStartOffset(value: string, line: number) {
+  if (line <= 1) return 0;
+  let offset = 0;
+  for (let currentLine = 1; currentLine < line; currentLine++) {
+    let nextLine = value.indexOf("\n", offset);
+    if (nextLine < 0) return value.length;
+    offset = nextLine + 1;
+  }
+  return offset;
 }
 
 function collectSearchMatches(input: {
@@ -384,12 +307,6 @@ function truncateUtf8(value: string, maxBytes: number) {
     }
   }
   return { text: "", truncated: true };
-}
-
-function normalizedActiveDocument(activeDocument: WorkspaceAgentActiveDocument | null) {
-  if (!activeDocument) return null;
-  let path = normalizeWorkspaceAgentFilePath(activeDocument.path);
-  return path ? { ...activeDocument, path } : null;
 }
 
 function utf8ByteLength(value: string) {
