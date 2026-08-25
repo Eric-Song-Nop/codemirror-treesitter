@@ -21,7 +21,9 @@ GroveMd is built for a small set of workflows that should stay simple:
 - **Browser Agent**: use your own DeepSeek API key with
   `deepseek-v4-flash` by default, or manually select `deepseek-v4-pro`, to
   search and read the active workspace or apply version-checked edits to its
-  open Markdown document. The Agent orchestration and tools stay in the page.
+  Markdown documents. Multiple page-memory conversations can run in parallel
+  and remain available from the Agent session switcher. The Agent orchestration
+  and tools stay in the page.
 - **Instant live Markdown**: headings, tables, task lists, code fences, KaTeX,
   Mermaid, and images render inline while the document remains editable.
 
@@ -69,9 +71,10 @@ collaboration flows.
   demo.
 - **Browser Agent layer**: Grove uses Vercel AI SDK Core with a lazy
   `@ai-sdk/deepseek` adapter fixed to `https://api.deepseek.com`. A
-  user-provided key remains in page memory while workspace tools list, read,
-  and search Markdown and dispatch version-checked edits through the active
-  CodeMirror/Loro document. DeepSeek's
+  user-provided key and a registry of independently running conversations
+  remain in page memory while workspace tools list, read, and search Markdown
+  and dispatch version-checked edits through workspace-owned Loro documents.
+  DeepSeek's
   [disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) runs by
   default, and its public API documents no client-side opt-out. DeepSeek
   documents per-user isolation and automatic cleanup of unused entries,
@@ -126,8 +129,9 @@ await editor.ready;
 - Optional LiveMD collaboration bindings for Loro documents, presence, custom
   text containers, and collaborative undo/redo.
 - A browser-resident Grove Markdown Agent with DeepSeek BYOK, bounded workspace
-  list/read/search tools, streamed responses, and path-based exact edits through
-  the workspace collaborative-document registry.
+  list/read/search tools, parallel switchable page-memory conversations,
+  streamed responses, and path-based exact edits through the workspace
+  collaborative-document registry.
 - Validation tooling and apps that check public export parity, package
   dependency boundaries, language-data coverage, example coverage, benchmark
   coverage, and runtime behavior against official CodeMirror/Lezer packages.
@@ -181,10 +185,11 @@ this repository replace the language-aware layers above those primitives.
    Local MD Workspace owns a provider-neutral Agent host and a lazy Vercel AI
    SDK `@ai-sdk/deepseek` adapter fixed to `https://api.deepseek.com`.
    `deepseek-v4-flash` is the default, and `deepseek-v4-pro` is the only model
-   the user can select manually. Reads go through the active
-   `WorkspaceRuntime`; writes dispatch one version-checked CodeMirror
-   transaction so the main Loro peer, ordinary undo, and existing persistence
-   paths remain authoritative.
+   the user can select manually. Independent conversation controllers allow
+   concurrent runs and session switching without aborting background work.
+   Reads go through the active `WorkspaceRuntime`; writes dispatch exact edits
+   through workspace-owned collaborative documents so the main Loro peer,
+   ordinary undo, and existing persistence paths remain authoritative.
 
 ## Workspace Structure
 

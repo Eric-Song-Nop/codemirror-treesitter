@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
 import { useWorkspaceAgentHost, type WorkspaceAgentHostRefs } from "./useWorkspaceAgentHost";
 import { WorkspaceAgentPanel } from "./WorkspaceAgentPanel";
@@ -22,18 +22,22 @@ export function WorkspaceAgentFeature({
 }: WorkspaceAgentFeatureProps) {
   let { t } = useI18n();
   let createRunHost = useWorkspaceAgentHost(hostRefs);
-  let { configure, error, errorCode, hasApiKey, messages, model, newChat, send, stop, status } =
-    useWorkspaceAgent({ scopeKey, workspaceKey });
+  let {
+    activeSessionId,
+    configure,
+    error,
+    errorCode,
+    hasApiKey,
+    messages,
+    model,
+    newChat,
+    selectSession,
+    send,
+    sessions,
+    status,
+    stop,
+  } = useWorkspaceAgent({ scopeKey, workspaceKey });
   let displayedError = errorCode ? t(`agent.error.${errorCode}`) : error;
-
-  useEffect(() => {
-    if (!open) stop();
-  }, [open, stop]);
-
-  let close = useCallback(() => {
-    stop();
-    onClose();
-  }, [onClose, stop]);
 
   let sendMessage = useCallback(
     (prompt: string) => send(prompt, createRunHost),
@@ -42,16 +46,19 @@ export function WorkspaceAgentFeature({
 
   return (
     <WorkspaceAgentPanel
+      activeSessionId={activeSessionId}
       error={displayedError}
       hasApiKey={hasApiKey}
       messages={messages}
       model={model}
       open={open}
       runStatus={status}
+      sessions={sessions}
       workspaceAvailable={workspaceAvailable}
-      onClose={close}
+      onClose={onClose}
       onConfigure={configure}
       onNewChat={newChat}
+      onSelectSession={selectSession}
       onSend={sendMessage}
       onStop={stop}
     />

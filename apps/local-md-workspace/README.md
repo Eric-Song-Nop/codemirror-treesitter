@@ -33,8 +33,9 @@ packages.
 - Open a command palette with `Cmd/Ctrl+Shift+P` for file navigation and core
   workspace actions.
 - Run a browser-resident Markdown Agent that can list, read, and search the
-  active local or Dropbox workspace and apply version-checked exact
-  replacements to the active workspace document.
+  active local or Dropbox workspace, keep multiple page-memory conversations
+  running and switchable, and apply version-checked exact replacements to
+  workspace Markdown documents.
 - Insert pasted, dropped, or selected image files into sibling `assets/`
   directories and resolve Markdown image previews through blob URLs.
 - Export Markdown files to standalone HTML through LiveMD's Tree-sitter
@@ -132,10 +133,10 @@ packages.
   model binding.
   Root `runtime.ts` and `ai-sdk-runtime.ts` remain the two small composition
   facades that preserve demand loading.
-- `src/features/workspace-agent`: the lazy React feature, run-host hook, safe AI
-  SDK chat transport, controller, panel, and their component tests. The pure
-  ref-to-host binding stays in the workspace adapter so browser smoke tests do
-  not import React hooks.
+- `src/features/workspace-agent`: the lazy React feature, private multi-session
+  controller registry, run-host hook, safe AI SDK chat transport, switchable
+  panel, and their component tests. The pure ref-to-host binding stays in the
+  workspace adapter so browser smoke tests do not import React hooks.
 - `src/components/ui/*`: local shadcn/radix UI primitives.
 - `scripts/dev.mjs`: starts the local Grove relay when needed, then starts the
   frontend with `VITE_LOCAL_MD_SHARE_RELAY_ORIGIN`.
@@ -192,6 +193,16 @@ Neither value is written to browser storage, URLs, telemetry, or logs. The
 default model is `deepseek-v4-flash`; `deepseek-v4-pro` is the only model the
 user can select manually.
 
+The panel keeps a page-memory registry of conversations. **New chat** creates
+and selects a separate session instead of clearing the current one; the session
+switcher can return to any earlier conversation in the current workspace.
+Each session owns an independent AI SDK `Chat`, run host, status, cancellation,
+and draft, so different sessions can stream concurrently without mixing their
+messages. **Stop** affects only the selected session. Selecting another session
+or hiding the panel leaves background runs active; changing workspaces or
+unmounting the app stops them all and replaces the registry with one empty
+session. Conversations are never written to browser storage.
+
 DeepSeek enables its
 [disk context cache](https://api-docs.deepseek.com/guides/kv_cache/) by default
 for API requests, and its public API documents no client-side opt-out. DeepSeek
@@ -227,7 +238,8 @@ The current Agent is available only for local/cloud workspace routes. Guest
 shared files and standalone-file drafts do not receive an Agent capability. It
 does not provide arbitrary web fetch, shell, JavaScript evaluation, DOM
 automation, file create/rename/delete, WebLLM, embeddings, or a persistent
-conversation/index.
+conversation/index. The switchable session registry exists only for the
+current page lifetime.
 
 The Agent UI loads on the first panel open; AI SDK Core's `ToolLoopAgent` and
 the `@ai-sdk/deepseek` provider load on the first run. Production validation
