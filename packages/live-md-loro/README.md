@@ -27,6 +27,9 @@ plugin and extension helpers needed to bind a LiveMD editor to a `LoroDoc`.
 - Export helpers for resolving the LiveMD text container from a `LoroDoc`.
 - Re-export collaboration undo and redo commands as `liveMdLoroUndo` and
   `liveMdLoroRedo`.
+- Project direct local Loro edits marked by
+  `commitLiveMdLoroExternalEdit(...)` into every bound editor without writing
+  the resulting CodeMirror transaction back into Loro.
 - Drain the initial Loro dispatch guard when the editor document already
   matches the Loro document, avoiding a redundant initial replacement.
 
@@ -34,6 +37,7 @@ plugin and extension helpers needed to bind a LiveMD editor to a `LoroDoc`.
 
 ```ts
 import {
+  commitLiveMdLoroExternalEdit,
   getLiveMdLoroText,
   liveMdLoroCollaboration,
   liveMdLoroCollaborationPlugin,
@@ -55,6 +59,11 @@ const plugin = liveMdLoroCollaborationPlugin({
   undoManager,
   text: "markdown",
 });
+
+const text = doc.getText("markdown");
+text.insert(0, "Agent edit");
+commitLiveMdLoroExternalEdit(doc);
+text.free();
 ```
 
 `text` may be a string key or a function that returns a `LoroText` from the
@@ -73,6 +82,12 @@ The exported `createLiveMdLoroTextGetter(...)` and `getLiveMdLoroText(...)`
 helpers are low-level accessors rather than collaboration-owned adapters. Their
 returned native `LoroText` handles are caller-owned and should be freed after
 use.
+
+Use `commitLiveMdLoroExternalEdit(...)` when an application actor edits the
+bound `LoroDoc` directly rather than through CodeMirror. The marker lets every
+bound view apply the Loro diff as a remote CodeMirror transaction while
+preventing an echo commit. Ordinary editor transactions should continue to call
+`doc.commit()` through the collaboration extension.
 
 ## Web Component Usage
 

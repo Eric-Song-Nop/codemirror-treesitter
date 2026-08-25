@@ -155,7 +155,8 @@ packages.
   states, path-scoped persistence, and current-document reconciliation
   contracts.
 - [Browser Agent Architecture](./BROWSER_AGENT_PLAN.md): browser-side workspace
-  tools, active-document editing, BYOK boundaries, and resource budgets.
+  tools, path-based collaborative-document editing, BYOK boundaries, and
+  resource budgets.
 - [Effect and Zustand migration](./EFFECT_ZUSTAND_MIGRATION.md): app-only
   dependency boundary, lifecycle invariants, and phased migration plan.
 
@@ -203,24 +204,23 @@ The available tools are:
 
 - `get_workspace_context`
 - `list_markdown_files`
-- `read_markdown`
+- `read_file`
 - `search_markdown`
-- `apply_current_document_edits`
+- `write_file`
 
-Listing, reading, and literal search can inspect Markdown files across the
-active local or Dropbox workspace. The unsaved active document is read from the
-live editor; inactive files are read-only. Writes are limited to exact unique
-replacements in the workspace document bound when the run starts. The host
-validates workspace, document, path, editor, generation, version, and content
-hash immediately before applying all replacements in one transaction.
+Listing, reading, literal search, and exact writes operate across Markdown files
+in the active local or Dropbox workspace. Reads and searches resolve content
+through the workspace-owned `WorkspaceDocuments` registry, so selected and
+unselected views observe the same Loro authority. `read_file` returns absolute
+UTF-16 offsets; `write_file` validates `{ from, to, expectedText, insert }`
+edits against one current document snapshot before applying them atomically.
 
-Agent writes use
-`EditorView.dispatch({ changes, userEvent: "input.agent" })`.
-The existing `loro-codemirror` binding commits that input on the main Loro peer,
-which preserves ordinary undo and routes the update through the existing
-IndexedDB pending log, BroadcastChannel, Grove Relay, autosave, and OpenDAL
-materialization paths. There is no separate Agent CRDT peer, selective Agent
-undo, edit approval queue, or cross-file write path.
+Agent writes call `CollaborativeDocument.edit(...)` and then `flush()`. The
+document's marked local Loro transaction is projected into any bound CodeMirror
+view without an echo commit, while browser recovery, BroadcastChannel, Grove
+Relay, and source materialization remain document-owned. A successful logical
+edit remains `status: "applied"` even when the result separately reports that
+filesystem persistence is blocked or failed.
 
 The current Agent is available only for local/cloud workspace routes. Guest
 shared files and standalone-file drafts do not receive an Agent capability. It

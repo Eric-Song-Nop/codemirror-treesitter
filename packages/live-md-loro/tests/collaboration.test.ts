@@ -6,6 +6,7 @@ import { loroSyncAnnotation } from "loro-codemirror/sync";
 import { EphemeralStore, LoroDoc, UndoManager } from "loro-crdt";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  commitLiveMdLoroExternalEdit,
   createLiveMdLoroTextGetter,
   getLiveMdLoroText,
   liveMdLoroCollaboration,
@@ -170,6 +171,45 @@ describe("liveMdLoroCollaboration", () => {
     expect(text.toString()).toBe("from loro!");
     await editor.ready;
     destroyTestEditor(editor);
+  });
+
+  it("syncs marked local Loro edits into the editor without writing them back", async () => {
+    let doc = ownNative(new LoroDoc());
+    let text = ownNative(doc.getText("markdown"));
+    text.insert(0, "before");
+    doc.commit();
+    let localUpdates = 0;
+    let unsubscribe = doc.subscribeLocalUpdates(() => localUpdates++);
+    ownResource(unsubscribe, unsubscribe);
+
+    let remoteFlags: boolean[] = [];
+    let remoteRecorder = StateField.define<null>({
+      create: () => null,
+      update(value, transaction) {
+        if (transaction.docChanged) {
+          remoteFlags.push(transaction.annotation(Transaction.remote) === true);
+        }
+        return value;
+      },
+    });
+    let editor = createTestEditor({
+      defaultValue: "before",
+      extensions: [liveMdLoroCollaboration({ doc }), remoteRecorder],
+      parent: document.body.appendChild(document.createElement("div")),
+    });
+    await flushMicrotasks();
+    localUpdates = 0;
+    remoteFlags = [];
+
+    text.delete(0, 6);
+    text.insert(0, "after");
+    commitLiveMdLoroExternalEdit(doc);
+    await flushMicrotasks();
+
+    expect(editor.value).toBe("after");
+    expect(text.toString()).toBe("after");
+    expect(localUpdates).toBe(1);
+    expect(remoteFlags).toEqual([true]);
   });
 
   it("syncs the first editor edit when both documents start empty", async () => {

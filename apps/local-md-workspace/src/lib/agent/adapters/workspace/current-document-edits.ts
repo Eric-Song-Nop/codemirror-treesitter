@@ -8,7 +8,7 @@ import type {
   WorkspaceAgentApplyCurrentDocumentEditsInput,
   WorkspaceAgentApplyCurrentDocumentEditsResult,
   WorkspaceAgentEditFailureReason,
-  WorkspaceAgentTextEdit,
+  WorkspaceAgentLegacyTextEdit,
 } from "../../domain/contracts.ts";
 import type { WorkspaceAgentLimits } from "../../domain/limits.ts";
 
@@ -41,7 +41,7 @@ type ResolveWorkspaceAgentTextEditsResult =
 
 function resolveWorkspaceAgentTextEdits(input: {
   baseValue: string;
-  edits: readonly WorkspaceAgentTextEdit[];
+  edits: readonly WorkspaceAgentLegacyTextEdit[];
   maxOutputBytes: number;
   maxReplacements: number;
 }): ResolveWorkspaceAgentTextEditsResult {

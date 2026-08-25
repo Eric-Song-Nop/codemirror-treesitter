@@ -1,4 +1,7 @@
-import { liveMdLoroCollaborationPlugin } from "@codemirror-treesitter/live-md-loro";
+import {
+  commitLiveMdLoroExternalEdit,
+  liveMdLoroCollaborationPlugin,
+} from "@codemirror-treesitter/live-md-loro";
 import type { LiveMdConfig } from "@codemirror-treesitter/live-md";
 import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
 import type { Frontiers } from "loro-crdt";
@@ -55,6 +58,10 @@ export type CollabDocumentState = {
   undoManager: UndoManager;
   value: string;
 };
+
+export function commitCollabDocumentExternalEdit(state: CollabDocumentState) {
+  commitLiveMdLoroExternalEdit(state.doc);
+}
 
 export type CollabExternalEditResolution = {
   kind: "imported";

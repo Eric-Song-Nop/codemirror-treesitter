@@ -134,14 +134,7 @@ export function LocalWorkspaceApp() {
   let documentTargetGenerationRef = useRef(0);
   let agentWorkspaceKey = singleFileSource ? "" : (workspaceRuntime?.identity.id ?? "");
   let effectiveBusy = busy || openingDocument != null;
-  let agentScopeKey = [
-    agentWorkspaceKey,
-    selectedFile?.path ?? "",
-    collabDocument?.docId ?? "",
-    singleFileSource?.kind ?? "",
-    activeDocumentGenerationRef.current,
-    documentTargetGenerationRef.current,
-  ].join("\u0000");
+  let agentScopeKey = agentWorkspaceKey;
   let {
     activeShareForSelectedFile,
     activeShareRecord,
@@ -746,16 +739,8 @@ export function LocalWorkspaceApp() {
         {agentActivated ? (
           <Suspense fallback={null}>
             <WorkspaceAgentFeature
-              activeDocumentGenerationRef={activeDocumentGenerationRef}
-              collabDocumentRef={collabDocumentRef}
-              dirtyRef={dirtyRef}
-              documentTargetGenerationRef={documentTargetGenerationRef}
-              editorElementRef={editorElementRef}
-              editVersionRef={editVersionRef}
               open={agentOpen}
               scopeKey={agentScopeKey}
-              selectedFileRef={selectedFileRef}
-              selectedFileSourceRef={selectedFileSourceRef}
               singleFileSourceRef={singleFileSourceRef}
               workspaceAvailable={Boolean(workspaceRuntime && !singleFileSource)}
               workspaceKey={agentWorkspaceKey}

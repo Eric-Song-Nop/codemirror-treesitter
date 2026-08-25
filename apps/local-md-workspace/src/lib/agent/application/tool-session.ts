@@ -1,14 +1,14 @@
-import { WORKSPACE_AGENT_MAX_STALE_RETRIES, WORKSPACE_AGENT_MAX_TOOL_CALLS } from "./policy.ts";
+import { WORKSPACE_AGENT_MAX_TOOL_CALLS } from "./policy.ts";
 import type {
-  WorkspaceAgentApplyCurrentDocumentEditsInput,
-  WorkspaceAgentApplyCurrentDocumentEditsResult,
   WorkspaceAgentContext,
   WorkspaceAgentListMarkdownInput,
   WorkspaceAgentListMarkdownResult,
-  WorkspaceAgentReadMarkdownInput,
-  WorkspaceAgentReadMarkdownResult,
+  WorkspaceAgentReadFileInput,
+  WorkspaceAgentReadFileResult,
   WorkspaceAgentSearchMarkdownInput,
   WorkspaceAgentSearchResult,
+  WorkspaceAgentWriteFileInput,
+  WorkspaceAgentWriteFileResult,
 } from "../domain/contracts.ts";
 import type { WorkspaceAgentHost } from "./host-port.ts";
 import type { WorkspaceAgentRunEvent } from "./run-contracts.ts";
@@ -18,33 +18,24 @@ export type WorkspaceAgentToolExecution = {
   signal?: AbortSignal;
 };
 
-export type WorkspaceAgentApplyCurrentDocumentEditsToolResult =
-  | WorkspaceAgentApplyCurrentDocumentEditsResult
-  | {
-      message: string;
-      path: string;
-      reason: "stale-retry-limit";
-      status: "not-applied";
-    };
-
 export interface WorkspaceAgentToolSession {
-  applyCurrentDocumentEdits(
-    input: WorkspaceAgentApplyCurrentDocumentEditsInput,
-    execution: WorkspaceAgentToolExecution,
-  ): Promise<WorkspaceAgentApplyCurrentDocumentEditsToolResult>;
   getContext(execution: WorkspaceAgentToolExecution): Promise<WorkspaceAgentContext>;
   listMarkdown(
     input: WorkspaceAgentListMarkdownInput,
     execution: WorkspaceAgentToolExecution,
   ): Promise<WorkspaceAgentListMarkdownResult>;
-  readMarkdown(
-    input: WorkspaceAgentReadMarkdownInput,
+  readFile(
+    input: WorkspaceAgentReadFileInput,
     execution: WorkspaceAgentToolExecution,
-  ): Promise<WorkspaceAgentReadMarkdownResult>;
+  ): Promise<WorkspaceAgentReadFileResult>;
   searchMarkdown(
     input: WorkspaceAgentSearchMarkdownInput,
     execution: WorkspaceAgentToolExecution,
   ): Promise<WorkspaceAgentSearchResult>;
+  writeFile(
+    input: WorkspaceAgentWriteFileInput,
+    execution: WorkspaceAgentToolExecution,
+  ): Promise<WorkspaceAgentWriteFileResult>;
 }
 
 type ToolDeduplicatedEvent = Extract<WorkspaceAgentRunEvent, { type: "tool-deduplicated" }>;
@@ -54,8 +45,6 @@ export function createWorkspaceAgentToolSession(
   onEvent?: (event: ToolDeduplicatedEvent) => void,
 ): WorkspaceAgentToolSession {
   let calls = new Map<string, { promise: Promise<unknown>; semanticKey: string }>();
-  let staleRetryPending = false;
-  let staleRetriesUsed = 0;
 
   let execute = <OUTPUT>(
     toolName: string,
@@ -98,32 +87,19 @@ export function createWorkspaceAgentToolSession(
   };
 
   return {
-    applyCurrentDocumentEdits: (input, execution) =>
-      execute("apply_current_document_edits", input, execution, () => {
-        if (staleRetryPending && staleRetriesUsed >= WORKSPACE_AGENT_MAX_STALE_RETRIES) {
-          return {
-            message: `The run used all ${WORKSPACE_AGENT_MAX_STALE_RETRIES} stale edit retries. Start a new run after reviewing the document.`,
-            path: input.version.path,
-            reason: "stale-retry-limit" as const,
-            status: "not-applied" as const,
-          };
-        }
-        if (staleRetryPending) staleRetriesUsed++;
-        let result = host.applyCurrentDocumentEdits(input, execution.signal);
-        staleRetryPending = result.status == "not-applied" && result.reason == "stale-version";
-        return result;
-      }),
     getContext: (execution) =>
       execute("get_workspace_context", {}, execution, () => host.getContext()),
     listMarkdown: (input, execution) =>
       execute("list_markdown_files", input, execution, () =>
         host.listMarkdown(input, execution.signal),
       ),
-    readMarkdown: (input, execution) =>
-      execute("read_markdown", input, execution, () => host.readMarkdown(input, execution.signal)),
+    readFile: (input, execution) =>
+      execute("read_file", input, execution, () => host.readFile(input, execution.signal)),
     searchMarkdown: (input, execution) =>
       execute("search_markdown", input, execution, () =>
         host.searchMarkdown(input, execution.signal),
       ),
+    writeFile: (input, execution) =>
+      execute("write_file", input, execution, () => host.writeFile(input, execution.signal)),
   };
 }

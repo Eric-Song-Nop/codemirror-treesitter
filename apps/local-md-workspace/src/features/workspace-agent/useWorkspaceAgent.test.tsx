@@ -95,14 +95,14 @@ describe("useWorkspaceAgent", () => {
       input.onEvent?.({ delta: " two", type: "text-delta" });
       input.onEvent?.({
         toolCallId: "private-call-id",
-        toolName: "read_markdown",
+        toolName: "read_file",
         type: "tool-start",
       });
       input.onEvent?.({
         durationMs: 4,
         outcome: "success",
         toolCallId: "private-call-id",
-        toolName: "read_markdown",
+        toolName: "read_file",
         type: "tool-finish",
       });
       return deferred.promise;
@@ -118,7 +118,7 @@ describe("useWorkspaceAgent", () => {
     await waitUntil(() => messageText(currentApi?.messages.at(-1)) == "one two");
 
     let toolPart = currentApi?.messages.at(-1)?.parts.find(isToolUIPart);
-    expect(toolPart && getToolName(toolPart)).toBe("read_markdown");
+    expect(toolPart && getToolName(toolPart)).toBe("read_file");
     expect(toolPart).toMatchObject({
       input: {},
       output: { status: "success" },

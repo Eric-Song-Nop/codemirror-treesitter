@@ -1,14 +1,13 @@
-import { EditorState, Transaction } from "@codemirror/state";
+import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { convertArrayToReadableStream, MockLanguageModelV4 } from "ai/test";
-import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import {
   createWorkspaceAgentRunHost,
   type WorkspaceAgentHostRefs,
 } from "../src/lib/agent/adapters/workspace/run-host.ts";
 import { runWorkspaceAgentWithAiSdkModel } from "../src/lib/agent/adapters/ai-sdk/runner.ts";
 import type { WorkspaceAgentRunEvent } from "../src/lib/agent/application/run-contracts.ts";
-import type { WorkspaceAgentApplyCurrentDocumentEditsResult } from "../src/lib/agent/domain/contracts.ts";
+import type { WorkspaceAgentWriteFileResult } from "../src/lib/agent/domain/contracts.ts";
 import type { WorkspaceCollaborativeDocument } from "../src/lib/workspace/documents/contracts.ts";
 import { createMemoryWorkspaceRuntime } from "../src/test/memory-workspace-runtime.ts";
 
@@ -20,9 +19,8 @@ export type WorkspaceAgentBrowserIntegrationResult = {
   persistedValue: string;
   response: string;
   standaloneBlocked: boolean;
-  switchedWriteReason: string | null;
   toolNames: string[];
-  userEvents: Array<string | null>;
+  unselectedValue: string;
 };
 
 /**
@@ -32,22 +30,26 @@ export type WorkspaceAgentBrowserIntegrationResult = {
 export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAgentBrowserIntegrationResult> {
   let suffix = uniqueSuffix();
   let path = `agent-${suffix}.md`;
+  let otherPath = `other-${suffix}.md`;
   let initialValue = "# Browser Agent\n\nbefore\n";
   let expectedValue = "# Browser Agent\n\nafter\n";
-  let runtime = createMemoryWorkspaceRuntime([[path, initialValue]], {
-    id: `agent-smoke:${suffix}`,
-    name: "Agent smoke",
-  });
+  let from = initialValue.indexOf("before");
+  let runtime = createMemoryWorkspaceRuntime(
+    [
+      [path, initialValue],
+      [otherPath, "other"],
+    ],
+    {
+      id: `agent-smoke:${suffix}`,
+      name: "Agent smoke",
+    },
+  );
   let view: EditorView | null = null;
   let parent: HTMLDivElement | null = null;
   let unsubscribeLocalUpdates: (() => void) | null = null;
 
   try {
     let documentState: WorkspaceCollaborativeDocument = await runtime.documents.document(path);
-    let dirtyRef = { current: false };
-    let editVersionRef = { current: 0 };
-    let editorValueRef = { current: initialValue };
-    let userEvents: Array<string | null> = [];
     parent = document.body.appendChild(document.createElement("div"));
     view = new EditorView({
       parent,
@@ -55,39 +57,17 @@ export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAg
         doc: initialValue,
         extensions: [
           documentState.liveMdConfig.plugins?.map((plugin) => plugin.extension ?? []) ?? [],
-          EditorView.updateListener.of((update) => {
-            if (!update.docChanged) return;
-            dirtyRef.current = true;
-            editVersionRef.current += 1;
-            editorValueRef.current = update.state.doc.toString();
-            userEvents.push(update.transactions.at(-1)?.annotation(Transaction.userEvent) ?? null);
-          }),
         ],
       }),
     });
 
     let refs: WorkspaceAgentHostRefs = {
-      activeDocumentGenerationRef: { current: 1 },
-      collabDocumentRef: { current: documentState },
-      dirtyRef,
-      documentTargetGenerationRef: { current: 1 },
-      editorElementRef: { current: { view } as LiveMdEditorElement },
-      editVersionRef,
-      selectedFileSourceRef: { current: runtime },
-      selectedFileRef: {
-        current: { kind: "file", name: path, path },
-      },
       singleFileSourceRef: { current: null },
       workspaceRuntimeRef: { current: runtime },
     };
     let host = createWorkspaceAgentRunHost(refs);
-    if (!host) throw new Error("The real collaboration document did not bind to the Agent host.");
+    if (!host) throw new Error("The workspace registry did not bind to the Agent host.");
 
-    let read = await host.readMarkdown({ path });
-    if (read.status != "found" || read.source.kind != "active-document") {
-      throw new Error("The Agent did not read the open collaboration document as active.");
-    }
-    let version = read.source.version;
     let localUpdates = 0;
     await flushMicrotasks();
     unsubscribeLocalUpdates = documentState.loroDoc.subscribeLocalUpdates(() => localUpdates++);
@@ -96,12 +76,12 @@ export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAg
       modelId: "mock-browser-agent",
       provider: "mock",
       doStream: [
-        toolCallStream("read-current", "read_markdown", { path }),
-        toolCallStream("edit-current", "apply_current_document_edits", {
-          edits: [{ newText: "after", oldText: "before" }],
-          version,
+        toolCallStream("read-current", "read_file", { path }),
+        toolCallStream("edit-current", "write_file", {
+          edits: [{ expectedText: "before", from, insert: "after", to: from + 6 }],
+          path,
         }),
-        textStream("Updated the open document."),
+        textStream("Updated the workspace document."),
       ],
     });
 
@@ -117,19 +97,12 @@ export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAg
 
     let editorValue = view.state.doc.toString();
     let loroValue = documentState.read();
-    await documentState.flush();
     let persistedValue = runtime.files.get(path) ?? "";
-
-    refs.selectedFileRef.current = {
-      kind: "file",
-      name: "other.md",
-      path: "other.md",
-    };
-    let switchedWrite = host.applyCurrentDocumentEdits({
-      edits: [{ newText: "again", oldText: "after" }],
-      version,
+    let unselectedWrite = await host.writeFile({
+      edits: [{ expectedText: "other", from: 0, insert: "unselected", to: 5 }],
+      path: otherPath,
     });
-    refs.selectedFileRef.current = { kind: "file", name: path, path };
+    let unselectedValue = runtime.files.get(otherPath) ?? "";
     refs.singleFileSourceRef.current = {
       draftId: "standalone",
       kind: "draft",
@@ -143,8 +116,8 @@ export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAg
       loroValue,
       persistedValue,
       result: result.message.content,
-      switchedWrite,
-      userEvents,
+      unselectedValue,
+      unselectedWrite,
     });
 
     return {
@@ -155,11 +128,10 @@ export async function runWorkspaceAgentBrowserIntegration(): Promise<WorkspaceAg
       persistedValue,
       response: result.message.content,
       standaloneBlocked: createWorkspaceAgentRunHost(refs) == null,
-      switchedWriteReason: switchedWrite.status == "not-applied" ? switchedWrite.reason : null,
       toolNames: events
         .filter((event) => event.type == "tool-start")
         .map((event) => event.toolName),
-      userEvents,
+      unselectedValue,
     };
   } finally {
     unsubscribeLocalUpdates?.();
@@ -176,10 +148,10 @@ function assertIntegrationResult(input: {
   loroValue: string;
   persistedValue: string;
   result: string;
-  switchedWrite: WorkspaceAgentApplyCurrentDocumentEditsResult;
-  userEvents: Array<string | null>;
+  unselectedValue: string;
+  unselectedWrite: WorkspaceAgentWriteFileResult;
 }) {
-  if (input.result != "Updated the open document.") {
+  if (input.result != "Updated the workspace document.") {
     throw new Error(`Unexpected fake Agent response: ${input.result}`);
   }
   if (
@@ -198,16 +170,12 @@ function assertIntegrationResult(input: {
   if (input.localUpdates != 1) {
     throw new Error(`Expected one main-peer Loro update, received ${input.localUpdates}.`);
   }
-  if (input.userEvents.length != 1 || input.userEvents[0] != "input.agent") {
-    throw new Error(`Expected one input.agent transaction: ${JSON.stringify(input.userEvents)}`);
-  }
   if (
-    input.switchedWrite.status != "not-applied" ||
-    input.switchedWrite.reason != "active-document-unavailable"
+    input.unselectedWrite.status != "applied" ||
+    input.unselectedWrite.persistence.status != "saved" ||
+    input.unselectedValue != "unselected"
   ) {
-    throw new Error(
-      `A document switch did not fail closed: ${JSON.stringify(input.switchedWrite)}`,
-    );
+    throw new Error(`The unselected document write failed: ${JSON.stringify(input)}`);
   }
 }
 

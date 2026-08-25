@@ -26,6 +26,12 @@ export function getCollabDocumentValue(
   return requireMarkdownDocumentRuntime().getCollabDocumentValue(...args);
 }
 
+export function commitCollabDocumentExternalEdit(
+  ...args: Parameters<MarkdownDocumentRuntime["commitCollabDocumentExternalEdit"]>
+) {
+  return requireMarkdownDocumentRuntime().commitCollabDocumentExternalEdit(...args);
+}
+
 export function collabDocumentNeedsSourceWrite(
   ...args: Parameters<MarkdownDocumentRuntime["collabDocumentNeedsSourceWrite"]>
 ) {

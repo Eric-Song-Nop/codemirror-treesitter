@@ -18,17 +18,15 @@ part: the browser calls DeepSeek directly with a user-provided API key.
 - Run the MVP Agent on the browser main thread. Remote streaming and workspace
   I/O are asynchronous; a Worker becomes relevant only for local inference or
   a CPU-heavy long-lived index.
-- Allow workspace-wide Markdown listing, reading, and literal text search.
-- Allow writes only to the workspace document that is active when the Agent run
-  starts.
-- Treat an Agent edit as another local editor input. Use the existing ordinary
-  undo behavior; do not add an Agent peer, inverse updates, selective Agent undo,
-  run rollback, or per-edit approval.
-- Dispatch Agent changes through the active CodeMirror `EditorView`. The
-  existing `loro-codemirror` binding then commits them as local operations on
-  the main Loro peer and feeds the existing browser persistence, cross-tab,
-  relay, and source-autosave paths.
-- Reject stale intent before dispatch. CRDT convergence does not make a model's
+- Allow workspace-wide Markdown listing, reading, literal text search, and
+  exact writes through the workspace document registry.
+- Treat an Agent edit as another actor input to the shared Loro document. Do not
+  add a persistent Agent peer, inverse updates, selective Agent undo, run
+  rollback, or per-edit approval.
+- Apply Agent changes through `CollaborativeDocument.edit(...)`; bound
+  CodeMirror views subscribe to that authority, while browser persistence,
+  cross-tab transport, relay, and source materialization stay document-owned.
+- Reject stale intent before editing. CRDT convergence does not make a model's
   edit semantically correct when the user or another peer changed its base.
 - Keep Agent domain contracts SDK-independent; UI state retains only text and
   generic tool status so another browser runtime can replace AI SDK later.
@@ -43,8 +41,8 @@ The MVP includes:
 - streamed assistant text and summarized tool activity;
 - Stop and New chat actions;
 - workspace context, Markdown listing, reading, and bounded search;
-- reading the unsaved active document from CodeMirror/Loro memory;
-- version-bound exact replacements in the current document;
+- reading selected or unselected files from their shared Loro documents;
+- expected-text exact edits to any exposed workspace Markdown file;
 - structured conflict, truncation, unavailable, provider, and cancellation
   states;
 - normal Loro undo, browser persistence, BroadcastChannel, Grove Relay, and
@@ -55,7 +53,6 @@ The MVP includes:
 The MVP excludes:
 
 - guest shared-file and standalone-file Agent entry points;
-- writes to inactive files;
 - create, rename, move, delete, or multi-file transactions;
 - an Agent-specific undo stack or proposal/fork workflow;
 - conversation persistence;
@@ -121,55 +118,33 @@ The first tool set is:
 ```text
 get_workspace_context
 list_markdown_files
-read_markdown
+read_file
 search_markdown
-apply_current_document_edits
+write_file
 ```
 
-`read_markdown` returns the live CodeMirror value and an opaque version token
-when its path is the active document. Inactive files are read from
-`WorkspaceRuntime.documents.observe` and remain read-only.
+`read_file` resolves the path through `WorkspaceRuntime.documents` and returns
+the current Loro value plus absolute UTF-16 offsets for the requested window.
+The selected CodeMirror view has no authority or write capability that an
+unselected document lacks.
 
-The active-document version token represents at least:
-
-```ts
-type ActiveDocumentVersion = {
-  version: 1;
-  workspaceId: string;
-  documentId: string;
-  path: string;
-  documentGeneration: number;
-  targetGeneration: number;
-  editVersion: number;
-  contentHash: string;
-};
-```
-
-The write tool accepts exact replacements:
+The write tool accepts exact offset edits:
 
 ```ts
 type AgentTextEdit = {
-  oldText: string;
-  newText: string;
+  from: number;
+  to: number;
+  expectedText: string;
+  insert: string;
 };
 ```
 
-Every `oldText` must identify exactly one range in the base snapshot. All edits
-are resolved against that same snapshot, must not overlap, and are dispatched in
-one CodeMirror transaction. Missing, ambiguous, overlapping, stale, or oversized
-edits produce a structured result and no partial write.
-
-Immediately before dispatch, in one synchronous call stack, the host validates
-workspace identity, document ID, path, document and target generations, edit
-version, content hash, editor/Loro agreement, the captured `EditorView`, and
-cancellation state. A conflict lets the Agent reread and retry at most twice.
-
-The write is a single `EditorView.dispatch` transaction tagged
-`input.agent`. It deliberately does not mutate a separate Agent Loro peer. The
-existing `loro-codemirror` binding turns that transaction into an ordinary
-local operation on the main Loro peer, so normal undo, pending-update storage,
-cross-tab broadcast, Grove Relay, and source autosave continue through their
-existing paths.
+Every range is checked against `expectedText` in one current document snapshot;
+ranges must be valid and non-overlapping. Conflicts and oversized output produce
+a structured result with no partial write. Successful edits enter the shared
+Loro document synchronously, then `flush()` waits for their filesystem
+projection. A projection error is reported separately from the already-applied
+logical edit so the Agent does not repeat it.
 
 ## Initial Budgets
 
@@ -189,15 +164,14 @@ measurements:
 | Search snippet               |      240 characters |
 | Local/cloud read concurrency |               4 / 2 |
 | Minimum literal query        |        2 characters |
-| Replacements per write       |                  32 |
+| Exact edits per write        |                  32 |
 | Edited document output       |             256 KiB |
 | Agent steps per run          |                  12 |
 | Unique tool calls per run    |                  12 |
-| Stale retries                |                   2 |
 | Default run timeout          |             120 sec |
 
 Search is literal substring matching in the MVP. It reports scanned files,
 bytes, matches, partial failures, and the budget that truncated a result. The
-active document's unsaved value overrides its storage observation. The unique
+collaborative document's current value overrides its storage projection. The unique
 tool-call budget counts first-seen tool-call IDs; a deduplicated retry of the
 same ID does not consume another slot.

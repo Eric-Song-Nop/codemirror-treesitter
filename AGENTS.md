@@ -143,10 +143,11 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   state stay out of browser storage. DeepSeek documents per-user cache
   isolation and cleanup of unused entries, typically within a few hours to
   days.
-- Agent writes are current-workspace-document-only. Dispatch them through the
-  active CodeMirror view so `loro-codemirror`, ordinary undo, collaboration,
-  and source persistence remain authoritative; do not mutate storage or a
-  second Loro peer as an Agent shortcut.
+- Agent reads and writes are current-workspace Markdown only. Resolve every
+  content path through `WorkspaceRuntime.documents.document(path)` and apply
+  exact edits to that shared Loro document; do not dispatch through a selected
+  CodeMirror view, mutate storage, or create a second persistent Loro peer as
+  an Agent shortcut.
 - `packages/opendal-wasm-browser` is private and experimental. Its generated
   `pkg/` output must be rebuilt with the package WASM task when Rust wrapper
   code changes.
