@@ -90,6 +90,8 @@ export type CollabDocumentMaterialization = {
 
 export type MaterializeCollabDocumentResult = {
   externalEdit?: CollabExternalEditResolution;
+  materialization: CollabDocumentMaterialization;
+  sourceUpdate: Uint8Array | null;
 };
 
 type AcknowledgeCollabDocumentSourceSavedOptions = {
@@ -424,7 +426,11 @@ export async function materializeCollabDocument(
     },
     versionVector: materialization.versionVector,
   });
-  return { externalEdit: sourceImport?.externalEdit };
+  return {
+    externalEdit: sourceImport?.externalEdit,
+    materialization,
+    sourceUpdate: sourceImport?.update ?? null,
+  };
 }
 
 export async function acknowledgeCollabDocumentSourceSaved(
