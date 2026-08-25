@@ -1,5 +1,4 @@
 import { useCallback, useState } from "react";
-import type { WorkspaceDocumentIntentLease } from "@/app/document-session-coordinator";
 import type { FileTreeCreateKind, FileTreeDeleteTarget } from "@/components/FileTree";
 import type { TFunction } from "@/lib/i18n";
 import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
@@ -23,16 +22,16 @@ type MutableRef<T> = {
 
 type UseWorkspaceEntryDialogsOptions = {
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
-  beginDocumentTransition: (path?: string) => WorkspaceDocumentIntentLease;
-  clearActiveDocument: () => Promise<void>;
+  beginDocumentViewChange: (path?: string) => AbortSignal;
+  cancelImageUpload: () => void;
+  clearDocumentView: () => Promise<void>;
   collabDocumentRef: MutableRef<WorkspaceCollaborativeDocument | null>;
-  documentTargetGenerationRef: MutableRef<number>;
-  finishDocumentTransition: (lease: WorkspaceDocumentIntentLease) => void;
+  finishDocumentViewChange: (signal: AbortSignal) => void;
   loadTree: (
     runtime: WorkspaceRuntime,
     nextSelectedPath?: null | string,
     options?: {
-      documentIntent?: WorkspaceDocumentIntentLease;
+      documentSignal?: AbortSignal;
       saveBeforeSelect?: boolean;
     },
   ) => Promise<void>;
@@ -52,11 +51,11 @@ type UseWorkspaceEntryDialogsOptions = {
 
 export function useWorkspaceEntryDialogs({
   autoSaveTaskRef,
-  beginDocumentTransition,
-  clearActiveDocument,
+  beginDocumentViewChange,
+  cancelImageUpload,
+  clearDocumentView,
   collabDocumentRef,
-  documentTargetGenerationRef,
-  finishDocumentTransition,
+  finishDocumentViewChange,
   loadTree,
   saveCurrentFile,
   saveOperationRef,
@@ -122,7 +121,7 @@ export function useWorkspaceEntryDialogs({
   let submitFileDialog = useCallback(
     async (value: string) => {
       if (!workspaceRuntime || !fileDialogMode) return;
-      documentTargetGenerationRef.current += 1;
+      cancelImageUpload();
       if (!(await saveCurrentFile())) return;
 
       setFileDialogError("");
@@ -132,7 +131,7 @@ export function useWorkspaceEntryDialogs({
       let currentWorkspacePath = singleFileSourceRef.current
         ? null
         : (selectedFileRef.current?.path ?? null);
-      let closesActiveSession =
+      let replacesSelectedView =
         fileDialogMode == "rename" &&
         Boolean(
           currentTarget &&
@@ -142,11 +141,11 @@ export function useWorkspaceEntryDialogs({
       let reopenPath = currentWorkspacePath;
       let revision =
         currentTarget?.kind == "file" && currentTarget.path == currentWorkspacePath
-          ? activeDocumentRevision(collabDocumentRef.current)
+          ? selectedDocumentRevision(collabDocumentRef.current)
           : undefined;
-      let documentIntent: WorkspaceDocumentIntentLease | null = null;
+      let documentSignal: AbortSignal | null = null;
       try {
-        if (closesActiveSession) await clearActiveDocument();
+        if (replacesSelectedView) await clearDocumentView();
         let nextPath =
           fileDialogMode == "create"
             ? await workspaceRuntime.entries.create(value)
@@ -159,34 +158,34 @@ export function useWorkspaceEntryDialogs({
           currentTarget?.kind == "directory" && nextPath
             ? pathAfterDirectoryRename(currentWorkspacePath, currentTarget.path, nextPath)
             : nextPath;
-        if (closesActiveSession) reopenPath = nextSelectedPath;
+        if (replacesSelectedView) reopenPath = nextSelectedPath;
 
         setFileDialogMode(null);
         setFileDialogTarget(null);
         if (nextSelectedPath && currentWorkspacePath != nextSelectedPath) {
-          documentIntent = beginDocumentTransition(nextSelectedPath);
+          documentSignal = beginDocumentViewChange(nextSelectedPath);
         }
         await loadTree(workspaceRuntime, nextSelectedPath ?? currentWorkspacePath, {
-          documentIntent: documentIntent ?? undefined,
+          documentSignal: documentSignal ?? undefined,
           saveBeforeSelect: false,
         });
       } catch (error) {
-        if (closesActiveSession && reopenPath) {
+        if (replacesSelectedView && reopenPath) {
           await loadTree(workspaceRuntime, reopenPath, { saveBeforeSelect: false }).catch(() => {});
         }
         setFileDialogError(errorToMessage(error));
       } finally {
-        if (documentIntent) finishDocumentTransition(documentIntent);
+        if (documentSignal) finishDocumentViewChange(documentSignal);
         setBusy(false);
       }
     },
     [
-      beginDocumentTransition,
+      beginDocumentViewChange,
+      cancelImageUpload,
       collabDocumentRef,
-      documentTargetGenerationRef,
       fileDialogMode,
       fileDialogTarget,
-      finishDocumentTransition,
+      finishDocumentViewChange,
       loadTree,
       saveCurrentFile,
       selectedFileRef,
@@ -213,37 +212,37 @@ export function useWorkspaceEntryDialogs({
     let runtime = workspaceRuntime;
     let target = deleteTarget;
     if (!runtime || !target) return;
-    documentTargetGenerationRef.current += 1;
+    cancelImageUpload();
     if (!(await saveCurrentFile())) return;
 
-    let activePath = singleFileSourceRef.current ? null : (selectedFileRef.current?.path ?? null);
-    let deletesActiveDocument = Boolean(activePath && entryContainsPath(target, activePath));
+    let selectedPath = singleFileSourceRef.current ? null : (selectedFileRef.current?.path ?? null);
+    let deletesSelectedDocument = Boolean(selectedPath && entryContainsPath(target, selectedPath));
     setBusy(true);
     setErrorMessage("");
     setRetryLoadPath(null);
     autoSaveTaskRef.current?.task.cancel();
     saveOperationRef.current += 1;
     let revision =
-      target.kind == "file" && target.path == activePath
-        ? activeDocumentRevision(collabDocumentRef.current)
+      target.kind == "file" && target.path == selectedPath
+        ? selectedDocumentRevision(collabDocumentRef.current)
         : undefined;
     try {
-      if (deletesActiveDocument) await clearActiveDocument();
+      if (deletesSelectedDocument) await clearDocumentView();
       assertEntryMutationApplied(
         await runtime.entries.delete({ kind: target.kind, path: target.path, revision }),
         target.path,
       );
-      let nextSelectedPath = deletesActiveDocument ? null : activePath;
+      let nextSelectedPath = deletesSelectedDocument ? null : selectedPath;
 
       setDeleteTarget(null);
-      if (deletesActiveDocument) {
+      if (deletesSelectedDocument) {
         let selectedPathContext = workspaceSelectedPathContext(runtime.identity);
         if (selectedPathContext) clearStoredWorkspaceSelectedPath(selectedPathContext);
       }
       await loadTree(runtime, nextSelectedPath, { saveBeforeSelect: false });
     } catch (error) {
-      if (deletesActiveDocument && activePath) {
-        await loadTree(runtime, activePath, { saveBeforeSelect: false }).catch(() => {});
+      if (deletesSelectedDocument && selectedPath) {
+        await loadTree(runtime, selectedPath, { saveBeforeSelect: false }).catch(() => {});
       }
       setErrorMessage(errorToMessage(error));
       setRetryLoadPath(null);
@@ -251,11 +250,11 @@ export function useWorkspaceEntryDialogs({
       setBusy(false);
     }
   }, [
-    clearActiveDocument,
+    clearDocumentView,
     collabDocumentRef,
     autoSaveTaskRef,
+    cancelImageUpload,
     deleteTarget,
-    documentTargetGenerationRef,
     loadTree,
     saveCurrentFile,
     saveOperationRef,
@@ -305,7 +304,7 @@ function entryContainsPath(target: FileTreeDeleteTarget, path: string) {
     : path == target.path;
 }
 
-function activeDocumentRevision(document: WorkspaceCollaborativeDocument | null) {
+function selectedDocumentRevision(document: WorkspaceCollaborativeDocument | null) {
   let source = document?.collabState.source;
   return source?.kind == "present" ? source.baseline.revision : undefined;
 }

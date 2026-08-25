@@ -1,9 +1,6 @@
 import { useCallback, useState, type RefObject } from "react";
 import type { LiveMdEditorElement, LiveMdMarkdownConfig } from "@codemirror-treesitter/live-md";
-import type {
-  WorkspaceDocumentIntentLease,
-  WorkspaceDocumentSessionController,
-} from "@/app/document-session-coordinator";
+import type { WorkspaceDocumentViewCoordinator } from "@/app/document-view-coordinator";
 import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import { openStandaloneHtmlPrintView } from "@/lib/export/browser-print";
 import {
@@ -31,7 +28,7 @@ import {
   markdownDownloadFileName,
   singleFileMarkdownNode,
 } from "@/lib/workspace/single-file";
-import type { ActiveDocumentSource, SingleFileSource } from "@/lib/workspace/types";
+import type { SelectedFileSource, SingleFileSource } from "@/lib/workspace/types";
 import { normalizeMarkdownPath, type MarkdownFileNode } from "@/lib/workspace/tree";
 import type { StoredDropboxWorkspaceConfig } from "@/lib/workspace/store";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
@@ -53,17 +50,17 @@ type MarkdownHtmlExportInput = {
 type UseWorkspaceFileActionsOptions = {
   activateSingleFileDocument: (
     source: SingleFileSource,
-    persistence: ActiveDocumentSource,
+    persistence: SelectedFileSource,
     file: MarkdownFileNode,
     value: string,
-    options: { intent: WorkspaceDocumentIntentLease; localFileHandle?: AccessFileHandle },
+    options: { signal: AbortSignal; localFileHandle?: AccessFileHandle },
   ) => Promise<boolean>;
-  beginDocumentTransition: (path?: string) => WorkspaceDocumentIntentLease;
+  beginDocumentViewChange: (path?: string) => AbortSignal;
+  cancelImageUpload: () => void;
   collabDocumentRef: MutableRef<WorkspaceCollaborativeDocument | null>;
   createDropboxRuntime: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceRuntime>;
   discardMaterializedDraft: (source: SingleFileSource | null) => void;
-  documentTargetGenerationRef: MutableRef<number>;
-  documentSessions: WorkspaceDocumentSessionController;
+  documentViews: WorkspaceDocumentViewCoordinator;
   editorElementRef: RefObject<LiveMdEditorElement | null>;
   editorValueRef: MutableRef<string>;
   loadTree: (
@@ -89,12 +86,12 @@ type UseWorkspaceFileActionsOptions = {
 
 export function useWorkspaceFileActions({
   activateSingleFileDocument,
-  beginDocumentTransition,
+  beginDocumentViewChange,
+  cancelImageUpload,
   collabDocumentRef,
   createDropboxRuntime,
   discardMaterializedDraft,
-  documentTargetGenerationRef,
-  documentSessions,
+  documentViews,
   editorElementRef,
   editorValueRef,
   loadTree,
@@ -118,9 +115,9 @@ export function useWorkspaceFileActions({
   let [saveAsDropboxError, setSaveAsDropboxError] = useState("");
 
   let currentMarkdownValue = useCallback(() => {
-    let activeDocument = collabDocumentRef.current;
-    return activeDocument && selectedFileRef.current?.path == activeDocument.path
-      ? activeDocument.read()
+    let selectedDocument = collabDocumentRef.current;
+    return selectedDocument && selectedFileRef.current?.path == selectedDocument.path
+      ? selectedDocument.read()
       : editorValueRef.current;
   }, [collabDocumentRef, editorValueRef, selectedFileRef]);
 
@@ -259,7 +256,7 @@ export function useWorkspaceFileActions({
 
     let source = singleFileSourceRef.current;
     let value = currentMarkdownValue();
-    let lease = beginDocumentTransition(file.path);
+    let signal = beginDocumentViewChange(file.path);
     setErrorMessage("");
     setRetryLoadPath(null);
     try {
@@ -275,7 +272,7 @@ export function useWorkspaceFileActions({
           createLocalFileSource(handle),
           nextFile,
           value,
-          { intent: lease, localFileHandle: handle },
+          { signal, localFileHandle: handle },
         ))
       ) {
         return;
@@ -284,18 +281,18 @@ export function useWorkspaceFileActions({
       let runtime = workspaceRuntimeRef.current;
       if (runtime) await refreshWorkspaceForCurrentEditor(runtime);
     } catch (error) {
-      if (documentSessions.isCurrent(lease) && !isAbortError(error)) {
+      if (documentViews.isCurrent(signal) && !isAbortError(error)) {
         setErrorMessage(errorToMessage(error));
       }
     } finally {
-      documentSessions.finish(lease);
+      documentViews.finish(signal);
     }
   }, [
     activateSingleFileDocument,
-    beginDocumentTransition,
+    beginDocumentViewChange,
     currentMarkdownValue,
     discardMaterializedDraft,
-    documentSessions,
+    documentViews,
     downloadCurrentMarkdownCopy,
     refreshWorkspaceForCurrentEditor,
     selectedFileRef,
@@ -330,7 +327,7 @@ export function useWorkspaceFileActions({
         return;
       }
 
-      documentTargetGenerationRef.current += 1;
+      cancelImageUpload();
       setBusy(true);
       setDropboxConnecting(true);
       setSaveAsDropboxError("");
@@ -366,9 +363,9 @@ export function useWorkspaceFileActions({
     },
     [
       createDropboxRuntime,
+      cancelImageUpload,
       currentMarkdownValue,
       discardMaterializedDraft,
-      documentTargetGenerationRef,
       loadTree,
       setBusy,
       setDropboxConnecting,

@@ -2,28 +2,38 @@ import { describe, expect, it } from "vite-plus/test";
 import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import type { WorkspaceStorageKind } from "@/lib/workspace/storage/types";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
-import { createDocumentSession, documentSessionMatchesSource } from "./document-session.ts";
+import {
+  createWorkspaceDocumentContext,
+  workspaceDocumentContextMatchesSource,
+} from "./document-context.ts";
 import { documentSourceRef } from "./source-identity.ts";
 
-describe("document sessions", () => {
+describe("workspace document contexts", () => {
   it("binds a collab document to a concrete workspace source", () => {
     let runtime = fakeRuntime("opendal-gdrive", "gdrive:workspace-1");
     let file = { kind: "file" as const, name: "note.md", path: "notes/note.md" };
-    let session = createDocumentSession(runtime, file, fakeCollabDocument("notes/note.md"));
+    let context = createWorkspaceDocumentContext(
+      runtime,
+      file,
+      fakeCollabDocument("notes/note.md"),
+    );
 
-    expect(session.id).toBe("opendal-gdrive:gdrive:workspace-1:notes/note.md");
-    expect(session.sourceRef).toEqual({
+    expect(context.id).toBe("opendal-gdrive:gdrive:workspace-1:notes/note.md");
+    expect(context.sourceRef).toEqual({
       backendKind: "opendal-gdrive",
       path: "notes/note.md",
       workspaceId: "gdrive:workspace-1",
       workspaceNamespace: "opendal-gdrive:gdrive:workspace-1",
     });
     expect(
-      documentSessionMatchesSource(session, documentSourceRef(runtime.identity, file.path)),
+      workspaceDocumentContextMatchesSource(
+        context,
+        documentSourceRef(runtime.identity, file.path),
+      ),
     ).toBe(true);
     expect(
-      documentSessionMatchesSource(
-        session,
+      workspaceDocumentContextMatchesSource(
+        context,
         documentSourceRef(fakeRuntime("local", "local:workspace-1").identity, file.path),
       ),
     ).toBe(false);

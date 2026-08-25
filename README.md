@@ -126,8 +126,8 @@ await editor.ready;
 - Optional LiveMD collaboration bindings for Loro documents, presence, custom
   text containers, and collaborative undo/redo.
 - A browser-resident Grove Markdown Agent with DeepSeek BYOK, bounded workspace
-  read/search tools, streamed responses, and current-document-only edits that
-  reuse normal CodeMirror, Loro, and workspace persistence paths.
+  list/read/search tools, streamed responses, and path-based exact edits through
+  the workspace collaborative-document registry.
 - Validation tooling and apps that check public export parity, package
   dependency boundaries, language-data coverage, example coverage, benchmark
   coverage, and runtime behavior against official CodeMirror/Lezer packages.

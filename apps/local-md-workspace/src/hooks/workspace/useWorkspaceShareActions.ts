@@ -14,10 +14,10 @@ import { readHostSecret } from "@/lib/workspace/share-host";
 import type { ActiveOwnerShareRecord } from "@/lib/workspace/types";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import {
-  createDocumentSession,
-  documentSessionMatchesSource,
-  type DocumentSession,
-} from "@/lib/workspace/document-session";
+  createWorkspaceDocumentContext,
+  workspaceDocumentContextMatchesSource,
+  type WorkspaceDocumentContext,
+} from "@/lib/workspace/document-context";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
@@ -26,7 +26,7 @@ type MutableRef<T> = {
 
 type StartOwnerShareHost = (
   record: OwnerShareRecord,
-  session: DocumentSession,
+  context: WorkspaceDocumentContext,
   options?: { actionLabel?: string; shouldContinue?: () => boolean },
 ) => Promise<void>;
 
@@ -89,7 +89,10 @@ export function useWorkspaceShareActions({
       });
       setCreatedShare(share);
       setActiveShareRecord(share.record);
-      await startOwnerShareHost(share.record, createDocumentSession(runtime, file, document));
+      await startOwnerShareHost(
+        share.record,
+        createWorkspaceDocumentContext(runtime, file, document),
+      );
     } catch (error) {
       setShareError(errorToMessage(error));
     } finally {
@@ -116,12 +119,12 @@ export function useWorkspaceShareActions({
 
     let document = collabDocumentRef.current;
     let file = selectedFileRef.current;
-    let session =
+    let context =
       document && file && document.path == file.path
-        ? createDocumentSession(runtime, file, document)
+        ? createWorkspaceDocumentContext(runtime, file, document)
         : null;
     let shouldRestartHost =
-      session != null && documentSessionMatchesSource(session, record.sourceRef);
+      context != null && workspaceDocumentContextMatchesSource(context, record.sourceRef);
     let hostSecret = readHostSecret(record);
     if (!hostSecret) {
       setShareError("This browser cannot rotate the link without the host key.");
@@ -143,15 +146,15 @@ export function useWorkspaceShareActions({
       });
       setCreatedShare(share);
       setActiveShareRecord(share.record);
-      if (shouldRestartHost && session) {
-        await startOwnerShareHost(share.record, session, {
+      if (shouldRestartHost && context) {
+        await startOwnerShareHost(share.record, context, {
           actionLabel: "Link rotated",
         });
       }
     } catch (error) {
       setShareError(errorToMessage(error));
-      if (shouldRestartHost && session) {
-        void startOwnerShareHost(record, session, {
+      if (shouldRestartHost && context) {
+        void startOwnerShareHost(record, context, {
           actionLabel: "Link rotation failed",
         });
       }

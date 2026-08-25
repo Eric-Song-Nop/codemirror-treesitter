@@ -12,7 +12,7 @@ import { StaticOpendalOperatorHost } from "../storage/opendal-operator-host.ts";
 import { OpendalWorkspaceObjectStore } from "../storage/opendal-workspace-object-store.ts";
 import { legacyLocalWorkspaceId, localWorkspaceSourceAliases } from "../source-identity.ts";
 import { DefaultWorkspaceDocuments } from "../documents/workspace-documents.ts";
-import { ActiveDocumentChangeSource } from "./current-document-changes.ts";
+import { WorkspaceDocumentChangeMonitor } from "./document-changes.ts";
 import { createWorkspaceRuntimeDisposal } from "./runtime-disposal.ts";
 import {
   OpendalWorkspaceAssetService,
@@ -44,25 +44,25 @@ export async function createBrowserLocalWorkspaceRuntime(input: {
   let host = new StaticOpendalOperatorHost(identity, operator);
   let store = new OpendalWorkspaceObjectStore(host);
   let documentSource = new OpendalWorkspaceDocumentService(store);
-  let currentDocumentChanges = new ActiveDocumentChangeSource({
+  let documentChanges = new WorkspaceDocumentChangeMonitor({
     localRoot: input.handle,
     observe: (path) => documentSource.observe(path),
     probe: (path) => store.probe(path),
   });
   let documents = new DefaultWorkspaceDocuments({
-    changes: currentDocumentChanges,
+    changes: documentChanges,
+    documentSource,
     identity,
-    source: documentSource,
   });
   let dispose = createWorkspaceRuntimeDisposal({
-    changes: currentDocumentChanges,
+    changes: documentChanges,
     documents,
     host,
   });
 
   return {
     assets: new OpendalWorkspaceAssetService(store),
-    currentDocumentChanges,
+    documentChanges,
     documentSource,
     dispose,
     documents,

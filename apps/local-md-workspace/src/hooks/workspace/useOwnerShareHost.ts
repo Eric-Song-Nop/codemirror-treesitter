@@ -13,7 +13,7 @@ import {
   readHostSecret,
 } from "@/lib/workspace/share-host";
 import type { ActiveOwnerShareRecord } from "@/lib/workspace/types";
-import type { DocumentSession } from "@/lib/workspace/document-session";
+import type { WorkspaceDocumentContext } from "@/lib/workspace/document-context";
 import { sameDocumentSourceRef } from "@/lib/workspace/source-identity";
 
 type UseOwnerShareHostOptions = {
@@ -52,14 +52,14 @@ export function useOwnerShareHost({
   let startOwnerShareHost = useCallback(
     async (
       record: OwnerShareRecord,
-      session: DocumentSession,
+      context: WorkspaceDocumentContext,
       options: { actionLabel?: string; shouldContinue?: () => boolean } = {},
     ) => {
       if (options.shouldContinue && !options.shouldContinue()) return;
       stopOwnerShareHost();
 
       let actionLabel = options.actionLabel ?? "Link created";
-      if (!sameDocumentSourceRef(record.sourceRef, session.sourceRef)) {
+      if (!sameDocumentSourceRef(record.sourceRef, context.sourceRef)) {
         setShareError(`${actionLabel}, but this file is no longer the shared source.`);
         return;
       }
@@ -93,7 +93,7 @@ export function useOwnerShareHost({
         );
         let connection = new ShareRelayConnection({
           clientId: getOrCreateOwnerShareClientId(),
-          doc: session.collabDocument.loroDoc,
+          doc: context.collabDocument.loroDoc,
           onDocumentImported: () => {},
           onError: (message) => setShareError(message),
           onShareStatus: (status) => {
@@ -123,10 +123,10 @@ export function useOwnerShareHost({
         });
         shareHostConnectionRef.current = connection;
         shareHostRecordRef.current = record;
-        let stopLocalUpdates = session.collabDocument.loroDoc.subscribeLocalUpdates((bytes) => {
+        let stopLocalUpdates = context.collabDocument.loroDoc.subscribeLocalUpdates((bytes) => {
           connection.enqueueDocumentUpdate(bytes);
         });
-        let stopDocumentEvents = session.collabDocument.subscribe((event) => {
+        let stopDocumentEvents = context.collabDocument.subscribe((event) => {
           if (event.kind == "closed") {
             if (shareHostConnectionRef.current == connection) stopOwnerShareHost();
             return;

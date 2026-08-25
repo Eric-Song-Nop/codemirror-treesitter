@@ -78,15 +78,17 @@ application run-scoped tool session
         |
         v
 application host port / adapters/workspace
-- provider-neutral tools / workspace and active-editor capabilities
+- provider-neutral path-based workspace tools
         |
-        +-- WorkspaceRuntime tree/documents --> OpenDAL
+        +-- WorkspaceRuntime.tree --> Markdown discovery
         |
-        `-- EditorView.dispatch
-              --> loro-codemirror main-peer commit
-              --> IndexedDB pending log
-              --> BroadcastChannel / Grove Relay
-              --> LiveMD input / autosave / OpenDAL materialization
+        `-- WorkspaceRuntime.documents.document(path)
+              --> CollaborativeDocument.edit(exactEdits)
+              --> Loro logical authority
+                    +-- CodeMirror subscribers
+                    +-- IndexedDB recovery
+                    +-- BroadcastChannel / Grove Relay
+                    `-- OpenDAL materializer
 ```
 
 The panel, controller, transport, and SDK adapter never receive a raw OpenDAL

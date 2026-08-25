@@ -21,19 +21,19 @@ import {
 import {
   readWorkspaceFile,
   searchWorkspaceMarkdown,
-  type WorkspaceAgentReadRuntime,
+  type WorkspaceAgentRuntime,
 } from "../../application/workspace-search.ts";
 
 export function createWorkspaceAgentHost(input: {
   limits?: WorkspaceAgentLimitOverrides;
-  runtime: WorkspaceAgentReadRuntime;
+  runtime: WorkspaceAgentRuntime;
 }): WorkspaceAgentHost {
   return new DefaultWorkspaceAgentHost(input.runtime, resolveWorkspaceAgentLimits(input.limits));
 }
 
 class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
   constructor(
-    private readonly runtime: WorkspaceAgentReadRuntime,
+    private readonly runtime: WorkspaceAgentRuntime,
     private readonly limits: WorkspaceAgentLimits,
   ) {}
 

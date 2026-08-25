@@ -39,7 +39,7 @@ import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/provid
 import { errorToMessage } from "@/lib/workspace/errors";
 import { createEphemeralLocalWorkspaceRecord, saveStateLabel } from "@/lib/workspace/state";
 import type {
-  ActiveDocumentSource,
+  SelectedFileSource,
   SaveState,
   SingleFileSource,
   SourceAutoSaveTask,
@@ -63,7 +63,7 @@ export function LocalWorkspaceApp() {
     retrying: liveMdPreloadRetrying,
   } = useLiveMdPreload();
   let {
-    documents: documentSessions,
+    documentViews,
     runtime: workspaceEffectRuntime,
     store: workspaceAppStore,
   } = useWorkspaceApplication();
@@ -117,7 +117,7 @@ export function LocalWorkspaceApp() {
   let editorElementRef = useRef<LiveMdEditorElement | null>(null);
   let agentButtonRef = useRef<HTMLButtonElement | null>(null);
   let workspaceRuntimeRef = useRef<WorkspaceRuntime | null>(null);
-  let selectedFileSourceRef = useRef<ActiveDocumentSource | null>(null);
+  let selectedFileSourceRef = useRef<SelectedFileSource | null>(null);
   let selectedFileRef = useRef<MarkdownFileNode | null>(null);
   let singleFileSourceRef = useRef<SingleFileSource | null>(null);
   let localFileHandleRef = useRef<AccessFileHandle | null>(null);
@@ -125,13 +125,11 @@ export function LocalWorkspaceApp() {
   let editorValueRef = useRef("");
   let cleanValueRef = useRef("");
   let dirtyRef = useRef(false);
-  let editVersionRef = useRef(0);
   let saveStateRef = useRef<SaveState>("idle");
   let autoSaveTaskRef = useRef<SourceAutoSaveTask | null>(null);
   let scheduleAutoSaveRef = useRef<() => void>(() => {});
   let saveOperationRef = useRef(0);
-  let activeDocumentGenerationRef = useRef(0);
-  let documentTargetGenerationRef = useRef(0);
+  let imageUploadAbortRef = useRef<AbortController | null>(null);
   let agentWorkspaceKey = singleFileSource ? "" : (workspaceRuntime?.identity.id ?? "");
   let effectiveBusy = busy || openingDocument != null;
   let agentScopeKey = agentWorkspaceKey;
@@ -167,14 +165,6 @@ export function LocalWorkspaceApp() {
     [],
   );
 
-  useWorkspacePersistenceLifecycle({
-    autoSaveTaskRef,
-    closeActiveDocument: documentSessions.close,
-    collabDocumentRef,
-    dirtyRef,
-    setErrorMessage,
-  });
-
   useEffect(() => {
     completeDropboxPopupOAuthIfPresent();
   }, []);
@@ -205,9 +195,9 @@ export function LocalWorkspaceApp() {
     imageInputRef,
     resolveImageAssetFile,
   } = useWorkspaceImageAssets({
-    documentTargetGenerationRef,
     editorDocument,
     editorElementRef,
+    imageUploadAbortRef,
     selectedFile,
     selectedFileSourceRef,
     selectedFileRef,
@@ -244,6 +234,16 @@ export function LocalWorkspaceApp() {
     setSaveState(nextState);
   }, []);
 
+  let cancelImageUpload = useCallback(() => {
+    imageUploadAbortRef.current?.abort();
+    imageUploadAbortRef.current = null;
+  }, []);
+
+  let finishDocumentViewChange = useCallback(
+    (signal: AbortSignal) => documentViews.finish(signal),
+    [documentViews],
+  );
+
   let { flushOwnerShareHost, startOwnerShareHost, stopOwnerShareHost } = useOwnerShareHost({
     setActiveShareRecord,
     setShareError,
@@ -251,8 +251,8 @@ export function LocalWorkspaceApp() {
 
   let {
     activateSingleFileDocument,
-    beginDocumentTransition,
-    clearActiveDocument,
+    beginDocumentViewChange,
+    clearDocumentView,
     discardMaterializedDraft,
     ensureSelectedCollabDocument,
     handleEditorInput,
@@ -264,14 +264,12 @@ export function LocalWorkspaceApp() {
     resolveCurrentDocumentUseExternal,
     saveCurrentFile,
   } = useWorkspaceDocumentActions({
-    activeDocumentGenerationRef,
     autoSaveTaskRef,
+    cancelImageUpload,
     cleanValueRef,
     collabDocumentRef,
-    documentSessions,
-    documentTargetGenerationRef,
+    documentViews,
     dirtyRef,
-    editVersionRef,
     editorValueRef,
     localFileHandleRef,
     saveOperationRef,
@@ -290,6 +288,14 @@ export function LocalWorkspaceApp() {
     workspaceAppStore,
   });
 
+  useWorkspacePersistenceLifecycle({
+    autoSaveTaskRef,
+    clearDocumentView,
+    collabDocumentRef,
+    dirtyRef,
+    setErrorMessage,
+  });
+
   let replaceWorkspaceRuntime = useCallback(
     (nextRuntime: WorkspaceRuntime) =>
       workspaceEffectRuntime.runPromise(
@@ -298,17 +304,17 @@ export function LocalWorkspaceApp() {
             workspaceRuntimeRef.current = runtime;
             setWorkspaceRuntime(runtime);
           },
-          closeActiveDocument: clearActiveDocument,
+          clearDocumentView,
           current: () => workspaceRuntimeRef.current,
           next: nextRuntime,
         }),
       ),
-    [clearActiveDocument, setWorkspaceRuntime, workspaceEffectRuntime],
+    [clearDocumentView, setWorkspaceRuntime, workspaceEffectRuntime],
   );
 
   let { loadDirectory, loadTree, refreshWorkspaceForCurrentEditor } = useWorkspaceTree({
-    clearActiveDocument,
-    documentTargetGenerationRef,
+    cancelImageUpload,
+    clearDocumentView,
     loadFile,
     localFileHandleRef,
     selectedFileSourceRef,
@@ -427,9 +433,9 @@ export function LocalWorkspaceApp() {
     restoreDropboxWorkspace,
     restoreStoredWorkspace,
   } = useWorkspaceOpeners({
+    cancelImageUpload,
     clearDropboxAccessToken,
     createDropboxRuntime,
-    documentTargetGenerationRef,
     folderAccessUnavailableMessage,
     loadTree,
     refreshWorkspaceForCurrentEditor,
@@ -508,11 +514,11 @@ export function LocalWorkspaceApp() {
     submitFileDialog,
   } = useWorkspaceEntryDialogs({
     autoSaveTaskRef,
-    beginDocumentTransition,
-    clearActiveDocument,
+    beginDocumentViewChange,
+    cancelImageUpload,
+    clearDocumentView,
     collabDocumentRef,
-    documentTargetGenerationRef,
-    finishDocumentTransition: documentSessions.finish,
+    finishDocumentViewChange,
     loadTree,
     saveCurrentFile,
     saveOperationRef,
@@ -594,12 +600,12 @@ export function LocalWorkspaceApp() {
     submitSaveAsDropbox,
   } = useWorkspaceFileActions({
     activateSingleFileDocument,
-    beginDocumentTransition,
+    beginDocumentViewChange,
+    cancelImageUpload,
     collabDocumentRef,
     createDropboxRuntime,
     discardMaterializedDraft,
-    documentTargetGenerationRef,
-    documentSessions,
+    documentViews,
     editorElementRef,
     editorValueRef,
     loadTree,

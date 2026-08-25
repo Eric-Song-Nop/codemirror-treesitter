@@ -22,7 +22,7 @@ import {
   removeWorkspaceImageQueries,
 } from "@/lib/workspace/workspace-data-cache";
 import type {
-  ActiveDocumentSource,
+  SelectedFileSource,
   EditorDocument,
   SingleFileSource,
   WorkspaceImageAsset,
@@ -31,11 +31,11 @@ import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type UseWorkspaceImageAssetsOptions = {
-  documentTargetGenerationRef: RefObject<number>;
   editorDocument: EditorDocument;
   editorElementRef: RefObject<LiveMdEditorElement | null>;
+  imageUploadAbortRef: RefObject<AbortController | null>;
   selectedFile: MarkdownFileNode | null;
-  selectedFileSourceRef: RefObject<ActiveDocumentSource | null>;
+  selectedFileSourceRef: RefObject<SelectedFileSource | null>;
   selectedFileRef: RefObject<MarkdownFileNode | null>;
   setBusy: (busy: boolean) => void;
   setErrorMessage: (message: string) => void;
@@ -46,9 +46,9 @@ type UseWorkspaceImageAssetsOptions = {
 };
 
 export function useWorkspaceImageAssets({
-  documentTargetGenerationRef,
   editorDocument,
   editorElementRef,
+  imageUploadAbortRef,
   selectedFile,
   selectedFileSourceRef,
   selectedFileRef,
@@ -74,8 +74,9 @@ export function useWorkspaceImageAssets({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      imageUploadAbortRef.current?.abort();
     };
-  }, []);
+  }, [imageUploadAbortRef]);
 
   useEffect(() => {
     let previousRuntime = previousWorkspaceRuntimeRef.current;
@@ -135,10 +136,12 @@ export function useWorkspaceImageAssets({
       let imageFiles = files.filter(isImageFile);
       if (!imageFiles.length) return;
 
-      let targetGeneration = documentTargetGenerationRef.current;
-      let targetIsActive = () =>
+      imageUploadAbortRef.current?.abort();
+      let upload = new AbortController();
+      imageUploadAbortRef.current = upload;
+      let targetIsSelected = () =>
         mountedRef.current &&
-        documentTargetGenerationRef.current == targetGeneration &&
+        !upload.signal.aborted &&
         editorElementRef.current?.view === view &&
         selectedFileSourceRef.current === runtime &&
         workspaceRuntimeRef.current === runtime &&
@@ -153,11 +156,11 @@ export function useWorkspaceImageAssets({
       try {
         let insertedAssets: Array<WorkspaceImageAsset & { markdownReference: string }> = [];
         for (let imageFile of imageFiles) {
-          if (!targetIsActive()) throw staleImageUpload;
+          if (!targetIsSelected()) throw staleImageUpload;
           let asset = await runtime.assets.create(file.path, imageFile);
           let pendingAsset: PendingImageAsset = { path: asset.path };
           createdAssets.push(pendingAsset);
-          if (!targetIsActive()) throw staleImageUpload;
+          if (!targetIsSelected()) throw staleImageUpload;
 
           let url = URL.createObjectURL(imageFile);
           pendingAsset.url = url;
@@ -167,13 +170,13 @@ export function useWorkspaceImageAssets({
           });
         }
 
-        if (!targetIsActive()) throw staleImageUpload;
+        if (!targetIsSelected()) throw staleImageUpload;
         insertImageMarkdown(view, insertedAssets, options.position);
         referencesInserted = true;
         upsertImageAssets(insertedAssets);
         createdAssets = [];
       } catch (error) {
-        let stale = error === staleImageUpload || !targetIsActive();
+        let stale = error === staleImageUpload || !targetIsSelected();
         let rollbackErrors = referencesInserted
           ? revokePendingImageAssetUrls(createdAssets)
           : await rollbackPendingImageAssets(runtime, createdAssets);
@@ -189,12 +192,13 @@ export function useWorkspaceImageAssets({
           setErrorMessage(errorToMessage(reportedError));
         }
       } finally {
+        if (imageUploadAbortRef.current === upload) imageUploadAbortRef.current = null;
         if (mountedRef.current) setBusy(false);
       }
     },
     [
-      documentTargetGenerationRef,
       editorElementRef,
+      imageUploadAbortRef,
       selectedFileSourceRef,
       selectedFileRef,
       setBusy,

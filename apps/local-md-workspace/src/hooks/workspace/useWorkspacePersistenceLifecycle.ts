@@ -11,7 +11,7 @@ type DocumentPersistenceTarget = Pick<WorkspaceCollaborativeDocument, "flush">;
 
 type UseWorkspacePersistenceLifecycleOptions = {
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
-  closeActiveDocument: () => Promise<unknown>;
+  clearDocumentView: () => Promise<unknown>;
   collabDocumentRef: MutableRef<DocumentPersistenceTarget | null>;
   dirtyRef: MutableRef<boolean>;
   setErrorMessage: (message: string) => void;
@@ -19,7 +19,7 @@ type UseWorkspacePersistenceLifecycleOptions = {
 
 export function useWorkspacePersistenceLifecycle({
   autoSaveTaskRef,
-  closeActiveDocument,
+  clearDocumentView,
   collabDocumentRef,
   dirtyRef,
   setErrorMessage,
@@ -75,10 +75,10 @@ export function useWorkspacePersistenceLifecycle({
         .finally(async () => {
           if (lifecycleGenerationRef.current != lifecycleGeneration) return;
           sourceTask?.dispose();
-          await closeActiveDocument().catch(() => {});
+          await clearDocumentView().catch(() => {});
         });
     };
-  }, [autoSaveTaskRef, closeActiveDocument, collabDocumentRef, dirtyRef, setErrorMessage]);
+  }, [autoSaveTaskRef, clearDocumentView, collabDocumentRef, dirtyRef, setErrorMessage]);
 }
 
 async function flushPersistence(

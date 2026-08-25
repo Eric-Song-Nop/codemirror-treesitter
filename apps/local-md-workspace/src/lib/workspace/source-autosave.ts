@@ -1,4 +1,4 @@
-import { isWorkspaceDocumentSource, type ActiveDocumentSource } from "@/lib/workspace/types";
+import { isWorkspaceFileSource, type SelectedFileSource } from "@/lib/workspace/types";
 
 export type SourceAutoSaveKey = "cloud" | "local";
 
@@ -8,9 +8,9 @@ export type SourceAutoSaveTiming = {
 };
 
 export function sourceAutoSaveKey(
-  source: ActiveDocumentSource | null | undefined,
+  source: SelectedFileSource | null | undefined,
 ): SourceAutoSaveKey {
-  return isWorkspaceDocumentSource(source) && source.identity.kind != "local" ? "cloud" : "local";
+  return isWorkspaceFileSource(source) && source.identity.kind != "local" ? "cloud" : "local";
 }
 
 export function sourceAutoSaveTiming(key: SourceAutoSaveKey): SourceAutoSaveTiming {

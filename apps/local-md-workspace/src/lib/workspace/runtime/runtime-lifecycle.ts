@@ -3,7 +3,7 @@ import type { WorkspaceRuntime } from "./types.ts";
 
 export type WorkspaceRuntimeTransitionInput = {
   activate: (runtime: WorkspaceRuntime) => void;
-  closeActiveDocument: () => Promise<void>;
+  clearDocumentView: () => Promise<void>;
   current: () => WorkspaceRuntime | null;
   next: WorkspaceRuntime;
 };
@@ -37,7 +37,7 @@ export class WorkspaceRuntimeTransitions extends Context.Service<
         let runTransition = lock.withPermit(
           Effect.gen(function* () {
             let current = yield* tryRuntimeValue("read-current-runtime", input.current);
-            yield* tryRuntimePromise("close-active-document", input.closeActiveDocument);
+            yield* tryRuntimePromise("clear-document-view", input.clearDocumentView);
             yield* tryRuntimeAction("activate-runtime", () => {
               input.activate(input.next);
               activated = true;

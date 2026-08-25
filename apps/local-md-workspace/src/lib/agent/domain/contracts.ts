@@ -1,10 +1,6 @@
 import type { WorkspaceIdentity } from "../../workspace/runtime/types.ts";
 import type { WorkspaceStorageErrorCode } from "../../workspace/storage/types.ts";
 import type { EditConflictReason } from "../../workspace/documents/contracts.ts";
-import type {
-  WorkspaceAgentActiveDocumentVersion,
-  WorkspaceAgentVersionConflict,
-} from "./active-document.ts";
 
 export type WorkspaceAgentIssue = {
   code?: WorkspaceStorageErrorCode;
@@ -150,43 +146,3 @@ export type WorkspaceAgentContext = {
   };
   workspace: Pick<WorkspaceIdentity, "id" | "kind" | "name">;
 };
-
-/** @deprecated Removed with the active-editor compatibility adapter in the cleanup PR. */
-export type WorkspaceAgentLegacyTextEdit = {
-  newText: string;
-  oldText: string;
-};
-
-/** @deprecated Removed with the active-editor compatibility adapter in the cleanup PR. */
-export type WorkspaceAgentApplyCurrentDocumentEditsInput = {
-  edits: WorkspaceAgentLegacyTextEdit[];
-  version: WorkspaceAgentActiveDocumentVersion;
-};
-
-/** @deprecated Removed with the active-editor compatibility adapter in the cleanup PR. */
-export type WorkspaceAgentEditFailureReason =
-  | "aborted"
-  | "active-document-unavailable"
-  | "ambiguous-old-text"
-  | "invalid-edit-count"
-  | "missing-old-text"
-  | "output-too-large"
-  | "overlapping-edits"
-  | "stale-version";
-
-/** @deprecated Removed with the active-editor compatibility adapter in the cleanup PR. */
-export type WorkspaceAgentApplyCurrentDocumentEditsResult =
-  | {
-      appliedEdits: number;
-      outputBytes: number;
-      path: string;
-      status: "applied";
-    }
-  | {
-      conflicts?: WorkspaceAgentVersionConflict[];
-      editIndex?: number;
-      message: string;
-      path: string;
-      reason: WorkspaceAgentEditFailureReason;
-      status: "not-applied";
-    };

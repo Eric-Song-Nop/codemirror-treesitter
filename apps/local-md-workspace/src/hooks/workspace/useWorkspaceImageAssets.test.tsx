@@ -100,7 +100,7 @@ describe("useWorkspaceImageAssets", () => {
     let editorView = createTestEditorView();
 
     await renderImageAssetsHook({
-      documentTargetGeneration: 1,
+      imageSelectionKey: 1,
       editorView,
       selectedFile: testSelectedFile,
       workspaceRuntime: backend,
@@ -109,13 +109,13 @@ describe("useWorkspaceImageAssets", () => {
     expect(createImageAsset).toHaveBeenCalledWith(testSelectedFile.path, createdAsset.file);
 
     await renderImageAssetsHook({
-      documentTargetGeneration: 2,
+      imageSelectionKey: 2,
       editorView,
       selectedFile: otherSelectedFile,
       workspaceRuntime: otherBackend,
     });
     await renderImageAssetsHook({
-      documentTargetGeneration: 3,
+      imageSelectionKey: 3,
       editorView,
       selectedFile: testSelectedFile,
       workspaceRuntime: backend,
@@ -151,7 +151,7 @@ describe("useWorkspaceImageAssets", () => {
     let editorView = createTestEditorView();
 
     await renderImageAssetsHook({
-      documentTargetGeneration: 1,
+      imageSelectionKey: 1,
       editorView,
       selectedFile: testSelectedFile,
       setBusy,
@@ -193,7 +193,7 @@ describe("useWorkspaceImageAssets", () => {
     let editorView = createTestEditorView();
 
     await renderImageAssetsHook({
-      documentTargetGeneration: 1,
+      imageSelectionKey: 1,
       editorView,
       selectedFile: testSelectedFile,
       setBusy,
@@ -259,8 +259,8 @@ describe("useWorkspaceImageAssets", () => {
 });
 
 type RenderImageAssetsHookOptions = {
-  documentTargetGeneration?: number;
   editorView?: TestEditorView | null;
+  imageSelectionKey?: number;
   selectedFile?: MarkdownFileNode;
   setBusy?: (busy: boolean) => void;
   setErrorMessage?: (message: string) => void;
@@ -291,8 +291,8 @@ async function renderImageAssetsHook(
     root?.render(
       <QueryClientProvider client={queryClient}>
         <ImageAssetsHarness
-          documentTargetGeneration={options.documentTargetGeneration ?? 0}
           editorView={options.editorView ?? null}
+          imageSelectionKey={options.imageSelectionKey ?? 0}
           onApi={(api) => (currentApi = api)}
           selectedFile={options.selectedFile ?? testSelectedFile}
           setBusy={options.setBusy ?? (() => {})}
@@ -305,16 +305,16 @@ async function renderImageAssetsHook(
 }
 
 function ImageAssetsHarness({
-  documentTargetGeneration,
   editorView,
+  imageSelectionKey,
   onApi,
   selectedFile,
   setBusy,
   setErrorMessage,
   workspaceRuntime,
 }: {
-  documentTargetGeneration: number;
   editorView: TestEditorView | null;
+  imageSelectionKey: number;
   onApi: (api: ImageAssetsApi) => void;
   selectedFile: MarkdownFileNode;
   setBusy: (busy: boolean) => void;
@@ -322,13 +322,12 @@ function ImageAssetsHarness({
   workspaceRuntime: WorkspaceRuntime;
 }) {
   let editorElementRef = useRef<LiveMdEditorElement | null>(null);
-  let documentTargetGenerationRef = useRef(documentTargetGeneration);
+  let imageUploadAbortRef = useRef<AbortController | null>(null);
   let selectedFileSourceRef = useRef<WorkspaceRuntime | null>(workspaceRuntime);
   let selectedFileRef = useRef<MarkdownFileNode | null>(selectedFile);
   let singleFileSourceRef = useRef<SingleFileSource | null>(null);
   let workspaceRuntimeRef = useRef<WorkspaceRuntime | null>(workspaceRuntime);
 
-  documentTargetGenerationRef.current = documentTargetGeneration;
   editorElementRef.current = editorView
     ? ({ view: editorView } as unknown as LiveMdEditorElement)
     : null;
@@ -337,10 +336,15 @@ function ImageAssetsHarness({
   singleFileSourceRef.current = null;
   workspaceRuntimeRef.current = workspaceRuntime;
 
+  useEffect(() => {
+    imageUploadAbortRef.current?.abort();
+    imageUploadAbortRef.current = null;
+  }, [imageSelectionKey]);
+
   let hookOptions = {
-    documentTargetGenerationRef,
     editorDocument: { ...testEditorDocument, path: selectedFile.path },
     editorElementRef,
+    imageUploadAbortRef,
     selectedFile,
     selectedFileSourceRef,
     selectedFileRef,

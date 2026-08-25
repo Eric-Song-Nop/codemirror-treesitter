@@ -17,14 +17,10 @@ import type {
 import { createBrowserLocalWorkspaceRuntime } from "@/lib/workspace/runtime/browser-local-runtime";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
-type MutableRef<T> = {
-  current: T;
-};
-
 type UseWorkspaceOpenersOptions = {
+  cancelImageUpload: () => void;
   clearDropboxAccessToken: () => void;
   createDropboxRuntime: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceRuntime>;
-  documentTargetGenerationRef: MutableRef<number>;
   folderAccessUnavailableMessage: string;
   loadTree: (
     runtime: WorkspaceRuntime,
@@ -50,9 +46,9 @@ type UseWorkspaceOpenersOptions = {
 };
 
 export function useWorkspaceOpeners({
+  cancelImageUpload,
   clearDropboxAccessToken,
   createDropboxRuntime,
-  documentTargetGenerationRef,
   folderAccessUnavailableMessage,
   loadTree,
   refreshWorkspaceForCurrentEditor,
@@ -72,7 +68,7 @@ export function useWorkspaceOpeners({
   let openWorkspace = useCallback(async () => {
     setErrorMessage("");
     setRetryLoadPath(null);
-    documentTargetGenerationRef.current += 1;
+    cancelImageUpload();
     if (!(await saveCurrentFile())) return;
     if (!supportsDirectoryPicker()) {
       setErrorMessage(folderAccessUnavailableMessage);
@@ -99,8 +95,8 @@ export function useWorkspaceOpeners({
       setBusy(false);
     }
   }, [
+    cancelImageUpload,
     clearDropboxAccessToken,
-    documentTargetGenerationRef,
     folderAccessUnavailableMessage,
     loadTree,
     rememberWorkspaceHandle,
@@ -122,7 +118,7 @@ export function useWorkspaceOpeners({
     ) => {
       setErrorMessage("");
       setRetryLoadPath(null);
-      documentTargetGenerationRef.current += 1;
+      cancelImageUpload();
       if (!options.skipSaveCurrent && !(await saveCurrentFile())) return false;
 
       setBusy(true);
@@ -151,8 +147,8 @@ export function useWorkspaceOpeners({
       }
     },
     [
+      cancelImageUpload,
       createDropboxRuntime,
-      documentTargetGenerationRef,
       loadTree,
       restoreCloudRedirectEditorDraft,
       saveCurrentFile,
@@ -168,7 +164,7 @@ export function useWorkspaceOpeners({
   let restoreStoredWorkspace = useCallback(async () => {
     if (!storedLocalWorkspace) return;
 
-    documentTargetGenerationRef.current += 1;
+    cancelImageUpload();
     setBusy(true);
     setErrorMessage("");
     setRetryLoadPath(null);
@@ -196,8 +192,8 @@ export function useWorkspaceOpeners({
       setBusy(false);
     }
   }, [
+    cancelImageUpload,
     clearDropboxAccessToken,
-    documentTargetGenerationRef,
     loadTree,
     setBusy,
     setErrorMessage,
@@ -226,7 +222,7 @@ export function useWorkspaceOpeners({
   let refreshWorkspace = useCallback(async () => {
     if (!workspaceRuntime) return;
 
-    documentTargetGenerationRef.current += 1;
+    cancelImageUpload();
     if (!(await saveCurrentFile())) return;
     setBusy(true);
     setErrorMessage("");
@@ -240,9 +236,9 @@ export function useWorkspaceOpeners({
       setBusy(false);
     }
   }, [
+    cancelImageUpload,
     refreshWorkspaceForCurrentEditor,
     saveCurrentFile,
-    documentTargetGenerationRef,
     setBusy,
     setErrorMessage,
     setRetryLoadPath,

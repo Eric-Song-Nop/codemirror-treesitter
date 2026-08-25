@@ -7,7 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import type { RelayShareSession } from "@/lib/collaboration/share-relay-client";
 import type { OwnerShareRecord } from "@/lib/collaboration/share-storage";
-import { createDocumentSession } from "@/lib/workspace/document-session";
+import { createWorkspaceDocumentContext } from "@/lib/workspace/document-context";
 import { documentSourceRef } from "@/lib/workspace/source-identity";
 import { createMemoryWorkspaceRuntime } from "@/test/memory-workspace-runtime";
 import { useOwnerShareHost } from "./useOwnerShareHost";
@@ -89,12 +89,12 @@ describe("useOwnerShareHost session refresh", () => {
       );
     let fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
-    let { record, session } = ownerShareFixture();
+    let { context, record } = ownerShareFixture();
     localStorage.setItem(record.hostSecretRef, "host-secret");
     await renderOwnerShareHostHook();
 
     await act(async () => {
-      await currentApi!.startOwnerShareHost(record, session);
+      await currentApi!.startOwnerShareHost(record, context);
     });
     expect(relayMocks.connectionOptions).toHaveLength(1);
     let refreshSessionToken = relayMocks.connectionOptions[0]!.refreshSessionToken;
@@ -163,7 +163,7 @@ function ownerShareFixture() {
   } as unknown as WorkspaceCollaborativeDocument;
   return {
     record,
-    session: createDocumentSession(runtime, file, collabDocument),
+    context: createWorkspaceDocumentContext(runtime, file, collabDocument),
   };
 }
 

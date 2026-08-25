@@ -2330,14 +2330,12 @@ async function installMockFileSystemAccess(client, sessionId) {
 
           function loadSmokeFiles() {
             try {
-              let raw = localStorage.getItem(smokeStorageKey);
-              if (raw) {
-                return new Map(JSON.parse(raw).map(([name, value]) => [name, deserializeValue(value)]));
-              }
+              let persisted = readPersistedSmokeFiles();
+              if (persisted) return persisted;
             } catch {}
 
             let files = new Map([["welcome.md", "# Welcome\\n"]]);
-            persistSmokeFiles(files);
+            writePersistedSmokeFiles(files);
             return files;
           }
 
@@ -2354,11 +2352,31 @@ async function installMockFileSystemAccess(client, sessionId) {
             return directories;
           }
 
-          function persistSmokeFiles(files) {
+          function readPersistedSmokeFiles() {
+            let raw = localStorage.getItem(smokeStorageKey);
+            if (!raw) return null;
+            return new Map(
+              JSON.parse(raw).map(([name, value]) => [name, deserializeValue(value)])
+            );
+          }
+
+          function writePersistedSmokeFiles(files) {
             localStorage.setItem(
               smokeStorageKey,
               JSON.stringify(Array.from(files.entries()).map(([name, value]) => [name, serializeValue(value)]))
             );
+          }
+
+          function persistSmokeFile(path, value) {
+            let files = readPersistedSmokeFiles() ?? new Map();
+            files.set(path, value);
+            writePersistedSmokeFiles(files);
+          }
+
+          function removePersistedSmokeFiles(paths) {
+            let files = readPersistedSmokeFiles() ?? new Map();
+            for (let path of paths) files.delete(path);
+            writePersistedSmokeFiles(files);
           }
 
           function persistSmokeDirectories(directories) {
@@ -2451,7 +2469,7 @@ async function installMockFileSystemAccess(client, sessionId) {
                 value = new TextDecoder().decode(value);
               }
               this.files.set(this.path, value);
-              persistSmokeFiles(this.files);
+              persistSmokeFile(this.path, value);
             }
             async write(data) {
               if (data && typeof data == "object" && data.type == "write") {
@@ -2523,7 +2541,7 @@ async function installMockFileSystemAccess(client, sessionId) {
                 if (!options.create) throw new DOMException("File not found.", "NotFoundError");
                 ensureParents(this.directories, path);
                 this.files.set(path, "");
-                persistSmokeFiles(this.files);
+                persistSmokeFile(path, "");
                 persistSmokeDirectories(this.directories);
               }
               return new SmokeFileHandle(name, this.files, path);
@@ -2531,7 +2549,7 @@ async function installMockFileSystemAccess(client, sessionId) {
             async removeEntry(name, options = {}) {
               let path = joinPath(this.path, name);
               if (this.files.delete(path)) {
-                persistSmokeFiles(this.files);
+                removePersistedSmokeFiles([path]);
                 return;
               }
               if (!directoryExists(this.files, this.directories, path)) {
@@ -2540,13 +2558,17 @@ async function installMockFileSystemAccess(client, sessionId) {
               if (!options.recursive && Array.from(this.files.keys()).some((key) => key.startsWith(path + "/"))) {
                 throw new DOMException("Directory is not empty.", "InvalidModificationError");
               }
+              let removedFiles = [];
               for (let key of Array.from(this.files.keys())) {
-                if (key.startsWith(path + "/")) this.files.delete(key);
+                if (key.startsWith(path + "/")) {
+                  this.files.delete(key);
+                  removedFiles.push(key);
+                }
               }
               for (let key of Array.from(this.directories)) {
                 if (key == path || key.startsWith(path + "/")) this.directories.delete(key);
               }
-              persistSmokeFiles(this.files);
+              removePersistedSmokeFiles(removedFiles);
               persistSmokeDirectories(this.directories);
             }
             async *entries() {
@@ -2591,7 +2613,7 @@ async function installMockFileSystemAccess(client, sessionId) {
             let path = normalize(name);
             ensureParents(directories, path);
             files.set(path, String(value));
-            persistSmokeFiles(files);
+            persistSmokeFile(path, String(value));
             persistSmokeDirectories(directories);
           };
           window.showDirectoryPicker = async () => new SmokeDirectoryHandle("Smoke Workspace", files, directories);
