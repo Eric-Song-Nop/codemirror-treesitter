@@ -8,7 +8,7 @@ import {
 import { RenewableOpendalOperatorHost } from "../storage/opendal-operator-host.ts";
 import { OpendalWorkspaceObjectStore } from "../storage/opendal-workspace-object-store.ts";
 import { DefaultWorkspaceDocuments } from "../documents/workspace-documents.ts";
-import { ActiveDocumentChangeSource } from "./current-document-changes.ts";
+import { WorkspaceDocumentChangeMonitor } from "./document-changes.ts";
 import { createWorkspaceRuntimeDisposal } from "./runtime-disposal.ts";
 import {
   OpendalWorkspaceAssetService,
@@ -44,25 +44,25 @@ export async function createCloudWorkspaceRuntime(input: {
   );
   let store = new OpendalWorkspaceObjectStore(host);
   let documentSource = new OpendalWorkspaceDocumentService(store);
-  let currentDocumentChanges = new ActiveDocumentChangeSource({
+  let documentChanges = new WorkspaceDocumentChangeMonitor({
     intervalMs: 10_000,
     observe: (path) => documentSource.observe(path),
     probe: (path) => store.probe(path),
   });
   let documents = new DefaultWorkspaceDocuments({
-    changes: currentDocumentChanges,
+    changes: documentChanges,
+    documentSource,
     identity: input.identity,
-    source: documentSource,
   });
   let dispose = createWorkspaceRuntimeDisposal({
-    changes: currentDocumentChanges,
+    changes: documentChanges,
     documents,
     host,
   });
 
   return {
     assets: new OpendalWorkspaceAssetService(store),
-    currentDocumentChanges,
+    documentChanges,
     documentSource,
     dispose,
     documents,

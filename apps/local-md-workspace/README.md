@@ -62,10 +62,11 @@ packages.
 ## Source Layout
 
 - `src/app/workspace-store.ts`: app-owned Zustand vanilla state and atomic
-  active/opening document-view publication operations.
-- `src/app/document-session-coordinator.ts`: Effect-owned latest-intent
-  workspace document preparation, serialized view replacement, and selected
-  subscription cleanup. It does not own document persistence or lifetime.
+  selected/loading document-view publication operations.
+- `src/app/document-view-coordinator.ts`: latest-request workspace document
+  preparation, view replacement, and selected subscription cleanup. It uses
+  standard abort signals for stale UI work and never flushes or closes a
+  collaborative document.
 - `src/app/workspace-application.ts` and
   `src/app/WorkspaceApplicationProvider.tsx`: the StrictMode-external app
   lifetime and stable React composition boundary.
@@ -152,7 +153,7 @@ packages.
   stacked delivery plan.
 - [OpenDAL Workspace Storage Architecture](./OPENDAL_WORKSPACE_ARCHITECTURE.md):
   implemented browser operator, workspace object storage, explicit source
-  states, path-scoped persistence, and current-document reconciliation
+  states, path-scoped persistence, and external-source reconciliation
   contracts.
 - [Browser Agent Architecture](./BROWSER_AGENT_PLAN.md): browser-side workspace
   tools, path-based collaborative-document editing, BYOK boundaries, and

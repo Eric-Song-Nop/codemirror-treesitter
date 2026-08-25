@@ -23,28 +23,27 @@ describe("workspace app store", () => {
     expect(store.getState().errorMessage).toBe("First error; second error");
   });
 
-  it("keeps the active document while only the latest opening can finish", () => {
+  it("keeps the selected document while its replacement is loading", () => {
     let store = createWorkspaceAppStore();
-    let active = publishDocument(store, "a.md", "# A");
+    let selected = publishDocument(store, "a.md", "# A");
 
-    publishWorkspaceDocumentOpening(store, { intentId: 2, path: "b.md" }, "# A edited");
-    publishWorkspaceDocumentOpening(store, { intentId: 3, path: "c.md" });
-    clearWorkspaceDocumentOpening(store, 2);
+    publishWorkspaceDocumentOpening(store, { path: "b.md" }, "# A edited");
+    publishWorkspaceDocumentOpening(store, { path: "c.md" });
 
     expect(store.getState()).toMatchObject({
-      collabDocument: active.document,
-      editorDocument: { path: active.file.path, value: "# A edited" },
-      openingDocument: { intentId: 3, path: "c.md" },
-      selectedFile: active.file,
+      collabDocument: selected.document,
+      editorDocument: { path: selected.file.path, value: "# A edited" },
+      openingDocument: { path: "c.md" },
+      selectedFile: selected.file,
     });
 
-    clearWorkspaceDocumentOpening(store, 3);
+    clearWorkspaceDocumentOpening(store);
     expect(store.getState().openingDocument).toBeNull();
   });
 
   it("installs a document and clears its opening in one publication", () => {
     let store = createWorkspaceAppStore();
-    publishWorkspaceDocumentOpening(store, { intentId: 1, path: "b.md" });
+    publishWorkspaceDocumentOpening(store, { path: "b.md" });
     let snapshots = recordSnapshots(store);
     let next = publishDocument(store, "b.md", "# B");
 
@@ -60,10 +59,10 @@ describe("workspace app store", () => {
     });
   });
 
-  it("clears the active view in one publication", () => {
+  it("clears the selected view in one publication", () => {
     let store = createWorkspaceAppStore();
     publishDocument(store, "a.md", "# A");
-    publishWorkspaceDocumentOpening(store, { intentId: 2, path: "b.md" });
+    publishWorkspaceDocumentOpening(store, { path: "b.md" });
     let snapshots = recordSnapshots(store);
 
     clearWorkspaceDocumentView(store);

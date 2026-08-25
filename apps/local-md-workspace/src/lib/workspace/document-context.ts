@@ -8,7 +8,7 @@ import {
 } from "@/lib/workspace/source-identity";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
-export type DocumentSession = {
+export type WorkspaceDocumentContext = {
   collabDocument: WorkspaceCollaborativeDocument;
   file: MarkdownFileNode;
   id: string;
@@ -16,15 +16,11 @@ export type DocumentSession = {
   sourceRef: DocumentSourceRef;
 };
 
-export type ActiveWorkspaceDocumentSession = DocumentSession & {
-  epoch: number;
-};
-
-export function createDocumentSession(
+export function createWorkspaceDocumentContext(
   runtime: WorkspaceRuntime,
   file: MarkdownFileNode,
   collabDocument: WorkspaceCollaborativeDocument,
-): DocumentSession {
+): WorkspaceDocumentContext {
   let sourceRef = documentSourceRef(runtime.identity, file.path);
   return {
     collabDocument,
@@ -35,9 +31,9 @@ export function createDocumentSession(
   };
 }
 
-export function documentSessionMatchesSource(
-  session: DocumentSession,
+export function workspaceDocumentContextMatchesSource(
+  context: WorkspaceDocumentContext,
   sourceRef: DocumentSourceRef,
 ) {
-  return sameDocumentSourceRef(session.sourceRef, sourceRef);
+  return sameDocumentSourceRef(context.sourceRef, sourceRef);
 }

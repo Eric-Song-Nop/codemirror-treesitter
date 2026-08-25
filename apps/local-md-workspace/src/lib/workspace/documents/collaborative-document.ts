@@ -15,8 +15,8 @@ import {
 import { createCollabDocumentBroadcastSync } from "@/lib/collaboration/document-sync";
 import { createDebouncedTask, type DebouncedTask } from "@/lib/scheduling/debounced-task";
 import type {
-  CurrentDocumentChangeSource,
-  CurrentDocumentChangeSubscription,
+  WorkspaceDocumentChangeSource,
+  WorkspaceDocumentChangeSubscription,
   WorkspaceDocumentPort,
   WorkspaceIdentity,
   WorkspaceTextSnapshot,
@@ -36,10 +36,10 @@ const materializeDelayMs = 500;
 const materializeMaxWaitMs = 2_000;
 
 export type ManagedCollaborativeDocumentOptions = {
-  changes: CurrentDocumentChangeSource | null;
+  changes: WorkspaceDocumentChangeSource | null;
+  documentSource: WorkspaceDocumentPort;
   identity: WorkspaceIdentity;
   path: string;
-  source: WorkspaceDocumentPort;
   state: CollabDocumentState;
 };
 
@@ -61,7 +61,7 @@ export class ManagedCollaborativeDocument implements WorkspaceCollaborativeDocum
   private requestedGeneration = 0;
   private sourceOperations: Promise<void> = Promise.resolve();
   private readonly stopBroadcast: () => void;
-  private readonly stopDocumentChanges: CurrentDocumentChangeSubscription | null;
+  private readonly stopDocumentChanges: WorkspaceDocumentChangeSubscription | null;
   private readonly stopLoroSubscription: () => void;
   private value: string;
   private readonly waiters = new Set<FlushWaiter>();
@@ -195,7 +195,7 @@ export class ManagedCollaborativeDocument implements WorkspaceCollaborativeDocum
     let path = normalizeWorkspaceDocumentPath(rawPath);
     if (path == this.path) throw new Error("A document copy requires a different path.");
     await this.runSourceOperation(async () => {
-      await commitExplicitTarget(this.options.source, path, this.value);
+      await commitExplicitTarget(this.options.documentSource, path, this.value);
     });
   }
 
@@ -206,7 +206,7 @@ export class ManagedCollaborativeDocument implements WorkspaceCollaborativeDocum
       if (state.source.kind != "recovery-required") {
         throw new Error("The document does not require external-source recovery.");
       }
-      let observation = await this.options.source.observe(this.path);
+      let observation = await this.options.documentSource.observe(this.path);
       if (observation.state == "missing") throw new Error(`${this.path} no longer exists.`);
       if (observation.state == "unavailable") throw observation.error;
       let resolution = await resolveCollabRecoveryUseExternal(
@@ -234,7 +234,7 @@ export class ManagedCollaborativeDocument implements WorkspaceCollaborativeDocum
       }
       let materialization = captureCollabDocumentMaterialization(state);
       let snapshot = await commitExplicitTarget(
-        this.options.source,
+        this.options.documentSource,
         this.path,
         materialization.value,
       );
@@ -359,7 +359,7 @@ export class ManagedCollaborativeDocument implements WorkspaceCollaborativeDocum
   }
 
   private backend(): CollabDocumentSource {
-    return { documents: this.options.source, identity: this.options.identity };
+    return { documentSource: this.options.documentSource, identity: this.options.identity };
   }
 
   private assertEditable() {

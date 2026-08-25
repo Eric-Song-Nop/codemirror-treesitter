@@ -3,7 +3,7 @@ import {
   throwIfWorkspaceAgentAborted,
 } from "../../application/abort.ts";
 import { resolveWorkspaceMarkdownFile } from "../../application/workspace-catalog.ts";
-import type { WorkspaceAgentReadRuntime } from "../../application/workspace-search.ts";
+import type { WorkspaceAgentRuntime } from "../../application/workspace-search.ts";
 import type {
   WorkspaceAgentTextEdit,
   WorkspaceAgentWriteFileInput,
@@ -14,7 +14,7 @@ import type { WorkspaceAgentLimits } from "../../domain/limits.ts";
 export async function writeWorkspaceAgentFile(input: {
   limits: Pick<WorkspaceAgentLimits, "catalog" | "write">;
   request: WorkspaceAgentWriteFileInput;
-  runtime: WorkspaceAgentReadRuntime;
+  runtime: WorkspaceAgentRuntime;
   signal?: AbortSignal;
 }): Promise<WorkspaceAgentWriteFileResult> {
   let path = input.request.path;

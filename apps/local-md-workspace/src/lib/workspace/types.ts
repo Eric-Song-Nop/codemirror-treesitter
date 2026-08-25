@@ -36,16 +36,16 @@ export type StandaloneDocumentSource = {
   writeFile(value: string): Promise<void>;
 };
 
-export type ActiveDocumentSource = StandaloneDocumentSource | WorkspaceRuntime;
+export type SelectedFileSource = StandaloneDocumentSource | WorkspaceRuntime;
 
-export function isWorkspaceDocumentSource(
-  source: ActiveDocumentSource | null | undefined,
+export function isWorkspaceFileSource(
+  source: SelectedFileSource | null | undefined,
 ): source is WorkspaceRuntime {
   return Boolean(source && "identity" in source);
 }
 
-export function activeDocumentSourceId(source: ActiveDocumentSource) {
-  return isWorkspaceDocumentSource(source) ? source.identity.id : source.id;
+export function selectedFileSourceId(source: SelectedFileSource) {
+  return isWorkspaceFileSource(source) ? source.identity.id : source.id;
 }
 
 export type WorkspaceImageAsset = {

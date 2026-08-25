@@ -5,7 +5,7 @@ import type {
 } from "../../../workspace/documents/contracts.ts";
 import type { WorkspaceTreePort } from "../../../workspace/runtime/types.ts";
 import type { MarkdownDirectoryNode, MarkdownTreeNode } from "../../../workspace/tree.ts";
-import type { WorkspaceAgentReadRuntime } from "../../application/workspace-search.ts";
+import type { WorkspaceAgentRuntime } from "../../application/workspace-search.ts";
 import { createWorkspaceAgentHost } from "./host.ts";
 
 describe("workspace Agent host", () => {
@@ -181,7 +181,7 @@ function fakeRuntime(input: {
   documents?: WorkspaceDocuments;
   files: Record<string, string>;
   tree?: WorkspaceTreePort;
-}): WorkspaceAgentReadRuntime {
+}): WorkspaceAgentRuntime {
   return {
     documents:
       input.documents ??

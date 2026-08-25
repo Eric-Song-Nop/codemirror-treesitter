@@ -1,9 +1,9 @@
 import type { AccessDirectoryHandle } from "../file-system.ts";
 import type { SourceObservation, SourceProbe } from "../storage/types.ts";
 import type {
-  CurrentDocumentChangeHint,
-  CurrentDocumentChangeSource,
-  CurrentDocumentChangeSubscription,
+  WorkspaceDocumentChangeHint,
+  WorkspaceDocumentChangeSource,
+  WorkspaceDocumentChangeSubscription,
   WorkspaceTextSnapshot,
 } from "./types.ts";
 
@@ -22,7 +22,7 @@ type FileSystemObserverConstructor = new (
   callback: (records: FileSystemChangeRecordLike[]) => void,
 ) => FileSystemObserverLike;
 
-export type CurrentDocumentChangeSourceOptions = {
+export type WorkspaceDocumentChangeMonitorOptions = {
   hintDebounceMs?: number;
   intervalMs?: number;
   localRoot?: AccessDirectoryHandle;
@@ -38,20 +38,20 @@ type Sample = {
   key: string;
 };
 
-export class ActiveDocumentChangeSource implements CurrentDocumentChangeSource {
+export class WorkspaceDocumentChangeMonitor implements WorkspaceDocumentChangeSource {
   private readonly hintDebounceMs: number;
   private readonly intervalMs: number;
   private readonly maxIntervalMs: number;
   private readonly observerConstructor: FileSystemObserverConstructor | undefined;
-  private readonly subscriptions = new Set<CurrentDocumentChangeSubscription>();
+  private readonly subscriptions = new Set<WorkspaceDocumentChangeSubscription>();
 
-  constructor(private readonly options: CurrentDocumentChangeSourceOptions) {
+  constructor(private readonly options: WorkspaceDocumentChangeMonitorOptions) {
     this.intervalMs = positiveFinite(options.intervalMs ?? 3_000, "polling interval");
     this.maxIntervalMs = positiveFinite(options.maxIntervalMs ?? 60_000, "maximum interval");
     this.hintDebounceMs = nonNegativeFinite(options.hintDebounceMs ?? 120, "hint debounce");
     if (this.maxIntervalMs < this.intervalMs) {
       throw new RangeError(
-        "Current-document maximum interval cannot be shorter than its interval.",
+        "Workspace document maximum interval cannot be shorter than its interval.",
       );
     }
     this.observerConstructor =
@@ -65,9 +65,9 @@ export class ActiveDocumentChangeSource implements CurrentDocumentChangeSource {
 
   subscribe(
     path: string,
-    listener: (hint: CurrentDocumentChangeHint) => void,
-  ): CurrentDocumentChangeSubscription {
-    let subscription = new ActiveDocumentSubscription({
+    listener: (hint: WorkspaceDocumentChangeHint) => void,
+  ): WorkspaceDocumentChangeSubscription {
+    let subscription = new WorkspaceDocumentSubscription({
       hintDebounceMs: this.hintDebounceMs,
       intervalMs: this.intervalMs,
       listener,
@@ -79,7 +79,7 @@ export class ActiveDocumentChangeSource implements CurrentDocumentChangeSource {
       probe: this.options.probe,
       random: this.options.random ?? Math.random,
     });
-    let exposedSubscription: CurrentDocumentChangeSubscription = {
+    let exposedSubscription: WorkspaceDocumentChangeSubscription = {
       dispose: () => {
         subscription.dispose();
         this.subscriptions.delete(exposedSubscription);
@@ -96,7 +96,7 @@ export class ActiveDocumentChangeSource implements CurrentDocumentChangeSource {
   }
 }
 
-class ActiveDocumentSubscription implements CurrentDocumentChangeSubscription {
+class WorkspaceDocumentSubscription implements WorkspaceDocumentChangeSubscription {
   private baseline: string | null = null;
   private disposed = false;
   private failureCount = 0;
@@ -110,7 +110,7 @@ class ActiveDocumentSubscription implements CurrentDocumentChangeSubscription {
     private readonly input: {
       hintDebounceMs: number;
       intervalMs: number;
-      listener: (hint: CurrentDocumentChangeHint) => void;
+      listener: (hint: WorkspaceDocumentChangeHint) => void;
       localRoot?: AccessDirectoryHandle;
       maxIntervalMs: number;
       observe: (path: string) => Promise<SourceObservation<WorkspaceTextSnapshot>>;
@@ -286,7 +286,7 @@ class ActiveDocumentSubscription implements CurrentDocumentChangeSubscription {
     }, this.input.hintDebounceMs);
   }
 
-  private emit(hint: CurrentDocumentChangeHint) {
+  private emit(hint: WorkspaceDocumentChangeHint) {
     try {
       this.input.listener(hint);
     } catch {
@@ -318,21 +318,21 @@ async function resolveParentDirectory(root: AccessDirectoryHandle, path: string)
 function normalizeDocumentPath(path: string) {
   let parts = path.trim().replace(/\\/g, "/").split("/").filter(Boolean);
   if (!parts.length || parts.some((part) => part == "." || part == "..")) {
-    throw new Error("Current-document observer requires a normalized file path.");
+    throw new Error("Workspace document observer requires a normalized file path.");
   }
   return parts.join("/");
 }
 
 function positiveFinite(value: number, label: string) {
   if (!Number.isFinite(value) || value <= 0) {
-    throw new RangeError(`Current-document ${label} must be positive.`);
+    throw new RangeError(`Workspace document ${label} must be positive.`);
   }
   return value;
 }
 
 function nonNegativeFinite(value: number, label: string) {
   if (!Number.isFinite(value) || value < 0) {
-    throw new RangeError(`Current-document ${label} must not be negative.`);
+    throw new RangeError(`Workspace document ${label} must not be negative.`);
   }
   return value;
 }

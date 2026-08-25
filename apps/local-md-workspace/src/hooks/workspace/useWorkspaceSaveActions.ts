@@ -7,8 +7,8 @@ import type {
   WorkspaceCollaborativeDocument,
 } from "@/lib/workspace/documents";
 import {
-  isWorkspaceDocumentSource,
-  type ActiveDocumentSource,
+  isWorkspaceFileSource,
+  type SelectedFileSource,
   type EditorDocument,
   type SaveState,
   type SourceAutoSaveTask,
@@ -25,12 +25,11 @@ type UseWorkspaceSaveActionsOptions = {
   cleanValueRef: MutableRef<string>;
   collabDocumentRef: MutableRef<WorkspaceCollaborativeDocument | null>;
   dirtyRef: MutableRef<boolean>;
-  editVersionRef: MutableRef<number>;
   editorValueRef: MutableRef<string>;
   saveOperationRef: MutableRef<number>;
   saveStateRef: MutableRef<SaveState>;
   scheduleAutoSaveRef: MutableRef<() => void>;
-  selectedFileSourceRef: MutableRef<ActiveDocumentSource | null>;
+  selectedFileSourceRef: MutableRef<SelectedFileSource | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
   setEditorDocument: Dispatch<SetStateAction<EditorDocument>>;
   setErrorMessage: (message: string) => void;
@@ -43,7 +42,6 @@ export function useWorkspaceSaveActions({
   cleanValueRef,
   collabDocumentRef,
   dirtyRef,
-  editVersionRef,
   editorValueRef,
   saveOperationRef,
   saveStateRef,
@@ -120,7 +118,7 @@ export function useWorkspaceSaveActions({
     }
 
     let source = selectedFileSourceRef.current;
-    if (!source || !file || isWorkspaceDocumentSource(source)) return true;
+    if (!source || !file || isWorkspaceFileSource(source)) return true;
     let value = editorValueRef.current;
     if (!dirtyRef.current && value == cleanValueRef.current) return true;
 
@@ -196,7 +194,6 @@ export function useWorkspaceSaveActions({
   let handleEditorInput = useCallback(
     (value: string) => {
       editorValueRef.current = value;
-      editVersionRef.current += 1;
 
       let document = collabDocumentRef.current;
       if (document) {
@@ -218,45 +215,10 @@ export function useWorkspaceSaveActions({
       applyCollaborativeDocumentSnapshot,
       collabDocumentRef,
       dirtyRef,
-      editVersionRef,
       editorValueRef,
       saveStateRef,
       scheduleAutoSave,
       setSaveStateSynced,
-    ],
-  );
-
-  let reconcileCurrentDocumentSource = useCallback(
-    async (
-      runtime: WorkspaceRuntime,
-      file: MarkdownFileNode,
-      document: WorkspaceCollaborativeDocument,
-    ) => {
-      assertCurrentRecoveryDocument({
-        collabDocumentRef,
-        document,
-        file,
-        runtime,
-        selectedFileRef,
-        selectedFileSourceRef,
-      });
-      try {
-        await document.importExternalChange();
-        applyCollaborativeDocumentSnapshot(document);
-      } catch (error) {
-        if (collabDocumentRef.current !== document) return;
-        applyCollaborativeDocumentSnapshot(document);
-        setErrorMessage(errorToMessage(error));
-        setRetryLoadPath(document.snapshot().sourceKind == "unavailable" ? file.path : null);
-      }
-    },
-    [
-      applyCollaborativeDocumentSnapshot,
-      collabDocumentRef,
-      selectedFileRef,
-      selectedFileSourceRef,
-      setErrorMessage,
-      setRetryLoadPath,
     ],
   );
 
@@ -352,7 +314,6 @@ export function useWorkspaceSaveActions({
     clearPendingSaveTimer,
     handleEditorInput,
     keepCurrentDocumentAs,
-    reconcileCurrentDocumentSource,
     recreateCurrentDocumentSource,
     resolveCurrentDocumentUseExternal,
     saveCurrentFile,
@@ -380,7 +341,7 @@ function assertCurrentRecoveryDocument(input: {
   file: MarkdownFileNode;
   runtime: WorkspaceRuntime;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
-  selectedFileSourceRef: MutableRef<ActiveDocumentSource | null>;
+  selectedFileSourceRef: MutableRef<SelectedFileSource | null>;
 }) {
   if (
     input.selectedFileSourceRef.current !== input.runtime ||

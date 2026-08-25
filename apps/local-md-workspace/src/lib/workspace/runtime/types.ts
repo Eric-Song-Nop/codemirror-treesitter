@@ -79,20 +79,20 @@ export interface WorkspaceAssetPort {
   }): Promise<WorkspaceCommitResult>;
 }
 
-export type CurrentDocumentChangeHint =
+export type WorkspaceDocumentChangeHint =
   | { kind: "changed"; path: string }
   | { kind: "monitor-unavailable"; path: string }
   | { kind: "resync-required"; path: string };
 
-export interface CurrentDocumentChangeSubscription {
+export interface WorkspaceDocumentChangeSubscription {
   dispose(): void;
 }
 
-export interface CurrentDocumentChangeSource {
+export interface WorkspaceDocumentChangeSource {
   subscribe(
     path: string,
-    listener: (hint: CurrentDocumentChangeHint) => void,
-  ): CurrentDocumentChangeSubscription;
+    listener: (hint: WorkspaceDocumentChangeHint) => void,
+  ): WorkspaceDocumentChangeSubscription;
 }
 
 export type WorkspaceHostCapabilities = {
@@ -102,7 +102,7 @@ export type WorkspaceHostCapabilities = {
 
 export type WorkspaceRuntime = {
   assets: WorkspaceAssetPort;
-  currentDocumentChanges: CurrentDocumentChangeSource | null;
+  documentChanges: WorkspaceDocumentChangeSource | null;
   documentSource: WorkspaceDocumentPort;
   dispose(): Promise<void>;
   documents: WorkspaceDocuments;

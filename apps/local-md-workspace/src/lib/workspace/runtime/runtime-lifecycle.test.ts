@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { createWorkspaceDocumentSessionKernel } from "@/app/document-session-coordinator";
 import { createWorkspaceEffectRuntime } from "@/app/effect-runtime";
-import { createWorkspaceAppStore } from "@/app/workspace-store";
 import { transitionWorkspaceRuntime } from "./runtime-lifecycle.ts";
 import type { WorkspaceRuntime } from "./types.ts";
 
@@ -15,7 +13,7 @@ describe("workspace runtime lifecycle", () => {
     await effectRuntime.runPromise(
       transitionWorkspaceRuntime({
         activate: () => events.push("activate:next"),
-        closeActiveDocument: async () => {
+        clearDocumentView: async () => {
           events.push("close-document");
         },
         current: () => current,
@@ -27,7 +25,7 @@ describe("workspace runtime lifecycle", () => {
     expect(events).toEqual(["close-document", "activate:next", "dispose:current"]);
   });
 
-  it("still closes the active document when reusing the same runtime", async () => {
+  it("still clears the selected document view when reusing the same runtime", async () => {
     let effectRuntime = createTestWorkspaceEffectRuntime();
     let events: string[] = [];
     let current = runtime("current", events);
@@ -35,7 +33,7 @@ describe("workspace runtime lifecycle", () => {
     await effectRuntime.runPromise(
       transitionWorkspaceRuntime({
         activate: () => events.push("activate:current"),
-        closeActiveDocument: async () => {
+        clearDocumentView: async () => {
           events.push("close-document");
         },
         current: () => current,
@@ -56,7 +54,7 @@ describe("workspace runtime lifecycle", () => {
       effectRuntime.runPromise(
         transitionWorkspaceRuntime({
           activate: vi.fn(),
-          closeActiveDocument: async () => {
+          clearDocumentView: async () => {
             throw new Error("close failed");
           },
           current: () => runtime("current", events),
@@ -85,7 +83,7 @@ describe("workspace runtime lifecycle", () => {
           active = next;
           events.push("first-activate");
         },
-        closeActiveDocument: async () => {
+        clearDocumentView: async () => {
           events.push("first-start");
           await gate;
           events.push("first-end");
@@ -100,7 +98,7 @@ describe("workspace runtime lifecycle", () => {
           active = next;
           events.push("second");
         },
-        closeActiveDocument: async () => {},
+        clearDocumentView: async () => {},
         current: () => active,
         next: secondRuntime,
       }),
@@ -131,7 +129,7 @@ describe("workspace runtime lifecycle", () => {
       .runPromise(
         transitionWorkspaceRuntime({
           activate: () => events.push("activate:next"),
-          closeActiveDocument: async () => {
+          clearDocumentView: async () => {
             events.push("close-start");
             await gate;
             events.push("close-end");
@@ -176,7 +174,7 @@ describe("workspace runtime lifecycle", () => {
             active = next;
             events.push("activate:first");
           },
-          closeActiveDocument: async () => {
+          clearDocumentView: async () => {
             events.push("close-start");
             await gate;
             events.push("close-end");
@@ -193,7 +191,7 @@ describe("workspace runtime lifecycle", () => {
             active = next;
             events.push("activate:waiting");
           },
-          closeActiveDocument: async () => {},
+          clearDocumentView: async () => {},
           current: () => active,
           next: waitingRuntime,
         }),
@@ -215,9 +213,7 @@ describe("workspace runtime lifecycle", () => {
 });
 
 function createTestWorkspaceEffectRuntime() {
-  return createWorkspaceEffectRuntime(
-    createWorkspaceDocumentSessionKernel(createWorkspaceAppStore()),
-  );
+  return createWorkspaceEffectRuntime();
 }
 
 function runtime(id: string, events: string[]) {

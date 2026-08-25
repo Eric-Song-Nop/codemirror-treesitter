@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AccessDirectoryHandle } from "../file-system.ts";
-import { ActiveDocumentChangeSource } from "./current-document-changes.ts";
+import { WorkspaceDocumentChangeMonitor } from "./document-changes.ts";
 
-describe("ActiveDocumentChangeSource polling", () => {
+describe("WorkspaceDocumentChangeMonitor polling", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
@@ -10,7 +10,7 @@ describe("ActiveDocumentChangeSource polling", () => {
     let revision = "r1";
     let observe = vi.fn(async () => presentSnapshot("unused"));
     let listener = vi.fn();
-    let subscription = new ActiveDocumentChangeSource({
+    let subscription = new WorkspaceDocumentChangeMonitor({
       hintDebounceMs: 0,
       intervalMs: 100,
       maxIntervalMs: 800,
@@ -43,7 +43,7 @@ describe("ActiveDocumentChangeSource polling", () => {
     let content = "one";
     let observe = vi.fn(async () => presentSnapshot(content));
     let listener = vi.fn();
-    let subscription = new ActiveDocumentChangeSource({
+    let subscription = new WorkspaceDocumentChangeMonitor({
       hintDebounceMs: 0,
       intervalMs: 100,
       observe,
@@ -75,7 +75,7 @@ describe("ActiveDocumentChangeSource polling", () => {
       });
     });
     let listener = vi.fn();
-    let subscription = new ActiveDocumentChangeSource({
+    let subscription = new WorkspaceDocumentChangeMonitor({
       hintDebounceMs: 0,
       intervalMs: 100,
       observe: async () => presentSnapshot("unused"),
@@ -98,7 +98,7 @@ describe("ActiveDocumentChangeSource polling", () => {
   it("backs off unavailable samples and resumes detecting a present revision", async () => {
     let unavailable = true;
     let listener = vi.fn();
-    let subscription = new ActiveDocumentChangeSource({
+    let subscription = new WorkspaceDocumentChangeMonitor({
       hintDebounceMs: 0,
       intervalMs: 100,
       maxIntervalMs: 800,
@@ -126,7 +126,7 @@ describe("ActiveDocumentChangeSource polling", () => {
   });
 });
 
-describe("ActiveDocumentChangeSource FileSystemObserver", () => {
+describe("WorkspaceDocumentChangeMonitor FileSystemObserver", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
@@ -136,7 +136,7 @@ describe("ActiveDocumentChangeSource FileSystemObserver", () => {
       folder: directoryHandle("folder"),
     });
     let listener = vi.fn();
-    let subscription = new ActiveDocumentChangeSource({
+    let subscription = new WorkspaceDocumentChangeMonitor({
       hintDebounceMs: 0,
       localRoot: root,
       observe: async () => presentSnapshot("one"),
@@ -163,7 +163,7 @@ describe("ActiveDocumentChangeSource FileSystemObserver", () => {
   it("keeps unknown records as resync hints but falls back after a terminal error", async () => {
     let observer = createObserverHarness();
     let listener = vi.fn();
-    let subscription = new ActiveDocumentChangeSource({
+    let subscription = new WorkspaceDocumentChangeMonitor({
       hintDebounceMs: 0,
       intervalMs: 100,
       localRoot: directoryHandle("root"),
@@ -186,7 +186,7 @@ describe("ActiveDocumentChangeSource FileSystemObserver", () => {
 
   it("contains listener failures and still disconnects", async () => {
     let observer = createObserverHarness();
-    let subscription = new ActiveDocumentChangeSource({
+    let subscription = new WorkspaceDocumentChangeMonitor({
       hintDebounceMs: 0,
       localRoot: directoryHandle("root"),
       observe: async () => presentSnapshot("one"),
@@ -204,7 +204,7 @@ describe("ActiveDocumentChangeSource FileSystemObserver", () => {
 
   it("disposes every active subscription with the source runtime", async () => {
     let observer = createObserverHarness();
-    let source = new ActiveDocumentChangeSource({
+    let source = new WorkspaceDocumentChangeMonitor({
       localRoot: directoryHandle("root"),
       observe: async () => presentSnapshot("one"),
       observerConstructor: observer.Constructor,

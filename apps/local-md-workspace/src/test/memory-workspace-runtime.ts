@@ -51,13 +51,13 @@ export function createMemoryWorkspaceRuntime(
   let documentSource = new OpendalWorkspaceDocumentService(store);
   let documents = new DefaultWorkspaceDocuments({
     changes: null,
+    documentSource,
     identity,
-    source: documentSource,
   });
 
   return {
     assets: new OpendalWorkspaceAssetService(store),
-    currentDocumentChanges: null,
+    documentChanges: null,
     documentSource,
     dispose: () => documents.close(),
     documents,

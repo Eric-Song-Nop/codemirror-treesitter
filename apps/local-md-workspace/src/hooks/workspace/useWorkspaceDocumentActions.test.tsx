@@ -74,7 +74,7 @@ describe("useWorkspaceDocumentActions", () => {
       expect(await fixture?.api?.saveCurrentFile()).toBe(true);
     });
 
-    let firstA = fixture.application.documents.current()!.collabDocument;
+    let firstA = fixture.application.documentViews.current()!.collabDocument;
     let freeA = vi.spyOn(firstA.loroDoc, "free");
     let originalValue = firstA.read();
     firstA.edit([
@@ -91,7 +91,7 @@ describe("useWorkspaceDocumentActions", () => {
       expect(await fixture!.api!.loadFile(runtime!, fileA, { saveCurrent: false })).toBe(true);
     });
 
-    let reopenedA = fixture.application.documents.current()!;
+    let reopenedA = fixture.application.documentViews.current()!;
     expect(reopenedA.collabDocument).toBe(firstA);
     expect(reopenedA.collabDocument.read()).toBe("# A\\nEdited before switching.\n");
     expect(freeA).not.toHaveBeenCalled();
@@ -113,7 +113,7 @@ describe("useWorkspaceDocumentActions", () => {
       await fixture?.api?.loadFile(runtime!, fileA, { saveCurrent: false });
     });
 
-    let documentA = fixture.application.documents.current()!.collabDocument;
+    let documentA = fixture.application.documentViews.current()!.collabDocument;
     let valueA = documentA.read();
     documentA.edit([
       {
@@ -139,7 +139,7 @@ describe("useWorkspaceDocumentActions", () => {
     await act(async () => {
       expect(await fixture!.api!.loadFile(runtime!, fileB, { saveCurrent: false })).toBe(true);
     });
-    expect(fixture.application.documents.current()?.file.path).toBe(fileB.path);
+    expect(fixture.application.documentViews.current()?.file.path).toBe(fileB.path);
 
     releaseSave.open();
     await act(async () => {
@@ -151,7 +151,7 @@ describe("useWorkspaceDocumentActions", () => {
     expect(fixture.options.editorValueRef.current).toBe("# B\\n");
   });
 
-  it("keeps remote and external changes active for an unselected document", async () => {
+  it("keeps remote and external changes flowing for an unselected document", async () => {
     let fileA = markdownFile("a.md");
     let fileB = markdownFile("b.md");
     runtime = createMemoryWorkspaceRuntime(
@@ -159,14 +159,14 @@ describe("useWorkspaceDocumentActions", () => {
         [fileA.path, "# A\n"],
         [fileB.path, "# B\n"],
       ],
-      { id: "memory:document-actions-inactive-updates" },
+      { id: "memory:document-actions-unselected-updates" },
     );
     fixture = createDocumentActionsFixture();
     await renderFixture(fixture);
     await act(async () => {
       await fixture!.api!.loadFile(runtime!, fileA, { saveCurrent: false });
     });
-    let documentA = fixture.application.documents.current()!.collabDocument;
+    let documentA = fixture.application.documentViews.current()!.collabDocument;
     await act(async () => {
       await fixture!.api!.loadFile(runtime!, fileB, { saveCurrent: false });
     });
@@ -183,18 +183,18 @@ describe("useWorkspaceDocumentActions", () => {
     remote.free();
     await documentA.flush();
 
-    expect(fixture.application.documents.current()?.file.path).toBe(fileB.path);
+    expect(fixture.application.documentViews.current()?.file.path).toBe(fileB.path);
     expect(runtime.files.get(fileA.path)).toBe("# A\nRemote.\n");
 
     runtime.files.set(fileA.path, "# External\n");
     await documentA.importExternalChange();
 
-    expect(fixture.application.documents.current()?.file.path).toBe(fileB.path);
+    expect(fixture.application.documentViews.current()?.file.path).toBe(fileB.path);
     expect(documentA.read()).toBe("# External\n");
     await act(async () => {
       await fixture!.api!.loadFile(runtime!, fileA, { saveCurrent: false });
     });
-    expect(fixture.application.documents.current()!.collabDocument).toBe(documentA);
+    expect(fixture.application.documentViews.current()!.collabDocument).toBe(documentA);
     expect(fixture.options.editorValueRef.current).toBe("# External\n");
   });
 
@@ -210,14 +210,14 @@ describe("useWorkspaceDocumentActions", () => {
     });
     fixture = createDocumentActionsFixture();
     await renderFixture(fixture);
-    let intent = fixture.application.documents.begin(standaloneFile.path);
+    let signal = fixture.application.documentViews.begin(standaloneFile.path);
     await act(async () => {
       await fixture!.api!.activateSingleFileDocument(
         { kind: "local-file", name: standaloneFile.name },
         standaloneSource,
         standaloneFile,
         "# Initial\\n",
-        { intent, localFileHandle: handle },
+        { signal, localFileHandle: handle },
       );
     });
 
@@ -262,14 +262,12 @@ function createDocumentActionsFixture() {
   let setters = createWorkspaceAppSetters(store);
   let saveStateRef: DocumentActionOptions["saveStateRef"] = { current: "idle" };
   let options: DocumentActionOptions = {
-    activeDocumentGenerationRef: { current: 0 },
     autoSaveTaskRef: { current: null },
+    cancelImageUpload: vi.fn(),
     cleanValueRef: { current: "" },
     collabDocumentRef: { current: null },
-    documentSessions: application.documents,
-    documentTargetGenerationRef: { current: 0 },
+    documentViews: application.documentViews,
     dirtyRef: { current: false },
-    editVersionRef: { current: 0 },
     editorValueRef: { current: "" },
     localFileHandleRef: { current: null },
     saveOperationRef: { current: 0 },

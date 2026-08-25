@@ -132,9 +132,10 @@ type StoredCollabDocumentCandidate = BrowserCollabDocumentState & {
   snapshot: Uint8Array;
 };
 
-export type CollabDocumentSource =
-  | { documentSource: WorkspaceDocumentPort; identity: WorkspaceIdentity }
-  | { documents: WorkspaceDocumentPort; identity: WorkspaceIdentity };
+export type CollabDocumentSource = {
+  documentSource: WorkspaceDocumentPort;
+  identity: WorkspaceIdentity;
+};
 
 export async function openMarkdownCollabDocument(
   backend: CollabDocumentSource,
@@ -414,7 +415,7 @@ export async function materializeCollabDocument(
   if (state.source.kind != "present") {
     throw new Error(`The source for ${state.path} must be reconciled before materialization.`);
   }
-  let result = await collabSourceDocuments(backend).commit({
+  let result = await backend.documentSource.commit({
     condition: { kind: "if-unchanged", revision: state.source.baseline.revision },
     path: state.path,
     value: materialization.value,
@@ -422,7 +423,7 @@ export async function materializeCollabDocument(
   if (result.status != "committed") {
     throw new Error(`Workspace materialization for ${state.path} ended with ${result.status}.`);
   }
-  let committed = await collabSourceDocuments(backend).observe(state.path);
+  let committed = await backend.documentSource.observe(state.path);
   if (committed.state != "present" || committed.value.value != materialization.value) {
     throw new Error(`Workspace materialization for ${state.path} could not be verified.`);
   }
@@ -718,11 +719,7 @@ function observeCollabSource(
   source: CollabDocumentSource,
   path: string,
 ): Promise<SourceObservation<WorkspaceTextSnapshot>> {
-  return collabSourceDocuments(source).observe(path);
-}
-
-function collabSourceDocuments(source: CollabDocumentSource) {
-  return "documentSource" in source ? source.documentSource : source.documents;
+  return source.documentSource.observe(path);
 }
 
 function sourceMetadataFields(snapshot: WorkspaceTextSnapshot) {

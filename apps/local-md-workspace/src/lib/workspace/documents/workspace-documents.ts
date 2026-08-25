@@ -1,6 +1,6 @@
 import { openMarkdownCollabDocument } from "@/lib/collaboration/markdown-document";
 import type {
-  CurrentDocumentChangeSource,
+  WorkspaceDocumentChangeSource,
   WorkspaceDocumentPort,
   WorkspaceIdentity,
 } from "@/lib/workspace/runtime/types";
@@ -11,9 +11,9 @@ import {
 import type { WorkspaceCollaborativeDocument, WorkspaceDocuments } from "./contracts.ts";
 
 export type WorkspaceDocumentsOptions = {
-  changes: CurrentDocumentChangeSource | null;
+  changes: WorkspaceDocumentChangeSource | null;
+  documentSource: WorkspaceDocumentPort;
   identity: WorkspaceIdentity;
-  source: WorkspaceDocumentPort;
 };
 
 export class DefaultWorkspaceDocuments implements WorkspaceDocuments {
@@ -45,7 +45,7 @@ export class DefaultWorkspaceDocuments implements WorkspaceDocuments {
 
   private async open(path: string) {
     let state = await openMarkdownCollabDocument(
-      { documents: this.options.source, identity: this.options.identity },
+      { documentSource: this.options.documentSource, identity: this.options.identity },
       path,
     );
     return new ManagedCollaborativeDocument({ ...this.options, path, state });

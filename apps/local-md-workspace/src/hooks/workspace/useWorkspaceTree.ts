@@ -1,6 +1,5 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import type { WorkspaceDocumentIntentLease } from "@/app/document-session-coordinator";
 import type { FileTreeDeleteTarget } from "@/components/FileTree";
 import type { AccessFileHandle } from "@/lib/workspace/file-system";
 import { clearStoredWorkspaceSelectedPath } from "@/lib/workspace/store";
@@ -15,8 +14,8 @@ import { dirname } from "pathe";
 import { workspaceSelectedPathContext } from "@/lib/workspace/state";
 import { readWorkspaceDirectory, readWorkspaceTree } from "@/lib/workspace/workspace-data-cache";
 import {
-  activeDocumentSourceId,
-  type ActiveDocumentSource,
+  selectedFileSourceId,
+  type SelectedFileSource,
   type SingleFileSource,
 } from "@/lib/workspace/types";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
@@ -26,15 +25,15 @@ type MutableRef<T> = {
 };
 
 type UseWorkspaceTreeOptions = {
-  clearActiveDocument: () => Promise<void>;
-  documentTargetGenerationRef: MutableRef<number>;
+  cancelImageUpload: () => void;
+  clearDocumentView: () => Promise<void>;
   loadFile: (
     runtime: WorkspaceRuntime,
     file: MarkdownFileNode,
-    options?: { intent?: WorkspaceDocumentIntentLease; saveCurrent?: boolean },
+    options?: { signal?: AbortSignal; saveCurrent?: boolean },
   ) => Promise<boolean>;
   localFileHandleRef: MutableRef<AccessFileHandle | null>;
-  selectedFileSourceRef: MutableRef<ActiveDocumentSource | null>;
+  selectedFileSourceRef: MutableRef<SelectedFileSource | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
   setTree: Dispatch<SetStateAction<MarkdownDirectoryNode | null>>;
   setTreeSelection: (target: FileTreeDeleteTarget | null) => void;
@@ -42,8 +41,8 @@ type UseWorkspaceTreeOptions = {
 };
 
 export function useWorkspaceTree({
-  clearActiveDocument,
-  documentTargetGenerationRef,
+  cancelImageUpload,
+  clearDocumentView,
   loadFile,
   localFileHandleRef,
   selectedFileSourceRef,
@@ -59,11 +58,11 @@ export function useWorkspaceTree({
       runtime: WorkspaceRuntime,
       nextSelectedPath?: null | string,
       options: {
-        documentIntent?: WorkspaceDocumentIntentLease;
+        documentSignal?: AbortSignal;
         saveBeforeSelect?: boolean;
       } = {},
     ) => {
-      documentTargetGenerationRef.current += 1;
+      cancelImageUpload();
       let nextTree = await loadSelectedPathAncestors(
         runtime,
         await readWorkspaceTree(queryClient, runtime),
@@ -76,7 +75,7 @@ export function useWorkspaceTree({
 
       if (nextSelectedFile) {
         await loadFile(runtime, nextSelectedFile, {
-          intent: options.documentIntent,
+          signal: options.documentSignal,
           saveCurrent: options.saveBeforeSelect ?? true,
         });
         return;
@@ -88,17 +87,17 @@ export function useWorkspaceTree({
         if (
           !singleFileSourceRef.current &&
           selectedFileSourceRef.current &&
-          activeDocumentSourceId(selectedFileSourceRef.current) == runtime.identity.id &&
+          selectedFileSourceId(selectedFileSourceRef.current) == runtime.identity.id &&
           selectedFileRef.current?.path == nextSelectedPath
         ) {
-          await clearActiveDocument();
+          await clearDocumentView();
         }
       }
       setTreeSelection(null);
     },
     [
-      clearActiveDocument,
-      documentTargetGenerationRef,
+      clearDocumentView,
+      cancelImageUpload,
       loadFile,
       selectedFileSourceRef,
       selectedFileRef,
@@ -117,7 +116,7 @@ export function useWorkspaceTree({
         !source &&
         file &&
         selectedFileSourceRef.current &&
-        activeDocumentSourceId(selectedFileSourceRef.current) == runtime.identity.id
+        selectedFileSourceId(selectedFileSourceRef.current) == runtime.identity.id
       ) {
         return file.path;
       }

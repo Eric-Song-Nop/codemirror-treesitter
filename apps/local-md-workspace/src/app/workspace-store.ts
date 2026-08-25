@@ -15,7 +15,6 @@ import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 export type WorkspaceDocumentOpening = {
-  intentId: number;
   path: string;
 };
 
@@ -129,19 +128,19 @@ export function createWorkspaceAppSetters(store: WorkspaceAppStore): WorkspaceAp
 export function publishWorkspaceDocumentOpening(
   store: WorkspaceAppStore,
   opening: WorkspaceDocumentOpening,
-  activeValue?: string,
+  currentValue?: string,
 ) {
   store.setState((state) => ({
     editorDocument:
-      activeValue == null ? state.editorDocument : { ...state.editorDocument, value: activeValue },
+      currentValue == null
+        ? state.editorDocument
+        : { ...state.editorDocument, value: currentValue },
     openingDocument: opening,
   }));
 }
 
-export function clearWorkspaceDocumentOpening(store: WorkspaceAppStore, intentId: number) {
-  store.setState((state) =>
-    state.openingDocument?.intentId == intentId ? { openingDocument: null } : state,
-  );
+export function clearWorkspaceDocumentOpening(store: WorkspaceAppStore) {
+  store.setState({ openingDocument: null });
 }
 
 export function clearWorkspaceDocumentView(store: WorkspaceAppStore, preserveOpening = false) {

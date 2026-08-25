@@ -17,7 +17,7 @@ import {
   resolveWorkspaceMarkdownFile,
 } from "./workspace-catalog.ts";
 
-export type WorkspaceAgentReadRuntime = {
+export type WorkspaceAgentRuntime = {
   documents: WorkspaceDocuments;
   identity: WorkspaceIdentity;
   tree: WorkspaceTreePort;
@@ -26,7 +26,7 @@ export type WorkspaceAgentReadRuntime = {
 export async function readWorkspaceFile(input: {
   limits: WorkspaceAgentLimits;
   request: WorkspaceAgentReadFileInput;
-  runtime: WorkspaceAgentReadRuntime;
+  runtime: WorkspaceAgentRuntime;
   signal?: AbortSignal;
 }): Promise<WorkspaceAgentReadFileResult> {
   let resolved = await resolveWorkspaceMarkdownFile({
@@ -66,7 +66,7 @@ export async function readWorkspaceFile(input: {
 export async function searchWorkspaceMarkdown(input: {
   limits: WorkspaceAgentLimits;
   request: WorkspaceAgentSearchMarkdownInput;
-  runtime: WorkspaceAgentReadRuntime;
+  runtime: WorkspaceAgentRuntime;
   signal?: AbortSignal;
 }): Promise<WorkspaceAgentSearchResult> {
   let directory = normalizeWorkspaceAgentDirectory(input.request.directory);
@@ -183,7 +183,7 @@ type SearchDocumentResult =
 
 async function readSearchDocument(
   path: string,
-  runtime: WorkspaceAgentReadRuntime,
+  runtime: WorkspaceAgentRuntime,
   maxFileBytes: number,
   signal?: AbortSignal,
 ): Promise<SearchDocumentResult> {
