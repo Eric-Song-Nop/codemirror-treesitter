@@ -491,6 +491,7 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
     `Boolean(document.querySelector("#settings-save-api-key"))`,
     sessionId,
   );
+  await assertWorkspaceSettingsMobileAccessibility(client, sessionId);
   await submitUncontrolledSecretForm(client, sessionId, {
     "#settings-save-api-key": secret,
     "#settings-save-passphrase": passphrase,
@@ -547,6 +548,195 @@ async function assertAgentCredentialVaultFlow(client, sessionId) {
     sessionId,
   );
   await assertAgentCredentialRecord(client, sessionId, secret, passphrase, false);
+}
+
+async function assertWorkspaceSettingsMobileAccessibility(client, sessionId) {
+  await client.send(
+    "Emulation.setDeviceMetricsOverride",
+    { deviceScaleFactor: 1, height: 568, mobile: true, width: 320 },
+    sessionId,
+  );
+
+  try {
+    await waitForSettledUi(100);
+    await client.evaluate(`document.querySelector("#settings-save-api-key")?.focus()`, sessionId);
+    for (let index = 0; index < 4; index += 1) {
+      await pressTab(client, sessionId);
+    }
+    let themeState = await workspaceSettingsAccessibilityState(
+      client,
+      sessionId,
+      "settings-theme-gruvbox-dark",
+    );
+
+    await pressTab(client, sessionId);
+    let languageState = await workspaceSettingsAccessibilityState(
+      client,
+      sessionId,
+      "settings-language-en",
+    );
+
+    for (let [label, state] of [
+      ["theme", themeState],
+      ["language", languageState],
+    ]) {
+      if (
+        state.activeElementId != state.expectedElementId ||
+        !state.focusVisible ||
+        !state.labelFocusIndicator ||
+        !state.dialogInsideViewport ||
+        !state.fixedRegionsVisible ||
+        !state.focusInsideScrollRegion ||
+        state.dialogScrollTop != 0 ||
+        state.scrollRegionScrollTop <= 0 ||
+        state.minimumSecondaryTextContrast < 4.5
+      ) {
+        throw new Error(
+          `Workspace settings ${label} accessibility failed: ${JSON.stringify(state)}`,
+        );
+      }
+    }
+  } finally {
+    await client.send("Emulation.clearDeviceMetricsOverride", {}, sessionId);
+    await waitForSettledUi(100);
+  }
+}
+
+async function workspaceSettingsAccessibilityState(client, sessionId, expectedElementId) {
+  return client.evaluate(
+    `
+      (() => {
+        let expectedElementId = ${JSON.stringify(expectedElementId)};
+        let dialog = document.querySelector("#workspace-settings-dialog");
+        let scrollRegion = dialog?.querySelector(
+          '[data-slot="workspace-settings-scroll-region"]'
+        );
+        let header = dialog?.querySelector('[data-slot="dialog-header"]');
+        let footer = dialog?.querySelector('[data-slot="dialog-footer"]');
+        let activeElement = document.activeElement;
+        let activeLabel = activeElement?.closest?.("label");
+        let viewport = {
+          bottom: visualViewport?.height ?? innerHeight,
+          left: 0,
+          right: visualViewport?.width ?? innerWidth,
+          top: 0
+        };
+        let inside = (rect, bounds = viewport) =>
+          Boolean(rect) &&
+          rect.top >= bounds.top - 1 &&
+          rect.left >= bounds.left - 1 &&
+          rect.bottom <= bounds.bottom + 1 &&
+          rect.right <= bounds.right + 1;
+        let visibleCloseButtons = Array.from(
+          dialog?.querySelectorAll('button[data-slot="dialog-close"]') ?? []
+        ).every((button) => inside(button.getBoundingClientRect()));
+
+        let parseColor = (value) => {
+          let canvas = document.createElement("canvas");
+          canvas.width = 1;
+          canvas.height = 1;
+          let context = canvas.getContext("2d", { willReadFrequently: true });
+          context.clearRect(0, 0, 1, 1);
+          context.fillStyle = value;
+          context.fillRect(0, 0, 1, 1);
+          let [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+          return [red, green, blue, alpha / 255];
+        };
+        let composite = (foreground, background) => {
+          let alpha = foreground[3] + background[3] * (1 - foreground[3]);
+          if (alpha == 0) return [0, 0, 0, 0];
+          return [
+            (foreground[0] * foreground[3] +
+              background[0] * background[3] * (1 - foreground[3])) /
+              alpha,
+            (foreground[1] * foreground[3] +
+              background[1] * background[3] * (1 - foreground[3])) /
+              alpha,
+            (foreground[2] * foreground[3] +
+              background[2] * background[3] * (1 - foreground[3])) /
+              alpha,
+            alpha
+          ];
+        };
+        let paintedBackground = (element) => {
+          let layers = [];
+          for (let current = element; current; current = current.parentElement) {
+            layers.push(parseColor(getComputedStyle(current).backgroundColor));
+          }
+          return layers.reverse().reduce(
+            (background, layer) => composite(layer, background),
+            [255, 255, 255, 1]
+          );
+        };
+        let luminance = (color) => {
+          let [red, green, blue] = color.slice(0, 3).map((channel) => {
+            let value = channel / 255;
+            return value <= 0.04045
+              ? value / 12.92
+              : ((value + 0.055) / 1.055) ** 2.4;
+          });
+          return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        };
+        let contrast = (element) => {
+          let background = paintedBackground(element);
+          let foreground = composite(parseColor(getComputedStyle(element).color), background);
+          let foregroundLuminance = luminance(foreground);
+          let backgroundLuminance = luminance(background);
+          return (
+            (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+            (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
+          );
+        };
+        let secondaryTextContrasts = Array.from(
+          dialog?.querySelectorAll(".text-xs:not(.sr-only)") ?? []
+        ).map(contrast);
+        let dialogRect = dialog?.getBoundingClientRect();
+        let scrollRect = scrollRegion?.getBoundingClientRect();
+        let activeRect = (activeLabel ?? activeElement)?.getBoundingClientRect();
+        let labelStyle = activeLabel ? getComputedStyle(activeLabel) : null;
+        let rectSnapshot = (rect) =>
+          rect
+            ? { bottom: rect.bottom, left: rect.left, right: rect.right, top: rect.top }
+            : null;
+
+        return {
+          activeRect: rectSnapshot(activeRect),
+          activeElementId: activeElement?.id ?? null,
+          dialogRect: rectSnapshot(dialogRect),
+          dialogInsideViewport: inside(dialogRect),
+          dialogScrollTop: dialog?.scrollTop ?? null,
+          expectedElementId,
+          fixedRegionsVisible:
+            inside(header?.getBoundingClientRect()) &&
+            inside(footer?.getBoundingClientRect()) &&
+            visibleCloseButtons,
+          focusInsideScrollRegion: inside(activeRect, scrollRect),
+          focusVisible: Boolean(activeElement?.matches?.(":focus-visible")),
+          labelFocusIndicator: Boolean(
+            labelStyle &&
+              (labelStyle.boxShadow != "none" ||
+                (labelStyle.outlineStyle != "none" && labelStyle.outlineWidth != "0px"))
+          ),
+          minimumSecondaryTextContrast: Math.min(...secondaryTextContrasts),
+          scrollRegionRect: rectSnapshot(scrollRect),
+          scrollRegionScrollTop: scrollRegion?.scrollTop ?? null
+        };
+      })()
+    `,
+    sessionId,
+  );
+}
+
+async function pressTab(client, sessionId) {
+  let key = {
+    code: "Tab",
+    key: "Tab",
+    nativeVirtualKeyCode: 9,
+    windowsVirtualKeyCode: 9,
+  };
+  await client.send("Input.dispatchKeyEvent", { ...key, type: "rawKeyDown" }, sessionId);
+  await client.send("Input.dispatchKeyEvent", { ...key, type: "keyUp" }, sessionId);
+  await waitForSettledUi(50);
 }
 
 async function clickButtonByText(client, sessionId, scopeSelector, label) {
