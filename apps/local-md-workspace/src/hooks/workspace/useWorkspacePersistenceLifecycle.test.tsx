@@ -13,6 +13,7 @@ type ReactActGlobal = typeof globalThis & {
 
 type TestDocument = {
   dispose: () => Promise<void>;
+  flush: () => Promise<void>;
 };
 
 let container: HTMLDivElement | null = null;
@@ -50,12 +51,11 @@ describe("useWorkspacePersistenceLifecycle", () => {
   ])("flushes collaboration and source persistence on %s", async (_name, dispatch) => {
     let sourceTask = createTestTask();
     let collabDocument = createTestDocument();
-    let flushCollabDocument = vi.fn(async () => {});
 
-    await renderLifecycle({ collabDocument, flushCollabDocument, sourceTask });
+    await renderLifecycle({ collabDocument, sourceTask });
     await act(async () => dispatch());
 
-    expect(flushCollabDocument).toHaveBeenCalledWith(collabDocument);
+    expect(collabDocument.flush).toHaveBeenCalledOnce();
     expect(sourceTask.flush).toHaveBeenCalledOnce();
   });
 
@@ -64,8 +64,7 @@ describe("useWorkspacePersistenceLifecycle", () => {
     let setErrorMessage = vi.fn();
 
     await renderLifecycle({
-      collabDocument: createTestDocument(),
-      flushCollabDocument: vi.fn(async () => {
+      collabDocument: createTestDocument(async () => {
         throw new Error("collaboration persistence failed");
       }),
       setErrorMessage,
@@ -83,12 +82,11 @@ describe("useWorkspacePersistenceLifecycle", () => {
     let sourceTask = createTestTask(async () => {
       callOrder.push("source");
     });
-    let collabDocument = createTestDocument();
-    let flushCollabDocument = vi.fn(async () => {
+    let collabDocument = createTestDocument(async () => {
       callOrder.push("collaboration");
     });
 
-    await renderLifecycle({ collabDocument, dirtyRef, flushCollabDocument, sourceTask });
+    await renderLifecycle({ collabDocument, dirtyRef, sourceTask });
 
     let cleanUnload = new Event("beforeunload", { cancelable: true });
     await act(async () => window.dispatchEvent(cleanUnload));
@@ -108,16 +106,15 @@ describe("useWorkspacePersistenceLifecycle", () => {
     let dirtyRef = { current: true };
     let sourceTask = createTestTask(() => flushCompleted.promise);
     let collabDocument = createTestDocument();
-    let flushCollabDocument = vi.fn(async () => {});
 
-    await renderLifecycle({ collabDocument, dirtyRef, flushCollabDocument, sourceTask });
+    await renderLifecycle({ collabDocument, dirtyRef, sourceTask });
     await act(async () => window.dispatchEvent(new Event("pagehide")));
 
     let dirtyUnload = new Event("beforeunload", { cancelable: true });
     await act(async () => window.dispatchEvent(dirtyUnload));
 
     expect(dirtyUnload.defaultPrevented).toBe(true);
-    expect(flushCollabDocument).toHaveBeenCalledTimes(2);
+    expect(collabDocument.flush).toHaveBeenCalledTimes(2);
     expect(sourceTask.flush).toHaveBeenCalledTimes(2);
 
     await act(async () => flushCompleted.resolve());
@@ -152,14 +149,12 @@ async function renderLifecycle({
   closeActiveDocument = vi.fn(async () => {}),
   collabDocument = null,
   dirtyRef = { current: false },
-  flushCollabDocument = vi.fn(async () => {}),
   setErrorMessage = vi.fn(),
   sourceTask = null,
 }: {
   closeActiveDocument?: () => Promise<void>;
   collabDocument?: TestDocument | null;
   dirtyRef?: { current: boolean };
-  flushCollabDocument?: (document: TestDocument) => Promise<void>;
   setErrorMessage?: (message: string) => void;
   sourceTask?: DebouncedTask | null;
 }) {
@@ -169,7 +164,6 @@ async function renderLifecycle({
         closeActiveDocument={closeActiveDocument}
         collabDocument={collabDocument}
         dirtyRef={dirtyRef}
-        flushCollabDocument={flushCollabDocument}
         setErrorMessage={setErrorMessage}
         sourceTask={sourceTask}
       />,
@@ -181,14 +175,12 @@ function LifecycleHarness({
   closeActiveDocument,
   collabDocument,
   dirtyRef,
-  flushCollabDocument,
   setErrorMessage,
   sourceTask,
 }: {
   closeActiveDocument: () => Promise<void>;
   collabDocument: TestDocument | null;
   dirtyRef: { current: boolean };
-  flushCollabDocument: (document: TestDocument) => Promise<void>;
   setErrorMessage: (message: string) => void;
   sourceTask: DebouncedTask | null;
 }) {
@@ -202,15 +194,15 @@ function LifecycleHarness({
     closeActiveDocument,
     collabDocumentRef,
     dirtyRef,
-    flushCollabDocument,
     setErrorMessage,
   });
   return null;
 }
 
-function createTestDocument(): TestDocument {
+function createTestDocument(flush: () => Promise<void> = async () => {}): TestDocument {
   return {
     dispose: vi.fn(async () => {}),
+    flush: vi.fn(flush),
   };
 }
 

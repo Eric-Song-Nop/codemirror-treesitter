@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import {
   clearWorkspaceDocumentOpening,
@@ -51,7 +51,7 @@ describe("workspace app store", () => {
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0]).toMatchObject({
       collabDocument: next.document,
-      editorDocument: { path: next.file.path, value: next.document.value },
+      editorDocument: { path: next.file.path, value: next.value },
       openingDocument: null,
       saveState: "saved",
       selectedFile: next.file,
@@ -83,9 +83,9 @@ describe("workspace app store", () => {
 
 function publishDocument(store: WorkspaceAppStore, path: string, value: string) {
   let file = { kind: "file" as const, name: path, path } satisfies MarkdownFileNode;
-  let document = { docId: "test:" + path, path, value } as CollabDocumentState;
+  let document = { docId: "test:" + path, path } as WorkspaceCollaborativeDocument;
   publishWorkspaceDocumentView(store, { document, file, saveState: "saved", value });
-  return { document, file };
+  return { document, file, value };
 }
 
 function recordSnapshots(store: WorkspaceAppStore) {

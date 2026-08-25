@@ -263,6 +263,7 @@ export class ManagedCollaborativeDocument implements WorkspaceCollaborativeDocum
     this.stopDocumentChanges?.dispose();
     this.stopBroadcast();
     this.stopLoroSubscription();
+    this.emit({ kind: "closed", snapshot: this.snapshot() });
     this.listeners.clear();
     try {
       await this.options.state.dispose();

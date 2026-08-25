@@ -17,7 +17,7 @@ BrowserLocal / Dropbox / Google Drive / OneDrive / S3
                          |
                     workspace runtime
                          |
-                 React and Loro sessions
+             collaborative documents and views
 ```
 
 The File System Access API remains responsible for directory selection,
@@ -134,7 +134,8 @@ type WorkspaceRuntime = {
   tree: WorkspaceTreePort;
   entries: WorkspaceEntryPort;
   assets: WorkspaceAssetPort;
-  documents: WorkspaceDocumentPort;
+  documentSource: WorkspaceDocumentPort;
+  documents: WorkspaceDocuments;
   currentDocumentChanges: CurrentDocumentChangeSource | null;
   host: WorkspaceHostCapabilities;
   dispose(): Promise<void>;
@@ -192,8 +193,9 @@ does not infer a base revision from an earlier unrelated call.
 
 ## Document Persistence
 
-An active collaborative document stores its source baseline beside its Loro
-checkpoint. Source state is explicit:
+Each opened collaborative document stores its source baseline beside its Loro
+checkpoint. A normalized path resolves to the same document for the entire
+workspace lifetime. Source state is explicit:
 
 ```ts
 type DocumentSourceState =
@@ -215,34 +217,36 @@ Only `present` permits automatic projection writes. Missing, unavailable,
 recovery-required, partial, and unknown states require an authoritative refresh
 or an explicit user recovery action.
 
-`DocumentPersistenceCoordinator` provides one lane for each
-`(workspaceId, path)` pair:
+Each collaborative document owns one coalescing materializer:
 
 - at most one projection write is in flight;
-- pending projections may collapse to the latest generation;
-- superseded callers complete only after the durable replacement completes;
-- session ID and epoch fence stale work but never create a parallel path lane;
-- refresh barriers run in the same lane as projection writes;
-- close blocks pending work and waits for the in-flight operation.
+- pending projections collapse to the latest requested state;
+- edits remain accepted while a projection is running;
+- external observations and source commits share one source-operation queue;
+- browser recovery is flushed even when source projection is blocked;
+- `flush()` waits for the generation requested before the call, while later
+  edits continue in a following projection.
 
-Entry rename/delete and runtime transitions flush or close the active document
-before mutating its path or disposing its runtime.
+Entry rename and delete preserve path identity: the old-path document remains
+alive and observes its missing source, while a renamed destination is a new
+path. Runtime disposal closes the entire registry after flushing every opened
+document.
 
 ## External Changes and Recovery
 
-Only the active document is monitored.
+Every opened document is monitored until the workspace closes.
 
 - BrowserLocal observes the file's immediate parent with a non-recursive
   `FileSystemObserver` when available.
-- Cloud sources and BrowserLocal fallback poll only the active path.
+- Cloud sources and BrowserLocal fallback poll each opened path.
 - Polling permits one in-flight sample, pauses while hidden, resumes
   immediately, and backs off after failures.
 - Online, page-show, and visibility resume events request an immediate resync.
-- Switching documents disposes the previous subscription.
+- Switching the selected view does not dispose a document subscription.
 
 Observer records and polling samples are hints. They never update Loro directly.
-A hint enters a persistence barrier, performs an authoritative document read,
-and then reconciles the returned observation.
+A hint enters that document's source queue, performs an authoritative document
+read, and then reconciles the returned observation.
 
 External content changes are imported as Loro transactions. A dirty document
 with an invalid checkpoint or divergent external source enters
@@ -280,11 +284,12 @@ The implementation must preserve these rules:
 3. Revisions are explicit and travel with the snapshot that produced them.
 4. BrowserLocal observed checks are never described as atomic.
 5. An unknown mutation is reconciled, not retried through another path.
-6. One workspace path has one persistence lane across document sessions.
+6. One workspace path has one collaborative document and one materializer.
 7. Change monitors produce hints; authoritative reads produce content.
 8. Automatic writes stop when source state is not `present`.
 9. Dirty Loro content is never replaced because a checkpoint is invalid.
-10. Runtime disposal follows document flush/close and rejects stale work.
+10. Runtime disposal flushes and closes every opened document before releasing
+    its storage host.
 
 ## Verification
 

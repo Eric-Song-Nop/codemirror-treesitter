@@ -4,10 +4,7 @@ import type {
   WorkspaceDocumentIntentLease,
   WorkspaceDocumentSessionController,
 } from "@/app/document-session-coordinator";
-import {
-  getCollabDocumentValue,
-  type CollabDocumentState,
-} from "@/lib/collaboration/markdown-document";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import { openStandaloneHtmlPrintView } from "@/lib/export/browser-print";
 import {
   createStandaloneMarkdownHtml,
@@ -62,7 +59,7 @@ type UseWorkspaceFileActionsOptions = {
     options: { intent: WorkspaceDocumentIntentLease; localFileHandle?: AccessFileHandle },
   ) => Promise<boolean>;
   beginDocumentTransition: (path?: string) => WorkspaceDocumentIntentLease;
-  collabDocumentRef: MutableRef<CollabDocumentState | null>;
+  collabDocumentRef: MutableRef<WorkspaceCollaborativeDocument | null>;
   createDropboxRuntime: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceRuntime>;
   discardMaterializedDraft: (source: SingleFileSource | null) => void;
   documentTargetGenerationRef: MutableRef<number>;
@@ -123,7 +120,7 @@ export function useWorkspaceFileActions({
   let currentMarkdownValue = useCallback(() => {
     let activeDocument = collabDocumentRef.current;
     return activeDocument && selectedFileRef.current?.path == activeDocument.path
-      ? getCollabDocumentValue(activeDocument)
+      ? activeDocument.read()
       : editorValueRef.current;
   }, [collabDocumentRef, editorValueRef, selectedFileRef]);
 
@@ -348,7 +345,7 @@ export function useWorkspaceFileActions({
                 appKey,
                 root: storedDropboxConfig?.root ?? defaultDropboxRoot(),
               });
-        let result = await runtime.documents.commit({
+        let result = await runtime.documentSource.commit({
           condition: { kind: "if-absent" },
           path,
           value,

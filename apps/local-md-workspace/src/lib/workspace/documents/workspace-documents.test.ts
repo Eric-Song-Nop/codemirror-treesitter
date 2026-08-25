@@ -7,7 +7,6 @@ import {
   resetBrowserCollabMemoryStoreForTests,
 } from "@/lib/collaboration/collab-browser-store";
 import { createMemoryWorkspaceRuntime } from "@/test/memory-workspace-runtime";
-import { DefaultWorkspaceDocuments } from "./workspace-documents.ts";
 
 let indexedDbDescriptor: PropertyDescriptor | undefined;
 
@@ -87,8 +86,8 @@ describe("workspace collaborative documents", () => {
     let document = await documents.document("note.md");
     let firstCommitStarted = deferred();
     let releaseFirstCommit = deferred();
-    let originalCommit = runtime.documents.commit.bind(runtime.documents);
-    let commit = vi.spyOn(runtime.documents, "commit").mockImplementation(async (input) => {
+    let originalCommit = runtime.documentSource.commit.bind(runtime.documentSource);
+    let commit = vi.spyOn(runtime.documentSource, "commit").mockImplementation(async (input) => {
       if (commit.mock.calls.length == 1) {
         firstCommitStarted.resolve();
         await releaseFirstCommit.promise;
@@ -116,7 +115,7 @@ describe("workspace collaborative documents", () => {
   it("keeps an accepted edit in browser recovery when source projection fails", async () => {
     let { documents, runtime } = fixture([["note.md", "start"]]);
     let document = await documents.document("note.md");
-    vi.spyOn(runtime.documents, "commit").mockRejectedValue(new Error("source offline"));
+    vi.spyOn(runtime.documentSource, "commit").mockRejectedValue(new Error("source offline"));
 
     document.edit([{ expectedText: "", from: 5, insert: " durable", to: 5 }]);
     await expect(document.flush()).rejects.toThrow("source offline");
@@ -129,8 +128,7 @@ describe("workspace collaborative documents", () => {
     expect(text.toString()).toBe("start durable");
     text.free();
     recovered.free();
-    await documents.close().catch(() => {});
-    await runtime.dispose();
+    await runtime.dispose().catch(() => {});
   });
 
   it("keeps every opened document alive until registry close", async () => {
@@ -157,11 +155,7 @@ describe("workspace collaborative documents", () => {
 function fixture(entries: Array<[string, string]> = []) {
   let runtime = createMemoryWorkspaceRuntime(entries);
   return {
-    documents: new DefaultWorkspaceDocuments({
-      changes: null,
-      identity: runtime.identity,
-      source: runtime.documents,
-    }),
+    documents: runtime.documents,
     runtime,
   };
 }

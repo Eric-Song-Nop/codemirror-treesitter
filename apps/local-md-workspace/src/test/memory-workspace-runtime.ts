@@ -22,6 +22,7 @@ import {
   OpendalWorkspaceTreeService,
 } from "@/lib/workspace/runtime/services";
 import type { WorkspaceIdentity, WorkspaceRuntime } from "@/lib/workspace/runtime/types";
+import { DefaultWorkspaceDocuments } from "@/lib/workspace/documents";
 
 export type MemoryWorkspaceRuntime = WorkspaceRuntime & {
   files: Map<string, string>;
@@ -47,12 +48,19 @@ export function createMemoryWorkspaceRuntime(
     sourceAliases: options.sourceAliases,
   };
   let store = new MemoryWorkspaceObjectStore(identity.id, files);
+  let documentSource = new OpendalWorkspaceDocumentService(store);
+  let documents = new DefaultWorkspaceDocuments({
+    changes: null,
+    identity,
+    source: documentSource,
+  });
 
   return {
     assets: new OpendalWorkspaceAssetService(store),
     currentDocumentChanges: null,
-    dispose: async () => {},
-    documents: new OpendalWorkspaceDocumentService(store),
+    documentSource,
+    dispose: () => documents.close(),
+    documents,
     entries: new OpendalWorkspaceEntryService(store),
     files,
     host: {},

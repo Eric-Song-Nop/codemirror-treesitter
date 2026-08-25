@@ -8,13 +8,7 @@ import {
   publishSingleFileDocumentView,
   type WorkspaceAppStore,
 } from "@/app/workspace-store";
-import type { SerializedCollabVersionVector } from "@/lib/collaboration/collab-browser-store";
 import { useWorkspaceSaveActions } from "@/hooks/workspace/useWorkspaceSaveActions";
-import {
-  collabDocumentNeedsSourceWrite,
-  openMarkdownCollabDocument,
-  type CollabDocumentState,
-} from "@/lib/collaboration/markdown-document";
 import {
   restoreOwnerShareRecordForPath,
   type CreatedOwnerShare,
@@ -46,8 +40,8 @@ import type {
 } from "@/lib/workspace/types";
 import { saveStoredWorkspaceSelectedPath } from "@/lib/workspace/store";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
-import { workspaceDocumentPersistenceCoordinator } from "@/lib/workspace/runtime/document-persistence-coordinator";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 
 type MutableRef<T> = {
   current: T;
@@ -65,7 +59,7 @@ type UseWorkspaceDocumentActionsOptions = {
   activeDocumentGenerationRef: MutableRef<number>;
   autoSaveTaskRef: MutableRef<SourceAutoSaveTask | null>;
   cleanValueRef: MutableRef<string>;
-  collabDocumentRef: MutableRef<CollabDocumentState | null>;
+  collabDocumentRef: MutableRef<WorkspaceCollaborativeDocument | null>;
   documentSessions: WorkspaceDocumentSessionController;
   documentTargetGenerationRef: MutableRef<number>;
   dirtyRef: MutableRef<boolean>;
@@ -77,17 +71,6 @@ type UseWorkspaceDocumentActionsOptions = {
   scheduleAutoSaveRef: MutableRef<() => void>;
   selectedFileSourceRef: MutableRef<ActiveDocumentSource | null>;
   selectedFileRef: MutableRef<MarkdownFileNode | null>;
-  sendHostDocumentUpdate: (
-    runtime: WorkspaceRuntime,
-    path: string,
-    update: Uint8Array | null,
-  ) => void;
-  sendHostSaveAck: (
-    runtime: WorkspaceRuntime,
-    path: string,
-    value: string,
-    savedVersion: SerializedCollabVersionVector,
-  ) => void;
   setActiveShareRecord: Dispatch<SetStateAction<ActiveOwnerShareRecord | null>>;
   setCreatedShare: Dispatch<SetStateAction<CreatedOwnerShare | null>>;
   setEditorDocument: Dispatch<SetStateAction<{ path: string; value: string; version: number }>>;
@@ -96,7 +79,6 @@ type UseWorkspaceDocumentActionsOptions = {
   setSaveStateSynced: (nextState: SaveState) => void;
   singleFileSourceRef: MutableRef<SingleFileSource | null>;
   startOwnerShareHost: StartOwnerShareHost;
-  stopOwnerShareHost: () => void;
   workspaceAppStore: WorkspaceAppStore;
 };
 
@@ -116,8 +98,6 @@ export function useWorkspaceDocumentActions({
   scheduleAutoSaveRef,
   selectedFileSourceRef,
   selectedFileRef,
-  sendHostDocumentUpdate,
-  sendHostSaveAck,
   setActiveShareRecord,
   setCreatedShare,
   setEditorDocument,
@@ -126,7 +106,6 @@ export function useWorkspaceDocumentActions({
   setSaveStateSynced,
   singleFileSourceRef,
   startOwnerShareHost,
-  stopOwnerShareHost,
   workspaceAppStore,
 }: UseWorkspaceDocumentActionsOptions) {
   let invalidateActiveDocumentSave = useCallback(() => {
@@ -140,7 +119,7 @@ export function useWorkspaceDocumentActions({
   }, [documentSessions, documentTargetGenerationRef]);
 
   let {
-    bindCollabDocumentBroadcast,
+    applyCollaborativeDocumentSnapshot,
     clearPendingSaveTimer,
     handleEditorInput,
     keepCurrentDocumentAs,
@@ -148,13 +127,10 @@ export function useWorkspaceDocumentActions({
     recreateCurrentDocumentSource,
     resolveCurrentDocumentUseExternal,
     saveCurrentFile,
-    scheduleAutoSave,
   } = useWorkspaceSaveActions({
-    activeDocumentGenerationRef,
     autoSaveTaskRef,
     cleanValueRef,
     collabDocumentRef,
-    documentSessions,
     dirtyRef,
     editVersionRef,
     editorValueRef,
@@ -163,8 +139,6 @@ export function useWorkspaceDocumentActions({
     scheduleAutoSaveRef,
     selectedFileSourceRef,
     selectedFileRef,
-    sendHostDocumentUpdate,
-    sendHostSaveAck,
     setEditorDocument,
     setErrorMessage,
     setRetryLoadPath,
@@ -173,7 +147,6 @@ export function useWorkspaceDocumentActions({
 
   let clearCompatibilityDocument = useCallback(() => {
     clearPendingSaveTimer();
-    stopOwnerShareHost();
     invalidateActiveDocumentSave();
     collabDocumentRef.current = null;
     selectedFileRef.current = null;
@@ -202,7 +175,6 @@ export function useWorkspaceDocumentActions({
     setCreatedShare,
     saveStateRef,
     singleFileSourceRef,
-    stopOwnerShareHost,
   ]);
 
   let clearActiveDocument = useCallback(async () => {
@@ -354,7 +326,15 @@ export function useWorkspaceDocumentActions({
         let outcome = await documentSessions.transition({
           lease,
           prepare: async () => {
-            if ((options.saveCurrent ?? true) && !(await saveCurrentFile())) return null;
+            // Workspace documents materialize independently of UI selection. Only
+            // a standalone draft needs an explicit save before the view changes.
+            if (
+              (options.saveCurrent ?? true) &&
+              !collabDocumentRef.current &&
+              !(await saveCurrentFile())
+            ) {
+              return null;
+            }
             if (!documentSessions.isCurrent(lease)) return null;
 
             let restoredShareRecord = await restoreOwnerShareRecordForPath(
@@ -363,27 +343,38 @@ export function useWorkspaceDocumentActions({
             ).catch(() => null);
             if (!documentSessions.isCurrent(lease)) return null;
 
-            let document = await openMarkdownCollabDocument(runtime, file.path);
-            let value = document.value;
-            let needsSourceWrite = collabDocumentNeedsSourceWrite(document);
-            let nextSaveState: SaveState = needsSourceWrite ? "pending" : "saved";
+            let document = await runtime.documents.document(file.path);
+            let snapshot = document.snapshot();
+            let nextSaveState = collaborativeDocumentSaveState(snapshot.persistenceStatus);
 
             return {
               activate: () => {
-                let stopBroadcast = () => {};
                 clearCompatibilityDocument();
                 try {
                   selectedFileRef.current = file;
                   selectedFileSourceRef.current = runtime;
                   collabDocumentRef.current = document;
-                  stopBroadcast = bindCollabDocumentBroadcast(runtime, document);
-                  editorValueRef.current = value;
-                  cleanValueRef.current = value;
-                  dirtyRef.current = needsSourceWrite;
+                  editorValueRef.current = snapshot.value;
+                  cleanValueRef.current = snapshot.value;
+                  dirtyRef.current = snapshot.persistenceStatus != "saved";
                   editVersionRef.current = 0;
                   singleFileSourceRef.current = null;
                   localFileHandleRef.current = null;
                   saveStateRef.current = nextSaveState;
+
+                  let stopSubscription = document.subscribe((event) => {
+                    if (collabDocumentRef.current !== document) return;
+                    applyCollaborativeDocumentSnapshot(document, event.snapshot);
+                    if (event.kind == "persistence-error") {
+                      setErrorMessage(errorToMessage(event.error));
+                      setRetryLoadPath(
+                        event.snapshot.sourceKind == "unavailable" ? document.path : null,
+                      );
+                    } else if (event.kind == "materialized") {
+                      setErrorMessage("");
+                      setRetryLoadPath(null);
+                    }
+                  });
 
                   let selectedPathContext = workspaceSelectedPathContext(runtime.identity);
                   if (selectedPathContext) {
@@ -396,38 +387,22 @@ export function useWorkspaceDocumentActions({
                   };
                   setActiveShareRecord(restoredShareRecord);
                   if (restoredShareRecord) {
-                    void startOwnerShareHost(restoredShareRecord, session, {
-                      shouldContinue: () =>
-                        documentSessions.isActive(session) || documentSessions.isCurrent(lease),
-                    });
+                    void startOwnerShareHost(restoredShareRecord, session);
                   }
-                  if (needsSourceWrite) scheduleAutoSave();
                   setRetryLoadPath(null);
 
                   return {
-                    release: async () => {
-                      try {
-                        stopBroadcast();
-                      } finally {
-                        await workspaceDocumentPersistenceCoordinator.close({
-                          epoch: session.epoch,
-                          path: session.file.path,
-                          sessionId: session.collabDocument.docId,
-                          workspaceId: session.runtime.identity.id,
-                        });
-                      }
-                    },
+                    release: async () => stopSubscription(),
                     retire: clearCompatibilityDocument,
                     session,
                   };
                 } catch (error) {
-                  stopBroadcast();
                   clearCompatibilityDocument();
                   throw error;
                 }
               },
-              dispose: () => document.dispose(),
-              view: { document, file, saveState: nextSaveState, value },
+              dispose: async () => {},
+              view: { document, file, saveState: nextSaveState, value: snapshot.value },
             };
           },
         });
@@ -441,8 +416,8 @@ export function useWorkspaceDocumentActions({
     },
     [
       activeDocumentGenerationRef,
+      applyCollaborativeDocumentSnapshot,
       beginDocumentTransition,
-      bindCollabDocumentBroadcast,
       cleanValueRef,
       clearCompatibilityDocument,
       collabDocumentRef,
@@ -452,7 +427,6 @@ export function useWorkspaceDocumentActions({
       editorValueRef,
       localFileHandleRef,
       saveCurrentFile,
-      scheduleAutoSave,
       selectedFileSourceRef,
       selectedFileRef,
       setActiveShareRecord,
@@ -470,59 +444,33 @@ export function useWorkspaceDocumentActions({
 
       let file = selectedFileRef.current;
       if (!file || file.path != draft.selectedPath) return false;
+      let document = collabDocumentRef.current;
+      if (!document || document.path != file.path) return false;
 
       invalidateDocumentTarget();
       selectedFileSourceRef.current = runtime;
-      editorValueRef.current = draft.dirtyValue;
-      editVersionRef.current += 1;
-      setEditorDocument((current) => ({
-        path: file.path,
-        value: draft.dirtyValue ?? "",
-        version: current.version + 1,
-      }));
-
-      if (draft.dirtyValue == cleanValueRef.current) {
-        dirtyRef.current = false;
-        setSaveStateSynced("saved");
-        return true;
-      }
-
-      dirtyRef.current = true;
-      setSaveStateSynced("pending");
-      scheduleAutoSave();
+      let currentValue = document.read();
+      let result = document.edit([
+        { expectedText: currentValue, from: 0, insert: draft.dirtyValue, to: currentValue.length },
+      ]);
+      if (result.status == "conflict") return false;
+      applyCollaborativeDocumentSnapshot(document);
       return true;
     },
     [
-      cleanValueRef,
-      dirtyRef,
-      editVersionRef,
-      editorValueRef,
+      applyCollaborativeDocumentSnapshot,
+      collabDocumentRef,
       invalidateDocumentTarget,
-      scheduleAutoSave,
       selectedFileSourceRef,
       selectedFileRef,
-      setEditorDocument,
-      setSaveStateSynced,
     ],
   );
 
   let ensureSelectedCollabDocument = useCallback(
     async (runtime: WorkspaceRuntime, file: MarkdownFileNode) => {
-      let current = documentSessions.current();
-      if (current?.runtime === runtime && current.file.path == file.path) {
-        return current.collabDocument;
-      }
-
-      if (!(await loadFile(runtime, file, { saveCurrent: false }))) {
-        throw new Error("The document changed before collaboration was ready.");
-      }
-      let active = documentSessions.current();
-      if (active?.runtime !== runtime || active.file.path != file.path) {
-        throw new Error("The document changed before collaboration was ready.");
-      }
-      return active.collabDocument;
+      return runtime.documents.document(file.path);
     },
-    [documentSessions, loadFile],
+    [],
   );
 
   return {
@@ -541,4 +489,20 @@ export function useWorkspaceDocumentActions({
     resolveCurrentDocumentUseExternal,
     saveCurrentFile,
   };
+}
+
+function collaborativeDocumentSaveState(
+  status: ReturnType<WorkspaceCollaborativeDocument["snapshot"]>["persistenceStatus"],
+): SaveState {
+  switch (status) {
+    case "pending":
+      return "pending";
+    case "saving":
+      return "saving";
+    case "saved":
+      return "saved";
+    case "blocked":
+    case "error":
+      return "error";
+  }
 }

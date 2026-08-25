@@ -1,4 +1,5 @@
 import type { CreatedWorkspaceImageNode, MarkdownDirectoryNode } from "../tree.ts";
+import type { WorkspaceDocuments } from "../documents/contracts.ts";
 import type {
   SourceObservation,
   SourceProbe,
@@ -102,8 +103,9 @@ export type WorkspaceHostCapabilities = {
 export type WorkspaceRuntime = {
   assets: WorkspaceAssetPort;
   currentDocumentChanges: CurrentDocumentChangeSource | null;
+  documentSource: WorkspaceDocumentPort;
   dispose(): Promise<void>;
-  documents: WorkspaceDocumentPort;
+  documents: WorkspaceDocuments;
   entries: WorkspaceEntryPort;
   host: WorkspaceHostCapabilities;
   identity: WorkspaceIdentity;

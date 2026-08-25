@@ -23,10 +23,7 @@ import { useWorkspaceShareState } from "@/hooks/workspace/useWorkspaceShareState
 import { useWorkspaceStartup } from "@/hooks/workspace/useWorkspaceStartup";
 import { useWorkspaceTree } from "@/hooks/workspace/useWorkspaceTree";
 import { completeDropboxPopupOAuthIfPresent } from "@/lib/workspace/providers/dropbox/oauth";
-import {
-  flushCollabDocumentPersistence,
-  type CollabDocumentState,
-} from "@/lib/collaboration/markdown-document";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import { isMobileBrowser } from "@/lib/platform/browser-support";
 import {
   supportsDirectoryPicker,
@@ -124,7 +121,7 @@ export function LocalWorkspaceApp() {
   let selectedFileRef = useRef<MarkdownFileNode | null>(null);
   let singleFileSourceRef = useRef<SingleFileSource | null>(null);
   let localFileHandleRef = useRef<AccessFileHandle | null>(null);
-  let collabDocumentRef = useRef<CollabDocumentState | null>(null);
+  let collabDocumentRef = useRef<WorkspaceCollaborativeDocument | null>(null);
   let editorValueRef = useRef("");
   let cleanValueRef = useRef("");
   let dirtyRef = useRef(false);
@@ -182,7 +179,6 @@ export function LocalWorkspaceApp() {
     closeActiveDocument: documentSessions.close,
     collabDocumentRef,
     dirtyRef,
-    flushCollabDocument: flushCollabDocumentPersistence,
     setErrorMessage,
   });
 
@@ -255,19 +251,8 @@ export function LocalWorkspaceApp() {
     setSaveState(nextState);
   }, []);
 
-  let {
-    flushOwnerShareHost,
-    sendHostDocumentUpdate,
-    sendHostSaveAck,
-    startOwnerShareHost,
-    stopOwnerShareHost,
-  } = useOwnerShareHost({
-    dirtyRef,
-    editorValueRef,
-    editVersionRef,
-    scheduleAutoSaveRef,
+  let { flushOwnerShareHost, startOwnerShareHost, stopOwnerShareHost } = useOwnerShareHost({
     setActiveShareRecord,
-    setSaveStateSynced,
     setShareError,
   });
 
@@ -281,7 +266,6 @@ export function LocalWorkspaceApp() {
     keepCurrentDocumentAs,
     loadFile,
     openSingleFileDraft,
-    reconcileCurrentDocumentSource,
     recreateCurrentDocumentSource,
     restoreCloudRedirectEditorDraft,
     resolveCurrentDocumentUseExternal,
@@ -302,8 +286,6 @@ export function LocalWorkspaceApp() {
     scheduleAutoSaveRef,
     selectedFileSourceRef,
     selectedFileRef,
-    sendHostDocumentUpdate,
-    sendHostSaveAck,
     setActiveShareRecord,
     setCreatedShare,
     setEditorDocument,
@@ -312,7 +294,6 @@ export function LocalWorkspaceApp() {
     setSaveStateSynced,
     singleFileSourceRef,
     startOwnerShareHost,
-    stopOwnerShareHost,
     workspaceAppStore,
   });
 
@@ -331,28 +312,6 @@ export function LocalWorkspaceApp() {
       ),
     [clearActiveDocument, setWorkspaceRuntime, workspaceEffectRuntime],
   );
-
-  useEffect(() => {
-    if (!workspaceRuntime || !selectedFile || !collabDocument || singleFileSource) return;
-    let changes = workspaceRuntime.currentDocumentChanges;
-    if (!changes) return;
-    let documentGeneration = activeDocumentGenerationRef.current;
-    let subscription = changes.subscribe(selectedFile.path, () => {
-      void reconcileCurrentDocumentSource(
-        workspaceRuntime,
-        selectedFile,
-        collabDocument,
-        documentGeneration,
-      );
-    });
-    return () => subscription.dispose();
-  }, [
-    collabDocument,
-    reconcileCurrentDocumentSource,
-    selectedFile,
-    singleFileSource,
-    workspaceRuntime,
-  ]);
 
   let { loadDirectory, loadTree, refreshWorkspaceForCurrentEditor } = useWorkspaceTree({
     clearActiveDocument,
@@ -393,7 +352,6 @@ export function LocalWorkspaceApp() {
           selectedFile,
           collabDocument,
           path,
-          activeDocumentGenerationRef.current,
         );
         setRecoveryDialogAction(null);
         await loadTree(workspaceRuntime, targetPath, { saveBeforeSelect: false });
@@ -411,21 +369,10 @@ export function LocalWorkspaceApp() {
     setBusy(true);
     setRecoveryDialogError("");
     try {
-      let generation = activeDocumentGenerationRef.current;
       if (recoveryDialogAction == "use-external") {
-        await resolveCurrentDocumentUseExternal(
-          workspaceRuntime,
-          selectedFile,
-          collabDocument,
-          generation,
-        );
+        await resolveCurrentDocumentUseExternal(workspaceRuntime, selectedFile, collabDocument);
       } else if (recoveryDialogAction == "recreate") {
-        await recreateCurrentDocumentSource(
-          workspaceRuntime,
-          selectedFile,
-          collabDocument,
-          generation,
-        );
+        await recreateCurrentDocumentSource(workspaceRuntime, selectedFile, collabDocument);
       }
       setRecoveryDialogAction(null);
     } catch (error) {
@@ -443,8 +390,9 @@ export function LocalWorkspaceApp() {
   ]);
 
   let recoveryKind =
-    collabDocument?.source.kind == "missing" || collabDocument?.source.kind == "recovery-required"
-      ? collabDocument.source.kind
+    collabDocument?.collabState.source.kind == "missing" ||
+    collabDocument?.collabState.source.kind == "recovery-required"
+      ? collabDocument.collabState.source.kind
       : undefined;
 
   useEffect(() => {

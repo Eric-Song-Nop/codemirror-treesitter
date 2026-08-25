@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LoroDoc } from "loro-crdt";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { CollabDocumentState } from "@/lib/collaboration/markdown-document";
+import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import type { RelayShareSession } from "@/lib/collaboration/share-relay-client";
 import type { OwnerShareRecord } from "@/lib/collaboration/share-storage";
 import { createDocumentSession } from "@/lib/workspace/document-session";
@@ -125,12 +125,7 @@ async function renderOwnerShareHostHook() {
 
 function OwnerShareHostHarness() {
   currentApi = useOwnerShareHost({
-    dirtyRef: { current: false },
-    editorValueRef: { current: "" },
-    editVersionRef: { current: 0 },
-    scheduleAutoSaveRef: { current: () => {} },
     setActiveShareRecord: vi.fn(),
-    setSaveStateSynced: vi.fn(),
     setShareError: vi.fn(),
   });
   return null;
@@ -161,10 +156,11 @@ function ownerShareFixture() {
   };
   let doc = new LoroDoc();
   let collabDocument = {
-    doc,
+    loroDoc: doc,
     docId: "doc-id",
     path: file.path,
-  } as CollabDocumentState;
+    subscribe: () => () => {},
+  } as unknown as WorkspaceCollaborativeDocument;
   return {
     record,
     session: createDocumentSession(runtime, file, collabDocument),

@@ -43,6 +43,10 @@ export type CollaborativeDocumentSnapshot = Readonly<{
 
 export type DocumentListenerEvent =
   | Readonly<{
+      kind: "closed";
+      snapshot: CollaborativeDocumentSnapshot;
+    }>
+  | Readonly<{
       kind: "changed";
       snapshot: CollaborativeDocumentSnapshot;
     }>

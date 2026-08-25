@@ -195,7 +195,7 @@ describe("Markdown collaboration documents", () => {
   it("imports an already observed source snapshot without reading storage again", async () => {
     let backend = createMemoryBackend([["note.md", "# First\n"]]);
     let document = await openMarkdownCollabDocument(backend, "note.md");
-    let observe = vi.spyOn(backend.documents, "observe");
+    let observe = vi.spyOn(backend.documentSource, "observe");
 
     let result = await ingestExternalMarkdownObservation(document, {
       state: "present",
