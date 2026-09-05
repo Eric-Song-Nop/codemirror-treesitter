@@ -119,7 +119,15 @@ import {
   restoreProjectionSets,
   revealProjectionSets,
 } from "./projection-state.js";
-import { createLiveMdRenderCache, type LiveMdRenderCache } from "./render-cache.js";
+import {
+  createLiveMdRenderCache,
+  type LiveMdRenderCache,
+  connectLiveMdCodeFenceSessions,
+  disposeLiveMdCodeFenceSessions,
+  mapLiveMdCodeFenceSessions,
+  pruneLiveMdCodeFenceSessions,
+  liveMdCodeFenceSessionsPending,
+} from "./render-cache.js";
 
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
 const liveMdSchedulerQuietDelay = 24;
@@ -157,6 +165,11 @@ type LiveMdPendingSurfaceBase = {
   runtime: LiveMdRuntimeState;
   state: LiveMdSurfaceProjectionState;
 };
+
+const commitLiveMdCodeFenceHighlights = StateEffect.define<{
+  ranges: readonly DocRange[];
+  trace: LiveMdLeafAnalysisTrace;
+}>();
 
 const commitLiveMdScheduledAnalysis = StateEffect.define<LiveMdScheduledAnalysis>();
 
@@ -433,6 +446,8 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
     surfaceTrace = emptyLiveMdLeafAnalysisTrace();
     private pendingSurfaceBase: LiveMdPendingSurfaceBase | null = null;
     private runtime: LiveMdRuntimeState | null = null;
+    private fenceCache: LiveMdRenderCache | null = null;
+    private sharedRenderCache: LiveMdRenderCache | null = null;
     private lastScrollDirection: -1 | 0 | 1 = 0;
     private lastViewportFrom: number | null = null;
     private surfaceState = emptySurfaceProjectionState();
@@ -441,7 +456,32 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       this.refresh();
     }
 
+    get fenceParsingPending() {
+      return !!this.fenceCache && liveMdCodeFenceSessionsPending(this.fenceCache);
+    }
+
+    destroy() {
+      if (this.fenceCache) disposeLiveMdCodeFenceSessions(this.fenceCache);
+      this.fenceCache = null;
+    }
+
     update(update: ViewUpdate) {
+      if (update.docChanged && this.fenceCache)
+        mapLiveMdCodeFenceSessions(this.fenceCache, update.changes);
+      let completions = update.transactions.flatMap((transaction) =>
+        transaction.effects.flatMap((effect) =>
+          effect.is(commitLiveMdCodeFenceHighlights) ? [effect.value] : [],
+        ),
+      );
+      let completedRanges = completions.flatMap((completion) => [...completion.ranges]);
+      for (let completion of completions)
+        this.surfaceTrace = mergeLiveMdLeafAnalysisTraces(this.surfaceTrace, completion.trace);
+      if (completedRanges.length)
+        this.surfaceState = invalidateSurfaceProjectionState(
+          this.surfaceState,
+          completedRanges,
+          this.surfaceState.semanticRevision,
+        );
       let analysis = update.state.field(liveMdAnalysisField, false);
       if (analysis?.pending) {
         if (update.docChanged) {
@@ -452,6 +492,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
         return;
       }
       if (
+        completedRanges.length ||
         update.viewportChanged ||
         update.startState.field(liveMdAnalysisField) != update.state.field(liveMdAnalysisField)
       ) {
@@ -472,6 +513,18 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
         this.surfaceState = emptySurfaceProjectionState();
         return;
       }
+      if (this.sharedRenderCache != analysis.renderCache) {
+        if (this.fenceCache) disposeLiveMdCodeFenceSessions(this.fenceCache);
+        this.sharedRenderCache = analysis.renderCache;
+        // Result maps may be shared by states/views; native ownership must not be.
+        this.fenceCache = { ...analysis.renderCache };
+        let cache = this.fenceCache;
+        connectLiveMdCodeFenceSessions(cache, (ranges, trace) => {
+          if (this.fenceCache == cache)
+            this.view.dispatch({ effects: commitLiveMdCodeFenceHighlights.of({ ranges, trace }) });
+        });
+      }
+      pruneLiveMdCodeFenceSessions(this.fenceCache!, [surfaceKeepWindow(this.view)], analysis.tree);
       let runtimeChanged = this.runtime != analysis;
       let semanticRevision = surfaceSemanticRevision(analysis);
       let surfaceInvalidationRanges =
@@ -504,6 +557,7 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
             analysis,
             compileRanges,
             surfaceTrace,
+            this.fenceCache!,
           );
           this.surfaceState = patchSurfaceProjectionState(
             this.surfaceState,
@@ -1782,6 +1836,7 @@ function compileRuntimeVisibleSurfaceProjection(
   analysis: LiveMdRuntimeState,
   ranges: readonly DocRange[],
   trace = emptyLiveMdLeafAnalysisTrace(),
+  renderCache = analysis.renderCache,
 ): SurfaceProjection {
   if (!ranges.length) return emptySurfaceProjection();
   if (analysis.pending) return emptySurfaceProjection();
@@ -1789,7 +1844,7 @@ function compileRuntimeVisibleSurfaceProjection(
   if (!semantic) return emptySurfaceProjection();
 
   let input = projectionCompileInput(state, analysis.activeLines, analysis.activeSourceRanges, {
-    renderCache: analysis.renderCache,
+    renderCache,
     sourceIslandMode: true,
     trace,
   });
@@ -2237,7 +2292,8 @@ export function __testRefreshLiveMdSurfacePreservingState(view: EditorView) {
 
 export async function __testFlushLiveMdAnalysis(view: EditorView) {
   for (let index = 0; index < 120; index++) {
-    if (!view.state.field(liveMdAnalysisField).pending) return;
+    let analysis = view.state.field(liveMdAnalysisField);
+    if (!analysis.pending && !view.plugin(liveMdSurfacePlugin)?.fenceParsingPending) return;
     await waitForScheduledTurn();
   }
 }
@@ -2246,7 +2302,11 @@ export async function waitForLiveMdAnalysis(
   view: EditorView,
   cancelled: () => boolean = () => false,
 ) {
-  while (!cancelled() && view.state.field(liveMdAnalysisField).pending) {
+  while (
+    !cancelled() &&
+    (view.state.field(liveMdAnalysisField).pending ||
+      view.plugin(liveMdSurfacePlugin)?.fenceParsingPending)
+  ) {
     await waitForScheduledTurn();
   }
 }

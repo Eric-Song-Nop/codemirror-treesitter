@@ -18,7 +18,7 @@ import { type LiveMdTableModel } from "../analysis/descriptors.js";
 import { hashString } from "../analysis/ranges.js";
 import { liveMdObjectEpoch } from "./epochs.js";
 import { LiveMdCodeFenceSession } from "./code-fence-session.js";
-import { type DocRange } from "../analysis/types.js";
+import { type DocRange, emptyLiveMdLeafAnalysisTrace } from "../analysis/types.js";
 
 export type LiveMdRenderCache = {
   codeFenceHighlights: Map<string, LiveMdCodeFenceHighlightResult>;
@@ -293,7 +293,8 @@ export function cachedLiveMdCodeFenceHighlightResult(
 
 type CodeFenceSessionOwner = {
   sessions: Map<number, LiveMdCodeFenceSession>;
-  callback: (ranges: readonly DocRange[]) => void;
+  callback: (ranges: readonly DocRange[], trace: LiveMdLeafAnalysisTrace) => void;
+  asyncTrace: LiveMdLeafAnalysisTrace;
   timer: ReturnType<typeof setTimeout> | null;
   deadline: number;
 };
@@ -310,6 +311,7 @@ export function connectLiveMdCodeFenceSessions(
   }
   codeFenceSessionOwners.set(cache, {
     sessions: new Map(),
+    asyncTrace: emptyLiveMdLeafAnalysisTrace(),
     callback,
     timer: null,
     deadline: performance.now() + 4,
@@ -382,9 +384,19 @@ function scheduleCodeFenceSessions(owner: CodeFenceSessionOwner) {
     for (let session of owner.sessions.values()) {
       if (!session.pending) continue;
       if (performance.now() >= owner.deadline) break;
-      if (session.work(() => performance.now() >= owner.deadline)) completed.push(session.range);
+      let before = session.traceSnapshot();
+      let done = session.work(() => performance.now() >= owner.deadline);
+      let after = session.traceSnapshot();
+      for (let key of Object.keys(before) as (keyof typeof before)[]) {
+        owner.asyncTrace[key] += after[key] - before[key];
+      }
+      if (done) completed.push(session.range);
     }
-    if (completed.length) owner.callback(completed);
+    if (completed.length) {
+      let trace = owner.asyncTrace;
+      owner.asyncTrace = emptyLiveMdLeafAnalysisTrace();
+      owner.callback(completed, trace);
+    }
     if (Array.from(owner.sessions.values()).some((session) => session.pending))
       scheduleCodeFenceSessions(owner);
   }, 0);
