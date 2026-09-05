@@ -19,3 +19,13 @@ Local changes:
 
 Regression coverage lives in `packages/live-md-loro/tests/collaboration.test.ts`.
 When refreshing upstream, retain these fixes until equivalent coverage passes.
+
+- Map remote presence through document changes immediately and resolve CRDT
+  cursors again after imported/local changes; coalesce refreshes and cancel on destroy.
+- Restore undo selections only when no newer local selection/edit exists;
+  cancel queued commands/restorations on destroy and share callback ownership
+  across views using one UndoManager.
+
+The bundled LiveMD Loro package includes `LICENSE.loro-codemirror` for attribution.
+Declaration generation may emit ignored `src/*.d.ts` artifacts, as it does for
+workspace package sources; those files are not maintained source.

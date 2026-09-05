@@ -145,3 +145,10 @@ vp run @codemirror-treesitter/live-md-loro#build
 The root override resolves `loro-codemirror` to `vendor/loro-codemirror`.
 Its upstream provenance and local fixes are documented there. Vite source aliases
 and the bundled package build both consume that same maintained source.
+
+Remote presence is mapped with each text transaction, then refreshed from Loro
+cursor identities after imports, local edits, and checkout. Refresh work is
+coalesced and cancelled when the view closes. Undo/redo cursor restoration yields
+to newer local selections or edits; closing a view cancels its queued commands
+and restoration. Multiple views may share an UndoManager without one view's
+teardown removing another view's callbacks.
