@@ -413,3 +413,14 @@ The editor discovers code-fence languages from completed Markdown syntax, includ
 fences nested in blockquotes and lists. Syntax changed ranges limit subsequent
 queries, and `ready` waits for the initial encountered grammars. Indented code and
 fence contents cannot suppress loading of a later real fence.
+
+### Incremental code fence parsing
+
+Attached editor surfaces retain up to 16 fence parser sessions, keyed by mapped
+content positions independently of render-result keys. Editing a fence applies a
+minimal source change to its previous tree and supplies that tree to Tree-sitter.
+Theme changes reuse the completed tree. Parsing, nested grammar wrapping, and
+highlight windows yield and resume under a shared per-surface time budget; partial
+or stale results are not published. The session owner cancels stale work on edits
+and releases native resources on eviction, pruning, and view destruction. Unattached
+state-only render oracles use disposable parsing resources.

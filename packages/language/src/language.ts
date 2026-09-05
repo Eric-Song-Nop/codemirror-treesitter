@@ -420,6 +420,31 @@ export class TreeSitterParser implements TreeConfig {
     return result;
   }
 
+  /** Start resumable nested-tree wrapping. Cancel unfinished work before discarding it.
+   * This builder owns the native tree; a completed result transfers ownership to the caller.
+   */
+  startTreeBuild(
+    tree: TSTree,
+    doc: Text,
+    oldTree: Tree | null = null,
+    nestedParsers?: Map<TreeSitterParser, TSParser>,
+  ): { work(shouldStop?: () => boolean): Tree | null; cancel(): void } {
+    let build = new NestedTreeBuild(this, tree, doc, oldTree, nestedParsers);
+    let completed = false;
+    return {
+      work(shouldStop) {
+        let result = build.work(shouldStop);
+        completed ||= result != null;
+        return result;
+      },
+      cancel() {
+        if (completed) return;
+        build.cancel();
+        disposeNativeTree(tree);
+      },
+    };
+  }
+
   editTree(tree: TSTree, changes: ChangeDesc, oldDoc: Text, newDoc: Text): TSTree {
     let edited = tree.copy();
     try {

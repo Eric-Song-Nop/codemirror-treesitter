@@ -1,4 +1,4 @@
-import { Text } from "@codemirror/state";
+import { Text, type ChangeDesc } from "@codemirror/state";
 import {
   highlightTree,
   type Highlighter,
@@ -17,6 +17,8 @@ import { type MarkdownTable } from "../widgets.js";
 import { type LiveMdTableModel } from "../analysis/descriptors.js";
 import { hashString } from "../analysis/ranges.js";
 import { liveMdObjectEpoch } from "./epochs.js";
+import { LiveMdCodeFenceSession } from "./code-fence-session.js";
+import { type DocRange } from "../analysis/types.js";
 
 export type LiveMdRenderCache = {
   codeFenceHighlights: Map<string, LiveMdCodeFenceHighlightResult>;
@@ -233,6 +235,7 @@ export function cachedLiveMdCodeFenceHighlightResult(
   highlighters: readonly Highlighter[],
   recordRenderKey: string,
   language: string,
+  range?: DocRange,
 ): LiveMdCodeFenceHighlightResult {
   let parser = languages.get(language);
   if (!parser || !source) return { resultKey: hashString(""), source, spans: [] };
@@ -253,10 +256,138 @@ export function cachedLiveMdCodeFenceHighlightResult(
   let cached = cache.codeFenceHighlights.get(key);
   if (cached && cached.source == source) return cached;
 
+  let owner = codeFenceSessionOwners.get(cache);
+  if (owner && range) {
+    let session = owner.sessions.get(range.from);
+    if (session && session.parser != parser) {
+      session.dispose();
+      owner.sessions.delete(range.from);
+      session = undefined;
+    }
+    if (!session) {
+      while (owner.sessions.size >= 16) {
+        let first = owner.sessions.entries().next().value!;
+        first[1].dispose();
+        owner.sessions.delete(first[0]);
+      }
+      session = new LiveMdCodeFenceSession(parser, range, trace);
+    }
+    session.range = range;
+    owner.sessions.delete(range.from);
+    owner.sessions.set(range.from, session);
+    session.request(source, key, highlighters, trace);
+    session.work(() => performance.now() >= owner.deadline);
+    if (session.result) {
+      cache.codeFenceHighlights.set(key, session.result);
+      return session.result;
+    }
+    scheduleCodeFenceSessions(owner);
+    return { resultKey: hashString(""), source, spans: [] };
+  }
+
   trace.heavyRenderStarts++;
   let result = parseCodeFenceHighlightSpans(trace, source, parser, highlighters);
   cache.codeFenceHighlights.set(key, result);
   return result;
+}
+
+type CodeFenceSessionOwner = {
+  sessions: Map<number, LiveMdCodeFenceSession>;
+  callback: (ranges: readonly DocRange[]) => void;
+  timer: ReturnType<typeof setTimeout> | null;
+  deadline: number;
+};
+const codeFenceSessionOwners = new WeakMap<LiveMdRenderCache, CodeFenceSessionOwner>();
+
+export function connectLiveMdCodeFenceSessions(
+  cache: LiveMdRenderCache,
+  callback: CodeFenceSessionOwner["callback"],
+) {
+  let previous = codeFenceSessionOwners.get(cache);
+  if (previous) {
+    previous.callback = callback;
+    return;
+  }
+  codeFenceSessionOwners.set(cache, {
+    sessions: new Map(),
+    callback,
+    timer: null,
+    deadline: performance.now() + 4,
+  });
+}
+
+export function disposeLiveMdCodeFenceSessions(cache: LiveMdRenderCache) {
+  let owner = codeFenceSessionOwners.get(cache);
+  if (!owner) return;
+  if (owner.timer != null) clearTimeout(owner.timer);
+  for (let session of owner.sessions.values()) session.dispose();
+  owner.sessions.clear();
+  codeFenceSessionOwners.delete(cache);
+}
+
+export function mapLiveMdCodeFenceSessions(cache: LiveMdRenderCache, changes: ChangeDesc) {
+  let owner = codeFenceSessionOwners.get(cache);
+  if (!owner || changes.empty) return;
+  let mapped = new Map<number, LiveMdCodeFenceSession>();
+  for (let session of owner.sessions.values()) {
+    let removed = false;
+    changes.iterChangedRanges((from, to) => {
+      if (from <= session.range.from && to >= session.range.to) removed = true;
+    });
+    if (removed) {
+      session.dispose();
+      continue;
+    }
+    session.map(changes);
+    mapped.get(session.range.from)?.dispose();
+    mapped.set(session.range.from, session);
+  }
+  owner.sessions = mapped;
+  owner.deadline = performance.now() + 4;
+}
+
+/** Drop resources for fences removed or no longer selected for the visible surface. */
+export function pruneLiveMdCodeFenceSessions(
+  cache: LiveMdRenderCache,
+  ranges: readonly DocRange[],
+  tree?: Tree,
+) {
+  let owner = codeFenceSessionOwners.get(cache);
+  if (!owner) return;
+  for (let [position, session] of owner.sessions) {
+    let node = tree?.resolve(session.range.from, 1);
+    while (node && node.name != "fenced_code_block") node = node.parent ?? undefined;
+    if (
+      (!tree || node) &&
+      ranges.some((range) => range.from <= session.range.to && range.to >= session.range.from)
+    )
+      continue;
+    session.dispose();
+    owner.sessions.delete(position);
+  }
+}
+
+export function liveMdCodeFenceSessionsPending(cache: LiveMdRenderCache) {
+  return Array.from(codeFenceSessionOwners.get(cache)?.sessions.values() ?? []).some(
+    (session) => session.pending,
+  );
+}
+
+function scheduleCodeFenceSessions(owner: CodeFenceSessionOwner) {
+  if (owner.timer != null) return;
+  owner.timer = setTimeout(() => {
+    owner.timer = null;
+    owner.deadline = performance.now() + 6;
+    let completed: DocRange[] = [];
+    for (let session of owner.sessions.values()) {
+      if (!session.pending) continue;
+      if (performance.now() >= owner.deadline) break;
+      if (session.work(() => performance.now() >= owner.deadline)) completed.push(session.range);
+    }
+    if (completed.length) owner.callback(completed);
+    if (Array.from(owner.sessions.values()).some((session) => session.pending))
+      scheduleCodeFenceSessions(owner);
+  }, 0);
 }
 
 function parseCodeFenceHighlightSpans(
