@@ -1,0 +1,99 @@
+--- a/packages/live-md-loro/tests/collaboration.test.ts
++++ b/packages/live-md-loro/tests/collaboration.test.ts
+@@ -1,4 +1,9 @@
+ // @vitest-environment happy-dom
++
++import {
++  ephemeralEffect,
++  ephemeralStateField,
++} from "../../../node_modules/loro-codemirror/src/ephemeral.ts";
+ 
+ import { StateField, Transaction } from "@codemirror/state";
+ import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
+@@ -357,3 +362,86 @@
+   await Promise.resolve();
+   await Promise.resolve();
+ }
++
++it("CURSOR REVIEW remote deletion remaps presence", async () => {
++  const source = ownNative(new LoroDoc());
++  const target = ownNative(new LoroDoc());
++  const text = ownNative(source.getText("markdown"));
++  text.insert(0, "abcdefghij");
++  source.commit();
++  target.import(source.export({ mode: "snapshot" }));
++  const ephemeral = new EphemeralStore();
++  ownResource(ephemeral, () => {
++    ephemeral.destroy();
++    ephemeral.inner.free();
++  });
++  const editor = createTestEditor({
++    value: "abcdefghij",
++    autofocus: false,
++    parent: document.body.appendChild(document.createElement("div")),
++    extensions: liveMdLoroCollaboration({
++      doc: target,
++      presence: { ephemeral, user: { name: "test", colorClassName: "test" } },
++    }),
++  });
++  await flushMicrotasks();
++  editor.view.dispatch({
++    selection: { anchor: 8 },
++    effects: ephemeralEffect.of({
++      type: "cursor",
++      peer: source.peerIdStr,
++      cursor: { anchor: 8, head: 9 },
++    }),
++  });
++  text.insert(0, "ZZ");
++  source.commit();
++  target.import(source.export({ mode: "snapshot" }));
++  await new Promise((resolve) => setTimeout(resolve, 20));
++  console.log(
++    "CURSOR_INSERT",
++    JSON.stringify({
++      length: editor.value.length,
++      local: editor.view.state.selection.main.head,
++      remote: editor.view.state.field(ephemeralStateField).remoteCursors.get(source.peerIdStr),
++    }),
++  );
++  text.delete(2, 10);
++  source.commit();
++  target.import(source.export({ mode: "snapshot" }));
++  await new Promise((resolve) => setTimeout(resolve, 20));
++  const cursor = editor.view.state.field(ephemeralStateField).remoteCursors.get(source.peerIdStr)!;
++  console.log(
++    "CURSOR_REMOTE",
++    JSON.stringify({
++      doc: editor.value,
++      local: editor.view.state.selection.main.head,
++      remote: cursor,
++    }),
++  );
++  expect(cursor.anchor).toBeLessThanOrEqual(editor.value.length);
++});
++
++it("CURSOR REVIEW undo preserves newer selection", async () => {
++  const doc = ownNative(new LoroDoc());
++  const text = ownNative(doc.getText("markdown"));
++  text.insert(0, "abcdef");
++  doc.commit();
++  const undoManager = ownNative(new UndoManager(doc, {}));
++  const editor = createTestEditor({
++    value: "abcdef",
++    autofocus: false,
++    parent: document.body.appendChild(document.createElement("div")),
++    extensions: liveMdLoroCollaboration({ doc, undoManager }),
++  });
++  await flushMicrotasks();
++  editor.view.dispatch({ selection: { anchor: 3 } });
++  editor.view.dispatch({ changes: { from: 3, insert: "X" }, selection: { anchor: 4 } });
++  undoManager.undo();
++  editor.view.dispatch({ selection: { anchor: 0 }, userEvent: "select.pointer" });
++  await new Promise((resolve) => setTimeout(resolve, 20));
++  console.log(
++    "CURSOR_UNDO",
++    JSON.stringify({ doc: editor.value, head: editor.view.state.selection.main.head }),
++  );
++  expect(editor.view.state.selection.main.head).toBe(0);
++});
