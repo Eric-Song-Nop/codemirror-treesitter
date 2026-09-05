@@ -35,4 +35,22 @@ describe("LiveMD code-fence language loading", () => {
       changedCodeFenceLanguageNames(before.doc, transaction.state.doc, transaction.changes),
     ).toEqual(["ts"]);
   });
+  it("discovers fences in quote and list containers and changed nested info strings", () => {
+    for (let prefix of ["> ", "- ", "1. ", "> - ", "    "]) {
+      let before = EditorState.create({ doc: `${prefix}\`\`\`ts\n${prefix}body\n${prefix}\`\`\`` });
+      expect(codeFenceLanguageNames(before.doc.toString())).toEqual(["ts"]);
+      let from = before.doc.toString().indexOf("ts");
+      let transaction = before.update({ changes: { from, to: from + 2, insert: "python" } });
+      expect(
+        changedCodeFenceLanguageNames(before.doc, transaction.state.doc, transaction.changes),
+      ).toEqual(["python"]);
+    }
+  });
+
+  it("ends an unclosed quote fence when its container ends", () => {
+    expect(codeFenceLanguageNames("> ```ts\n> body\n\n```python\nprint(1)\n```")).toEqual([
+      "ts",
+      "python",
+    ]);
+  });
 });

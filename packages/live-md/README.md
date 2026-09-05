@@ -406,3 +406,10 @@ The LiveMD test suite covers web component behavior, readonly commands,
 leaf-local analysis equivalence against the canonical semantic oracle,
 feature registration, code fences, LaTeX, Mermaid, newline editing, Markdown
 HTML rendering, and style installation.
+
+### Code fence grammar discovery
+
+The editor discovers code-fence languages from completed Markdown syntax, including
+fences nested in blockquotes and lists. Syntax changed ranges limit subsequent
+queries, and `ready` waits for the initial encountered grammars. Indented code and
+fence contents cannot suppress loading of a later real fence.
