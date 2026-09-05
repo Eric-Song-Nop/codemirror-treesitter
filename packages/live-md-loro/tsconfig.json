@@ -4,8 +4,8 @@
     "paths": {
       "@codemirror-treesitter/live-md": ["../live-md/src/index.ts"],
       "@codemirror-treesitter/live-md-theme": ["../live-md-theme/src/index.ts"],
-      "loro-codemirror": ["../../node_modules/loro-codemirror/src/index.ts"],
-      "loro-codemirror/sync": ["../../node_modules/loro-codemirror/src/sync.ts"]
+      "loro-codemirror": ["../../vendor/loro-codemirror/src/index.ts"],
+      "loro-codemirror/sync": ["../../vendor/loro-codemirror/src/sync.ts"]
     }
   },
   "include": ["src", "tests"]
