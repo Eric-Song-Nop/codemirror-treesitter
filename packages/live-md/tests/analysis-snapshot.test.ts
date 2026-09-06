@@ -1,3 +1,4 @@
+import * as projectionRecords from "../src/core/projection/project-leaf.js";
 // @vitest-environment happy-dom
 
 import {
@@ -5753,3 +5754,54 @@ function canonicalWidgetProps(widget: Record<string, unknown>) {
   }
   return props;
 }
+
+it("patches structural line decorations without a hidden full-cache projection", async () => {
+  let doc =
+    Array.from({ length: 100 }, (_, i) => `# Heading ${i}\n\nparagraph ${i}`).join("\n\n") +
+    "\n\nanchor";
+  let view = await markdownAnalysisView(doc, "anchor");
+  let full = vi.spyOn(projectionRecords, "projectLeafCacheRecords");
+  try {
+    let from = doc.indexOf("Heading 50");
+    dispatchParsedTransaction(view, view.state.update({ changes: { from, insert: "updated " } }));
+    await __testFlushLiveMdAnalysis(view);
+    expect(full).not.toHaveBeenCalled();
+    let local = __testLiveMdAnalysis({ state: view.state });
+    expect(local.trace.directProjectionRecords).toBeLessThan(15);
+    expect(canonicalAnalysis(view.state, local)).toEqual(
+      canonicalAnalysis(view.state, __testBuildCanonicalLiveMdAnalysis(view.state)),
+    );
+  } finally {
+    full.mockRestore();
+    view.destroy();
+  }
+});
+
+it.each(["", "next paragraph"])(
+  "preserves structural line points on empty patch-end lines before %s",
+  async (tail) => {
+    let doc = "- first\n- second\n  continuation\n\n" + tail;
+    let view = await markdownAnalysisView(doc, "first");
+    try {
+      let from = doc.indexOf("continuation");
+      dispatchParsedTransaction(
+        view,
+        view.state.update({ changes: { from, to: from + 3, insert: "new" } }),
+      );
+      await __testFlushLiveMdAnalysis(view);
+      let local = __testLiveMdAnalysis({ state: view.state });
+      for (let ranges of [local.decorations, local.atomicRanges]) {
+        ranges.between(0, Number.MAX_SAFE_INTEGER, (from, to) => {
+          expect(from).toBeGreaterThanOrEqual(0);
+          expect(to).toBeLessThanOrEqual(view.state.doc.length);
+        });
+      }
+      expect(view.state.selection.main.head).toBeLessThanOrEqual(view.state.doc.length);
+      expect(canonicalAnalysis(view.state, local)).toEqual(
+        canonicalAnalysis(view.state, __testBuildCanonicalLiveMdAnalysis(view.state)),
+      );
+    } finally {
+      view.destroy();
+    }
+  },
+);

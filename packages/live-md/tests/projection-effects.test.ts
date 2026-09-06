@@ -2,7 +2,7 @@
 
 import { EditorState, RangeSet, Text, type RangeValue } from "@codemirror/state";
 import { Decoration, WidgetType, type DecorationSet } from "@codemirror/view";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   type LeafAnalysisRecord,
   type LiveMdDescriptor,
@@ -603,3 +603,47 @@ function atomicRanges(
   });
   return ranges.sort((left, right) => left.from - right.from || left.to - right.to);
 }
+
+it("maps only touched replacements and preserves exact mapping across multiple edits", () => {
+  let build = testBuild("x".repeat(40_000));
+  for (let from = 10; from < 40_000; from += 40) {
+    addReplace(build, from, from + 20, new TestWidget(String(from)), true);
+  }
+  let direct = projectionSetsFromLayer(finishProjectionLayers(build).direct);
+  let transaction = build.state.update({
+    changes: [
+      { from: 10, insert: "before" },
+      { from: 20, to: 25, insert: "inside" },
+      { from: 30, insert: "after" },
+      { from: 50, to: 70, insert: "entire replacement" },
+      { from: 15000, to: 15003 },
+    ],
+  });
+  let expected: Array<{ from: number; to: number }> = [];
+  direct.destructiveDecorations.between(0, build.state.doc.length, (from, to) => {
+    let mappedFrom = transaction.changes.mapPos(from, 1);
+    let mappedTo = transaction.changes.mapPos(to, -1);
+    if (mappedFrom < mappedTo) expected.push({ from: mappedFrom, to: mappedTo });
+  });
+  let fullScans = 0;
+  // oxlint-disable-next-line typescript/unbound-method -- explicit receiver supplied below
+  let original = RangeSet.prototype.between;
+  let spy = vi
+    .spyOn(RangeSet.prototype, "between")
+    .mockImplementation(function (this: RangeSet<RangeValue>, from, to, callback) {
+      if (from === 0 && to >= build.state.doc.length) fullScans++;
+      return original.call(this, from, to, callback);
+    });
+  let mapped;
+  try {
+    mapped = mapProjectionSets(direct, transaction.changes, []);
+    expect(fullScans).toBe(0);
+  } finally {
+    spy.mockRestore();
+  }
+  let actual: Array<{ from: number; to: number }> = [];
+  mapped.destructiveDecorations.between(0, transaction.state.doc.length, (from, to) => {
+    actual.push({ from, to });
+  });
+  expect(actual.sort((a, b) => a.from - b.from)).toEqual(expected);
+});

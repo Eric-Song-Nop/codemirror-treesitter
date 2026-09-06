@@ -1,0 +1,268 @@
+--- a/packages/language/tests/parse-session.test.ts
++++ b/packages/language/tests/parse-session.test.ts
+@@ -989,3 +989,26 @@
+     }
+   });
+ });
++
++it("REVIEW interrupted edits retain incremental base", () => {
++  const bases: Array<NativeTree | null> = [];
++  let calls = 0;
++  const root = fakeParser(({ oldTree }) => {
++    bases.push(oldTree);
++    if (++calls === 2) return pause;
++    return fakeTree("root-" + calls);
++  });
++  keepNestedOnEqualLengthEdit(root);
++  const state = EditorState.create({ doc: "abcdef" });
++  const initial = ParseContext.create(root, state);
++  expect(initial.work(() => false)).toBe(true);
++  const first = changedContext(initial, state, 1, "X");
++  expect(first.context.work(() => false)).toBe(false);
++  const second = changedContext(first.context, first.state, 2, "Y");
++  expect(second.context.work(() => false)).toBe(true);
++  console.log(
++    "REVIEW_BASES",
++    bases.map((v) => (v ? (v as FakeNativeTree).label : null)),
++  );
++  expect(bases[2]).not.toBeNull();
++});
+--- a/packages/live-md-loro/tests/collaboration.test.ts
++++ b/packages/live-md-loro/tests/collaboration.test.ts
+@@ -357,3 +357,62 @@
+   await Promise.resolve();
+   await Promise.resolve();
+ }
++
++it("REVIEW mixed-container remote import", async () => {
++  const source = ownNative(new LoroDoc());
++  const target = ownNative(new LoroDoc());
++  source.getMap("aaa").set("title", "initial");
++  const text = ownNative(source.getText("markdown"));
++  text.insert(0, "hello");
++  source.commit();
++  target.import(source.export({ mode: "snapshot" }));
++  const editor = createTestEditor({
++    value: "hello",
++    autofocus: false,
++    parent: document.body.appendChild(document.createElement("div")),
++    extensions: liveMdLoroCollaboration({ doc: target }),
++  });
++  await flushMicrotasks();
++  let events: unknown[] = [];
++  target.subscribe((e) =>
++    events.push(e.events.map((v) => ({ target: v.target, type: v.diff.type }))),
++  );
++  source.getMap("aaa").set("title", "changed");
++  text.insert(5, " world");
++  source.commit();
++  target.import(source.export({ mode: "snapshot" }));
++  console.log(
++    "REVIEW_LORO",
++    JSON.stringify(events),
++    editor.value,
++    target.getText("markdown").toString(),
++  );
++  expect(editor.value).toBe("hello world");
++});
++it("REVIEW two views same document", async () => {
++  const doc = ownNative(new LoroDoc());
++  const first = createTestEditor({
++    autofocus: false,
++    parent: document.body.appendChild(document.createElement("div")),
++    extensions: liveMdLoroCollaboration({ doc }),
++  });
++  const second = createTestEditor({
++    autofocus: false,
++    parent: document.body.appendChild(document.createElement("div")),
++    extensions: liveMdLoroCollaboration({ doc }),
++  });
++  await flushMicrotasks();
++  first.view.dispatch({ changes: { from: 0, insert: "hello" } });
++  const staleValue = second.value;
++  second.view.dispatch({ changes: { from: second.value.length, insert: "!" } });
++  console.log(
++    "REVIEW_TWO_VIEWS",
++    JSON.stringify({
++      staleValue,
++      first: first.value,
++      second: second.value,
++      loro: doc.getText("markdown").toString(),
++    }),
++  );
++  expect(staleValue).toBe("hello");
++});
+--- a/packages/live-md/tests/analysis-snapshot.test.ts
++++ b/packages/live-md/tests/analysis-snapshot.test.ts
+@@ -1,3 +1,4 @@
++import * as reviewProjection from "../src/core/projection/project-leaf.js";
+ // @vitest-environment happy-dom
+ 
+ import {
+@@ -78,6 +79,7 @@
+ import { type LiveMdLeafAnalysisTrace } from "../src/core/analysis/types.js";
+ import {
+   codeFenceLanguagesField,
++  codeFenceLanguageNames,
+   codeFenceHighlighterFacet,
+   deleteLiveMdTree,
+   emptyCodeFenceLanguages,
+@@ -5753,3 +5755,158 @@
+   }
+   return props;
+ }
++
++it("REVIEW differential edits", async () => {
++  const blocks = [
++    "paragraph **bold** and _italic_",
++    "- item\n- second",
++    "> quote\n> more",
++    "# heading",
++    "```\ncode\n```",
++    "| a | b |\n| --- | --- |\n| x | y |",
++    "[label](https://example.com)",
++    "---",
++    "    indented",
++    "- [ ] task",
++    "<div>\nhtml\n</div>",
++  ];
++  let seed = 731;
++  const rand = (n: number) => {
++    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
++    return seed % n;
++  };
++  const inserts = ["\n", "\n\n", " ", "#", "> ", "- ", "`", "```\n", "*", "|", "x", "", "\n---\n"];
++  for (let trial = 0; trial < 12; trial++) {
++    let doc =
++      Array.from({ length: 12 }, () => blocks[rand(blocks.length)]).join("\n\n") + "\n\nanchor";
++    let view = await markdownAnalysisView(doc, "anchor");
++    try {
++      for (let edit = 0; edit < 25; edit++) {
++        let before = view.state.doc.toString();
++        let from = rand(before.length + 1),
++          to = Math.min(before.length, from + rand(5));
++        let insert = inserts[rand(inserts.length)]!;
++        dispatchParsedTransaction(
++          view,
++          view.state.update({
++            changes: { from, to, insert },
++            selection: { anchor: from + insert.length },
++          }),
++        );
++        await __testFlushLiveMdAnalysis(view);
++        let local = canonicalAnalysis(view.state, __testLiveMdAnalysis({ state: view.state }));
++        let fresh = canonicalAnalysis(view.state, __testBuildCanonicalLiveMdAnalysis(view.state));
++        if (JSON.stringify(local) !== JSON.stringify(fresh))
++          console.log("REVIEW_REPRO", JSON.stringify({ before, from, to, insert, trial, edit }));
++        expect(local).toEqual(fresh);
++      }
++    } finally {
++      view.destroy();
++    }
++  }
++}, 120000);
++
++it("REVIEW nested fence discovery", () => {
++  expect(codeFenceLanguageNames("> ```ts\n> const x = 1\n> ```")).toContain("ts");
++});
++it("REVIEW visible surface survives unrelated edit", async () => {
++  const doc = Array.from({ length: 30 }, (_, i) => `paragraph ${i} **strong**`).join("\n\n");
++  const view = await markdownAnalysisView(doc);
++  try {
++    const from = view.state.doc.length;
++    dispatchParsedTransaction(view, view.state.update({ changes: { from, insert: "!" } }));
++    await __testFlushLiveMdAnalysis(view);
++    const trace = __testLiveMdAnalysis(view).trace;
++    console.log("REVIEW_SURFACE", JSON.stringify(trace));
++    expect(trace.surfaceCompileRanges).toEqual([]);
++  } finally {
++    view.destroy();
++  }
++});
++
++it("REVIEW hidden full structural projection", async () => {
++  const doc = Array.from({ length: 100 }, (_, i) => `paragraph ${i} **strong**`).join("\n\n");
++  const view = await markdownAnalysisView(doc);
++  const original = reviewProjection.projectLeafCacheRecords;
++  const passes: number[] = [];
++  const spy = vi
++    .spyOn(reviewProjection, "projectLeafCacheRecords")
++    .mockImplementation((...args) => {
++      const count = original(...args);
++      passes.push(count);
++      return count;
++    });
++  try {
++    dispatchParsedTransaction(
++      view,
++      view.state.update({ changes: { from: doc.length, insert: "!" } }),
++    );
++    await __testFlushLiveMdAnalysis(view);
++    console.log(
++      "REVIEW_HIDDEN",
++      JSON.stringify({
++        passes,
++        reported: __testLiveMdAnalysis(view).trace.directProjectionRecords,
++      }),
++    );
++    expect(passes).not.toContain(100);
++  } finally {
++    spy.mockRestore();
++    view.destroy();
++  }
++});
++
++it("REVIEW code fence loses native incremental tree", async () => {
++  const languages = await loadCodeFenceLanguages(["ts"]);
++  const parser = languages.get("ts")!;
++  const original = parser.parseWith.bind(parser);
++  const calls: Array<{ length: number; reused: boolean; bounded: boolean }> = [];
++  const spy = vi.spyOn(parser, "parseWith").mockImplementation((...args) => {
++    calls.push({ length: args[1].length, reused: Boolean(args[2]), bounded: Boolean(args[3]) });
++    return original(...args);
++  });
++  const doc = "```ts\n" + "const value = 1;\n".repeat(100) + "```\n\nanchor";
++  const view = await markdownAnalysisView(
++    doc,
++    "anchor",
++    codeFenceLanguagesField.init(() => languages),
++  );
++  try {
++    calls.length = 0;
++    dispatchParsedTransaction(
++      view,
++      view.state.update({ changes: { from: 20, insert: "2" }, selection: { anchor: 20 } }),
++    );
++    await __testFlushLiveMdAnalysis(view);
++    console.log("REVIEW_FENCE", JSON.stringify(calls));
++    expect(calls.some((call) => call.reused)).toBe(true);
++  } finally {
++    spy.mockRestore();
++    view.destroy();
++  }
++});
++
++it("REVIEW pending input scans every replacement", async () => {
++  const doc =
++    Array.from({ length: 100 }, (_, i) => `![image ${i}](image.png)`).join("\n\n") + "\n\nanchor";
++  const view = await markdownAnalysisView(doc, "anchor");
++  // oxlint-disable-next-line typescript/unbound-method -- called with its original receiver below
++  const original = RangeSet.prototype.between;
++  let visits = 0;
++  const spy = vi
++    .spyOn(RangeSet.prototype, "between")
++    .mockImplementation(function (this: RangeSet<RangeValue>, from, to, callback) {
++      return original.call(this, from, to, (a, b, value) => {
++        if (from === 0 && to === Number.MAX_SAFE_INTEGER) visits++;
++        return callback(a, b, value);
++      });
++    });
++  try {
++    view.dispatch({ changes: { from: doc.length, insert: "!" } });
++    console.log("REVIEW_PENDING_SCANS", visits);
++    expect(visits).toBeLessThan(100);
++  } finally {
++    spy.mockRestore();
++    view.destroy();
++  }
++});

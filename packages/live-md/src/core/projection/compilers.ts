@@ -2,11 +2,7 @@ import { type ChangeDesc, RangeSet } from "@codemirror/state";
 import { Decoration } from "@codemirror/view";
 import { type LeafAnalysisCache, type LeafAnalysisRecord } from "../analysis/descriptors.js";
 import { lineRangeFor, rangesOverlap } from "../analysis/ranges.js";
-import {
-  emptyLiveMdLeafAnalysisTrace,
-  type DocRange,
-  type LiveMdLeafAnalysisTrace,
-} from "../analysis/types.js";
+import { type DocRange, type LiveMdLeafAnalysisTrace } from "../analysis/types.js";
 import {
   createLiveMdBuild,
   finishProjectionLayers,
@@ -95,13 +91,14 @@ export function compileIncrementalDirectLayoutProjection(
   );
   input.trace.directProjectionRecords += projected;
   let compiled = projectionSetsFromLayer(finishProjectionLayers(build).direct);
+  compiled.structuralLineDecorations = compileDirectStructuralLineDecorations(
+    input,
+    cache,
+    patchRanges,
+  );
   let removeOwnerKeys = new Set(patch.removeRecordIds.map(liveMdRecordOwnerKey));
 
   let patched = patchProjectionSets(previous, patchRanges, compiled, removeOwnerKeys);
-  patched = {
-    ...patched,
-    structuralLineDecorations: compileFullDirectStructuralLineDecorations(input, cache),
-  };
   return projectionLayerFromSets(patched);
 }
 
@@ -184,12 +181,20 @@ function createCompileBuild(input: LiveMdProjectionCompileInput): LiveMdBuild {
   return createLiveMdBuild(input);
 }
 
-function compileFullDirectStructuralLineDecorations(
+function compileDirectStructuralLineDecorations(
   input: LiveMdProjectionCompileInput,
   cache: LeafAnalysisCache,
+  ranges: readonly DocRange[],
 ) {
-  let build = createCompileBuild({ ...input, trace: emptyLiveMdLeafAnalysisTrace() });
-  projectLeafCacheRecords(build, cache, (spec) => (spec.kind == "lineClass" ? [spec] : []));
+  let build = createCompileBuild(input);
+  let projected = projectLeafCacheRecordsTouchingRanges(
+    build,
+    cache,
+    ranges,
+    (spec) => (spec.kind == "lineClass" ? [spec] : []),
+    liveMdRecordMayProduceDirectLayout,
+  );
+  input.trace.directProjectionRecords += projected;
   return finishProjectionLayers(build).direct.structuralLineDecorations;
 }
 
@@ -238,7 +243,10 @@ function lineRangeWithNeighbors(input: LiveMdProjectionCompileInput, from: numbe
   let lastLine = doc.lineAt(Math.max(range.from, range.to - 1));
   let startLine = doc.line(Math.max(1, firstLine.number - 1));
   let endLine = doc.line(Math.min(doc.lines, lastLine.number + 1));
-  return { from: startLine.from, to: endLine.to };
+  // Patching uses half-open intervals, while line decorations are points.
+  // Include the last line's start even when that line is empty (also at EOF).
+  // doc.length + 1 is only a cache/filter bound, never an emitted position.
+  return { from: startLine.from, to: endLine.to + 1 };
 }
 
 function fullSurfaceSpec(
