@@ -1088,6 +1088,81 @@ describe("tree-sitter tree wrapper", () => {
     expect(afterSecond.node?.id).toBe(beforeSecond.node?.id);
   });
 
+  it.each(["root", "nested"])(
+    "retains incremental bases through repeated %s interruptions",
+    async (stage) => {
+      let doc =
+        "<script>let first = 1;</script><script>let second = 2;</script><script>let third = 3;</script>";
+      let { html, javascript } = await mixedHtmlState(doc);
+      let parser = TreeSitterParser.fromLanguage(html.parser.language!, {
+        nested: [
+          {
+            parser: javascript.parser,
+            ranges: (tree) => scriptTextRanges(tree).map((range) => [range]),
+          },
+        ],
+      });
+      let state = EditorState.create({ doc });
+      let context = ParseContext.create(parser, state);
+      expect(context.work()).toBe(true);
+      let original = context.tree;
+      let target = stage == "root" ? parser : javascript.parser;
+      // Preserve the original method for restoration; calls below bind this explicitly.
+      // oxlint-disable-next-line typescript/unbound-method
+      let parseWith = target.parseWith;
+      let suspended = true;
+      let bases: unknown[] = [];
+      target.parseWith = function (native, input, oldTree, stop, ranges) {
+        bases.push(oldTree);
+        if (
+          suspended &&
+          (stage == "root" ||
+            input.sliceString(ranges![0]!.from, ranges![0]!.to).includes("second"))
+        )
+          return null;
+        return parseWith.call(this, native, input, oldTree, stop, ranges);
+      };
+      try {
+        // Each edit hits a different nested group. Later edits must not erase
+        // earlier invalidations, including the zero-width deletion.
+        for (let [text, insert] of [
+          ["1", "100"],
+          ["20", ""],
+          ["3", "true"],
+        ]) {
+          let from = state.doc.toString().indexOf(text!);
+          let changes = [{ from, to: from + text!.length, insert }];
+          if (text == "1") {
+            let second = state.doc.toString().indexOf("2");
+            changes.push({ from: second, to: second + 1, insert: "20" });
+          }
+          let transaction = state.update({ changes });
+          let previous = context;
+          context = context.changes(transaction.changes, state, transaction.state);
+          state = transaction.state;
+          previous.destroy();
+          expect(context.work()).toBe(false);
+        }
+        expect(bases.length).toBeGreaterThanOrEqual(3);
+        expect(bases.every(Boolean)).toBe(true);
+        suspended = false;
+        expect(context.work()).toBe(true);
+        let fresh = parser.parse(state.doc);
+        expect(context.tree.toString()).toBe(fresh.toString());
+        expect(context.tree.nested.map((nest) => nest.tree.toString())).toEqual(
+          fresh.nested.map((nest) => nest.tree.toString()),
+        );
+        expect(context.tree.nested.map((nest) => nest.ranges)).toEqual(
+          fresh.nested.map((nest) => nest.ranges),
+        );
+        expect(original.resolveInner(doc.indexOf("first")).name).toBe("identifier");
+      } finally {
+        target.parseWith = parseWith;
+        context.destroy();
+      }
+    },
+  );
+
   it("resumes interrupted nested tree-sitter parsing", async () => {
     let script = `${"let value = 1;\n".repeat(80_000)}let done = true;\n`;
     let doc = `<script>${script}</script>`;

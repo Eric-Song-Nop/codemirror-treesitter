@@ -29,7 +29,9 @@ parsers while keeping the public CodeMirror language surface.
 - Expose low-level Tree-sitter query helpers for cached query compilation and
   capture collection over wrapped trees and nodes.
 - Maintain incremental parsing, parse scheduling, viewport-aware parsing, and
-  syntax-tree availability helpers.
+  syntax-tree availability helpers. Edits that interrupt root or nested parsing
+  retain the edited complete tree as their incremental base and accumulate dirty
+  ranges until parsing finishes, including across insertions and deletions.
 - Support nested parsing through included ranges and
   `TreeSitterParser.getSkippingParser(...)` for async parser loading. Nested
   parser sources may return one merged range list or an iterable of grouped
