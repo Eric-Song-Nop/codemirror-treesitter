@@ -101,21 +101,26 @@ export function mapProjectionSets(
 }
 
 function mapProjectionDecorations(decorations: DecorationSet, changes: ChangeDesc): DecorationSet {
+  if (changes.empty || decorations.size == 0) return decorations;
   let replacements: Array<Range<Decoration>> = [];
-  let hasReplacement = false;
-  decorations.between(0, Number.MAX_SAFE_INTEGER, (from, to, value) => {
-    if (!isLiveMdReplacementDecoration(value)) return;
-    hasReplacement = true;
-    // Replacement ownership is exact: boundary insertions stay outside,
-    // while edits inside the source continue to map with the replacement.
-    let mappedFrom = changes.mapPos(from, 1);
-    let mappedTo = changes.mapPos(to, -1);
-    if (mappedFrom < mappedTo) replacements.push(value.range(mappedFrom, mappedTo));
-  });
-  if (!hasReplacement) return decorations.map(changes);
-  let mappedOther = decorations
-    .update({ filter: (_from, _to, value) => !isLiveMdReplacementDecoration(value) })
-    .map(changes);
+  let untouched = decorations;
+  changes.iterChangedRanges((fromA, toA) => {
+    untouched = untouched.update({
+      filterFrom: fromA,
+      filterTo: toA,
+      filter(from, to, value) {
+        if (from > toA || to < fromA || !isLiveMdReplacementDecoration(value)) return true;
+        // Block widgets need inclusive sides for layout, but source ownership
+        // excludes edge insertions. Only touched replacements need this repair;
+        // all other ranges retain CodeMirror's persistent incremental mapping.
+        let mappedFrom = changes.mapPos(from, 1);
+        let mappedTo = changes.mapPos(to, -1);
+        if (mappedFrom < mappedTo) replacements.push(value.range(mappedFrom, mappedTo));
+        return false;
+      },
+    });
+  }, true);
+  let mappedOther = untouched.map(changes);
   return replacements.length
     ? RangeSet.join([mappedOther, RangeSet.of(replacements, true)])
     : mappedOther;
@@ -192,9 +197,7 @@ export function patchProjectionSets(
         : patchRangeSet(
             sets.structuralLineDecorations,
             ranges,
-            collectRangeSetRanges(additions.structuralLineDecorations, [
-              { from: 0, to: Number.MAX_SAFE_INTEGER },
-            ]),
+            collectRangeSetRanges(additions.structuralLineDecorations, ranges),
           ),
   };
 }

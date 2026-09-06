@@ -2,11 +2,7 @@ import { type ChangeDesc, RangeSet } from "@codemirror/state";
 import { Decoration } from "@codemirror/view";
 import { type LeafAnalysisCache, type LeafAnalysisRecord } from "../analysis/descriptors.js";
 import { lineRangeFor, rangesOverlap } from "../analysis/ranges.js";
-import {
-  emptyLiveMdLeafAnalysisTrace,
-  type DocRange,
-  type LiveMdLeafAnalysisTrace,
-} from "../analysis/types.js";
+import { type DocRange, type LiveMdLeafAnalysisTrace } from "../analysis/types.js";
 import {
   createLiveMdBuild,
   finishProjectionLayers,
@@ -95,13 +91,14 @@ export function compileIncrementalDirectLayoutProjection(
   );
   input.trace.directProjectionRecords += projected;
   let compiled = projectionSetsFromLayer(finishProjectionLayers(build).direct);
+  compiled.structuralLineDecorations = compileDirectStructuralLineDecorations(
+    input,
+    cache,
+    patchRanges,
+  );
   let removeOwnerKeys = new Set(patch.removeRecordIds.map(liveMdRecordOwnerKey));
 
   let patched = patchProjectionSets(previous, patchRanges, compiled, removeOwnerKeys);
-  patched = {
-    ...patched,
-    structuralLineDecorations: compileFullDirectStructuralLineDecorations(input, cache),
-  };
   return projectionLayerFromSets(patched);
 }
 
@@ -184,12 +181,16 @@ function createCompileBuild(input: LiveMdProjectionCompileInput): LiveMdBuild {
   return createLiveMdBuild(input);
 }
 
-function compileFullDirectStructuralLineDecorations(
+function compileDirectStructuralLineDecorations(
   input: LiveMdProjectionCompileInput,
   cache: LeafAnalysisCache,
+  ranges: readonly DocRange[],
 ) {
-  let build = createCompileBuild({ ...input, trace: emptyLiveMdLeafAnalysisTrace() });
-  projectLeafCacheRecords(build, cache, (spec) => (spec.kind == "lineClass" ? [spec] : []));
+  let build = createCompileBuild(input);
+  let projected = projectLeafCacheRecordsTouchingRanges(build, cache, ranges, (spec) =>
+    spec.kind == "lineClass" ? [spec] : [],
+  );
+  input.trace.directProjectionRecords += projected;
   return finishProjectionLayers(build).direct.structuralLineDecorations;
 }
 

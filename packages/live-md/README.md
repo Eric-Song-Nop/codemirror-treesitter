@@ -14,12 +14,13 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Built as an ES module package with Vite+ `vp pack`.
 - Keeps collaboration optional. Loro-specific code belongs in
   `@codemirror-treesitter/live-md-loro`, not this package.
-- LiveMD currently uses a full-walk immutable semantic cache baseline: the
-  production Markdown block cursor owns leaf/context/marker discovery, each
-  leaf produces DOM-free descriptors, unchanged leaf records can reuse their
-  prior analysis objects across edits, and projection maps descriptors to
-  CodeMirror decorations and widgets. Range-local changed-leaf analysis and
-  direct incremental projection remain follow-up work.
+- LiveMD uses range-local immutable semantic caches: the Markdown block cursor
+  discovers affected leaves, contexts, and markers; unchanged leaves reuse their
+  analysis objects; projection maps descriptors to decorations and widgets.
+  Direct layout patches rebuild structural line classes only around affected
+  records, with all projection work included in the trace. Pending edits map
+  persistent decoration ranges and repair only touched replacement boundaries.
+  Initialization and invalidated analysis inputs still require full discovery.
 
 ## Responsibilities
 
