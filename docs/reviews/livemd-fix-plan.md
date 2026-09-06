@@ -47,13 +47,13 @@ Additional validated issues discovered during implementation:
 - [#138](https://github.com/Eric-Song-Nop/codemirror-treesitter/pull/138): an interrupted initial parse must not hide configured language metadata. A forced-budget regression checks comment metadata and language activity before and after syntax publication.
 - Followup review of #137 caught dropped work beyond the native session limit and unbounded highlight queries. Both were fixed before completing the track. Delayed parser tests explicitly wait for completion while retaining exact reuse and disposal assertions.
 
-Independent main-targeted PRs are #131, #132, #133, #137, and #138. Stacks are **#131 → #136**, **#132 → #135**, and **#133 → #134**. Merge each prerequisite first, then retarget its successor to `main` and rerun CI. The existing workflow only triggers pull requests targeting `main`; stacked branches therefore require local combined validation before retargeting.
+The original independent main-targeted PRs were #131, #132, #133, #137, and #138. Their dependency order was **#131 → #136**, **#132 → #135**, and **#133 → #134**. Merge each prerequisite first, then retarget its successor to `main` and rerun CI. The existing workflow only triggers pull requests targeting `main`; stacked branches therefore require local combined validation before retargeting.
 
 The Loro changes are durable source-controlled fixes in `vendor/loro-codemirror`, with the original license, provenance, source aliases, package build, and clean-install verification. They do not rely on editing `node_modules`.
 
 ## Final validation
 
-The combined implementation is preserved on `fix/livemd-integration`. No PR has been merged.
+The combined implementation validated before landing is preserved on `fix/livemd-integration`. The fixes land through one squash commit per PR on `main`; dependent branches are rebased onto their merged prerequisites so the main history contains no duplicate prerequisite commits. The linked PRs record current merge status. Production releases use the repository's `grove-v*` tag-driven Grove CI/CD workflow, which validates and builds the tagged main revision before deployment.
 
 - `vp install` passed in the clean integration worktree.
 - `vp check` passed: formatting, linting, and type checking.
