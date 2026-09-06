@@ -187,8 +187,12 @@ function compileDirectStructuralLineDecorations(
   ranges: readonly DocRange[],
 ) {
   let build = createCompileBuild(input);
-  let projected = projectLeafCacheRecordsTouchingRanges(build, cache, ranges, (spec) =>
-    spec.kind == "lineClass" ? [spec] : [],
+  let projected = projectLeafCacheRecordsTouchingRanges(
+    build,
+    cache,
+    ranges,
+    (spec) => (spec.kind == "lineClass" ? [spec] : []),
+    liveMdRecordMayProduceDirectLayout,
   );
   input.trace.directProjectionRecords += projected;
   return finishProjectionLayers(build).direct.structuralLineDecorations;
@@ -239,7 +243,10 @@ function lineRangeWithNeighbors(input: LiveMdProjectionCompileInput, from: numbe
   let lastLine = doc.lineAt(Math.max(range.from, range.to - 1));
   let startLine = doc.line(Math.max(1, firstLine.number - 1));
   let endLine = doc.line(Math.min(doc.lines, lastLine.number + 1));
-  return { from: startLine.from, to: endLine.to };
+  // Patching uses half-open intervals, while line decorations are points.
+  // Include the last line's start even when that line is empty (also at EOF).
+  // doc.length + 1 is only a cache/filter bound, never an emitted position.
+  return { from: startLine.from, to: endLine.to + 1 };
 }
 
 function fullSurfaceSpec(

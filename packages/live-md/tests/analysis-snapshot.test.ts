@@ -5828,3 +5828,32 @@ function expectSurfaceMatchesCanonical(view: EditorView) {
     ),
   );
 }
+
+it.each(["", "next paragraph"])(
+  "preserves structural line points on empty patch-end lines before %s",
+  async (tail) => {
+    let doc = "- first\n- second\n  continuation\n\n" + tail;
+    let view = await markdownAnalysisView(doc, "first");
+    try {
+      let from = doc.indexOf("continuation");
+      dispatchParsedTransaction(
+        view,
+        view.state.update({ changes: { from, to: from + 3, insert: "new" } }),
+      );
+      await __testFlushLiveMdAnalysis(view);
+      let local = __testLiveMdAnalysis({ state: view.state });
+      for (let ranges of [local.decorations, local.atomicRanges]) {
+        ranges.between(0, Number.MAX_SAFE_INTEGER, (from, to) => {
+          expect(from).toBeGreaterThanOrEqual(0);
+          expect(to).toBeLessThanOrEqual(view.state.doc.length);
+        });
+      }
+      expect(view.state.selection.main.head).toBeLessThanOrEqual(view.state.doc.length);
+      expect(canonicalAnalysis(view.state, local)).toEqual(
+        canonicalAnalysis(view.state, __testBuildCanonicalLiveMdAnalysis(view.state)),
+      );
+    } finally {
+      view.destroy();
+    }
+  },
+);
