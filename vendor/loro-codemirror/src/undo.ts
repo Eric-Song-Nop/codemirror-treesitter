@@ -1,7 +1,7 @@
 import { EditorSelection, StateEffect, StateField } from "@codemirror/state";
 import { EditorView, type PluginValue, type ViewUpdate } from "@codemirror/view";
 import { Cursor, LoroDoc, LoroText, UndoManager } from "loro-crdt";
-import { loroSyncAnnotation } from "./sync.ts";
+import { loroBeforeCommit, loroSyncAnnotation } from "./sync.ts";
 
 export const undoEffect = StateEffect.define();
 export const redoEffect = StateEffect.define();
@@ -43,6 +43,10 @@ export class UndoPluginValue implements PluginValue {
             });
         }
         bindings.add(this);
+        loroBeforeCommit.set(this.view, transaction => {
+            this.activate();
+            this.lastSelection = this.captureSelection(transaction.startState.selection.main);
+        });
         queueMicrotask(() => {
             if (!this.destroyed && !this.lastSelection.length) this.lastSelection = this.captureSelection();
         });
@@ -54,8 +58,7 @@ export class UndoPluginValue implements PluginValue {
         bindings.add(this);
     }
 
-    private captureSelection(): Uint8Array[] {
-        const selection = this.view.state.selection.main;
+    private captureSelection(selection = this.view.state.selection.main): Uint8Array[] {
         const text = this.getTextFromDoc(this.doc);
         return [selection.anchor, selection.head].flatMap(position => {
             const cursor = text.getCursor(Math.min(text.length, position));
@@ -114,6 +117,7 @@ export class UndoPluginValue implements PluginValue {
 
     destroy(): void {
         this.destroyed = true;
+        loroBeforeCommit.delete(this.view);
         clearTimeout(this.timer);
         const bindings = owners.get(this.undoManager)!;
         bindings.delete(this);

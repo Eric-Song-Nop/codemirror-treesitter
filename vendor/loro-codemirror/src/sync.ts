@@ -1,4 +1,4 @@
-import { Annotation, type ChangeSpec } from "@codemirror/state";
+import { Annotation, type ChangeSpec, type Transaction } from "@codemirror/state";
 import { EditorView, type PluginValue, ViewUpdate } from "@codemirror/view";
 import {
     LoroDoc,
@@ -8,6 +8,9 @@ import {
 } from "loro-crdt";
 
 export const loroSyncAnnotation = Annotation.define();
+// Undo metadata must observe the source view before its synchronous Loro commit,
+// regardless of CodeMirror's plugin update order.
+export const loroBeforeCommit = new WeakMap<EditorView, (transaction: Transaction) => void>();
 let nextSyncOrigin = 0;
 
 export class LoroSyncPluginValue implements PluginValue {
@@ -94,25 +97,22 @@ export class LoroSyncPluginValue implements PluginValue {
     };
 
     update(update: ViewUpdate): void {
-        if (
-            !update.docChanged ||
-            update.transactions.some((transaction) =>
-                transaction.annotation(loroSyncAnnotation) != null)
-        ) {
-            return;
+        for (const transaction of update.transactions) {
+            if (!transaction.docChanged || transaction.annotation(loroSyncAnnotation) != null) continue;
+            loroBeforeCommit.get(this.view)?.(transaction);
+            let adj = 0;
+            transaction.changes.iterChanges((fromA, toA, _fromB, _toB, insert) => {
+                const insertText = insert.sliceString(0, insert.length, "\n");
+                if (fromA !== toA) {
+                    this.getTextFromDoc(this.doc).delete(fromA + adj, toA - fromA);
+                }
+                if (insertText.length > 0) {
+                    this.getTextFromDoc(this.doc).insert(fromA + adj, insertText);
+                }
+                adj += insertText.length - (toA - fromA);
+            });
+            this.doc.commit({ origin: this.origin });
         }
-        let adj = 0;
-        update.changes.iterChanges((fromA, toA, fromB, toB, insert) => {
-            const insertText = insert.sliceString(0, insert.length, "\n");
-            if (fromA !== toA) {
-                this.getTextFromDoc(this.doc).delete(fromA + adj, toA - fromA);
-            }
-            if (insertText.length > 0) {
-                this.getTextFromDoc(this.doc).insert(fromA + adj, insertText);
-            }
-            adj += insertText.length - (toA - fromA);
-        });
-        this.doc.commit({ origin: this.origin });
     }
 
     destroy(): void {
