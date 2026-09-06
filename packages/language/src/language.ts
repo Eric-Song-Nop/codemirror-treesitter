@@ -668,6 +668,9 @@ function queryOptions(root: SyntaxNode, options: TreeSitterQueryOptions): TSQuer
 }
 
 function queryRangeOverlapsNode(root: SyntaxNode, options: TreeSitterQueryOptions) {
+  // Native end byte 0 means unbounded. An explicit public zero upper bound
+  // contains no document content and must not accidentally query the whole tree.
+  if (options.to === 0) return false;
   let from = options.from ?? 0;
   let to = options.to ?? Number.POSITIVE_INFINITY;
   return from <= queryNodeEnd(root) && to >= root.from;
