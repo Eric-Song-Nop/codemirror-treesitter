@@ -474,25 +474,16 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
       }
       let runtimeChanged = this.runtime != analysis;
       let semanticRevision = surfaceSemanticRevision(analysis);
-      let surfaceInvalidationRanges =
-        runtimeChanged && analysis.surfaceInvalidationRanges.length
-          ? analysis.surfaceInvalidationRanges
-          : [];
-      let partialSurfaceInvalidation =
-        surfaceInvalidationRanges.length > 0 &&
-        this.runtime != null &&
-        this.surfaceState.semanticRevision >= 0;
       if (runtimeChanged || this.surfaceState.semanticRevision != semanticRevision) {
-        if (partialSurfaceInvalidation) {
-          this.surfaceState = invalidateSurfaceProjectionState(
-            this.surfaceState,
-            surfaceInvalidationRanges,
-            semanticRevision,
-          );
-        } else {
-          this.surfaceState = emptySurfaceProjectionState(semanticRevision);
-          this.surfaceTrace = emptyLiveMdLeafAnalysisTrace();
-        }
+        this.surfaceTrace = emptyLiveMdLeafAnalysisTrace();
+        this.surfaceState =
+          this.runtime && analysis.surfaceInvalidationRanges != null
+            ? invalidateSurfaceProjectionState(
+                this.surfaceState,
+                analysis.surfaceInvalidationRanges,
+                semanticRevision,
+              )
+            : emptySurfaceProjectionState(semanticRevision);
       }
 
       if (analysis.semantic) {
@@ -536,6 +527,10 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
     private mapPendingSurface(update: ViewUpdate, analysis: LiveMdRuntimeState) {
       let pending = analysis.pending;
       if (!pending) return;
+      // Document shifts are not scrolling and must not trigger read-ahead.
+      if (this.lastViewportFrom != null) {
+        this.lastViewportFrom = update.changes.mapPos(this.lastViewportFrom, 1);
+      }
       let editSurfaceRanges = pending.editSurface.ranges;
       let interactiveSafetyRanges = pending.interactiveSafetyRanges;
       let restoreRanges = pending.editSurface.restoreRanges;
@@ -552,7 +547,11 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
         ...sets,
         compiledRanges: subtractRanges(
           mapDocRanges(this.surfaceState.compiledRanges, update.changes),
-          editSurfaceRanges,
+          mergeDocRanges([
+            ...editSurfaceRanges,
+            ...interactiveSafetyRanges,
+            ...pending.editSurface.structuralLineClearRanges,
+          ]),
         ),
         semanticRevision: this.surfaceState.semanticRevision,
       };
@@ -1442,6 +1441,11 @@ function buildLiveMdAnalysis(
       tree,
       yieldCheck: options.yieldCheck,
     });
+    let surfaceInvalidationRanges = surfaceInvalidationForAnalysis(
+      state,
+      semanticAnalysis,
+      options,
+    );
     if (
       canReuseDirectProjectionForSelectionOnly(
         options.previous,
@@ -1457,7 +1461,7 @@ function buildLiveMdAnalysis(
         activeSourceRanges: semanticAnalysis.activeSourceRanges,
         pending: null,
         semanticTrace: semanticAnalysis.trace,
-        surfaceInvalidationRanges: [],
+        surfaceInvalidationRanges,
         sourceIslandLeaves: semanticAnalysis.sourceIslandLeaves,
         trace: semanticAnalysis.trace,
         tree,
@@ -1491,7 +1495,7 @@ function buildLiveMdAnalysis(
       revision: options.revision ?? options.previous?.revision ?? 0,
       semantic: semanticAnalysis.semantic,
       semanticTrace: trace,
-      surfaceInvalidationRanges: [],
+      surfaceInvalidationRanges,
       sourceIslandLeaves: semanticAnalysis.sourceIslandLeaves,
       trace,
       tree,
@@ -1509,11 +1513,52 @@ function buildLiveMdAnalysis(
     revision: options.revision ?? options.previous?.revision ?? 0,
     semantic: null,
     semanticTrace: null,
-    surfaceInvalidationRanges: [],
+    surfaceInvalidationRanges: null,
     sourceIslandLeaves: sourceIslandIndexFromLeaves([]),
     trace: emptyLiveMdLeafAnalysisTrace(),
     tree,
   };
+}
+
+function surfaceInvalidationForAnalysis(
+  state: EditorState,
+  semanticAnalysis: {
+    activeSourceRanges: readonly DocRange[];
+    semantic: NonNullable<LiveMdRuntimeState["semantic"]>;
+    transition?: LeafAnalysisCacheTransition | null;
+  },
+  options: BuildLiveMdAnalysisOptions,
+): readonly DocRange[] | null {
+  let previous = options.previous;
+  if (!previous?.semantic) return null;
+  let changes = options.transitionBase?.changes ?? options.transaction?.changes;
+  let previousActive = changes
+    ? mapDocRanges(previous.activeSourceRanges, changes)
+    : previous.activeSourceRanges;
+  let activeRanges = rangesEqual(previousActive, semanticAnalysis.activeSourceRanges)
+    ? []
+    : [...previousActive, ...semanticAnalysis.activeSourceRanges];
+  let transition = semanticAnalysis.transition;
+  if (
+    options.transitionBase &&
+    transition &&
+    !transition.fallback &&
+    !runtimeEpochsChanged(options.transitionBase.epochs, runtimeEpochs(state))
+  ) {
+    return mergeDocRanges([
+      ...(transition.mappedOldEffectRanges ?? []),
+      ...(transition.newEffectRanges ?? []),
+      ...activeRanges,
+    ]);
+  }
+  if (
+    options.transaction &&
+    !options.transaction.docChanged &&
+    previous.semantic.cache == semanticAnalysis.semantic.cache &&
+    !directProjectionInputsChanged(options.transaction.startState, state)
+  )
+    return mergeDocRanges(activeRanges);
+  return null;
 }
 
 function projectionCompileInput(
