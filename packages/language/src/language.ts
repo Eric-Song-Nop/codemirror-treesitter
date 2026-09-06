@@ -688,8 +688,11 @@ function parserForTree(tree: Tree) {
 
 function queryOptions(root: SyntaxNode, options: TreeSitterQueryOptions): TSQueryOptions {
   let queryOptions: TSQueryOptions = {};
-  if (options.from != null && options.from > root.from) queryOptions.startIndex = options.from;
-  if (options.to != null && options.to < queryNodeEnd(root)) queryOptions.endIndex = options.to;
+  // Native query index ranges use bytes, unlike node offsets and the public
+  // wrapper's UTF-16 code-unit ranges. The parser feeds UTF-16 to Tree-sitter,
+  // so each code unit (including each surrogate) occupies exactly two bytes.
+  if (options.from != null && options.from > root.from) queryOptions.startIndex = options.from * 2;
+  if (options.to != null && options.to < queryNodeEnd(root)) queryOptions.endIndex = options.to * 2;
   return queryOptions;
 }
 
