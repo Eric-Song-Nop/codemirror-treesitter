@@ -19,6 +19,40 @@ const source =
 const query = "(identifier) @name";
 
 describe("UTF-16 query ranges", () => {
+  it("keeps a zero upper bound empty without changing nonzero point queries", async () => {
+    let parser = await TreeSitterParser.load(javascriptWasm);
+    let tree = parser.parse(Text.of(source.split("\n")));
+    try {
+      for (let options of [{ to: 0 }, { from: 0, to: 0 }]) {
+        expect(queryTreeCaptures(tree, query, options)).toHaveLength(0);
+        expect(queryTreeMatches(tree, query, options)).toHaveLength(0);
+        expect(queryNodeCaptures(tree.topNode, query, options)).toHaveLength(0);
+        expect(queryNodeMatches(tree.topNode, query, options)).toHaveLength(0);
+      }
+      let point = source.indexOf("target") + 2;
+      let options = { from: point, to: point };
+      expect(queryTreeCaptures(tree, query, options).map((capture) => capture.node.text)).toEqual([
+        "target",
+      ]);
+      expect(
+        queryNodeCaptures(tree.topNode, query, options).map((capture) => capture.node.text),
+      ).toEqual(["target"]);
+      expect(
+        queryTreeMatches(tree, query, options).flatMap((match) =>
+          match.captures.map((capture) => capture.node.text),
+        ),
+      ).toEqual(["target"]);
+      expect(
+        queryNodeMatches(tree.topNode, query, options).flatMap((match) =>
+          match.captures.map((capture) => capture.node.text),
+        ),
+      ).toEqual(["target"]);
+    } finally {
+      __testDisposeWrappedTree(tree);
+      parser.clearQueryCache();
+    }
+  });
+
   it.each(["tree", "node"])(
     "bounds %s captures and matches in document coordinates",
     async (kind) => {

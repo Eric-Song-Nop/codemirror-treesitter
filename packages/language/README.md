@@ -29,6 +29,8 @@ parsers while keeping the public CodeMirror language surface.
 - Expose low-level Tree-sitter query helpers for cached query compilation and
   capture collection over wrapped trees and nodes. Public query `from`/`to`
   ranges use document UTF-16 offsets, converted to native byte ranges internally.
+  An explicit `to: 0` returns no results; equal nonzero bounds retain native
+  point-query behavior.
 - Maintain incremental parsing, parse scheduling, viewport-aware parsing, and
   syntax-tree availability helpers. The configured outer language metadata
   remains available while the initial syntax tree is pending. Edits that interrupt
