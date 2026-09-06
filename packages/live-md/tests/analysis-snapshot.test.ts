@@ -3410,6 +3410,53 @@ describe("LiveMD analysis snapshot", () => {
     }
   });
 
+  it("does not treat an offscreen prefix insertion as viewport scrolling", async () => {
+    let doc = Array.from(
+      { length: 160 },
+      (_, index) => `paragraph ${index} [link](https://example.com/${index}) **bold**`,
+    ).join("\n\n");
+    let view = await markdownAnalysisView(doc, "paragraph 0");
+    let restore = overrideViewportForTest(view, () => {
+      let from = view.state.doc.toString().indexOf("paragraph 80");
+      return { from, to: view.state.doc.lineAt(from).to };
+    });
+    try {
+      __testRefreshLiveMdSurface(view);
+      // Reset refresh trace without changing viewport or compiled coverage.
+      __testRefreshLiveMdSurfacePreservingState(view);
+      view.dispatch({ changes: { from: 0, insert: "new " } });
+      await __testFlushLiveMdAnalysis(view);
+      let after = __testLiveMdAnalysis(view);
+      expect(after.pending).toBeNull();
+      expect(after.trace.surfaceCompileCalls).toBe(0);
+      expect(after.trace.surfaceRecordsVisited).toBe(0);
+      let expected = __testBuildCanonicalLiveMdAnalysis(view.state);
+      let range = view.viewport;
+      expect(
+        clipCanonicalProjectionToRanges(
+          canonicalProjectionFromSets(
+            view.state,
+            after.surfaceDecorations,
+            after.surfaceAtomicRanges,
+          ),
+          [range],
+        ),
+      ).toEqual(
+        clipCanonicalProjectionToRanges(
+          canonicalProjectionFromSets(
+            view.state,
+            expected.surfaceDecorations,
+            expected.surfaceAtomicRanges,
+          ),
+          [range],
+        ),
+      );
+    } finally {
+      restore();
+      view.destroy();
+    }
+  });
+
   it("patches local edits and active islands without rebuilding unrelated surface records", async () => {
     let doc = Array.from(
       { length: 100 },

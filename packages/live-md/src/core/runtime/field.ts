@@ -581,6 +581,10 @@ const liveMdSurfacePlugin = ViewPlugin.fromClass(
     private mapPendingSurface(update: ViewUpdate, analysis: LiveMdRuntimeState) {
       let pending = analysis.pending;
       if (!pending) return;
+      // Document shifts are not scrolling and must not trigger read-ahead.
+      if (this.lastViewportFrom != null) {
+        this.lastViewportFrom = update.changes.mapPos(this.lastViewportFrom, 1);
+      }
       let editSurfaceRanges = pending.editSurface.ranges;
       let interactiveSafetyRanges = pending.interactiveSafetyRanges;
       let restoreRanges = pending.editSurface.restoreRanges;
