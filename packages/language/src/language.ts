@@ -688,12 +688,18 @@ function parserForTree(tree: Tree) {
 
 function queryOptions(root: SyntaxNode, options: TreeSitterQueryOptions): TSQueryOptions {
   let queryOptions: TSQueryOptions = {};
-  if (options.from != null && options.from > root.from) queryOptions.startIndex = options.from;
-  if (options.to != null && options.to < queryNodeEnd(root)) queryOptions.endIndex = options.to;
+  // Native query index ranges use bytes, unlike node offsets and the public
+  // wrapper's UTF-16 code-unit ranges. The parser feeds UTF-16 to Tree-sitter,
+  // so each code unit (including each surrogate) occupies exactly two bytes.
+  if (options.from != null && options.from > root.from) queryOptions.startIndex = options.from * 2;
+  if (options.to != null && options.to < queryNodeEnd(root)) queryOptions.endIndex = options.to * 2;
   return queryOptions;
 }
 
 function queryRangeOverlapsNode(root: SyntaxNode, options: TreeSitterQueryOptions) {
+  // Native end byte 0 means unbounded. An explicit public zero upper bound
+  // contains no document content and must not accidentally query the whole tree.
+  if (options.to === 0) return false;
   let from = options.from ?? 0;
   let to = options.to ?? Number.POSITIVE_INFINITY;
   return from <= queryNodeEnd(root) && to >= root.from;

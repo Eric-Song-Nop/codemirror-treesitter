@@ -27,7 +27,10 @@ parsers while keeping the public CodeMirror language surface.
 - Wrap Tree-sitter nodes and cursors with CodeMirror-facing `Tree`,
   `SyntaxNode`, `NodeType`, `NodeProp`, and cursor APIs.
 - Expose low-level Tree-sitter query helpers for cached query compilation and
-  capture collection over wrapped trees and nodes.
+  capture collection over wrapped trees and nodes. Public query `from`/`to`
+  ranges use document UTF-16 offsets, converted to native byte ranges internally.
+  An explicit `to: 0` returns no results; equal nonzero bounds retain native
+  point-query behavior.
 - Maintain incremental parsing, parse scheduling, viewport-aware parsing, and
   syntax-tree availability helpers. Edits that interrupt root or nested parsing
   retain the edited complete tree as their incremental base and accumulate dirty
