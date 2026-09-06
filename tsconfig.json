@@ -26,7 +26,7 @@
         "./packages/live-md-theme-gruvbox/src/index.ts"
       ],
       "@codemirror-treesitter/live-md-loro": ["./packages/live-md-loro/src/index.ts"],
-      "loro-codemirror": ["./node_modules/loro-codemirror/src/index.ts"]
+      "loro-codemirror": ["./vendor/loro-codemirror/src/index.ts"]
     }
   }
 }

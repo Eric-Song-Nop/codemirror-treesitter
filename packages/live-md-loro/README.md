@@ -30,8 +30,8 @@ plugin and extension helpers needed to bind a LiveMD editor to a `LoroDoc`.
 - Project direct local Loro edits marked by
   `commitLiveMdLoroExternalEdit(...)` into every bound editor without writing
   the resulting CodeMirror transaction back into Loro.
-- Drain the initial Loro dispatch guard when the editor document already
-  matches the Loro document, avoiding a redundant initial replacement.
+- Synchronize ordinary local edits across views sharing one document and skip
+  unrelated containers in mixed imports, without echo commits.
 
 ## Public Entry
 
@@ -84,10 +84,10 @@ returned native `LoroText` handles are caller-owned and should be freed after
 use.
 
 Use `commitLiveMdLoroExternalEdit(...)` when an application actor edits the
-bound `LoroDoc` directly rather than through CodeMirror. The marker lets every
-bound view apply the Loro diff as a remote CodeMirror transaction while
-preventing an echo commit. Ordinary editor transactions should continue to call
-`doc.commit()` through the collaboration extension.
+bound `LoroDoc` directly rather than through CodeMirror. Every bound view applies direct local Loro diffs as remote CodeMirror
+transactions without echo commits, including ordinary `doc.commit()` calls.
+The helper retains the application external-edit origin. Editor-originated
+commits use a per-view origin so only the originating view skips projection.
 
 ## Web Component Usage
 
@@ -123,8 +123,9 @@ editing.
 ## Current Implementation Notes
 
 - `src/index.ts` is intentionally small: it wraps `LoroExtensions`, resolves
-  the LiveMD text container, exports undo/redo, and drains the initial
-  dispatch guard when editor and Loro content already match.
+  the LiveMD text container, exports undo/redo, and marks synchronized
+  transactions remote. The vendored binding uses an annotation for initial
+  projection and cancels initialization after view destruction.
 - String-key collaboration getters release every fresh native `LoroText`
   wrapper after its synchronous upstream use. Custom getter results remain
   caller-owned and are never freed by this package.
@@ -140,3 +141,18 @@ vp run @codemirror-treesitter/live-md-loro#check
 vp run @codemirror-treesitter/live-md-loro#test
 vp run @codemirror-treesitter/live-md-loro#build
 ```
+
+The root override resolves `loro-codemirror` to `vendor/loro-codemirror`.
+Its upstream provenance and local fixes are documented there. Vite source aliases
+and the bundled package build both consume that same maintained source.
+
+Remote presence is mapped with each text transaction, then refreshed from Loro
+cursor identities after imports, local edits, and checkout. Refresh work is
+coalesced and cancelled when the view closes. Undo/redo cursor restoration yields
+to newer local selections or edits; closing a view cancels its queued commands
+and restoration. Multiple views may share an UndoManager without one view's
+teardown removing another view's callbacks.
+
+Undo metadata is captured from the originating transaction before its Loro commit,
+including when another bound view was selected most recently. Batched CodeMirror
+updates synchronize each local edit while skipping already-synchronized transactions.

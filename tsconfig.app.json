@@ -28,7 +28,7 @@
       "@codemirror-treesitter/merge": ["./packages/merge/src/index.ts"],
       "@codemirror-treesitter/theme-palettes": ["./packages/theme-palettes/src/index.ts"],
       "@codemirror-treesitter/theme-gruvbox": ["./packages/theme-gruvbox/src/index.ts"],
-      "loro-codemirror": ["./node_modules/loro-codemirror/src/index.ts"]
+      "loro-codemirror": ["./vendor/loro-codemirror/src/index.ts"]
     },
     "types": ["vite-plus/client"],
     "noFallthroughCasesInSwitch": true

@@ -83,6 +83,8 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `packages/live-md-loro`: Optional Loro collaboration bindings for LiveMD.
 - `packages/opendal-wasm-browser`: Experimental browser WASM wrapper for
   OpenDAL-backed cloud workspace storage.
+- `vendor/loro-codemirror`: Maintained MIT-licensed Loro binding source; the root
+  override and LiveMD Loro bundled build use it for synchronization fixes.
 - `vendor/web-tree-sitter`: Vendored `web-tree-sitter` runtime package used by
   the root override while the local cursor range navigation binding patch is
   needed.
