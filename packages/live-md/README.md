@@ -380,6 +380,10 @@ Cloudflare-specific code, and concrete theme packages.
   ordinary edits. Custom query-driven Markdown features run during per-leaf
   semantic analysis and project through the same direct and surface layers as
   built-in descriptors.
+- Visible surface projections retain mapped compiled coverage across edits.
+  Semantic commits invalidate changed effect ranges and changed active source
+  islands; pending interaction and source-reveal holes are compiled again on
+  commit. Renderer and parser context changes still require a full refresh.
 - The changed-leaf harness remains a range-local oracle check on top of the
   production block cursor. Its result is `Gate B: PASS` for range-local
   changed-leaf discovery: local changed leaves match the full-walk oracle, and
