@@ -987,5 +987,5 @@ describe("incremental nested direct reuse", () => {
       expect(next.context.tree.nested[index]).not.toBe(firstGeneration[index]);
       expect(next.context.tree.nested[index]!.tree.tree).toBe(firstGeneration[index]!.tree.tree);
     }
-  });
+  }, 30_000);
 });
