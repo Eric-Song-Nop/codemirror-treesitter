@@ -152,3 +152,7 @@ coalesced and cancelled when the view closes. Undo/redo cursor restoration yield
 to newer local selections or edits; closing a view cancels its queued commands
 and restoration. Multiple views may share an UndoManager without one view's
 teardown removing another view's callbacks.
+
+Undo metadata is captured from the originating transaction before its Loro commit,
+including when another bound view was selected most recently. Batched CodeMirror
+updates synchronize each local edit while skipping already-synchronized transactions.

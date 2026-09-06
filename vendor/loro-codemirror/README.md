@@ -29,3 +29,8 @@ When refreshing upstream, retain these fixes until equivalent coverage passes.
 The bundled LiveMD Loro package includes `LICENSE.loro-codemirror` for attribution.
 Declaration generation may emit ignored `src/*.d.ts` artifacts, as it does for
 workspace package sources; those files are not maintained source.
+
+- Capture undo ownership and the source transaction's starting selection before
+  writing a local edit into Loro, so another view cannot supply its cursor metadata.
+- Process local transactions individually in batched CodeMirror updates, even
+  when the same update also contains an already-synchronized transaction.

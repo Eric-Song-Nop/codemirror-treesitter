@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { EditorView } from "@codemirror/view";
 import { StateField, Transaction } from "@codemirror/state";
 import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
 import { loroSyncAnnotation } from "loro-codemirror/sync";
@@ -537,6 +538,56 @@ describe("liveMdLoroCollaboration", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(first.value).toBe("new base");
     expect(first.view.state.selection.main.head).toBe(2);
+  });
+
+  it("captures undo metadata from the source view before a combined edit and selection", async () => {
+    let doc = ownNative(new LoroDoc());
+    let text = ownNative(doc.getText("markdown"));
+    text.insert(0, "abcdef");
+    doc.commit();
+    let manager = ownNative(new UndoManager(doc, { mergeInterval: 0 }));
+    let pushed: number[][] = [];
+    let setOnPush = manager.setOnPush.bind(manager);
+    vi.spyOn(manager, "setOnPush").mockImplementation((callback) =>
+      setOnPush(
+        callback &&
+          ((...args) => {
+            let result = callback(...args);
+            pushed.push(result.cursors.map((cursor) => doc.getCursorPos(cursor)!.offset));
+            return result;
+          }),
+      ),
+    );
+    let extension = liveMdLoroCollaboration({ doc, undoManager: manager });
+    let first = new EditorView({ doc: "abcdef", extensions: [extension], parent: document.body });
+    ownResource(first, () => first.destroy());
+    let second = new EditorView({ doc: "abcdef", extensions: [extension], parent: document.body });
+    ownResource(second, () => second.destroy());
+    await flushMicrotasks();
+    first.dispatch({ selection: { anchor: 2 } });
+    second.dispatch({ selection: { anchor: 5 } });
+    first.dispatch({ changes: { from: 2, insert: "X" }, selection: { anchor: 3 } });
+    expect(pushed).toEqual([[3, 3]]);
+    liveMdLoroUndo(first);
+    await flushMicrotasks();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(first.state.doc.toString()).toBe("abcdef");
+    expect(second.state.doc.toString()).toBe("abcdef");
+    expect(first.state.selection.main.head).toBe(2);
+  });
+
+  it("keeps local edits when a ViewUpdate also contains a synchronized transaction", async () => {
+    let doc = ownNative(new LoroDoc());
+    let text = ownNative(doc.getText("markdown"));
+    let view = new EditorView({ extensions: liveMdLoroCollaboration({ doc }) });
+    ownResource(view, () => view.destroy());
+    await flushMicrotasks();
+    let synchronized = view.state.update({ annotations: loroSyncAnnotation.of("undo") });
+    let local = synchronized.state.update({ changes: { from: 0, insert: "keep" } });
+    view.update([synchronized, local]);
+    expect(view.state.doc.toString()).toBe("keep");
+    expect(text.toString()).toBe("keep");
   });
 
   it("exposes reusable text getter functions", () => {
