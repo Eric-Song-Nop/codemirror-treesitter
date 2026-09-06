@@ -407,3 +407,24 @@ The LiveMD test suite covers web component behavior, readonly commands,
 leaf-local analysis equivalence against the canonical semantic oracle,
 feature registration, code fences, LaTeX, Mermaid, newline editing, Markdown
 HTML rendering, and style installation.
+
+### Code fence grammar discovery
+
+The editor discovers code-fence languages from completed Markdown syntax, including
+fences nested in blockquotes and lists. Syntax changed ranges limit subsequent
+queries, and `ready` waits for the initial encountered grammars. Indented code and
+fence contents cannot suppress loading of a later real fence.
+
+### Incremental code fence parsing
+
+Attached editor surfaces retain up to 16 fence parser sessions, keyed by mapped
+content positions independently of render-result keys. Additional visible requests
+wait in a coalesced metadata queue; pending native sessions are never evicted to
+admit later fences, and unfinished work rotates between turns. Editing a fence applies a
+minimal source change to its previous tree and supplies that tree to Tree-sitter.
+Theme changes reuse the completed tree. Parsing, nested grammar wrapping, and
+highlight windows yield and resume under a shared per-surface time budget. Native
+highlight queries use bounded UTF-16 byte ranges and skip unrelated nested trees; partial
+or stale results are not published. The session owner cancels stale work on edits
+and releases native resources on eviction, pruning, and view destruction. Unattached
+state-only render oracles use disposable parsing resources.
