@@ -1177,7 +1177,7 @@ export class Language {
       language.of(this),
       EditorState.languageData.of((state, pos, side) => {
         let top = topNodeAt(state, pos, side);
-        let data = top.type.prop(languageDataProp);
+        let data = languageDataFacetAt(state, top);
         if (!data) return [];
         let base = state.facet(data);
         let sub = top.type.prop(sublanguageProp);
@@ -1197,7 +1197,7 @@ export class Language {
   }
 
   isActiveAt(state: EditorState, pos: number, side: -1 | 0 | 1 = -1) {
-    return topNodeAt(state, pos, side).type.prop(languageDataProp) == this.data;
+    return languageDataFacetAt(state, topNodeAt(state, pos, side)) == this.data;
   }
 
   findRegions(state: EditorState) {
@@ -1231,6 +1231,16 @@ function topNodeAt(state: EditorState, pos: number, side: -1 | 0 | 1) {
   let tree = syntaxTree(state);
   return (
     (topLang && topLang.allowsNesting ? tree.nestedAt(pos, side) : null)?.topNode ?? tree.topNode
+  );
+}
+
+function languageDataFacetAt(state: EditorState, top: SyntaxNode) {
+  // The initial parse may yield before publishing any tree. The configured
+  // outer language is still known, so comments and other metadata must not
+  // disappear while syntax is pending. Published nested trees remain decisive.
+  return (
+    top.type.prop(languageDataProp) ??
+    (top.tree == Tree.empty ? state.facet(language)?.data : undefined)
   );
 }
 
