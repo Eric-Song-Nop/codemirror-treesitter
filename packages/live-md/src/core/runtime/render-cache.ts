@@ -258,28 +258,19 @@ export function cachedLiveMdCodeFenceHighlightResult(
 
   let owner = codeFenceSessionOwners.get(cache);
   if (owner && range) {
-    let session = owner.sessions.get(range.from);
-    if (session && session.parser != parser) {
-      session.dispose();
-      owner.sessions.delete(range.from);
-      session = undefined;
+    let request = owner.requests.get(range.from);
+    if (!request || request.key != key || request.source != source) {
+      request = { key, source, parser, highlighters, range, trace };
+      owner.requests.set(range.from, request);
     }
-    if (!session) {
-      while (owner.sessions.size >= 16) {
-        let first = owner.sessions.entries().next().value!;
-        first[1].dispose();
-        owner.sessions.delete(first[0]);
+    let session = admitCodeFenceRequest(owner, request);
+    if (session) {
+      session.work(() => performance.now() >= owner.deadline);
+      if (session.result) {
+        cache.codeFenceHighlights.set(key, session.result);
+        owner.requests.delete(range.from);
+        return session.result;
       }
-      session = new LiveMdCodeFenceSession(parser, range, trace);
-    }
-    session.range = range;
-    owner.sessions.delete(range.from);
-    owner.sessions.set(range.from, session);
-    session.request(source, key, highlighters, trace);
-    session.work(() => performance.now() >= owner.deadline);
-    if (session.result) {
-      cache.codeFenceHighlights.set(key, session.result);
-      return session.result;
     }
     scheduleCodeFenceSessions(owner);
     return { resultKey: hashString(""), source, spans: [] };
@@ -291,7 +282,22 @@ export function cachedLiveMdCodeFenceHighlightResult(
   return result;
 }
 
+type CodeFenceRequest = {
+  key: string;
+  source: string;
+  parser: TreeSitterParser;
+  highlighters: readonly Highlighter[];
+  range: DocRange;
+  trace: LiveMdLeafAnalysisTrace;
+};
+
+const codeFenceNativeSessionLimit = 16;
+
 type CodeFenceSessionOwner = {
+  cache: LiveMdRenderCache;
+  // Coalesced metadata only: at most one request per current surface fence.
+  // Pending native sessions are never evicted to admit a later request.
+  requests: Map<number, CodeFenceRequest>;
   sessions: Map<number, LiveMdCodeFenceSession>;
   callback: (ranges: readonly DocRange[], trace: LiveMdLeafAnalysisTrace) => void;
   asyncTrace: LiveMdLeafAnalysisTrace;
@@ -310,6 +316,8 @@ export function connectLiveMdCodeFenceSessions(
     return;
   }
   codeFenceSessionOwners.set(cache, {
+    cache,
+    requests: new Map(),
     sessions: new Map(),
     asyncTrace: emptyLiveMdLeafAnalysisTrace(),
     callback,
@@ -324,6 +332,7 @@ export function disposeLiveMdCodeFenceSessions(cache: LiveMdRenderCache) {
   if (owner.timer != null) clearTimeout(owner.timer);
   for (let session of owner.sessions.values()) session.dispose();
   owner.sessions.clear();
+  owner.requests.clear();
   codeFenceSessionOwners.delete(cache);
 }
 
@@ -345,6 +354,17 @@ export function mapLiveMdCodeFenceSessions(cache: LiveMdRenderCache, changes: Ch
     mapped.set(session.range.from, session);
   }
   owner.sessions = mapped;
+  let requests = new Map<number, CodeFenceRequest>();
+  for (let request of owner.requests.values()) {
+    // Changed requests must be rediscovered from the next committed semantics.
+    if (changes.touchesRange(request.range.from, request.range.to)) continue;
+    let range = {
+      from: changes.mapPos(request.range.from, -1),
+      to: changes.mapPos(request.range.to, 1),
+    };
+    requests.set(range.from, { ...request, range });
+  }
+  owner.requests = requests;
   owner.deadline = performance.now() + 4;
 }
 
@@ -356,23 +376,49 @@ export function pruneLiveMdCodeFenceSessions(
 ) {
   let owner = codeFenceSessionOwners.get(cache);
   if (!owner) return;
-  for (let [position, session] of owner.sessions) {
-    let node = tree?.resolve(session.range.from, 1);
+  let retain = (range: DocRange) => {
+    let node = tree?.resolve(range.from, 1);
     while (node && node.name != "fenced_code_block") node = node.parent ?? undefined;
-    if (
+    return (
       (!tree || node) &&
-      ranges.some((range) => range.from <= session.range.to && range.to >= session.range.from)
-    )
-      continue;
+      ranges.some((visible) => visible.from <= range.to && visible.to >= range.from)
+    );
+  };
+  for (let [position, session] of owner.sessions) {
+    if (retain(session.range)) continue;
     session.dispose();
     owner.sessions.delete(position);
+  }
+  for (let [position, request] of owner.requests) {
+    if (!retain(request.range)) owner.requests.delete(position);
   }
 }
 
 export function liveMdCodeFenceSessionsPending(cache: LiveMdRenderCache) {
-  return Array.from(codeFenceSessionOwners.get(cache)?.sessions.values() ?? []).some(
-    (session) => session.pending,
-  );
+  return !!codeFenceSessionOwners.get(cache)?.requests.size;
+}
+
+function admitCodeFenceRequest(owner: CodeFenceSessionOwner, request: CodeFenceRequest) {
+  let position = request.range.from;
+  let session = owner.sessions.get(position);
+  if (session && session.parser != request.parser) {
+    session.dispose();
+    owner.sessions.delete(position);
+    session = undefined;
+  }
+  if (!session) {
+    if (owner.sessions.size >= codeFenceNativeSessionLimit) {
+      let reusable = Array.from(owner.sessions).find(([, candidate]) => !candidate.pending);
+      if (!reusable) return null;
+      reusable[1].dispose();
+      owner.sessions.delete(reusable[0]);
+    }
+    session = new LiveMdCodeFenceSession(request.parser, request.range, request.trace);
+    owner.sessions.set(position, session);
+  }
+  session.range = request.range;
+  session.request(request.source, request.key, request.highlighters, request.trace);
+  return session;
 }
 
 function scheduleCodeFenceSessions(owner: CodeFenceSessionOwner) {
@@ -381,24 +427,42 @@ function scheduleCodeFenceSessions(owner: CodeFenceSessionOwner) {
     owner.timer = null;
     owner.deadline = performance.now() + 6;
     let completed: DocRange[] = [];
-    for (let session of owner.sessions.values()) {
-      if (!session.pending) continue;
+    // FIFO admission also covers requests that have no native session yet.
+    for (let [position, request] of Array.from(owner.requests)) {
       if (performance.now() >= owner.deadline) break;
-      let before = session.traceSnapshot();
+      let before = { ...request.trace };
+      let session = admitCodeFenceRequest(owner, request);
+      if (!session) continue;
       let done = session.work(() => performance.now() >= owner.deadline);
-      let after = session.traceSnapshot();
-      for (let key of Object.keys(before) as (keyof typeof before)[]) {
-        owner.asyncTrace[key] += after[key] - before[key];
+      for (let key of [
+        "heavyRenderStarts",
+        "codeFenceParses",
+        "codeFenceParserSessionsCreated",
+        "codeFenceParserSessionsDeleted",
+        "codeFenceTreesCreated",
+        "codeFenceTreesDeleted",
+      ] as const) {
+        owner.asyncTrace[key] += request.trace[key] - before[key];
       }
-      if (done) completed.push(session.range);
+      if (done && session.result) {
+        // Publish into the result cache before another request can evict this
+        // completed native session and before the surface refresh callback.
+        owner.cache.codeFenceHighlights.set(request.key, session.result);
+        owner.requests.delete(position);
+        completed.push(session.range);
+      } else {
+        // Rotate unfinished work behind its peers. One large fence must not
+        // consume every turn while shorter visible fences wait indefinitely.
+        owner.requests.delete(position);
+        owner.requests.set(position, request);
+      }
     }
     if (completed.length) {
       let trace = owner.asyncTrace;
       owner.asyncTrace = emptyLiveMdLeafAnalysisTrace();
       owner.callback(completed, trace);
     }
-    if (Array.from(owner.sessions.values()).some((session) => session.pending))
-      scheduleCodeFenceSessions(owner);
+    if (owner.requests.size) scheduleCodeFenceSessions(owner);
   }, 0);
 }
 

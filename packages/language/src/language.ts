@@ -303,9 +303,13 @@ export class TreeSitterParser implements TreeConfig {
   highlightTags(tree: Tree, from: number, to: number): Map<number, readonly Tag[]> | null {
     if (!this.highlightQuery || !tree.tree) return null;
     let result = new Map<number, Tag[]>();
+    if (from >= to) return result;
     let root = tree.tree.rootNode;
+    if (to <= root.startIndex || from >= root.endIndex) return result;
     let captures = this.highlightQuery
-      .captures(root)
+      // Query range indices cross the WASM boundary as UTF-16 byte offsets,
+      // unlike the code-unit indices exposed by syntax nodes and CodeMirror.
+      .captures(root, { startIndex: from * 2, endIndex: to * 2 })
       .filter((capture) => capture.node.endIndex >= from && capture.node.startIndex <= to);
     for (let capture of captures) {
       let tags = tagsForCapture(capture.name);

@@ -12,6 +12,7 @@ import {
   createLiveMdRenderCache,
   disposeLiveMdCodeFenceSessions,
   mapLiveMdCodeFenceSessions,
+  liveMdCodeFenceSessionsPending,
   pruneLiveMdCodeFenceSessions,
 } from "../src/core/runtime/render-cache.js";
 
@@ -124,6 +125,102 @@ describe("bounded incremental code-fence sessions", () => {
       );
       expect(session.result!.spans).toEqual(oracle.spans);
     } finally {
+      session.dispose();
+    }
+  });
+
+  it("queues every visible fence beyond the native session limit without dropping work", async () => {
+    let { parser, deleted } = await trackedLanguage();
+    let parse = parser.parseWith.bind(parser);
+    let create = parser.createParser.bind(parser);
+    let blocked = true,
+      blockFirst = true,
+      created = 0,
+      peak = 0;
+    let firstNative: ReturnType<typeof parser.createParser> | null = null;
+    parser.createParser = () => {
+      created++;
+      peak = Math.max(peak, created - deleted());
+      let native = create();
+      firstNative ??= native;
+      return native;
+    };
+    parser.parseWith = (...args) => {
+      if (blocked) return null;
+      if (blockFirst && args[0] == firstNative) {
+        while (!args[3]!()) {
+          /* Simulate a native parse using this turn's budget. */
+        }
+        return null;
+      }
+      return parse(...args);
+    };
+    let cache = createLiveMdRenderCache();
+    let trace = emptyLiveMdLeafAnalysisTrace();
+    let completed = new Set<number>();
+    connectLiveMdCodeFenceSessions(cache, (ranges) => {
+      for (let range of ranges) completed.add(range.from);
+    });
+    let request = (index: number) =>
+      cachedLiveMdCodeFenceHighlightResult(
+        cache,
+        trace,
+        "let a = 3;",
+        new Map([["ts", parser]]),
+        highlighters,
+        `queued-${index}`,
+        "ts",
+        { from: index * 20, to: index * 20 + 10 },
+      );
+    try {
+      for (let index = 0; index < 40; index++) expect(request(index).spans).toEqual([]);
+      expect(created).toBe(16);
+      expect(deleted()).toBe(0);
+      expect(liveMdCodeFenceSessionsPending(cache)).toBe(true);
+      blocked = false;
+      for (let turn = 0; turn < 500 && completed.size < 39; turn++) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      expect(completed.size).toBe(39);
+      expect(liveMdCodeFenceSessionsPending(cache)).toBe(true);
+      blockFirst = false;
+      for (let turn = 0; turn < 500 && liveMdCodeFenceSessionsPending(cache); turn++) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      expect(liveMdCodeFenceSessionsPending(cache)).toBe(false);
+      expect(completed.size).toBe(40);
+      for (let index = 0; index < 40; index++)
+        expect(request(index).spans.length).toBeGreaterThan(0);
+      expect(peak).toBeLessThanOrEqual(16);
+    } finally {
+      disposeLiveMdCodeFenceSessions(cache);
+    }
+    expect(deleted()).toBe(created);
+  });
+
+  it("bounds each native highlight query to the current source window", async () => {
+    let { parser } = await trackedLanguage("javascript");
+    let source = "const value = 123;\n".repeat(3000);
+    let trace = emptyLiveMdLeafAnalysisTrace();
+    let session = new LiveMdCodeFenceSession(parser, { from: 0, to: source.length }, trace);
+    let query = parser.highlightQuery!;
+    let captures = query.captures.bind(query);
+    let counts: number[] = [];
+    let spy = vi.spyOn(query, "captures").mockImplementation((node, options) => {
+      expect(options?.startIndex).toBeTypeOf("number");
+      expect(options?.endIndex).toBeTypeOf("number");
+      expect(options!.endIndex! - options!.startIndex!).toBeLessThanOrEqual(8192 * 2);
+      let result = captures(node, options);
+      counts.push(result.length);
+      return result;
+    });
+    try {
+      session.request(source, "windowed", highlighters, trace);
+      finish(session);
+      expect(counts.length).toBeGreaterThan(1);
+      expect(Math.max(...counts)).toBeLessThan(counts.reduce((sum, value) => sum + value, 0) / 3);
+    } finally {
+      spy.mockRestore();
       session.dispose();
     }
   });

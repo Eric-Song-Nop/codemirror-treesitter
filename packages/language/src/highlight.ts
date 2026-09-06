@@ -292,7 +292,10 @@ function collectQueryTags(
     let tags = current.config?.highlightTags?.(current, from, to);
     if (tags) result.set(current, tags);
     for (let index = current.nested.length - 1; index >= 0; index--) {
-      pending.push(current.nested[index]!.tree);
+      let nested = current.nested[index]!;
+      if (nested.ranges.some((range) => range.from < to && range.to > from)) {
+        pending.push(nested.tree);
+      }
     }
   }
   return result;

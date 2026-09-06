@@ -143,16 +143,6 @@ export class LiveMdCodeFenceSession {
     }
   }
 
-  traceSnapshot() {
-    return {
-      codeFenceParses: this.trace.codeFenceParses,
-      codeFenceParserSessionsCreated: this.trace.codeFenceParserSessionsCreated,
-      codeFenceParserSessionsDeleted: this.trace.codeFenceParserSessionsDeleted,
-      codeFenceTreesCreated: this.trace.codeFenceTreesCreated,
-      codeFenceTreesDeleted: this.trace.codeFenceTreesDeleted,
-    };
-  }
-
   cancel() {
     this.nativeParser.reset();
     let builder = this.builder;
