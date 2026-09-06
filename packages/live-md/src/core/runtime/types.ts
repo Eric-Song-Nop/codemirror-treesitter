@@ -51,7 +51,8 @@ export type LiveMdRuntimeState = {
   revision: number;
   semantic: LiveMdSemanticState | null;
   semanticTrace: LiveMdSemanticTrace | null;
-  surfaceInvalidationRanges: readonly DocRange[];
+  /** null requires a full rebuild; an empty list preserves the mapped surface. */
+  surfaceInvalidationRanges: readonly DocRange[] | null;
   sourceIslandLeaves: SourceIslandIndex;
   trace: LiveMdLeafAnalysisTrace;
   tree: Tree;
