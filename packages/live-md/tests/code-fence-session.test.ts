@@ -257,13 +257,20 @@ describe("bounded incremental code-fence sessions", () => {
         { from, to: from + source.length },
       );
     try {
+      // Initial parsing is intentionally suspended. The retained tree only
+      // exists after the scheduled work completes, regardless of CPU speed.
+      parse.mockImplementationOnce(() => null);
       request(10, "let a = 1;", "initial");
+      expect(liveMdCodeFenceSessionsPending(cache)).toBe(true);
+      await waitForFenceRequests(cache);
       mapLiveMdCodeFenceSessions(cache, ChangeSet.of({ from: 0, insert: "before" }, 1000));
       request(16, "let a = 2;", "edited");
+      await waitForFenceRequests(cache);
       expect(parse.mock.calls.at(-1)![2]).not.toBeNull();
       pruneLiveMdCodeFenceSessions(cache, [{ from: 500, to: 1000 }]);
       expect(deleted()).toBe(1);
       for (let index = 0; index < 17; index++) request(index * 20, "let a = 3;", `fence-${index}`);
+      await waitForFenceRequests(cache);
       expect(deleted()).toBe(2);
     } finally {
       disposeLiveMdCodeFenceSessions(cache);
@@ -271,3 +278,10 @@ describe("bounded incremental code-fence sessions", () => {
     expect(deleted()).toBe(18);
   });
 });
+
+async function waitForFenceRequests(cache: ReturnType<typeof createLiveMdRenderCache>) {
+  for (let turn = 0; turn < 1000 && liveMdCodeFenceSessionsPending(cache); turn++) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  expect(liveMdCodeFenceSessionsPending(cache)).toBe(false);
+}
