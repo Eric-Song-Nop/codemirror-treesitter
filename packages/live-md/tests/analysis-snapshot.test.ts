@@ -21,6 +21,7 @@ import {
   Language,
   syntaxHighlighting,
   syntaxHighlighters,
+  syntaxTreeAvailable,
   tags as t,
   Tree,
   type DocRange,
@@ -92,6 +93,7 @@ import {
 import { liveMdCompositeEpoch, liveMdValueEpoch } from "../src/core/runtime/epochs.js";
 import { liveMdLinkBaseUrl, liveMdLinkInteractions, liveMdLinkOpen } from "../src/core/links.js";
 import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
+import { loadMarkdownParserService as loadLiveMdMarkdownParserService } from "@codemirror-treesitter/language-data/live-md";
 
 let locationDescriptor: PropertyDescriptor | undefined;
 
@@ -4045,67 +4047,95 @@ describe("LiveMD analysis snapshot", () => {
     expect(secondKeywordRanges.some((range) => rangesOverlap(range, firstRange))).toBe(false);
   });
 
-  it("verifies large code fence highlight cache hits against the source text", async () => {
-    let source = Array.from(
-      { length: 1200 },
-      (_value, index) => `let value${index} = ${index};`,
-    ).join("\n");
-    let doc = `\`\`\`ts\n${source}\n\`\`\`\n`;
-    let parseCalls = 0;
-    let languages = new Map(await loadCodeFenceLanguages());
-    let tsParser = languages.get("ts");
-    if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
-    let trackedParser = Object.create(tsParser) as typeof tsParser;
-    trackedParser.parseWith = (...args: Parameters<typeof tsParser.parseWith>) => {
-      parseCalls++;
-      return tsParser.parseWith(...args);
-    };
-    languages.set("ts", trackedParser);
+  it.each([false, true])(
+    "verifies large code fence cache hits after delayed initial parsing: %s",
+    async (delayInitialParse) => {
+      let source = Array.from(
+        { length: 1200 },
+        (_value, index) => `let value${index} = ${index};`,
+      ).join("\n");
+      let doc = `\`\`\`ts\n${source}\n\`\`\`\n`;
+      let parseCalls = 0;
+      let languages = new Map(await loadCodeFenceLanguages());
+      let tsParser = languages.get("ts");
+      if (!tsParser) throw new Error("TypeScript code fence parser is unavailable");
+      let trackedParser = Object.create(tsParser) as typeof tsParser;
+      trackedParser.parseWith = (...args: Parameters<typeof tsParser.parseWith>) => {
+        parseCalls++;
+        return tsParser.parseWith(...args);
+      };
+      languages.set("ts", trackedParser);
 
-    let state = await markdownAnalysisState(doc, "", [
-      liveMdCodeFenceHighlighting(testLightCodeFenceHighlightStyle),
-    ]);
-    state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
-    let analysis = __testLiveMdAnalysis({ state } as EditorView);
-    if (!analysis.semantic) throw new Error("Expected semantic cache for code fence cache test");
-    analysis.renderCache.codeFenceHighlights.clear();
-    parseCalls = 0;
-    let contentRange = { from: doc.indexOf(source), to: doc.indexOf(source) + source.length };
+      let markdown = await loadMarkdownExtension();
+      let service = await loadLiveMdMarkdownParserService();
+      let initialParse = delayInitialParse
+        ? vi.spyOn(service.blockParser, "parseWith").mockReturnValue(null)
+        : null;
+      let state: EditorState;
+      try {
+        state = EditorState.create({
+          doc,
+          extensions: [
+            markdown,
+            codeFenceLanguagesField,
+            liveMdCodeFenceHighlighting(testLightCodeFenceHighlightStyle),
+            liveMdAnalysis,
+          ],
+        });
+        if (delayInitialParse) expect(syntaxTreeAvailable(state)).toBe(false);
+      } finally {
+        initialParse?.mockRestore();
+      }
+      state = completedState(state);
+      expect(syntaxTreeAvailable(state)).toBe(true);
+      state = state.update({ effects: setCodeFenceLanguages.of(languages) }).state;
+      if (delayInitialParse) expect(__testLiveMdAnalysis({ state }).pending).not.toBeNull();
+      // A state-only host has no view scheduler to commit deferred semantics.
+      // Complete syntax first, then explicitly build the semantic cache consumed
+      // by this renderer/cache test instead of reading an initial pending cache.
+      let analysis = __testBuildLiveMdAnalysis(state);
+      expect(analysis.pending).toBeNull();
+      if (!analysis.semantic) throw new Error("Expected semantic cache for code fence cache test");
+      expect(leafAnalysisCacheRecordCount(analysis.semantic.cache)).toBe(1);
+      analysis.renderCache.codeFenceHighlights.clear();
+      parseCalls = 0;
+      let contentRange = { from: doc.indexOf(source), to: doc.indexOf(source) + source.length };
 
-    let firstTrace = emptyLiveMdLeafAnalysisTrace();
-    compileVisibleSurfaceProjection(
-      projectionCompileInputForTest(state, analysis, {
-        codeFenceHighlighters: [testLightCodeFenceHighlightStyle],
-        trace: firstTrace,
-      }),
-      analysis.semantic.cache,
-      [contentRange],
-      { codeFenceHighlights: true },
-    );
-    expect(parseCalls).toBe(1);
-    expect(firstTrace.heavyRenderStarts).toBe(1);
+      let firstTrace = emptyLiveMdLeafAnalysisTrace();
+      compileVisibleSurfaceProjection(
+        projectionCompileInputForTest(state, analysis, {
+          codeFenceHighlighters: [testLightCodeFenceHighlightStyle],
+          trace: firstTrace,
+        }),
+        analysis.semantic.cache,
+        [contentRange],
+        { codeFenceHighlights: true },
+      );
+      expect(parseCalls).toBe(1);
+      expect(firstTrace.heavyRenderStarts).toBe(1);
 
-    let cacheEntries = [...analysis.renderCache.codeFenceHighlights.entries()];
-    expect(cacheEntries).toHaveLength(1);
-    let [cacheKey, cached] = cacheEntries[0]!;
-    analysis.renderCache.codeFenceHighlights.set(cacheKey, {
-      ...cached,
-      source: `${cached.source}\n// stale`,
-    });
+      let cacheEntries = [...analysis.renderCache.codeFenceHighlights.entries()];
+      expect(cacheEntries).toHaveLength(1);
+      let [cacheKey, cached] = cacheEntries[0]!;
+      analysis.renderCache.codeFenceHighlights.set(cacheKey, {
+        ...cached,
+        source: `${cached.source}\n// stale`,
+      });
 
-    let secondTrace = emptyLiveMdLeafAnalysisTrace();
-    compileVisibleSurfaceProjection(
-      projectionCompileInputForTest(state, analysis, {
-        codeFenceHighlighters: [testLightCodeFenceHighlightStyle],
-        trace: secondTrace,
-      }),
-      analysis.semantic.cache,
-      [contentRange],
-      { codeFenceHighlights: true },
-    );
-    expect(parseCalls).toBe(2);
-    expect(secondTrace.heavyRenderStarts).toBe(1);
-  });
+      let secondTrace = emptyLiveMdLeafAnalysisTrace();
+      compileVisibleSurfaceProjection(
+        projectionCompileInputForTest(state, analysis, {
+          codeFenceHighlighters: [testLightCodeFenceHighlightStyle],
+          trace: secondTrace,
+        }),
+        analysis.semantic.cache,
+        [contentRange],
+        { codeFenceHighlights: true },
+      );
+      expect(parseCalls).toBe(2);
+      expect(secondTrace.heavyRenderStarts).toBe(1);
+    },
+  );
 
   it("rebuilds runtime code fence highlights when the syntax highlighter changes", async () => {
     let highlighterCompartment = new Compartment();
