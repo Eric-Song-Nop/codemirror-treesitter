@@ -151,3 +151,10 @@ against a clean `web-tree-sitter@0.26.9` package and checks the patched wasm
 checksums before the language tests run Gate A. The audit checks that this
 package exposes the upstream `@codemirror/language` public names and that
 Tree-sitter highlight helpers are available.
+
+`TreeSitterParser.startTreeBuild(nativeTree, doc, oldTree?, nestedParsers?)`
+provides resumable nested-tree wrapping for callers with their own parse scheduling.
+Call `work(shouldStop)` until it returns a `Tree`, or `cancel()` before discarding
+unfinished work. The builder owns the input native tree until completion transfers
+ownership to the returned wrapper. A caller-provided nested-parser map remains
+caller-owned and must be deleted when its session ends.

@@ -147,9 +147,11 @@ export async function loadCodeFenceLanguages(
 
 export function codeFenceLanguageNames(doc: string): string[] {
   let names = new Set<string>();
-  let openFence: { marker: "`" | "~"; length: number } | null = null;
+  let openFence: { marker: "`" | "~"; length: number; quoteDepth: number } | null = null;
   for (let line of doc.split(/\r?\n/u)) {
-    let match = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+    let { source, quoteDepth } = fenceContainerLine(line);
+    if (openFence && quoteDepth < openFence.quoteDepth) openFence = null;
+    let match = /^\s*(`{3,}|~{3,})(.*)$/u.exec(source);
     if (!match) continue;
     let marker = match[1]!;
     let rest = match[2]!;
@@ -160,12 +162,37 @@ export function codeFenceLanguageNames(doc: string): string[] {
       continue;
     }
     if (marker[0] == "`" && rest.includes("`")) continue;
-    openFence = { marker: marker[0] as "`" | "~", length: marker.length };
+    openFence = { marker: marker[0] as "`" | "~", length: marker.length, quoteDepth };
     let token = rest.trim().split(/\s/u, 1)[0] ?? "";
     if (token.startsWith("{")) token = token.slice(1);
     if (token.startsWith(".")) token = token.slice(1);
     if (token.endsWith("}")) token = token.slice(0, -1);
     if (token) names.add(token.toLowerCase());
+  }
+  return Array.from(names);
+}
+
+/** Grammar discovery from completed Markdown syntax, including all containers. */
+export function syntaxCodeFenceLanguageNames(
+  tree: Tree,
+  doc: Text,
+  ranges: readonly DocRange[] = [{ from: 0, to: doc.length }],
+): string[] {
+  let names = new Set<string>();
+  for (let range of ranges) {
+    for (let match of queryTreeMatches(
+      tree,
+      "(fenced_code_block (info_string (language) @language))",
+      { ...range, includeNested: false },
+    )) {
+      for (let capture of match.captures) {
+        let token = doc.sliceString(capture.node.from, capture.node.to).trim();
+        if (token.startsWith("{")) token = token.slice(1);
+        if (token.startsWith(".")) token = token.slice(1);
+        if (token.endsWith("}")) token = token.slice(0, -1);
+        if (token) names.add(token.toLowerCase());
+      }
+    }
   }
   return Array.from(names);
 }
@@ -196,7 +223,29 @@ function linesCoveringChange(doc: Text, from: number, to: number) {
 }
 
 function containsCodeFenceDelimiter(source: string) {
-  return /^ {0,3}(?:`{3,}|~{3,})/mu.test(source);
+  return source
+    .split(/\r?\n/u)
+    .some((line) => /^\s*(?:`{3,}|~{3,})/u.test(fenceContainerLine(line).source));
+}
+
+// Discovery is deliberately permissive about indentation: a continuation line
+// may belong to a list opened outside the changed lines. Actual fence rendering
+// remains governed by the Markdown syntax tree.
+function fenceContainerLine(line: string) {
+  let source = line;
+  let quoteDepth = 0;
+  for (;;) {
+    let quote = /^\s*>[ \t]?/u.exec(source);
+    if (quote) {
+      quoteDepth++;
+      source = source.slice(quote[0].length);
+      continue;
+    }
+    let list = /^\s*(?:[-+*]|\d{1,9}[.)])[ \t]+/u.exec(source);
+    if (!list) break;
+    source = source.slice(list[0].length);
+  }
+  return { source, quoteDepth };
 }
 
 async function loadMarkdownExtensionOnce() {

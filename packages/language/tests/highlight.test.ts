@@ -1,5 +1,5 @@
 import { EditorState, Text } from "@codemirror/state";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   HighlightStyle,
   Tag,
@@ -334,6 +334,59 @@ describe("highlight tags", () => {
     expect(html).toContain("<br>");
   });
 
+  it("keeps ranged query highlighting correct after Unicode and surrogate pairs", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    let parser = (await javascriptParser).configure({ highlightQuery: javascriptHighlights });
+    let source = "const label = '🪴中文';\nfunction target() { return 1; }\n";
+    let tree = parser.parse(Text.of(source.split("\n")));
+    try {
+      let from = source.indexOf("target"),
+        to = from + "target".length;
+      let highlighter = tagHighlighter([
+        { tag: tags.function(tags.variableName), class: "function-name" },
+      ]);
+      expect(__testHighlightTree(tree, [highlighter], from, to)).toEqual([
+        { from, to, class: "function-name" },
+      ]);
+      expect(__testHighlightTree(tree, [highlighter], from, from)).toEqual([]);
+    } finally {
+      tree.delete();
+      parser.clearQueryCache();
+    }
+  });
+  it("queries only overlapping nested trees for a highlight window", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    htmlParser ??= TreeSitterParser.load(htmlWasm);
+    let javascript = (await javascriptParser).configure({ highlightQuery: javascriptHighlights });
+    let html = (await htmlParser).configure({
+      highlightQuery: htmlHighlights,
+      nested: [
+        { parser: javascript, ranges: (tree) => scriptTextRanges(tree).map((range) => [range]) },
+      ],
+    });
+    let source = Array.from(
+      { length: 20 },
+      (_, index) => `<script>let value${index} = ${index};</script>`,
+    ).join("\n");
+    let tree = html.parse(Text.of(source.split("\n")));
+    let tagsSpy = vi.spyOn(javascript, "highlightTags");
+    let querySpy = vi.spyOn(javascript.highlightQuery!, "captures");
+    try {
+      expect(tree.nested.length).toBe(20);
+      let from = source.indexOf("let value18"),
+        to = from + "let value18 = 18;".length;
+      highlightTree(tree, classHighlighter, () => {}, from, to);
+      expect(tagsSpy).toHaveBeenCalledTimes(1);
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      expect(querySpy.mock.calls[0]![1]).toEqual({ startIndex: from * 2, endIndex: to * 2 });
+    } finally {
+      tagsSpy.mockRestore();
+      querySpy.mockRestore();
+      tree.delete();
+      javascript.clearQueryCache();
+      html.clearQueryCache();
+    }
+  });
   it("highlights deeply nested syntax without using the JavaScript call stack", async () => {
     javascriptParser ??= TreeSitterParser.load(javascriptWasm);
     let depth = 5_000;

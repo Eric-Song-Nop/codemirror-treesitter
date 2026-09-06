@@ -42,6 +42,47 @@ describe("code fence at end of document", () => {
     editor.destroy();
   });
 
+  it("loads grammars from actual nested fence syntax and edited info strings", async () => {
+    for (let [opening, continuation] of [
+      ["> ", "> "],
+      ["- ", "  "],
+      ["> 1. ", ">    "],
+    ]) {
+      let parent = document.createElement("div");
+      document.body.append(parent);
+      let editor = createLiveMdEditor({
+        parent,
+        doc: `${opening}\`\`\`ts\n${continuation}const value = 1;\n${continuation}\`\`\``,
+        focus: false,
+      });
+      try {
+        await editor.ready;
+        expect(editor.view.state.field(codeFenceLanguagesField).has("ts")).toBe(true);
+        let from = editor.value.indexOf("ts");
+        editor.view.dispatch({ changes: { from, to: from + 2, insert: "python" } });
+        await waitForCodeFenceLanguage(editor, "python");
+      } finally {
+        editor.destroy();
+      }
+    }
+  });
+
+  it("does not let an indented code block hide a later real fence from discovery", async () => {
+    let parent = document.createElement("div");
+    document.body.append(parent);
+    let editor = createLiveMdEditor({
+      parent,
+      doc: "    ```typescript\n    this is indented code\n\n```python\nprint(1)\n```",
+      focus: false,
+    });
+    try {
+      await editor.ready;
+      expect(editor.view.state.field(codeFenceLanguagesField).has("python")).toBe(true);
+      expect(editor.view.state.field(codeFenceLanguagesField).has("typescript")).toBe(false);
+    } finally {
+      editor.destroy();
+    }
+  });
   it("tree-sitter should include closing delimiter for code fence at EOF", async () => {
     let markdown = await loadMarkdownExtension();
 
