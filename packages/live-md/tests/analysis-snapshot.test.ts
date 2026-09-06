@@ -3376,6 +3376,136 @@ describe("LiveMD analysis snapshot", () => {
     view.destroy();
   });
 
+  it("reuses the compiled viewport after offscreen edits", async () => {
+    let doc = Array.from(
+      { length: 160 },
+      (_, index) => `paragraph ${index} [link](https://example.com/${index}) **bold**`,
+    ).join("\n\n");
+    let view = await markdownAnalysisView(doc, "paragraph 159");
+    let viewport = { from: 0, to: view.state.doc.line(15).to };
+    let restore = overrideViewportForTest(view, () => viewport);
+    try {
+      __testRefreshLiveMdSurface(view);
+      let before = canonicalProjectionFromSets(
+        view.state,
+        __testLiveMdAnalysis(view).surfaceDecorations,
+        __testLiveMdAnalysis(view).surfaceAtomicRanges,
+      );
+      view.dispatch({ changes: { from: doc.indexOf("paragraph 150"), insert: "new " } });
+      await __testFlushLiveMdAnalysis(view);
+      let after = __testLiveMdAnalysis(view);
+      expect(after.pending).toBeNull();
+      expect(after.trace.surfaceCompileCalls).toBe(0);
+      expect(after.trace.surfaceRecordsVisited).toBe(0);
+      expect(
+        canonicalProjectionFromSets(
+          view.state,
+          after.surfaceDecorations,
+          after.surfaceAtomicRanges,
+        ),
+      ).toEqual(before);
+    } finally {
+      restore();
+      view.destroy();
+    }
+  });
+
+  it("does not treat an offscreen prefix insertion as viewport scrolling", async () => {
+    let doc = Array.from(
+      { length: 160 },
+      (_, index) => `paragraph ${index} [link](https://example.com/${index}) **bold**`,
+    ).join("\n\n");
+    let view = await markdownAnalysisView(doc, "paragraph 0");
+    let restore = overrideViewportForTest(view, () => {
+      let from = view.state.doc.toString().indexOf("paragraph 80");
+      return { from, to: view.state.doc.lineAt(from).to };
+    });
+    try {
+      __testRefreshLiveMdSurface(view);
+      // Reset refresh trace without changing viewport or compiled coverage.
+      __testRefreshLiveMdSurfacePreservingState(view);
+      view.dispatch({ changes: { from: 0, insert: "new " } });
+      await __testFlushLiveMdAnalysis(view);
+      let after = __testLiveMdAnalysis(view);
+      expect(after.pending).toBeNull();
+      expect(after.trace.surfaceCompileCalls).toBe(0);
+      expect(after.trace.surfaceRecordsVisited).toBe(0);
+      let expected = __testBuildCanonicalLiveMdAnalysis(view.state);
+      let range = view.viewport;
+      expect(
+        clipCanonicalProjectionToRanges(
+          canonicalProjectionFromSets(
+            view.state,
+            after.surfaceDecorations,
+            after.surfaceAtomicRanges,
+          ),
+          [range],
+        ),
+      ).toEqual(
+        clipCanonicalProjectionToRanges(
+          canonicalProjectionFromSets(
+            view.state,
+            expected.surfaceDecorations,
+            expected.surfaceAtomicRanges,
+          ),
+          [range],
+        ),
+      );
+    } finally {
+      restore();
+      view.destroy();
+    }
+  });
+
+  it("patches local edits and active islands without rebuilding unrelated surface records", async () => {
+    let doc = Array.from(
+      { length: 100 },
+      (_, index) => `paragraph ${index} [link](https://example.com/${index}) **bold**`,
+    ).join("\n\n");
+    let view = await markdownAnalysisView(doc, "paragraph 0");
+    let restore = overrideViewportForTest(view, () => ({ from: 0, to: view.state.doc.length }));
+    try {
+      __testRefreshLiveMdSurface(view);
+      for (let index of [20, 40, 60]) {
+        let from = view.state.doc.toString().indexOf(`paragraph ${index}`);
+        view.dispatch({ selection: { anchor: from } });
+        let selected = __testLiveMdAnalysis(view);
+        expect(selected.trace.surfaceRecordsVisited).toBeLessThan(10);
+        expectSurfaceMatchesCanonical(view);
+        view.dispatch({ changes: { from, insert: "new " }, userEvent: "input.type" });
+        await __testFlushLiveMdAnalysis(view);
+        let edited = __testLiveMdAnalysis(view);
+        expect(edited.pending).toBeNull();
+        expect(edited.trace.surfaceRecordsVisited).toBeLessThan(10);
+        expectSurfaceMatchesCanonical(view);
+      }
+    } finally {
+      restore();
+      view.destroy();
+    }
+  });
+
+  it("heals pending surface holes after burst edits and selections around fences and tables", async () => {
+    let view = await markdownAnalysisView(liveMdKitchenSinkDoc(), "After anchor");
+    let restore = overrideViewportForTest(view, () => ({ from: 0, to: view.state.doc.length }));
+    try {
+      __testRefreshLiveMdSurface(view);
+      for (let target of ["alpha", "After anchor", "beta"]) {
+        let from = view.state.doc.toString().indexOf(target);
+        expect(from).toBeGreaterThanOrEqual(0);
+        view.dispatch({ selection: { anchor: from } });
+        view.dispatch({ changes: { from, insert: "x" }, userEvent: "input.type" });
+      }
+      view.dispatch({ selection: { anchor: 0 } });
+      await __testFlushLiveMdAnalysis(view);
+      expect(__testLiveMdAnalysis(view).pending).toBeNull();
+      expectSurfaceMatchesCanonical(view);
+    } finally {
+      restore();
+      view.destroy();
+    }
+  });
+
   it("keeps ViewPlugin surface refreshes viewport-only and off full materialization", async () => {
     let doc = Array.from(
       { length: 600 },
@@ -5743,3 +5873,16 @@ it.each(["", "next paragraph"])(
     }
   },
 );
+function expectSurfaceMatchesCanonical(view: EditorView) {
+  let actual = __testLiveMdAnalysis(view);
+  let expected = __testBuildCanonicalLiveMdAnalysis(view.state);
+  expect(
+    canonicalProjectionFromSets(view.state, actual.surfaceDecorations, actual.surfaceAtomicRanges),
+  ).toEqual(
+    canonicalProjectionFromSets(
+      view.state,
+      expected.surfaceDecorations,
+      expected.surfaceAtomicRanges,
+    ),
+  );
+}
