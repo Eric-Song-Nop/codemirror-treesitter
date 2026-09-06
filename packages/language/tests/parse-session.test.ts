@@ -110,6 +110,10 @@ function fakeTree(label: string): FakeNativeTree {
   let tree = {
     label,
     deleteCalls: 0,
+    copy() {
+      return fakeTree(`${label}-copy`);
+    },
+    edit() {},
     delete() {
       tree.deleteCalls++;
     },
@@ -191,6 +195,42 @@ function changedContext(context: ParseContext, state: EditorState, from: number,
 }
 
 describe("resumable nested parse sessions", () => {
+  it("keeps edited bases alive across repeated suspended edits and empty transfers", () => {
+    let bases: FakeNativeTree[] = [];
+    let initial = fakeTree("initial");
+    let suspended = false;
+    let root = fakeParser(({ oldTree }) => {
+      if (oldTree) bases.push(oldTree as FakeNativeTree);
+      return suspended ? pause : initial;
+    });
+    let state = EditorState.create({ doc: "abcdef" });
+    let context = ParseContext.create(root, state);
+    expect(context.work()).toBe(true);
+    suspended = true;
+    for (let insert of ["xy", "z", ""]) {
+      let transaction = state.update({ changes: { from: 1, to: 2, insert } });
+      let previous = context;
+      context = context.changes(transaction.changes, state, transaction.state);
+      state = transaction.state;
+      previous.destroy();
+      expect(context.work()).toBe(false);
+      expect(bases.at(-1)!.deleteCalls).toBe(0);
+    }
+    expect(bases).toHaveLength(3);
+    expect(bases.map((base) => base.deleteCalls)).toEqual([1, 1, 0]);
+    let empty = state.update({});
+    let previous = context;
+    context = context.changes(empty.changes, state, empty.state);
+    previous.destroy();
+    expect(context.work()).toBe(false);
+    expect(bases.at(-1)).toBe(bases.at(-2));
+    expect(bases.at(-1)!.deleteCalls).toBe(0);
+    context.destroy();
+    context.destroy();
+    expect(bases.at(-1)!.deleteCalls).toBe(1);
+    expect(initial.deleteCalls).toBe(0);
+  });
+
   it("explicitly releases a parse context's root native parser exactly once", () => {
     let created: FakeNativeParser[] = [];
     let root = fakeParser(() => fakeTree("root"), [], created);

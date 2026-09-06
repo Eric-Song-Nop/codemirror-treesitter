@@ -1064,6 +1064,25 @@ class ChangedRangeIndex {
     return ranges.length ? new ChangedRangeIndex(ranges) : ChangedRangeIndex.empty;
   }
 
+  mapAndAdd(changes: ChangeDesc) {
+    let ranges = this.ranges.map((range) => ({
+      from: changes.mapPos(range.from, -1),
+      to: changes.mapPos(range.to, 1),
+    }));
+    changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+      ranges.push({ from: fromB, to: toB });
+    });
+    // Keep zero-width deletion ranges: they also invalidate nested reuse.
+    ranges.sort((a, b) => a.from - b.from || a.to - b.to);
+    let merged: DocRange[] = [];
+    for (let range of ranges) {
+      let last = merged[merged.length - 1];
+      if (last && range.from <= last.to) last.to = Math.max(last.to, range.to);
+      else merged.push(range);
+    }
+    return new ChangedRangeIndex(merged);
+  }
+
   touches(ranges: readonly DocRange[]) {
     return ranges.some((range) => this.touchesRange(range));
   }
@@ -1478,10 +1497,17 @@ class ParseContext {
   }
 
   changes(changes: ChangeDesc, startState: EditorState, newState: EditorState) {
+    // A suspended parse has no published tree yet. Its edited base still
+    // describes startState and must survive another edit (and cancellation).
+    let base = this.tree.tree ? this.tree : (this.oldTree ?? this.tree);
     let oldTree =
-      this.tree.tree && !changes.empty
-        ? this.parser.editWrappedTree(this.tree, changes, startState.doc, newState.doc)
-        : this.tree;
+      base.tree && !changes.empty
+        ? this.parser.editWrappedTree(base, changes, startState.doc, newState.doc)
+        : base;
+    let changedRanges =
+      !this.tree.tree && this.changedRanges
+        ? this.changedRanges.mapAndAdd(changes)
+        : ChangedRangeIndex.fromChanges(changes);
     let viewport = {
       from: changes.mapPos(this.viewport.from, -1),
       to: changes.mapPos(this.viewport.to, 1),
@@ -1494,14 +1520,14 @@ class ParseContext {
       .filter((range) => range.from < range.to);
     let scheduleOn = this.scheduleOn;
     this.cancelPendingWork();
-    this.disposeOldTree();
+    this.disposeOldTree(oldTree);
     let cx = new ParseContext(this.parser, newState, Tree.empty, {
       from: viewport.from,
       to: viewport.to,
     });
     cx.oldTree = oldTree;
     cx.oldTreeOwned = editedTreeOwnership.has(oldTree);
-    cx.changedRanges = ChangedRangeIndex.fromChanges(changes);
+    cx.changedRanges = changedRanges;
     cx.scheduleOn = scheduleOn;
     cx.skipped = skipped;
     return cx;
