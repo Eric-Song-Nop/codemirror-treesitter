@@ -1,121 +1,131 @@
-import {
-    EditorSelection,
-    StateEffect,
-    StateField,
-} from "@codemirror/state";
-import { EditorView, type PluginValue, ViewUpdate } from "@codemirror/view";
-import {
-    Cursor,
-    LoroDoc,
-    LoroText,
-    type Subscription,
-    UndoManager,
-} from "loro-crdt";
+import { EditorSelection, StateEffect, StateField } from "@codemirror/state";
+import { EditorView, type PluginValue, type ViewUpdate } from "@codemirror/view";
+import { Cursor, LoroDoc, LoroText, UndoManager } from "loro-crdt";
+import { loroBeforeCommit, loroSyncAnnotation } from "./sync.ts";
 
 export const undoEffect = StateEffect.define();
 export const redoEffect = StateEffect.define();
-export const undoManagerStateField = StateField.define<UndoManager | undefined>(
-    {
-        create(state) {
-            return undefined;
-        },
+export const undoManagerStateField = StateField.define<UndoManager | undefined>({
+    create: () => undefined,
+    update: value => value,
+});
 
-        update(value, transaction) {
-            for (const effect of transaction.effects) {
-                if (effect.is(undoEffect)) {
-                    queueMicrotask(() => {
-                        if (value?.canUndo()) {
-                            value.undo();
-                        }
-                    });
-                } else if (effect.is(redoEffect)) {
-                    queueMicrotask(() => {
-                        if (value?.canRedo()) {
-                            value.redo();
-                        }
-                    });
-                }
-            }
-            return value;
-        },
-    }
-);
+// UndoManager has one callback slot. Keep it owned by the live bindings and
+// route restoration to the most recently active view, including undo commands.
+const owners = new WeakMap<UndoManager, Set<UndoPluginValue>>();
+const activeOwner = (manager: UndoManager) => Array.from(owners.get(manager) ?? []).at(-1);
 
 export class UndoPluginValue implements PluginValue {
-    sub?: Subscription;
-    lastSelection: {
-        anchor: Cursor | undefined;
-        head: Cursor | undefined;
-    } = {
-        anchor: undefined,
-        head: undefined,
-    };
+    private destroyed = false;
+    private selectionRevision = 0;
+    private timer?: ReturnType<typeof setTimeout>;
+    private lastSelection: Uint8Array[] = [];
+
     constructor(
         public view: EditorView,
         public doc: LoroDoc,
         private undoManager: UndoManager,
         private getTextFromDoc: (doc: LoroDoc) => LoroText
     ) {
-
-        this.undoManager.setOnPop((isUndo, value, counterRange) => {
-            const anchor = value.cursors[0] ?? undefined;
-            const head = value.cursors[1] ?? undefined;
-            if (!anchor) return;
-
-            setTimeout(() => {
-                const anchorPos = this.doc!.getCursorPos(anchor).offset;
-                const headPos = head
-                    ? this.doc!.getCursorPos(head).offset
-                    : anchorPos;
-                const selection = EditorSelection.single(anchorPos, headPos);
-                this.view.dispatch({
-                    selection,
-                    effects: [EditorView.scrollIntoView(selection.ranges[0])],
-                });
-            }, 0);
+        let bindings = owners.get(undoManager);
+        if (!bindings) {
+            owners.set(undoManager, bindings = new Set());
+            undoManager.setOnPop((_isUndo, value) => {
+                activeOwner(undoManager)?.restore(value.cursors);
+            });
+            undoManager.setOnPush((isUndo) => {
+                const owner = activeOwner(undoManager);
+                if (!owner) return { value: null, cursors: [] };
+                const cursors = (isUndo ? owner.lastSelection : owner.captureSelection()).map(bytes => Cursor.decode(bytes));
+                // The manager consumes the returned handles synchronously.
+                queueMicrotask(() => cursors.forEach(cursor => cursor.free()));
+                return { value: null, cursors };
+            });
+        }
+        bindings.add(this);
+        loroBeforeCommit.set(this.view, transaction => {
+            this.activate();
+            this.lastSelection = this.captureSelection(transaction.startState.selection.main);
         });
-
-        this.undoManager.setOnPush((isUndo, counterRange) => {
-            const cursors = [];
-            let selection = this.lastSelection;
-            if (!isUndo) {
-                const stateSelection = this.view.state.selection.main;
-                selection.anchor = this.getTextFromDoc(this.doc).getCursor(
-                    stateSelection.anchor
-                );
-                selection.head = this.getTextFromDoc(this.doc).getCursor(
-                    stateSelection.head
-                );
-            }
-            if (selection.anchor) {
-                cursors.push(selection.anchor);
-            }
-            if (selection.head) {
-                cursors.push(selection.head);
-            }
-            return {
-                value: null,
-                cursors,
-            };
+        queueMicrotask(() => {
+            if (!this.destroyed && !this.lastSelection.length) this.lastSelection = this.captureSelection();
         });
     }
 
+    private activate(): void {
+        const bindings = owners.get(this.undoManager)!;
+        bindings.delete(this);
+        bindings.add(this);
+    }
+
+    private captureSelection(selection = this.view.state.selection.main): Uint8Array[] {
+        const text = this.getTextFromDoc(this.doc);
+        return [selection.anchor, selection.head].flatMap(position => {
+            const cursor = text.getCursor(Math.min(text.length, position));
+            if (!cursor) return [];
+            try { return [cursor.encode()]; } finally { cursor.free(); }
+        });
+    }
+
+    private restore(cursors: Cursor[]): void {
+        const bytes = cursors.map(cursor => {
+            try { return cursor.encode(); } finally { cursor.free(); }
+        });
+        if (!bytes.length) return;
+        clearTimeout(this.timer);
+        const revision = this.selectionRevision;
+        this.timer = setTimeout(() => {
+            this.timer = undefined;
+            if (this.destroyed || revision !== this.selectionRevision) return;
+            const positions = bytes.map(encoded => {
+                const cursor = Cursor.decode(encoded);
+                try {
+                    const position = this.doc.getCursorPos(cursor);
+                    position?.update?.free();
+                    return position?.offset;
+                } finally { cursor.free(); }
+            });
+            if (positions[0] === undefined) return;
+            const limit = this.view.state.doc.length;
+            const selection = EditorSelection.single(
+                Math.min(limit, positions[0]), Math.min(limit, positions[1] ?? positions[0])
+            );
+            this.view.dispatch({ selection, effects: EditorView.scrollIntoView(selection.main) });
+        }, 0);
+    }
+
     update(update: ViewUpdate): void {
-        if (update.selectionSet) {
-            this.lastSelection = {
-                anchor: this.getTextFromDoc(this.doc).getCursor(
-                    update.state.selection.main.anchor
-                ),
-                head: this.getTextFromDoc(this.doc).getCursor(
-                    update.state.selection.main.head
-                ),
-            };
+        if (update.selectionSet || update.transactions.some(transaction => transaction.docChanged && transaction.annotation(loroSyncAnnotation) == null)) {
+            this.selectionRevision++;
+            clearTimeout(this.timer);
+            this.activate();
+        }
+        if (update.selectionSet || update.docChanged) this.lastSelection = this.captureSelection();
+        for (const transaction of update.transactions) {
+            for (const effect of transaction.effects) {
+                if (!effect.is(undoEffect) && !effect.is(redoEffect)) continue;
+                this.activate();
+                queueMicrotask(() => {
+                    if (this.destroyed) return;
+                    if (effect.is(undoEffect)) {
+                        if (this.undoManager.canUndo()) this.undoManager.undo();
+                    } else if (this.undoManager.canRedo()) this.undoManager.redo();
+                });
+            }
         }
     }
 
     destroy(): void {
-        this.sub?.();
-        this.sub = undefined;
+        this.destroyed = true;
+        loroBeforeCommit.delete(this.view);
+        clearTimeout(this.timer);
+        const bindings = owners.get(this.undoManager)!;
+        bindings.delete(this);
+        if (!bindings.size) {
+            this.undoManager.setOnPop(undefined);
+            this.undoManager.setOnPush(undefined);
+            owners.delete(this.undoManager);
+        }
     }
 }
 

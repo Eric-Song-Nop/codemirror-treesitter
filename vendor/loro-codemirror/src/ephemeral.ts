@@ -39,6 +39,17 @@ export const ephemeralStateField = StateField.define<{
         };
     },
     update(value, tr) {
+        // Preserve old EditorState snapshots and keep numeric positions valid even
+        // before the deferred CRDT refresh can run.
+        value = { ...value, remoteCursors: new Map(value.remoteCursors), remoteUsers: new Map(value.remoteUsers) };
+        if (tr.docChanged) {
+            for (const [peer, cursor] of value.remoteCursors) {
+                value.remoteCursors.set(peer, {
+                    anchor: tr.changes.mapPos(cursor.anchor),
+                    head: cursor.head === undefined ? undefined : tr.changes.mapPos(cursor.head),
+                });
+            }
+        }
         for (const effect of tr.effects) {
             if (effect.is(ephemeralEffect)) {
                 switch (effect.value.type) {
@@ -47,11 +58,15 @@ export const ephemeralStateField = StateField.define<{
                         break;
                     case "cursor":
                         const { peer, cursor } = effect.value;
-                        value.remoteCursors.set(peer, cursor);
+                        value.remoteCursors.set(peer, {
+                            anchor: Math.max(0, Math.min(tr.newDoc.length, cursor.anchor)),
+                            head: cursor.head === undefined ? undefined : Math.max(0, Math.min(tr.newDoc.length, cursor.head)),
+                        });
                         break;
                     case "user":
                         const { peer: uid, user } = effect.value;
-                        value.remoteUsers.set(uid, user);
+                        if (user === undefined) value.remoteUsers.delete(uid);
+                        else value.remoteUsers.set(uid, user);
                         break;
                     case "checkout":
                         value.isCheckout = effect.value.checkout;
@@ -87,19 +102,25 @@ const getCursorEffect = (
     peer: string,
     state: CursorState
 ): StateEffect<EphemeralEffect> | undefined => {
-    const anchor = Cursor.decode(state.anchor);
-    const anchorPos = doc.getCursorPos(anchor).offset;
-    let headPos = anchorPos;
-    if (state.head) {
-        // range
-        const head = Cursor.decode(state.head);
-        headPos = doc.getCursorPos(head).offset;
+    const cursors: Cursor[] = [];
+    try {
+        const resolve = (bytes: Uint8Array) => {
+            const cursor = Cursor.decode(bytes);
+            cursors.push(cursor);
+            const position = doc.getCursorPos(cursor);
+            if (position?.update) cursors.push(position.update);
+            return position?.offset;
+        };
+        const anchorPos = resolve(state.anchor);
+        const headPos = state.head ? resolve(state.head) : anchorPos;
+        if (anchorPos === undefined || headPos === undefined) return;
+        return ephemeralEffect.of({ type: "cursor", peer, cursor: { anchor: anchorPos, head: headPos } });
+    } catch {
+        // Presence can arrive before its referenced document operations.
+        return;
+    } finally {
+        for (const cursor of cursors) cursor.free();
     }
-    return ephemeralEffect.of({
-        type: "cursor",
-        peer,
-        cursor: { anchor: anchorPos, head: headPos },
-    });
 };
 
 export type EphemeralState = {
@@ -177,6 +198,8 @@ export class EphemeralPlugin implements PluginValue {
     sub: Subscription;
     ephemeralSub: Subscription;
     initUser: boolean = false;
+    private timer?: ReturnType<typeof setTimeout>;
+    private destroyed = false;
 
     constructor(
         public view: EditorView,
@@ -185,103 +208,32 @@ export class EphemeralPlugin implements PluginValue {
         public ephemeralStore: EphemeralStore<EphemeralState>,
         private getTextFromDoc: (doc: LoroDoc) => LoroText
     ) {
-        this.sub = this.doc.subscribe((e) => {
-            if (e.by === "local") {
-                // update remote cursor position
-                const { remoteCursors: remoteStates, isCheckout } =
-                    view.state.field(ephemeralStateField);
-                if (isCheckout) return;
-                const effects: StateEffect<EphemeralEffect>[] = [];
-                for (const peer of remoteStates.keys()) {
-                    if (peer === this.doc.peerIdStr) {
-                        continue;
-                    }
-                    const state = this.ephemeralStore.get(`${peer}-cm-cursor`);
-                    if (state) {
-                        const effect = getCursorEffect(this.doc, peer, state);
-                        if (effect) {
-                            effects.push(effect);
-                        }
-                    } else {
-                        effects.push(
-                            ephemeralEffect.of({
-                                type: "delete",
-                                peer,
-                            })
-                        );
-                    }
-                }
-                if (effects.length > 0) {
-                    // Defer the dispatch to avoid conflicts with ongoing updates
-                    setTimeout(() => {
-                        this.view.dispatch({
-                            effects,
-                        });
-                    });
-                }
-            } else if (e.by === "checkout") {
-                setTimeout(() => {
-                    this.view.dispatch({
-                        effects: [
-                            ephemeralEffect.of({
-                                type: "checkout",
-                                checkout: this.doc.isDetached(),
-                            }),
-                        ],
-                    });
-                });
-            }
-        });
+        this.sub = this.doc.subscribe(() => this.scheduleRefresh());
+        this.ephemeralSub = this.ephemeralStore.subscribe(() => this.scheduleRefresh());
+        this.scheduleRefresh();
+    }
 
-        this.ephemeralSub = this.ephemeralStore.subscribe((e) => {
-            if (e.by === "local") return;
-            const effects: StateEffect<EphemeralEffect>[] = [];
-            for (const key of e.added.concat(e.updated)) {
-                const peer = key.split("-")[0];
-                if (key.endsWith(CURSOR_KEY)) {
-                    const state = this.ephemeralStore.get(
-                        key as keyof EphemeralState
-                    )! as CursorState;
-                    const effect = getCursorEffect(this.doc, peer, state);
-                    if (effect) {
-                        effects.push(effect);
-                    }
-                }
-                if (key.endsWith(USER_KEY)) {
-                    const user = this.ephemeralStore.get(
-                        key as keyof EphemeralState
-                    )! as UserState;
-                    effects.push(
-                        ephemeralEffect.of({
-                            type: "user",
-                            peer,
-                            user,
-                        })
-                    );
-                }
+    private scheduleRefresh(): void {
+        if (this.destroyed || this.timer !== undefined) return;
+        this.timer = setTimeout(() => {
+            this.timer = undefined;
+            if (this.destroyed) return;
+            const effects: StateEffect<EphemeralEffect>[] = [
+                ephemeralEffect.of({ type: "checkout", checkout: this.doc.isDetached() }),
+            ];
+            const peers = new Set(this.view.state.field(ephemeralStateField).remoteCursors.keys());
+            for (const key of this.ephemeralStore.keys()) {
+                if (key.endsWith(CURSOR_KEY) || key.endsWith(USER_KEY)) peers.add(key.split("-")[0]);
             }
-
-            for (const key of e.removed) {
-                const peer = key.split("-")[0];
-                if (key.endsWith(CURSOR_KEY)) {
-                    effects.push(
-                        ephemeralEffect.of({
-                            type: "delete",
-                            peer,
-                        })
-                    );
-                }
+            for (const peer of peers) {
+                if (peer === this.doc.peerIdStr) continue;
+                const state = this.ephemeralStore.get(`${peer}-cm-cursor`);
+                const cursor = state && getCursorEffect(this.doc, peer, state);
+                effects.push(cursor ?? ephemeralEffect.of({ type: "delete", peer }));
+                effects.push(ephemeralEffect.of({ type: "user", peer, user: this.ephemeralStore.get(`${peer}-cm-user`) }));
             }
-
-            if (effects.length > 0) {
-                // Defer the dispatch to avoid conflicts with ongoing updates
-                setTimeout(() => {
-                    this.view.dispatch({
-                        effects,
-                    });
-                });
-            }
-        });
+            this.view.dispatch({ effects });
+        }, 0);
     }
 
     update(update: ViewUpdate): void {
@@ -318,6 +270,8 @@ export class EphemeralPlugin implements PluginValue {
     }
 
     destroy(): void {
+        this.destroyed = true;
+        clearTimeout(this.timer);
         this.sub?.();
         this.ephemeralSub?.();
         this.ephemeralStore.delete(getCursorEphemeralKey(this.doc));

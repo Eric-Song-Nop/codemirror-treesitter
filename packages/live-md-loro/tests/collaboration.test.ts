@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { EditorView } from "@codemirror/view";
 import { StateField, Transaction } from "@codemirror/state";
 import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
 import { loroSyncAnnotation } from "loro-codemirror/sync";
@@ -10,7 +11,10 @@ import {
   createLiveMdLoroTextGetter,
   getLiveMdLoroText,
   liveMdLoroCollaboration,
+  liveMdLoroUndo,
 } from "../src/index.js";
+
+import { ephemeralStateField } from "../../../vendor/loro-codemirror/src/ephemeral.ts";
 
 let locationDescriptor: PropertyDescriptor | undefined;
 let editors = new Set<ReturnType<typeof createLiveMdEditor>>();
@@ -325,6 +329,19 @@ describe("liveMdLoroCollaboration", () => {
     let text = ownNative(doc.getText("markdown"));
     text.insert(0, "base");
     doc.commit();
+    // Loro does not guarantee cross-container event order. Exercise the legal
+    // ordering that used to return before reaching the Markdown diff.
+    let subscribe = doc.subscribe.bind(doc);
+    vi.spyOn(doc, "subscribe").mockImplementation((listener) =>
+      subscribe((event) =>
+        listener({
+          ...event,
+          events: [...event.events].sort(
+            (a, b) => Number(a.target === text.id) - Number(b.target === text.id),
+          ),
+        }),
+      ),
+    );
     let editor = createTestEditor({
       defaultValue: "base",
       extensions: [liveMdLoroCollaboration({ doc })],
@@ -334,15 +351,22 @@ describe("liveMdLoroCollaboration", () => {
     let remote = ownNative(new LoroDoc());
     remote.import(doc.export({ mode: "snapshot" }));
     let remoteText = ownNative(remote.getText("markdown"));
-    let metadata = ownNative(remote.getMap("metadata"));
-    let other = ownNative(remote.getText("other"));
+    let metadata = ownNative(remote.getMap("aaa"));
+    let other = ownNative(remote.getText("aab"));
     metadata.set("title", "changed");
     other.insert(0, "unrelated");
     remoteText.insert(0, "new ");
     remote.commit();
     let commits = vi.fn();
     ownResource(commits, doc.subscribeLocalUpdates(commits));
+    let eventTargets: string[] = [];
+    let unsubscribe = doc.subscribe((event) => {
+      eventTargets = event.events.map((item) => item.target);
+    });
+    ownResource(unsubscribe, unsubscribe);
     doc.import(remote.export({ mode: "snapshot" }));
+    expect(eventTargets[0]).not.toBe(text.id);
+    expect(eventTargets).toContain(text.id);
     expect(editor.value).toBe("new base");
     expect(commits).not.toHaveBeenCalled();
     editor.view.dispatch({ changes: { from: 8, insert: "!" } });
@@ -374,6 +398,196 @@ describe("liveMdLoroCollaboration", () => {
     destroyTestEditor(first);
     second.view.dispatch({ changes: { from: 12, insert: "!" } });
     expect(text.toString()).toBe("direct world!");
+  });
+
+  it("resolves imported presence after insertion and deletion without stale or invalid offsets", async () => {
+    let source = ownNative(new LoroDoc());
+    let target = ownNative(new LoroDoc());
+    let text = ownNative(source.getText("markdown"));
+    text.insert(0, "abcdefghij");
+    source.commit();
+    target.import(source.export({ mode: "snapshot" }));
+    let ephemeral = ownEphemeral();
+    let remotePresence = ownEphemeral();
+    let anchor = ownNative(text.getCursor(8)!);
+    let head = ownNative(text.getCursor(9)!);
+    remotePresence.set(`${source.peerIdStr}-cm-cursor`, {
+      anchor: anchor.encode(),
+      head: head.encode(),
+    });
+    ephemeral.apply(remotePresence.encodeAll());
+    let editor = createTestEditor({
+      defaultValue: "abcdefghij",
+      autofocus: false,
+      extensions: [
+        liveMdLoroCollaboration({
+          doc: target,
+          presence: { ephemeral, user: { name: "local", colorClassName: "local" } },
+        }),
+      ],
+      parent: document.body,
+    });
+    await flushMicrotasks();
+    let cursor = () =>
+      editor.view.state.field(ephemeralStateField).remoteCursors.get(source.peerIdStr)!;
+    await vi.waitFor(() => expect(cursor()).toEqual({ anchor: 8, head: 9 }));
+    let stateBefore = editor.view.state;
+    text.insert(0, "ZZ");
+    source.commit();
+    target.import(source.export({ mode: "snapshot" }));
+    expect(cursor()).toEqual({ anchor: 10, head: 11 });
+    expect(stateBefore.field(ephemeralStateField).remoteCursors.get(source.peerIdStr)).toEqual({
+      anchor: 8,
+      head: 9,
+    });
+    text.delete(2, 10);
+    source.commit();
+    target.import(source.export({ mode: "snapshot" }));
+    expect(cursor()).toEqual({ anchor: 2, head: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(cursor()).toEqual({ anchor: 2, head: 2 });
+    expect(editor.value).toBe("ZZ");
+    remotePresence.delete(`${source.peerIdStr}-cm-cursor`);
+    ephemeral.apply(remotePresence.encodeAll());
+    destroyTestEditor(editor);
+    let dispatch = vi.spyOn(editor.view, "dispatch");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each(["selection", "destroy", "restore"] as const)(
+    "handles deferred undo cursor restoration: %s",
+    async (mode) => {
+      let doc = ownNative(new LoroDoc());
+      let text = ownNative(doc.getText("markdown"));
+      text.insert(0, "abcdef");
+      doc.commit();
+      let undoManager = ownNative(new UndoManager(doc, {}));
+      let editor = createTestEditor({
+        defaultValue: "abcdef",
+        autofocus: false,
+        extensions: [liveMdLoroCollaboration({ doc, undoManager })],
+        parent: document.body,
+      });
+      await flushMicrotasks();
+      editor.view.dispatch({ selection: { anchor: 3 } });
+      editor.view.dispatch({ changes: { from: 3, insert: "X" }, selection: { anchor: 4 } });
+      undoManager.undo();
+      expect(editor.value).toBe("abcdef");
+      if (mode === "selection")
+        editor.view.dispatch({ selection: { anchor: 0 }, userEvent: "select.pointer" });
+      if (mode === "destroy") destroyTestEditor(editor);
+      let dispatch = vi.spyOn(editor.view, "dispatch");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      if (mode === "destroy") expect(dispatch).not.toHaveBeenCalled();
+      else expect(editor.view.state.selection.main.head).toBe(mode === "selection" ? 0 : 3);
+    },
+  );
+
+  it("cancels a queued undo command when its editor is destroyed", async () => {
+    let doc = ownNative(new LoroDoc());
+    let undoManager = ownNative(new UndoManager(doc, {}));
+    let editor = createTestEditor({
+      extensions: [liveMdLoroCollaboration({ doc, undoManager })],
+      parent: document.body,
+    });
+    await flushMicrotasks();
+    editor.view.dispatch({ changes: { from: 0, insert: "keep" } });
+    liveMdLoroUndo(editor.view);
+    destroyTestEditor(editor);
+    await flushMicrotasks();
+    let text = ownNative(doc.getText("markdown"));
+    expect(text.toString()).toBe("keep");
+  });
+
+  it("projects mixed-container undo once and retains shared undo bindings after one view closes", async () => {
+    let doc = ownNative(new LoroDoc());
+    let text = ownNative(doc.getText("markdown"));
+    text.insert(0, "base");
+    doc.commit();
+    let manager = ownNative(new UndoManager(doc, { mergeInterval: 0 }));
+    let extension = liveMdLoroCollaboration({ doc, undoManager: manager });
+    let first = createTestEditor({
+      defaultValue: "base",
+      extensions: [extension],
+      parent: document.body,
+    });
+    let second = createTestEditor({
+      defaultValue: "base",
+      extensions: [extension],
+      parent: document.body,
+    });
+    await flushMicrotasks();
+    let metadata = ownNative(doc.getMap("aaa"));
+    metadata.set("label", "new");
+    text.insert(0, "new ");
+    doc.commit();
+    expect(first.value).toBe("new base");
+    expect(second.value).toBe("new base");
+    manager.undo();
+    expect(first.value).toBe("base");
+    expect(second.value).toBe("base");
+    destroyTestEditor(second);
+    manager.redo();
+    expect(first.value).toBe("new base");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    first.view.dispatch({ selection: { anchor: 2 } });
+    first.view.dispatch({ changes: { from: 2, insert: "!" }, selection: { anchor: 3 } });
+    liveMdLoroUndo(first.view);
+    await flushMicrotasks();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(first.value).toBe("new base");
+    expect(first.view.state.selection.main.head).toBe(2);
+  });
+
+  it("captures undo metadata from the source view before a combined edit and selection", async () => {
+    let doc = ownNative(new LoroDoc());
+    let text = ownNative(doc.getText("markdown"));
+    text.insert(0, "abcdef");
+    doc.commit();
+    let manager = ownNative(new UndoManager(doc, { mergeInterval: 0 }));
+    let pushed: number[][] = [];
+    let setOnPush = manager.setOnPush.bind(manager);
+    vi.spyOn(manager, "setOnPush").mockImplementation((callback) =>
+      setOnPush(
+        callback &&
+          ((...args) => {
+            let result = callback(...args);
+            pushed.push(result.cursors.map((cursor) => doc.getCursorPos(cursor)!.offset));
+            return result;
+          }),
+      ),
+    );
+    let extension = liveMdLoroCollaboration({ doc, undoManager: manager });
+    let first = new EditorView({ doc: "abcdef", extensions: [extension], parent: document.body });
+    ownResource(first, () => first.destroy());
+    let second = new EditorView({ doc: "abcdef", extensions: [extension], parent: document.body });
+    ownResource(second, () => second.destroy());
+    await flushMicrotasks();
+    first.dispatch({ selection: { anchor: 2 } });
+    second.dispatch({ selection: { anchor: 5 } });
+    first.dispatch({ changes: { from: 2, insert: "X" }, selection: { anchor: 3 } });
+    expect(pushed).toEqual([[3, 3]]);
+    liveMdLoroUndo(first);
+    await flushMicrotasks();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(first.state.doc.toString()).toBe("abcdef");
+    expect(second.state.doc.toString()).toBe("abcdef");
+    expect(first.state.selection.main.head).toBe(2);
+  });
+
+  it("keeps local edits when a ViewUpdate also contains a synchronized transaction", async () => {
+    let doc = ownNative(new LoroDoc());
+    let text = ownNative(doc.getText("markdown"));
+    let view = new EditorView({ extensions: liveMdLoroCollaboration({ doc }) });
+    ownResource(view, () => view.destroy());
+    await flushMicrotasks();
+    let synchronized = view.state.update({ annotations: loroSyncAnnotation.of("undo") });
+    let local = synchronized.state.update({ changes: { from: 0, insert: "keep" } });
+    view.update([synchronized, local]);
+    expect(view.state.doc.toString()).toBe("keep");
+    expect(text.toString()).toBe("keep");
   });
 
   it("exposes reusable text getter functions", () => {
@@ -412,4 +626,12 @@ function ownResource<T extends object>(resource: T, cleanup: () => void): T {
 async function flushMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function ownEphemeral() {
+  let store = new EphemeralStore();
+  return ownResource(store, () => {
+    store.destroy();
+    store.inner.free();
+  });
 }
