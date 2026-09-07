@@ -63,6 +63,28 @@ describe("mermaid rendering", () => {
     expect(svg.id).toMatch(/^cm-md-mermaid-/);
   });
 
+  it("isolates arrow markers when the same cached diagram appears in multiple editors", async () => {
+    let doc = "```mermaid\nflowchart LR\n  A --> B\n```\n\nnext";
+    let first = await mountEditor(doc, "next");
+    let second = await mountEditor(doc, "next");
+    let svgs = await Promise.all(
+      [first, second].map((editor) =>
+        waitForMermaidSvg(editor.view.contentDOM.querySelector<HTMLElement>(".cm-md-mermaid")!),
+      ),
+    );
+    let ids = svgs.flatMap((svg) => [...svg.querySelectorAll("marker")].map((marker) => marker.id));
+    expect(ids.length).toBeGreaterThan(0);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (let svg of svgs) {
+      for (let edge of svg.querySelectorAll("[marker-end]")) {
+        let id = edge.getAttribute("marker-end")!.slice(5, -1);
+        expect(svg.querySelector(`[id="${id}"]`)).toBeTruthy();
+      }
+    }
+    first.destroy();
+    second.destroy();
+  });
+
   it("supports the mmd fence alias", async () => {
     let editor = await mountEditor("```mmd\nflowchart TD\n  A --> B\n```\n\nnext", "next");
 

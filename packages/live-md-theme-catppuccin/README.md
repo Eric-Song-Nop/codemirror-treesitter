@@ -21,3 +21,6 @@ import {
 
 Code block token colors still come from the active CodeMirror syntax
 highlighters, not from this package.
+
+Mermaid nodes use a subtle accent tint and accent-derived borders against the
+page-colored canvas; labels retain the palette’s foreground colors.

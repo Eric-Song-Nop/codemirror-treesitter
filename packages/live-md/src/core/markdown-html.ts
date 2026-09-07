@@ -20,7 +20,7 @@ import {
 } from "./features.js";
 import { renderStrictLatexFormula, type LatexFormula } from "./latex.js";
 import { sanitizeLiveMdLinkDestination } from "./link-destination.js";
-import { renderLiveMdMermaidResult } from "./mermaid.js";
+import { renderLiveMdMermaidResult, scopeMermaidMarkers } from "./mermaid.js";
 
 export type MarkdownHtmlImage = {
   alt: string;
@@ -340,15 +340,16 @@ export function liveMdMarkdownDocumentCss(options: LiveMdMarkdownDocumentCssOpti
 }
 
 .${liveMdMarkdownDocumentClass} .cm-md-mermaid {
+  box-sizing: border-box;
   display: block;
   max-width: 100%;
+  border: 1px solid var(--live-md-border, #d5dcd8);
+  border-radius: 12px;
   accent-color: var(--live-md-mermaid-accent, var(--live-md-accent, #0f766e));
-  border: 1px solid var(--live-md-mermaid-border, var(--live-md-border, #d5dcd8));
-  border-radius: 8px;
-  background: var(--live-md-mermaid-surface, var(--live-md-surface, #fffaf0));
+  background: var(--live-md-mermaid-bg, var(--live-md-bg, #fffdfa));
   color: var(--live-md-mermaid-text, var(--live-md-text, #202523));
   overflow: auto;
-  padding: 0.9em;
+  padding: 1.25em;
 }
 
 .${liveMdMarkdownDocumentClass} .cm-md-mermaid-render {
@@ -853,7 +854,7 @@ async function renderMermaidFence(source: string) {
 
   let rendered = await renderLiveMdMermaidResult(diagramSource);
   if (!rendered.ok) return renderMermaidErrorHtml(diagramSource, rendered.message);
-  let sanitized = sanitizeMermaidSvg(rendered.svg);
+  let sanitized = sanitizeMermaidSvg(scopeMermaidMarkers(rendered.svg));
   if (!sanitized.ok) return renderMermaidErrorHtml(diagramSource, sanitized.message);
 
   return `<div class="cm-md-mermaid" data-source="${escapeAttribute(diagramSource)}">\n<div class="cm-md-mermaid-render">${sanitized.svg}</div>\n</div>`;

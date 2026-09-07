@@ -13,7 +13,7 @@ import {
 import { resolveLiveMdImageSource, type LiveMdImageSourceResolver } from "./images.js";
 import { renderLatexFormula, type LatexFormula, type LatexRenderResult } from "./latex.js";
 import { resolveLiveMdLinkHref } from "./links.js";
-import { renderLiveMdMermaidResult } from "./mermaid.js";
+import { renderLiveMdMermaidResult, scopeMermaidMarkers } from "./mermaid.js";
 import { hashString } from "./analysis/ranges.js";
 import { isAsciiDigit } from "./util.js";
 
@@ -594,7 +594,7 @@ function applyMermaidResult(
   if (result.ok) {
     let render = document.createElement("div");
     render.className = "cm-md-mermaid-render";
-    appendSvg(render, result.svg);
+    appendSvg(render, scopeMermaidMarkers(result.svg));
     element.replaceChildren(render);
     result.bindFunctions?.(render);
   } else {
