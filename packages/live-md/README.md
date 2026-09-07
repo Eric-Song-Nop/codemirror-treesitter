@@ -11,6 +11,10 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Depends on local `autocomplete`, `basic-setup`, `commands`, `language`, and
   `language-data` packages plus official CodeMirror state/view packages.
 - Uses KaTeX, Mermaid, and `beautiful-mermaid` for rich Markdown widgets.
+  Mermaid previews use theme-tinted nodes, a neutral canvas, and shared host
+  typography in the editor and HTML exports. Fallback flowchart shapes, labels,
+  and connectors also follow the host's Mermaid tokens. Cached SVGs respond to
+  theme changes without rerendering; mounted diagrams have isolated arrow markers.
 - Built as an ES module package with Vite+ `vp pack`.
 - Keeps collaboration optional. Loro-specific code belongs in
   `@codemirror-treesitter/live-md-loro`, not this package.

@@ -18,6 +18,9 @@ const beautifulMermaidThemeOptions: BeautifulMermaidRenderOptions = {
   line: "var(--live-md-mermaid-line, var(--live-md-muted, #66706c))",
   muted: "var(--live-md-mermaid-muted, var(--live-md-muted, #66706c))",
   surface: "var(--live-md-mermaid-surface, var(--live-md-bg, #fffdfa))",
+  padding: 20,
+  nodeSpacing: 32,
+  layerSpacing: 48,
   transparent: true,
 };
 
@@ -67,6 +70,28 @@ function loadMermaid() {
   mermaidPromise ??= import("mermaid").then((module) => {
     let mermaid = module.default;
     mermaid.initialize({
+      // CSS variables keep cached SVGs responsive to host theme changes.
+      theme: "neutral",
+      themeCSS: `
+        text, .label, .nodeLabel, .edgeLabel, .cluster-label {
+          font-family: var(--live-md-mermaid-font, var(--live-md-font-ui, system-ui));
+          fill: ${beautifulMermaidThemeOptions.fg};
+          color: ${beautifulMermaidThemeOptions.fg};
+        }
+        .node rect, .node circle, .node ellipse, .node polygon, .node path,
+        .actor, .labelBox, .activation0, .activation1, .activation2 {
+          fill: ${beautifulMermaidThemeOptions.surface};
+          stroke: ${beautifulMermaidThemeOptions.border};
+        }
+        .cluster rect, .edgeLabel rect, .edgeLabel .labelBkg {
+          fill: ${beautifulMermaidThemeOptions.bg};
+          stroke: ${beautifulMermaidThemeOptions.border};
+        }
+        .edgeLabel, .edgeLabel p { background-color: ${beautifulMermaidThemeOptions.bg}; }
+        .flowchart-link, .actor-line, .messageLine0, .messageLine1,
+        .transition, .relation { stroke: ${beautifulMermaidThemeOptions.line}; }
+        .marker { fill: ${beautifulMermaidThemeOptions.accent}; stroke: ${beautifulMermaidThemeOptions.accent}; }
+      `,
       securityLevel: "strict",
       startOnLoad: false,
     });
@@ -94,4 +119,22 @@ function prepareBeautifulMermaidSvg(svg: string) {
 
 function stripCssImports(svg: string) {
   return svg.replace(/^\s*@import\s+url\(['"][^'"]+['"]\);\s*/gm, "");
+}
+
+let mermaidMarkerSequence = 0;
+
+// Cached SVGs can be mounted more than once, including in differently themed hosts.
+// Fragment references are document-wide, so allocate marker IDs at insertion time.
+export function scopeMermaidMarkers(svg: string) {
+  let prefix = `live-md-marker-${++mermaidMarkerSequence}-`;
+  let ids = new Map<string, string>();
+  let scoped = svg.replace(/(<marker\b[^>]*\bid=")([^"]+)(")/g, (_, start, id, end) => {
+    let scopedId = `${prefix}${ids.size}`;
+    ids.set(id, scopedId);
+    return `${start}${scopedId}${end}`;
+  });
+  return scoped.replace(/url\(#([^)]*)\)/g, (reference, id) => {
+    let scopedId = ids.get(id);
+    return scopedId ? `url(#${scopedId})` : reference;
+  });
 }

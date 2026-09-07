@@ -59,8 +59,8 @@
   --live-md-mermaid-muted: var(--live-md-muted);
   --live-md-mermaid-line: var(--live-md-muted);
   --live-md-mermaid-accent: var(--live-md-accent);
-  --live-md-mermaid-border: var(--live-md-border);
-  --live-md-mermaid-surface: var(--live-md-bg);
+  --live-md-mermaid-border: color-mix(in srgb, var(--live-md-accent) 38%, var(--live-md-bg));
+  --live-md-mermaid-surface: color-mix(in srgb, var(--live-md-accent) 9%, var(--live-md-bg));
   --live-md-mermaid-font: var(--live-md-font-ui);
   --live-md-mermaid-mono-font: var(--live-md-font-code);
   display: block;
@@ -270,16 +270,18 @@
   font-size: 0.86em;
 }
 
+/* Keep the canvas quiet; node fills and connectors carry the theme accent. */
 .live-md-codemirror .cm-md-mermaid {
   box-sizing: border-box;
   display: block;
   max-width: 100%;
   border: 1px solid var(--live-md-border);
-  border-radius: 8px;
-  background: var(--live-md-surface);
-  color: var(--live-md-text);
+  border-radius: 12px;
+  accent-color: var(--live-md-mermaid-accent);
+  background: var(--live-md-mermaid-bg);
+  color: var(--live-md-mermaid-text);
   overflow: auto;
-  padding: 1.6em 0.9em;
+  padding: 1.25em;
 }
 
 .live-md-codemirror .cm-md-mermaid-render {
