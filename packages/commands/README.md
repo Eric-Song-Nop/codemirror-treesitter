@@ -63,7 +63,9 @@ apps.
 - Syntax-aware commands call local `syntaxTree`, `matchBrackets`, `NodeProp`,
   and indentation helpers from `@codemirror-treesitter/language`.
 - Tests are split by command behavior, history behavior, and indentation
-  behavior.
+  behavior. `tests/syntax.test.ts` loads the JavaScript grammar WASM to cover
+  `selectParentSyntax` and bracket-exploding `insertNewlineAndIndent` against a
+  real Tree-sitter tree.
 
 ## Validation
 
@@ -77,3 +79,10 @@ vp run audit
 
 The audit checks upstream export parity and verifies that known command stubs
 are not present.
+
+## License and attribution
+
+This package is a derivative work of [`@codemirror/commands`](https://github.com/codemirror/commands) by Marijn Haverbeke and others,
+distributed under the MIT License. The upstream copyright notice is retained
+alongside the project copyright in [`LICENSE`](./LICENSE). See the root
+[`NOTICE.md`](../../NOTICE.md) for the full list of derived components.

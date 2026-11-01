@@ -3,12 +3,22 @@
   "version": "0.0.0",
   "private": true,
   "description": "Experimental browser WASM wrapper for OpenDAL-backed local and cloud workspace storage",
+  "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/opendal-wasm-browser#readme",
+  "bugs": {
+    "url": "https://github.com/Eric-Song-Nop/codemirror-treesitter/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eric-Song-Nop/codemirror-treesitter.git",
+    "directory": "packages/opendal-wasm-browser"
+  },
   "files": [
     "dist",
     "pkg",
     "README.md",
-    "PLAN.md"
+    "PLAN.md",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,

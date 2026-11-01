@@ -2,9 +2,19 @@
   "name": "@codemirror-treesitter/theme-catppuccin",
   "version": "0.0.0",
   "description": "Catppuccin Latte and Macchiato themes for the tree-sitter CodeMirror build",
+  "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/theme-catppuccin#readme",
+  "bugs": {
+    "url": "https://github.com/Eric-Song-Nop/codemirror-treesitter/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eric-Song-Nop/codemirror-treesitter.git",
+    "directory": "packages/theme-catppuccin"
+  },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,

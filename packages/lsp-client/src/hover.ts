@@ -7,7 +7,7 @@ import {
   highlightCode,
 } from "@codemirror-treesitter/language";
 import { fromPosition } from "./pos.js";
-import { escHTML } from "./text.js";
+import { escHTML, fencedCodeLanguages, loadedLanguage, preloadHighlightLanguages } from "./text.js";
 import { LSPPlugin } from "./plugin.js";
 
 /// Create an extension that queries the language server for hover
@@ -32,8 +32,14 @@ function hoverRequest(plugin: LSPPlugin, pos: number) {
 function lspTooltipSource(view: EditorView, pos: number): Promise<Tooltip | null> {
   const plugin = LSPPlugin.get(view);
   if (!plugin) return Promise.resolve(null);
-  return hoverRequest(plugin, pos).then((result) => {
+  return hoverRequest(plugin, pos).then(async (result) => {
     if (!result) return null;
+    // Give lazily loaded code block grammars a chance to load so the
+    // tooltip renders highlighted; otherwise it falls back to plain text.
+    await preloadHighlightLanguages(
+      plugin.client.config.highlightLanguage,
+      hoverCodeLanguages(result.contents),
+    );
     return {
       pos: result.range ? fromPosition(view.state.doc, result.range.start) : pos,
       end: result.range ? fromPosition(view.state.doc, result.range.end) : pos,
@@ -46,6 +52,15 @@ function lspTooltipSource(view: EditorView, pos: number): Promise<Tooltip | null
       above: true,
     };
   });
+}
+
+function hoverCodeLanguages(
+  value: string | lsp.MarkupContent | lsp.MarkedString | lsp.MarkedString[],
+): string[] {
+  if (Array.isArray(value)) return value.flatMap(hoverCodeLanguages);
+  if (typeof value == "string") return fencedCodeLanguages(value);
+  if ("language" in value) return value.language ? [value.language] : [];
+  return value.kind == "markdown" ? fencedCodeLanguages(value.value) : [];
 }
 
 function renderTooltipContent(
@@ -68,9 +83,10 @@ export function __testRenderTooltipContent(
 function renderCode(plugin: LSPPlugin, code: lsp.MarkedString) {
   if (typeof code == "string") return plugin.docToHTML(code, "markdown");
   let { language, value } = code;
-  let lang =
+  let lang = loadedLanguage(
     plugin.client.config.highlightLanguage &&
-    plugin.client.config.highlightLanguage(language || "");
+      plugin.client.config.highlightLanguage(language || ""),
+  );
   if (!lang) {
     let viewLang = plugin.view.state.facet(languageFacet);
     if (viewLang && (!language || viewLang.name == language)) lang = viewLang;
