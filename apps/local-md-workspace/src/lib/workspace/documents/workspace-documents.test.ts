@@ -7,6 +7,10 @@ import {
   resetBrowserCollabMemoryStoreForTests,
 } from "@/lib/collaboration/collab-browser-store";
 import { createMemoryWorkspaceRuntime } from "@/test/memory-workspace-runtime";
+import {
+  DefaultWorkspaceDocuments,
+  WORKSPACE_DOCUMENT_IDLE_CLOSE_MS,
+} from "./workspace-documents.ts";
 
 let indexedDbDescriptor: PropertyDescriptor | undefined;
 
@@ -151,6 +155,74 @@ describe("workspace collaborative documents", () => {
     await runtime.dispose();
   });
 });
+
+describe("workspace document eviction", () => {
+  it("closes unretained documents after the idle period and keeps retained ones", async () => {
+    vi.useFakeTimers();
+    let { documents, runtime } = registryFixture(
+      Array.from({ length: 6 }, (_, index) => [`n${index}.md`, `# ${index}\n`]),
+    );
+    let opened = [];
+    for (let index = 0; index < 6; index++) opened.push(await documents.document(`n${index}.md`));
+    let release = opened[0]!.retain!();
+    expect(documents.liveDocumentCount()).toBe(6);
+
+    await vi.advanceTimersByTimeAsync(WORKSPACE_DOCUMENT_IDLE_CLOSE_MS + 1);
+    expect(documents.liveDocumentCount()).toBe(1);
+    expect(() => opened[1]!.read()).toThrow("closed");
+    expect(opened[0]!.read()).toBe("# 0\n");
+
+    release();
+    await vi.advanceTimersByTimeAsync(WORKSPACE_DOCUMENT_IDLE_CLOSE_MS - 1);
+    expect(documents.liveDocumentCount()).toBe(1);
+    await documents.document("n0.md");
+    await vi.advanceTimersByTimeAsync(WORKSPACE_DOCUMENT_IDLE_CLOSE_MS - 1);
+    expect(documents.liveDocumentCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(documents.liveDocumentCount()).toBe(0);
+
+    let reopened = await documents.document("n1.md");
+    expect(reopened).not.toBe(opened[1]);
+    expect(reopened.read()).toBe("# 1\n");
+    await documents.close();
+    await runtime.dispose();
+  });
+
+  it("caps live documents with LRU eviction and never evicts unsaved documents", async () => {
+    vi.useFakeTimers();
+    let { documents, runtime } = registryFixture(
+      Array.from({ length: 8 }, (_, index) => [`n${index}.md`, `${index}`]),
+      { maxLiveDocuments: 3 },
+    );
+    let dirty = await documents.document("n0.md");
+    dirty.edit([{ expectedText: "0", from: 0, insert: "zero", to: 1 }]);
+    expect(dirty.snapshot().persistenceStatus).not.toBe("saved");
+    for (let index = 1; index < 8; index++) {
+      await documents.document(`n${index}.md`);
+      await Promise.resolve();
+    }
+
+    expect(documents.liveDocumentCount()).toBe(3);
+    expect(dirty.read()).toBe("zero");
+    await documents.close();
+    expect(runtime.files.get("n0.md")).toBe("zero");
+    await runtime.dispose();
+  });
+});
+
+function registryFixture(
+  entries: Array<[string, string]>,
+  options: { idleCloseMs?: number; maxLiveDocuments?: number } = {},
+) {
+  let runtime = createMemoryWorkspaceRuntime(entries);
+  let documents = new DefaultWorkspaceDocuments({
+    changes: null,
+    documentSource: runtime.documentSource,
+    identity: runtime.identity,
+    ...options,
+  });
+  return { documents, runtime };
+}
 
 function fixture(entries: Array<[string, string]> = []) {
   let runtime = createMemoryWorkspaceRuntime(entries);

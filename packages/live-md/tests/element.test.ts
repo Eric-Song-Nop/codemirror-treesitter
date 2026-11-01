@@ -1,5 +1,4 @@
 // @vitest-environment happy-dom
-
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
@@ -9,6 +8,7 @@ import {
   type LiveMdEditorElement as LiveMdEditorElementType,
   type LiveMdPlugin,
 } from "../src/index.js";
+import { liveMdSharedSheet } from "../src/element/styles.js";
 
 let tagId = 0;
 let locationDescriptor: PropertyDescriptor | undefined;
@@ -76,6 +76,96 @@ describe("liveMd editor web component", () => {
     await expect(errorEvent).resolves.toMatchObject({
       detail: { error: expect.any(Error) },
     });
+  });
+
+  it("keeps ready pending until the element connects", async () => {
+    let tag = defineTestElement();
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
+    let resolved = false;
+    let ready = editor.ready.then(() => (resolved = true));
+
+    await flushTasks();
+    expect(resolved).toBe(false);
+
+    document.body.append(editor);
+    await ready;
+    expect(resolved).toBe(true);
+    expect(editor.view).toBeTruthy();
+  });
+
+  it("resolves a pending ready from a later connection after an early disconnect", async () => {
+    let tag = defineTestElement();
+    let editor = document.createElement(tag) as LiveMdEditorElementType;
+    let ready = editor.ready;
+
+    document.body.append(editor);
+    editor.remove();
+    document.body.append(editor);
+
+    await ready;
+    expect(editor.ready).toBe(ready);
+    expect(editor.view).toBeTruthy();
+  });
+
+  it("creates a fresh ready promise for each reconnection after settling", async () => {
+    let editor = mountTestEditor("doc");
+    let first = editor.ready;
+    await first;
+
+    editor.remove();
+    document.body.append(editor);
+
+    expect(editor.ready).not.toBe(first);
+    await editor.ready;
+  });
+
+  it("reports mount failures through live-md-error without unhandled rejections", async () => {
+    let unhandled = trackUnhandledRejections();
+    try {
+      let tag = defineTestElement();
+      let editor = document.createElement(tag) as LiveMdEditorElementType;
+      editor.config = {
+        plugins: [
+          {
+            mount() {
+              throw new Error("plugin mount failed");
+            },
+          },
+        ],
+      };
+      let errorEvent = waitForEvent<CustomEvent>(editor, "live-md-error");
+
+      document.body.append(editor);
+
+      await expect(errorEvent).resolves.toMatchObject({
+        detail: { error: expect.objectContaining({ message: "plugin mount failed" }) },
+      });
+      await flushTasks();
+      expect(unhandled.reasons).toEqual([]);
+      await expect(editor.ready).rejects.toThrow("plugin mount failed");
+    } finally {
+      unhandled.stop();
+    }
+  });
+
+  it("does not leave an unhandled rejection when async support fails and ready is ignored", async () => {
+    let unhandled = trackUnhandledRejections();
+    try {
+      let tag = defineTestElement();
+      let editor = document.createElement(tag) as LiveMdEditorElementType;
+      let errorEvent = waitForEvent<CustomEvent>(editor, "live-md-error");
+      vi.spyOn(EditorView.prototype, "dispatch").mockImplementationOnce(() => {
+        throw new Error("language dispatch failed");
+      });
+
+      document.body.append(editor);
+      await errorEvent;
+      await flushTasks();
+
+      expect(unhandled.reasons).toEqual([]);
+    } finally {
+      unhandled.stop();
+    }
   });
 
   it("registers a custom element with an open shadow root", async () => {
@@ -516,7 +606,41 @@ describe("liveMd editor web component", () => {
     expect(document.head.querySelector("style[data-live-md-runtime]")).toBeNull();
     expect(document.querySelector(".cm-md-heading")).toBeNull();
     expect(hasShadowRuntimeStyles(editor)).toBe(true);
-    expect(editor.shadowRoot?.querySelectorAll("style[data-live-md-runtime]")).toHaveLength(1);
+    // Constructing, connecting, and reconnecting must not duplicate the runtime sheet.
+    editor.remove();
+    document.body.append(editor);
+    await editor.ready;
+    let sheets = editor.shadowRoot!.adoptedStyleSheets;
+    expect(new Set(sheets).size).toBe(sheets.length);
+    expect(sheets.filter(isLiveMdRuntimeSheet)).toHaveLength(1);
+    expect(editor.shadowRoot!.querySelectorAll("style[data-live-md-runtime]")).toHaveLength(0);
+  });
+
+  it("shares one constructed stylesheet across editor shadow roots", async () => {
+    let first = mountTestEditor("first");
+    let second = mountTestEditor("second");
+    await Promise.all([first.ready, second.ready]);
+
+    let [sheet] = first.shadowRoot!.adoptedStyleSheets.filter(isLiveMdRuntimeSheet);
+    expect(sheet).toBeInstanceOf(CSSStyleSheet);
+    expect(second.shadowRoot!.adoptedStyleSheets.filter(isLiveMdRuntimeSheet)).toEqual([sheet]);
+    expect(first.shadowRoot!.querySelector("style[data-live-md-runtime]")).toBeNull();
+  });
+
+  it("does not take focus unless the autofocus attribute is present", async () => {
+    // happy-dom cannot track focus inside shadow roots, so observe the request itself.
+    let focus = vi.spyOn(EditorView.prototype, "focus").mockImplementation(() => {});
+    let plain = mountTestEditor("plain");
+    await plain.ready;
+    expect(focus).not.toHaveBeenCalled();
+
+    let tag = defineTestElement();
+    let focused = document.createElement(tag) as LiveMdEditorElementType;
+    focused.setAttribute("autofocus", "");
+    document.body.append(focused);
+    await focused.ready;
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(focus.mock.instances[0]).toBe(focused.view);
   });
 
   it("exports the reusable CodeMirror extension", () => {
@@ -569,6 +693,24 @@ function hasShadowRuntimeStyles(editor: LiveMdEditorElementType) {
     editor.shadowRoot?.querySelector("style[data-live-md-runtime]") ||
     editor.shadowRoot?.adoptedStyleSheets.length,
   );
+}
+
+function isLiveMdRuntimeSheet(sheet: CSSStyleSheet) {
+  return sheet === liveMdSharedSheet();
+}
+
+function flushTasks() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function trackUnhandledRejections() {
+  let reasons: unknown[] = [];
+  let listener = (reason: unknown) => reasons.push(reason);
+  process.on("unhandledRejection", listener);
+  return {
+    reasons,
+    stop: () => process.off("unhandledRejection", listener),
+  };
 }
 
 function waitForEvent<EventType extends Event>(target: EventTarget, type: string) {

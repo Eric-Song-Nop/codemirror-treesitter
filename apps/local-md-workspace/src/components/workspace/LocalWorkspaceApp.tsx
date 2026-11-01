@@ -1,36 +1,37 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { LiveMdConfig, LiveMdEditorElement } from "@codemirror-treesitter/live-md";
-import { useStore } from "zustand";
+import type { LiveMdEditorElement } from "@codemirror-treesitter/live-md";
 import { useWorkspaceApplication } from "@/app/WorkspaceApplicationProvider";
 import { createWorkspaceAppSetters } from "@/app/workspace-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { WorkspaceDialogs } from "@/components/workspace/WorkspaceDialogs";
 import type { DocumentRecoveryAction } from "@/components/workspace/DocumentRecoveryDialogs";
-import { WorkspaceEditorPane } from "@/components/workspace/WorkspaceEditorPane";
-import { WorkspaceErrorBanner } from "@/components/workspace/WorkspaceErrorBanner";
-import { WorkspaceHeader } from "@/components/workspace/WorkspaceHeader";
+import {
+  WorkspaceDialogsContainer,
+  WorkspaceEditorPaneContainer,
+  WorkspaceErrorBannerContainer,
+  WorkspaceHeaderContainer,
+  WorkspacePermissionBanner,
+  WorkspaceSidebarContainer,
+} from "@/components/workspace/WorkspaceChrome";
 import { WorkspaceSettingsDialog } from "@/components/workspace/WorkspaceSettingsDialog";
-import { WorkspaceSidebar } from "@/components/workspace/WorkspaceSidebar";
 import { useDropboxWorkspaceRuntime } from "@/hooks/workspace/useDropboxWorkspaceRuntime";
 import { useOwnerShareHost } from "@/hooks/workspace/useOwnerShareHost";
-import { useWorkspaceDocumentActions } from "@/hooks/workspace/useWorkspaceDocumentActions";
+import { useWorkspaceEditorSession } from "@/hooks/workspace/useWorkspaceEditorSession";
 import { useWorkspaceEntryDialogs } from "@/hooks/workspace/useWorkspaceEntryDialogs";
 import { useWorkspaceFileActions } from "@/hooks/workspace/useWorkspaceFileActions";
 import { useWorkspaceImageAssets } from "@/hooks/workspace/useWorkspaceImageAssets";
 import { useWorkspaceOpeners } from "@/hooks/workspace/useWorkspaceOpeners";
 import { useWorkspacePersistenceLifecycle } from "@/hooks/workspace/useWorkspacePersistenceLifecycle";
+import { useWorkspaceRootState } from "@/hooks/workspace/useWorkspaceRootState";
 import { useWorkspaceShareActions } from "@/hooks/workspace/useWorkspaceShareActions";
 import { useWorkspaceShareState } from "@/hooks/workspace/useWorkspaceShareState";
 import { useWorkspaceStartup } from "@/hooks/workspace/useWorkspaceStartup";
 import { useWorkspaceTree } from "@/hooks/workspace/useWorkspaceTree";
 import { completeDropboxPopupOAuthIfPresent } from "@/lib/workspace/providers/dropbox/oauth";
-import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import { isMobileBrowser } from "@/lib/platform/browser-support";
 import {
   supportsDirectoryPicker,
   supportsSaveFilePicker,
   type AccessDirectoryHandle,
-  type AccessFileHandle,
 } from "@/lib/workspace/file-system";
 import { findMarkdownFile, type MarkdownFileNode } from "@/lib/workspace/tree";
 import { useI18n } from "@/lib/i18n";
@@ -38,24 +39,19 @@ import { useLiveMdPreload } from "@/lib/editor/live-md-preload";
 import { isMobileSidebarViewport } from "@/lib/workspace/constants";
 import { defaultDropboxAppKey, defaultDropboxRoot } from "@/lib/workspace/providers/dropbox/config";
 import { errorToMessage } from "@/lib/workspace/errors";
-import { createEphemeralLocalWorkspaceRecord, saveStateLabel } from "@/lib/workspace/state";
-import type {
-  SelectedFileSource,
-  SaveState,
-  SingleFileSource,
-  SourceAutoSaveTask,
-} from "@/lib/workspace/types";
+import { createEphemeralLocalWorkspaceRecord } from "@/lib/workspace/state";
 import { rememberStoredLocalWorkspace, saveStoredWorkspaceKind } from "@/lib/workspace/store";
-import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
-import { transitionWorkspaceRuntime } from "@/lib/workspace/runtime/runtime-lifecycle";
 
-const emptyLiveMdConfig: LiveMdConfig = {};
-const emptyLiveMdPlugins: NonNullable<LiveMdConfig["plugins"]> = [];
 const WorkspaceAgentFeature = lazy(async () => {
   let module = await import("@/features/workspace-agent/WorkspaceAgentFeature");
   return { default: module.WorkspaceAgentFeature };
 });
 
+/**
+ * Workspace root. It wires the editor session and feature hooks together and
+ * renders from {@link useWorkspaceRootState}, which excludes high-frequency
+ * fields; the chrome containers subscribe to those themselves.
+ */
 export function LocalWorkspaceApp() {
   let { t } = useI18n();
   let {
@@ -63,26 +59,15 @@ export function LocalWorkspaceApp() {
     retry: retryLiveMdPreload,
     retrying: liveMdPreloadRetrying,
   } = useLiveMdPreload();
-  let {
-    documentViews,
-    runtime: workspaceEffectRuntime,
-    store: workspaceAppStore,
-  } = useWorkspaceApplication();
+  let application = useWorkspaceApplication();
+  let { documentViews, store: workspaceAppStore } = application;
   let {
     agentActivated,
     agentOpen,
-    busy,
     collabDocument,
-    dropboxConnecting,
-    editorDocument,
-    errorMessage,
-    openingDocument,
-    recoveryCopyPath,
+    documentSourceKind,
+    editorDocumentPath,
     recoveryDialogAction,
-    recoveryDialogError,
-    restoreChecking,
-    retryLoadPath,
-    saveState,
     selectedFile,
     sidebarOpen,
     singleFileSource,
@@ -92,48 +77,30 @@ export function LocalWorkspaceApp() {
     tree,
     treeSelection,
     workspaceRuntime,
-  } = useStore(workspaceAppStore);
+  } = useWorkspaceRootState(workspaceAppStore);
   let {
     setAgentActivated,
     setAgentOpen,
     setBusy,
     setDropboxConnecting,
-    setEditorDocument,
     setErrorMessage,
     setRecoveryCopyPath,
     setRecoveryDialogAction,
     setRecoveryDialogError,
     setRestoreChecking,
     setRetryLoadPath,
-    setSaveState,
     setSidebarOpen,
     setStoredDropboxConfig,
     setStoredLocalWorkspace,
     setStoredWorkspaceKind,
     setTree,
     setTreeSelection,
-    setWorkspaceRuntime,
   } = useMemo(() => createWorkspaceAppSetters(workspaceAppStore), [workspaceAppStore]);
 
   let editorElementRef = useRef<LiveMdEditorElement | null>(null);
   let agentButtonRef = useRef<HTMLButtonElement | null>(null);
-  let workspaceRuntimeRef = useRef<WorkspaceRuntime | null>(null);
-  let selectedFileSourceRef = useRef<SelectedFileSource | null>(null);
-  let selectedFileRef = useRef<MarkdownFileNode | null>(null);
-  let singleFileSourceRef = useRef<SingleFileSource | null>(null);
-  let localFileHandleRef = useRef<AccessFileHandle | null>(null);
-  let collabDocumentRef = useRef<WorkspaceCollaborativeDocument | null>(null);
-  let editorValueRef = useRef("");
-  let cleanValueRef = useRef("");
-  let dirtyRef = useRef(false);
-  let saveStateRef = useRef<SaveState>("idle");
-  let autoSaveTaskRef = useRef<SourceAutoSaveTask | null>(null);
-  let scheduleAutoSaveRef = useRef<() => void>(() => {});
-  let saveOperationRef = useRef(0);
-  let imageUploadAbortRef = useRef<AbortController | null>(null);
   let [settingsOpen, setSettingsOpen] = useState(false);
   let agentWorkspaceKey = singleFileSource ? "" : (workspaceRuntime?.identity.id ?? "");
-  let effectiveBusy = busy || openingDocument != null;
   let agentScopeKey = agentWorkspaceKey;
   let {
     activeShareForSelectedFile,
@@ -159,13 +126,48 @@ export function LocalWorkspaceApp() {
     workspaceRuntime,
   });
 
-  useEffect(
-    () => () => {
-      void workspaceRuntimeRef.current?.dispose();
-      workspaceRuntimeRef.current = null;
-    },
-    [],
-  );
+  let { flushOwnerShareHost, startOwnerShareHost, stopOwnerShareHost } = useOwnerShareHost({
+    setActiveShareRecord,
+    setShareError,
+  });
+
+  let session = useWorkspaceEditorSession(application, {
+    setActiveShareRecord,
+    setCreatedShare,
+    startOwnerShareHost,
+  });
+  let {
+    autoSaveTaskRef,
+    collabDocumentRef,
+    dirtyRef,
+    editorValueRef,
+    imageUploadAbortRef,
+    localFileHandleRef,
+    saveOperationRef,
+    selectedFileRef,
+    selectedFileSourceRef,
+    singleFileSourceRef,
+    workspaceRuntimeRef,
+  } = session.refs;
+  let {
+    activateSingleFileDocument,
+    beginDocumentViewChange,
+    cancelImageUpload,
+    clearDocumentView,
+    discardMaterializedDraft,
+    ensureSelectedCollabDocument,
+    finishDocumentViewChange,
+    handleEditorInput,
+    keepCurrentDocumentAs,
+    loadFile,
+    openSingleFileDraft,
+    recreateCurrentDocumentSource,
+    regrantWorkspaceAccess,
+    replaceWorkspaceRuntime,
+    resolveCurrentDocumentUseExternal,
+    restoreCloudRedirectEditorDraft,
+    saveCurrentFile,
+  } = session;
 
   useEffect(() => {
     completeDropboxPopupOAuthIfPresent();
@@ -189,7 +191,7 @@ export function LocalWorkspaceApp() {
     : isMobileBrowser()
       ? t("errors.fileSystemAccessUnavailableMobile")
       : t("errors.fileSystemAccessUnavailableDesktop");
-  let visibleErrorMessage = errorMessage || liveMdPreloadError;
+  let editorDocument = useMemo(() => ({ path: editorDocumentPath }), [editorDocumentPath]);
   let {
     canInsertImage,
     handleImageInputChange,
@@ -210,15 +212,7 @@ export function LocalWorkspaceApp() {
     workspaceRuntime,
     workspaceRuntimeRef,
   });
-  let collabLiveMdConfig = collabDocument?.liveMdConfig;
-  let markdownConfig = collabLiveMdConfig?.markdown ?? null;
-  let liveMdConfig = useMemo<LiveMdConfig>(
-    () => ({
-      markdown: collabLiveMdConfig?.markdown,
-      plugins: [imagePlugin, ...(collabLiveMdConfig?.plugins ?? emptyLiveMdPlugins)],
-    }),
-    [collabLiveMdConfig?.markdown, collabLiveMdConfig?.plugins, imagePlugin],
-  );
+  let markdownConfig = collabDocument?.liveMdConfig?.markdown ?? null;
   let { clearDropboxAccessToken, createDropboxRuntime, setDropboxRedirectAccessToken } =
     useDropboxWorkspaceRuntime({
       dirtyRef,
@@ -230,66 +224,6 @@ export function LocalWorkspaceApp() {
       workspaceRuntimeRef,
     });
 
-  let setSaveStateSynced = useCallback((nextState: SaveState) => {
-    if (saveStateRef.current == nextState) return;
-    saveStateRef.current = nextState;
-    setSaveState(nextState);
-  }, []);
-
-  let cancelImageUpload = useCallback(() => {
-    imageUploadAbortRef.current?.abort();
-    imageUploadAbortRef.current = null;
-  }, []);
-
-  let finishDocumentViewChange = useCallback(
-    (signal: AbortSignal) => documentViews.finish(signal),
-    [documentViews],
-  );
-
-  let { flushOwnerShareHost, startOwnerShareHost, stopOwnerShareHost } = useOwnerShareHost({
-    setActiveShareRecord,
-    setShareError,
-  });
-
-  let {
-    activateSingleFileDocument,
-    beginDocumentViewChange,
-    clearDocumentView,
-    discardMaterializedDraft,
-    ensureSelectedCollabDocument,
-    handleEditorInput,
-    keepCurrentDocumentAs,
-    loadFile,
-    openSingleFileDraft,
-    recreateCurrentDocumentSource,
-    restoreCloudRedirectEditorDraft,
-    resolveCurrentDocumentUseExternal,
-    saveCurrentFile,
-  } = useWorkspaceDocumentActions({
-    autoSaveTaskRef,
-    cancelImageUpload,
-    cleanValueRef,
-    collabDocumentRef,
-    documentViews,
-    dirtyRef,
-    editorValueRef,
-    localFileHandleRef,
-    saveOperationRef,
-    saveStateRef,
-    scheduleAutoSaveRef,
-    selectedFileSourceRef,
-    selectedFileRef,
-    setActiveShareRecord,
-    setCreatedShare,
-    setEditorDocument,
-    setErrorMessage,
-    setRetryLoadPath,
-    setSaveStateSynced,
-    singleFileSourceRef,
-    startOwnerShareHost,
-    workspaceAppStore,
-  });
-
   useWorkspacePersistenceLifecycle({
     autoSaveTaskRef,
     clearDocumentView,
@@ -297,22 +231,6 @@ export function LocalWorkspaceApp() {
     dirtyRef,
     setErrorMessage,
   });
-
-  let replaceWorkspaceRuntime = useCallback(
-    (nextRuntime: WorkspaceRuntime) =>
-      workspaceEffectRuntime.runPromise(
-        transitionWorkspaceRuntime({
-          activate: (runtime) => {
-            workspaceRuntimeRef.current = runtime;
-            setWorkspaceRuntime(runtime);
-          },
-          clearDocumentView,
-          current: () => workspaceRuntimeRef.current,
-          next: nextRuntime,
-        }),
-      ),
-    [clearDocumentView, setWorkspaceRuntime, workspaceEffectRuntime],
-  );
 
   let { loadDirectory, loadTree, refreshWorkspaceForCurrentEditor } = useWorkspaceTree({
     cancelImageUpload,
@@ -334,13 +252,13 @@ export function LocalWorkspaceApp() {
       }
       setRecoveryDialogAction(action);
     },
-    [selectedFile],
+    [selectedFile, setRecoveryCopyPath, setRecoveryDialogAction, setRecoveryDialogError],
   );
 
   let closeDocumentRecovery = useCallback(() => {
     setRecoveryDialogAction(null);
     setRecoveryDialogError("");
-  }, []);
+  }, [setRecoveryDialogAction, setRecoveryDialogError]);
 
   let submitRecoveryCopy = useCallback(
     async (path: string) => {
@@ -362,7 +280,16 @@ export function LocalWorkspaceApp() {
         setBusy(false);
       }
     },
-    [collabDocument, keepCurrentDocumentAs, loadTree, selectedFile, workspaceRuntime],
+    [
+      collabDocument,
+      keepCurrentDocumentAs,
+      loadTree,
+      selectedFile,
+      setBusy,
+      setRecoveryDialogAction,
+      setRecoveryDialogError,
+      workspaceRuntime,
+    ],
   );
 
   let confirmDocumentRecovery = useCallback(async () => {
@@ -387,13 +314,15 @@ export function LocalWorkspaceApp() {
     recoveryDialogAction,
     resolveCurrentDocumentUseExternal,
     selectedFile,
+    setBusy,
+    setRecoveryDialogAction,
+    setRecoveryDialogError,
     workspaceRuntime,
   ]);
 
   let recoveryKind =
-    collabDocument?.collabState.source.kind == "missing" ||
-    collabDocument?.collabState.source.kind == "recovery-required"
-      ? collabDocument.collabState.source.kind
+    documentSourceKind == "missing" || documentSourceKind == "recovery-required"
+      ? documentSourceKind
       : undefined;
 
   useEffect(() => {
@@ -419,14 +348,17 @@ export function LocalWorkspaceApp() {
     [loadDirectory, setErrorMessage, workspaceRuntime],
   );
 
-  let rememberWorkspaceHandle = useCallback(async (handle: AccessDirectoryHandle) => {
-    let record = await rememberStoredLocalWorkspace(handle);
-    let nextRecord = record ?? createEphemeralLocalWorkspaceRecord(handle);
-    setStoredLocalWorkspace(nextRecord);
-    setStoredWorkspaceKind("local");
-    saveStoredWorkspaceKind("local");
-    return nextRecord;
-  }, []);
+  let rememberWorkspaceHandle = useCallback(
+    async (handle: AccessDirectoryHandle) => {
+      let record = await rememberStoredLocalWorkspace(handle);
+      let nextRecord = record ?? createEphemeralLocalWorkspaceRecord(handle);
+      setStoredLocalWorkspace(nextRecord);
+      setStoredWorkspaceKind("local");
+      saveStoredWorkspaceKind("local");
+      return nextRecord;
+    },
+    [setStoredLocalWorkspace, setStoredWorkspaceKind],
+  );
 
   let {
     openDropboxWorkspace,
@@ -484,22 +416,22 @@ export function LocalWorkspaceApp() {
       void loadFile(workspaceRuntime, file);
       if (isMobileSidebarViewport()) setSidebarOpen(false);
     },
-    [loadFile, workspaceRuntime],
+    [loadFile, setSidebarOpen, workspaceRuntime],
   );
 
   let toggleSidebar = useCallback(() => {
     setSidebarOpen((open) => !open);
-  }, []);
+  }, [setSidebarOpen]);
 
   let toggleAgent = useCallback(() => {
     setAgentActivated(true);
     setAgentOpen((open) => !open);
-  }, []);
+  }, [setAgentActivated, setAgentOpen]);
 
   let closeAgent = useCallback(() => {
     setAgentOpen(false);
     requestAnimationFrame(() => agentButtonRef.current?.focus());
-  }, []);
+  }, [setAgentOpen]);
 
   let {
     closeDeleteDialog,
@@ -554,7 +486,7 @@ export function LocalWorkspaceApp() {
 
   let retryUnavailableCollabFile = useCallback(async () => {
     let runtime = workspaceRuntime;
-    let retryPath = retryLoadPath;
+    let retryPath = workspaceAppStore.getState().retryLoadPath;
     if (!runtime || !retryPath) return;
 
     let file = findMarkdownFile(tree, retryPath);
@@ -564,7 +496,7 @@ export function LocalWorkspaceApp() {
     }
 
     await loadFile(runtime, file, { saveCurrent: false });
-  }, [loadFile, refreshWorkspace, retryLoadPath, tree, workspaceRuntime]);
+  }, [loadFile, refreshWorkspace, tree, workspaceAppStore, workspaceRuntime]);
 
   let { createSharedFileLink, rotateSharedFileLink, stopSharingFile } = useWorkspaceShareActions({
     activeShareRecord,
@@ -627,10 +559,6 @@ export function LocalWorkspaceApp() {
     workspaceRuntimeRef,
   });
 
-  let saveLabel = useMemo(
-    () => saveStateLabel(saveState, selectedFile, singleFileSource, t),
-    [saveState, selectedFile, singleFileSource, t],
-  );
   let restoreAvailable = Boolean(storedLocalWorkspace);
   let dropboxRestoreAvailable = Boolean(storedDropboxConfig);
   let openSettings = useCallback(() => setSettingsOpen(true), []);
@@ -638,15 +566,12 @@ export function LocalWorkspaceApp() {
   return (
     <TooltipProvider>
       <div className="flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
-        <WorkspaceSidebar
+        <WorkspaceSidebarContainer
           browserSupported={browserSupported}
-          busy={effectiveBusy}
           canRefresh={canRefreshWorkspace}
-          dropboxConnecting={dropboxConnecting}
           dropboxRestoreAvailable={dropboxRestoreAvailable}
           open={sidebarOpen}
           restoreAvailable={restoreAvailable}
-          restoreChecking={restoreChecking}
           rootName={rootName}
           selectedPath={selectedPath}
           tree={tree}
@@ -683,19 +608,15 @@ export function LocalWorkspaceApp() {
             multiple
             onChange={handleImageInputChange}
           />
-          <WorkspaceHeader
+          <WorkspaceHeaderContainer
             activeShare={Boolean(activeShareForSelectedFile)}
             agentButtonRef={agentButtonRef}
             agentOpen={agentOpen}
-            busy={effectiveBusy}
             canExport={Boolean(selectedFile)}
             canInsertImage={canInsertImage}
             canSaveAs={Boolean(selectedFile)}
             canSaveToDevice={supportsSaveFilePicker()}
             canShare={canShareFile}
-            dropboxConnecting={dropboxConnecting}
-            saveLabel={saveLabel}
-            saveState={saveState}
             sidebarOpen={sidebarOpen}
             subtitle={headerSubtitle}
             title={headerTitle}
@@ -710,33 +631,23 @@ export function LocalWorkspaceApp() {
             onToggleAgent={toggleAgent}
           />
 
-          <WorkspaceErrorBanner
-            busy={effectiveBusy || liveMdPreloadRetrying}
-            message={visibleErrorMessage}
+          <WorkspacePermissionBanner onRegrant={() => void regrantWorkspaceAccess()} />
+
+          <WorkspaceErrorBannerContainer
+            liveMdPreloadError={liveMdPreloadError}
+            liveMdPreloadRetrying={liveMdPreloadRetrying}
             recoveryKind={recoveryKind}
-            retryPath={errorMessage ? retryLoadPath : liveMdPreloadError ? "live-md" : null}
-            onRetry={() => {
-              if (!errorMessage && liveMdPreloadError) {
-                void retryLiveMdPreload();
-              } else {
-                void retryUnavailableCollabFile();
-              }
-            }}
+            onRetryDocument={() => void retryUnavailableCollabFile()}
+            onRetryLiveMd={() => void retryLiveMdPreload()}
             onKeepLocalAs={() => openDocumentRecovery("keep-local-as")}
             onRecreate={() => openDocumentRecovery("recreate")}
             onUseExternal={() => openDocumentRecovery("use-external")}
           />
 
-          <WorkspaceEditorPane
-            liveMdConfig={selectedFile ? liveMdConfig : emptyLiveMdConfig}
-            document={editorDocument}
-            loadingLabel={
-              openingDocument
-                ? t("workspace.loadingFile", { path: openingDocument.path })
-                : undefined
-            }
+          <WorkspaceEditorPaneContainer
+            editorBlocked={fileDialogMode != null}
+            imagePlugin={imagePlugin}
             placeholder={t("workspace.placeholder")}
-            selected={Boolean(selectedFile) && openingDocument == null && fileDialogMode == null}
             onEditorReady={handleEditorReady}
             onInput={handleEditorInput}
           />
@@ -759,9 +670,8 @@ export function LocalWorkspaceApp() {
 
         <WorkspaceSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 
-        <WorkspaceDialogs
+        <WorkspaceDialogsContainer
           fileNameDialog={{
-            busy: effectiveBusy,
             error: fileDialogError,
             mode: fileDialogMode,
             value: fileDialogValue,
@@ -771,9 +681,6 @@ export function LocalWorkspaceApp() {
           }}
           recoveryDialog={{
             action: recoveryDialogAction,
-            busy: effectiveBusy,
-            copyPath: recoveryCopyPath,
-            error: recoveryDialogError,
             onClose: closeDocumentRecovery,
             onConfirm: confirmDocumentRecovery,
             onCopyPathChange: setRecoveryCopyPath,
@@ -781,8 +688,8 @@ export function LocalWorkspaceApp() {
           }}
           shareDialog={{
             activeShare: activeShareForSelectedFile,
-            busy: effectiveBusy || shareCreating,
             copied: shareCopied,
+            creating: shareCreating,
             error: shareError,
             expiration: shareExpiration,
             file: selectedFile,
@@ -797,7 +704,6 @@ export function LocalWorkspaceApp() {
             onStopSharing: stopSharingFile,
           }}
           saveAsDropboxDialog={{
-            busy: effectiveBusy || dropboxConnecting,
             error: saveAsDropboxError,
             open: saveAsDropboxDialogOpen,
             value: saveAsDropboxPath,
@@ -807,7 +713,6 @@ export function LocalWorkspaceApp() {
           }}
           commandPalette={{
             browserSupported,
-            busy: effectiveBusy,
             canInsertImage,
             canSaveAs: Boolean(selectedFile),
             canSaveAsLocal: supportsSaveFilePicker(),
@@ -818,7 +723,6 @@ export function LocalWorkspaceApp() {
               settingsOpen ||
               recoveryDialogAction != null ||
               deleteTarget != null,
-            dropboxConnecting,
             selectedPath,
             sidebarOpen,
             tree,
@@ -833,7 +737,6 @@ export function LocalWorkspaceApp() {
             onToggleSidebar: toggleSidebar,
           }}
           deleteDialog={{
-            busy: effectiveBusy,
             target: deleteTarget,
             onConfirm: () => void deleteWorkspaceEntry(),
             onOpenChange: closeDeleteDialog,

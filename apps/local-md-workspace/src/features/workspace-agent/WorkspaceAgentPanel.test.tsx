@@ -68,7 +68,7 @@ describe("WorkspaceAgentPanel", () => {
       onClose: close,
       onModelChange: modelChange,
       onSend: send,
-      sessions: [{ id: "session", status: "success", title: null }],
+      sessions: [{ approvals: [], edits: [], id: "session", status: "success", title: null }],
     });
 
     expect(document.querySelector("img")).toBeNull();
@@ -98,6 +98,59 @@ describe("WorkspaceAgentPanel", () => {
       prompt.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
     });
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("shows the target path, change, approval controls, and revertable edits", async () => {
+    let resolveApproval = vi.fn();
+    let revertEdit = vi.fn();
+    let change = {
+      added: 1,
+      diff: "@@ -1,0 +1,1 @@\n+injected line",
+      removed: 0,
+      truncated: false,
+    };
+    await renderPanel({
+      approvals: [{ change, id: "approval-1", path: "private/secrets.md" }],
+      edits: [{ change, id: "edit-1", path: "notes/other.md", status: "applied" }],
+      messages: createChat()
+        .user("Tidy the notes")
+        .assistant(({ writer }) => {
+          writer.tool("write_file", {
+            input: { path: "notes/other.md" },
+            output: { change, path: "notes/other.md", status: "success" },
+          });
+          writer.tool("read_file", { input: { path: "README.md" }, output: { status: "success" } });
+        })
+        .get(),
+      onResolveApproval: resolveApproval,
+      onRevertEdit: revertEdit,
+      sessions: [{ approvals: [], edits: [], id: "session", status: "running", title: null }],
+    });
+
+    let targets = Array.from(
+      document.querySelectorAll("[data-agent-tool-target]"),
+      (node) => node.textContent,
+    );
+    expect(targets).toEqual(["notes/other.md", "README.md"]);
+    expect(document.querySelector("[data-agent-diff]")?.textContent).toContain("+injected line");
+
+    let approval = document.querySelector<HTMLElement>("[data-agent-approval]")!;
+    expect(approval.textContent).toContain("Allow edit to private/secrets.md?");
+    act(() => buttonNamed("Allow once").click());
+    act(() => buttonNamed("Allow this file for this chat").click());
+    act(() => buttonNamed("Deny").click());
+    expect(resolveApproval.mock.calls).toEqual([
+      ["approval-1", "allow-once"],
+      ["approval-1", "allow-session"],
+      ["approval-1", "deny"],
+    ]);
+    expect(document.body.textContent).toContain("Waiting for your approval");
+
+    expect(document.querySelector("[data-agent-edits]")?.textContent).toContain(
+      "Edited notes/other.md",
+    );
+    act(() => buttonNamed("Revert").click());
+    expect(revertEdit).toHaveBeenCalledWith("edit-1");
   });
 
   it("switches isolated transcripts and drafts with mouse or keyboard", async () => {
@@ -145,7 +198,7 @@ async function renderPanel(overrides: Partial<PanelProps>) {
     messages: [],
     model: DEFAULT_WORKSPACE_AGENT_MODEL,
     open: true,
-    sessions: [{ id: "session", status: "idle", title: null }],
+    sessions: [{ approvals: [], edits: [], id: "session", status: "idle", title: null }],
     workspaceAvailable: true,
     onClose: vi.fn(),
     onModelChange: vi.fn(),
@@ -172,8 +225,8 @@ function SessionHarness() {
       model={DEFAULT_WORKSPACE_AGENT_MODEL}
       open
       sessions={[
-        { id: "a", status: "running", title: "Session A" },
-        { id: "b", status: "success", title: "Session B" },
+        { approvals: [], edits: [], id: "a", status: "running", title: "Session A" },
+        { approvals: [], edits: [], id: "b", status: "success", title: "Session B" },
       ]}
       workspaceAvailable
       onClose={vi.fn()}

@@ -310,13 +310,23 @@ export class Tree {
   }
 
   private directNestedAt(pos: number, side: -1 | 0 | 1 = 0): Tree | null {
-    let found: Tree | null = null;
-    for (let nest of this.nested) {
-      if (nest.ranges.some((range) => rangeContains(range, pos, side))) {
-        found = nest.tree;
-      }
+    if (!this.nested.length) return null;
+    let index = nestedRangeIndex(this);
+    // Last range whose start is at or before pos.
+    let low = 0;
+    let high = index.from.length;
+    while (low < high) {
+      let middle = (low + high) >> 1;
+      if (index.from[middle]! <= pos) low = middle + 1;
+      else high = middle;
     }
-    return found;
+    // Later nested entries win, matching the previous linear scan.
+    let best = -1;
+    for (let i = low - 1; i >= 0 && index.maxTo[i]! >= pos; i--) {
+      let nest = index.nest[i]!;
+      if (nest > best && nestedRangeContains(index.from[i]!, index.to[i]!, pos, side)) best = nest;
+    }
+    return best < 0 ? null : this.nested[best]!.tree;
   }
 
   resolveStack(pos: number, side: -1 | 0 | 1 = 0): NodeIterator {
@@ -371,6 +381,38 @@ export class Tree {
   toString() {
     return this.topNode.toString();
   }
+}
+
+type NestedRangeIndex = {
+  readonly from: number[];
+  readonly to: number[];
+  /** Prefix maximum of `to`, so a backwards scan can stop once no earlier range reaches pos. */
+  readonly maxTo: number[];
+  readonly nest: number[];
+};
+
+const nestedRangeIndexes = new WeakMap<Tree, NestedRangeIndex>();
+
+function nestedRangeIndex(tree: Tree): NestedRangeIndex {
+  let found = nestedRangeIndexes.get(tree);
+  if (found) return found;
+  let entries: { from: number; to: number; nest: number }[] = [];
+  tree.nested.forEach((nest, nestIndex) => {
+    for (let range of nest.ranges)
+      entries.push({ from: range.from, to: range.to, nest: nestIndex });
+  });
+  entries.sort((a, b) => a.from - b.from || a.to - b.to);
+  let index: NestedRangeIndex = { from: [], to: [], maxTo: [], nest: [] };
+  let maxTo = -Infinity;
+  for (let entry of entries) {
+    maxTo = Math.max(maxTo, entry.to);
+    index.from.push(entry.from);
+    index.to.push(entry.to);
+    index.maxTo.push(maxTo);
+    index.nest.push(entry.nest);
+  }
+  nestedRangeIndexes.set(tree, index);
+  return index;
 }
 
 function enterFirstIteratedCursorChild(cursor: TreeCursor, from: number, to: number): boolean {
@@ -445,12 +487,139 @@ function nestedStart(nest: NestedTree | { range: DocRange }) {
   return "range" in nest ? nest.range.from : (nest.ranges[0]?.from ?? 0);
 }
 
+/**
+ * Lezer `side` semantics for entering a node: -1 also enters nodes ending at
+ * pos, 1 also enters nodes starting at pos, and 0 only enters nodes that
+ * strictly contain pos. Zero-width nodes are never entered.
+ */
 function rangeContains(range: DocRange, pos: number, side: -1 | 0 | 1) {
-  return pos > range.from && pos < range.to
-    ? true
-    : pos == range.from
-      ? side >= 0
-      : pos == range.to && side <= 0;
+  return side < 0
+    ? range.from < pos && range.to >= pos
+    : side > 0
+      ? range.from <= pos && range.to > pos
+      : range.from < pos && range.to > pos;
+}
+
+/**
+ * Nested-tree ranges keep the lenient boundary rule this package has always
+ * used for language lookups: side 0 accepts both range boundaries.
+ */
+function nestedRangeContains(from: number, to: number, pos: number, side: -1 | 0 | 1) {
+  return pos > from && pos < to ? true : pos == from ? side >= 0 : pos == to && side <= 0;
+}
+
+type ChildRangeCursor = Pick<
+  TSTreeCursor,
+  | "gotoFirstChild"
+  | "gotoNextSibling"
+  | "gotoParent"
+  | "endIndex"
+  | "endPosition"
+  | "currentNode"
+  | "gotoFirstChildForIndex"
+  | "gotoFirstChildForPosition"
+>;
+
+type RangeJumpMode = "auto" | "javascript" | "native";
+let rangeJumpMode: RangeJumpMode = "auto";
+/** Probe verdicts per cursor implementation (prototype). */
+const nativeRangeJumpVerdicts = new WeakMap<object, boolean>();
+
+/** @internal Force a range-jump implementation in tests ("auto" restores probing). */
+export function __testSetRangeJumpMode(mode: RangeJumpMode) {
+  rangeJumpMode = mode;
+}
+
+/**
+ * Whether this cursor implementation's native `gotoFirstChildForIndex` /
+ * `gotoFirstChildForPosition` behave correctly. Upstream web-tree-sitter
+ * 0.26.9 ships a broken wasm shim (child index 0 reads as failure, -1 as
+ * success, and the target is read from the wrong transfer-buffer slots), so
+ * the native jump is used only after a probe against `Node.firstChildForIndex`
+ * passes; otherwise the JavaScript scan below is used. The probe runs once per
+ * implementation, on the first node that has two non-empty children.
+ */
+function nativeRangeJumpsWork(cursor: ChildRangeCursor) {
+  if (rangeJumpMode != "auto") return rangeJumpMode == "native";
+  let key = Object.getPrototypeOf(cursor) as object;
+  let verdict = nativeRangeJumpVerdicts.get(key);
+  if (verdict !== undefined) return verdict;
+  let node = cursor.currentNode as TSNode;
+  let first = node.firstChild;
+  let last = node.lastChild;
+  if (!first || !last || first.endIndex <= first.startIndex || last.startIndex <= first.endIndex) {
+    return false;
+  }
+  verdict = probeNativeRangeJumps(node, first, last);
+  nativeRangeJumpVerdicts.set(key, verdict);
+  return verdict;
+}
+
+/** @internal Run the native range-jump probe on `node` (needs two non-empty children). */
+export function __testProbeNativeRangeJumps(node: TSNode) {
+  return probeNativeRangeJumps(node, node.firstChild!, node.lastChild!);
+}
+
+function probeNativeRangeJumps(node: TSNode, first: TSNode, last: TSNode) {
+  let beyond = { row: node.endPosition.row + 1, column: 0 };
+  let cases: [index: number, position: Point, expected: TSNode | null][] = [
+    [first.startIndex, first.startPosition, first],
+    [last.startIndex, last.startPosition, last],
+    [node.endIndex + 1, beyond, null],
+  ];
+  try {
+    for (let [index, position, expected] of cases) {
+      for (let byPosition of [false, true]) {
+        let probe = node.walk();
+        try {
+          let moved = byPosition
+            ? probe.gotoFirstChildForPosition(position)
+            : probe.gotoFirstChildForIndex(index);
+          if (moved !== !!expected) return false;
+          if (expected && probe.currentNode.id != expected.id) return false;
+          if (expected && (!probe.gotoParent() || probe.currentNode.id != node.id)) return false;
+          if (!expected && probe.currentNode.id != node.id) return false;
+        } finally {
+          probe.delete();
+        }
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Move to the first child that ends after `index`, matching
+ * `ts_tree_cursor_goto_first_child_for_byte`. Uses the native jump only when
+ * {@link nativeRangeJumpsWork} verified it; otherwise scans siblings with
+ * `gotoFirstChild`/`gotoNextSibling`, which keeps the cursor root (so a later
+ * `gotoParent()` returns to the original node) and leaves the cursor where it
+ * started on failure. The scan is linear in the number of preceding siblings.
+ */
+export function cursorGotoFirstChildForIndex(cursor: ChildRangeCursor, index: number) {
+  if (nativeRangeJumpsWork(cursor)) return cursor.gotoFirstChildForIndex(index);
+  if (!cursor.gotoFirstChild()) return false;
+  do {
+    if (cursor.endIndex > index) return true;
+  } while (cursor.gotoNextSibling());
+  cursor.gotoParent();
+  return false;
+}
+
+/** Point variant of {@link cursorGotoFirstChildForIndex}. */
+export function cursorGotoFirstChildForPosition(cursor: ChildRangeCursor, position: Point) {
+  if (nativeRangeJumpsWork(cursor)) return cursor.gotoFirstChildForPosition(position);
+  if (!cursor.gotoFirstChild()) return false;
+  do {
+    let end = cursor.endPosition;
+    if (end.row > position.row || (end.row == position.row && end.column > position.column)) {
+      return true;
+    }
+  } while (cursor.gotoNextSibling());
+  cursor.gotoParent();
+  return false;
 }
 
 function cursorSearchIndex(range: DocRange, pos: number, side: -1 | 0 | 1) {
@@ -654,14 +823,50 @@ export class SyntaxNode {
     return this.type.prop(prop);
   }
 
+  /**
+   * Find the innermost node around `pos`. Like Lezer, side -1 enters nodes
+   * ending at pos, side 1 enters nodes starting at pos, and side 0 only enters
+   * nodes that strictly contain pos. When this node does not hold pos, the
+   * search starts from the nearest ancestor that does (or the root).
+   */
   resolve(pos: number, side: -1 | 0 | 1 = 0): SyntaxNode {
     if (!this.node) return this;
-    let index = pos;
-    if (side < 0 && index > this.from) index--;
-    if (index >= this.to && this.to > this.from) index = this.to - 1;
-    if (index < this.from) index = this.from;
-    let found = this.node.descendantForIndex(index, index);
-    return found ? new SyntaxNode(this.tree, found) : this;
+    let start: TSNode = this.node;
+    while (!nodeHolds(start, pos, side)) {
+      let parent = start.parent;
+      if (!parent) break;
+      start = parent;
+    }
+    // The native byte lookup is only a hint (its whitespace and boundary
+    // handling differs from the side rules): walk up from it to the first
+    // node that satisfies the side rule, then descend from there.
+    let index = side < 0 ? pos - 1 : pos;
+    let hint =
+      index >= start.startIndex && index < start.endIndex
+        ? start.descendantForIndex(index, index)
+        : null;
+    let base = start;
+    for (let node = hint; node && node.id != start.id; node = node.parent) {
+      if (nodeHolds(node, pos, side)) {
+        base = node;
+        break;
+      }
+    }
+    let cursor = base.walk();
+    try {
+      for (;;) {
+        let childIndex = side < 0 ? pos - 1 : pos;
+        if (!cursorGotoFirstChildForIndex(cursor, childIndex)) break;
+        if (!rangeContains({ from: cursor.startIndex, to: cursor.endIndex }, pos, side)) {
+          cursor.gotoParent();
+          break;
+        }
+      }
+      let found = cursor.currentNode;
+      return found.id == this.node.id ? this : new SyntaxNode(this.tree, found);
+    } finally {
+      cursor.delete();
+    }
   }
 
   resolveInner(pos: number, side: -1 | 0 | 1 = 0) {
@@ -878,6 +1083,10 @@ export class SyntaxNode {
 
 export type SyntaxNodeRef = SyntaxNode;
 
+function nodeHolds(node: TSNode, pos: number, side: -1 | 0 | 1) {
+  return rangeContains({ from: node.startIndex, to: node.endIndex }, pos, side);
+}
+
 export class TreeCursor {
   private deleted = false;
 
@@ -1027,7 +1236,9 @@ export class TreeCursor {
     let start = this.copyCursor();
     try {
       let index = cursorSearchIndex(this, pos, side);
-      if (this.cursor.gotoFirstChildForIndex(index) && rangeContains(this, pos, side)) return true;
+      if (cursorGotoFirstChildForIndex(this.cursor, index) && rangeContains(this, pos, side)) {
+        return true;
+      }
       this.cursor.resetTo(start);
       return false;
     } finally {
@@ -1048,11 +1259,11 @@ export class TreeCursor {
   }
 
   firstChildForIndex(index: number) {
-    return this.cursor.gotoFirstChildForIndex(index);
+    return cursorGotoFirstChildForIndex(this.cursor, index);
   }
 
   firstChildForPosition(position: Point) {
-    return this.cursor.gotoFirstChildForPosition(position);
+    return cursorGotoFirstChildForPosition(this.cursor, position);
   }
 
   moveTo(pos: number, side: -1 | 0 | 1 = 0) {
@@ -1061,7 +1272,7 @@ export class TreeCursor {
       let start = this.copyCursor();
       try {
         let index = cursorSearchIndex(this, pos, side);
-        if (!this.cursor.gotoFirstChildForIndex(index) || !rangeContains(this, pos, side)) {
+        if (!cursorGotoFirstChildForIndex(this.cursor, index) || !rangeContains(this, pos, side)) {
           this.cursor.resetTo(start);
           return this;
         }

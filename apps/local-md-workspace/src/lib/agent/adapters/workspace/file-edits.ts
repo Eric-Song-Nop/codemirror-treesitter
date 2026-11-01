@@ -10,8 +10,18 @@ import type {
   WorkspaceAgentWriteFileResult,
 } from "../../domain/contracts.ts";
 import type { WorkspaceAgentLimits } from "../../domain/limits.ts";
+import {
+  applyWorkspaceAgentEdits,
+  inverseWorkspaceAgentEdit,
+  summarizeWorkspaceAgentChange,
+} from "../../application/change-summary.ts";
+import type {
+  WorkspaceAgentRevertResult,
+  WorkspaceAgentWriteControl,
+} from "../../application/host-port.ts";
 
 export async function writeWorkspaceAgentFile(input: {
+  control?: WorkspaceAgentWriteControl;
   limits: Pick<WorkspaceAgentLimits, "catalog" | "write">;
   request: WorkspaceAgentWriteFileInput;
   runtime: WorkspaceAgentRuntime;
@@ -68,7 +78,28 @@ export async function writeWorkspaceAgentFile(input: {
     return notApplied(path, "unavailable", errorMessage(error));
   }
 
-  let projected = projectEdits(document.read(), input.request.edits);
+  // Pin the document for the whole transaction (approval wait, commit, flush)
+  // so registry idle/LRU eviction cannot close it mid-edit.
+  let release = document.retain?.() ?? (() => {});
+  try {
+    return await applyApprovedEdit({ ...input, document, path });
+  } finally {
+    release();
+  }
+}
+
+async function applyApprovedEdit(input: {
+  control?: WorkspaceAgentWriteControl;
+  document: Awaited<ReturnType<WorkspaceAgentRuntime["documents"]["document"]>>;
+  limits: Pick<WorkspaceAgentLimits, "catalog" | "write">;
+  path: string;
+  request: WorkspaceAgentWriteFileInput;
+  runtime: WorkspaceAgentRuntime;
+  signal?: AbortSignal;
+}): Promise<WorkspaceAgentWriteFileResult> {
+  let { document, path } = input;
+  let current = document.read();
+  let projected = projectEdits(current, input.request.edits);
   if (projected != null && utf8ByteLength(projected) > input.limits.write.maxOutputBytes) {
     return notApplied(
       path,
@@ -77,6 +108,45 @@ export async function writeWorkspaceAgentFile(input: {
     );
   }
 
+  let mismatch =
+    projected == null
+      ? -1
+      : input.request.edits.findIndex(
+          (edit) => current.slice(edit.from, edit.to) != edit.expectedText,
+        );
+  if (mismatch >= 0) {
+    return {
+      editIndex: mismatch,
+      message: conflictMessage("expected-text-mismatch"),
+      path,
+      reason: "expected-text-mismatch",
+      status: "not-applied",
+    };
+  }
+
+  if (input.control?.approve && projected != null) {
+    let approved: boolean;
+    try {
+      approved = await input.control.approve({
+        change: summarizeWorkspaceAgentChange(current, projected),
+        path,
+        signal: input.signal,
+      });
+    } catch (error) {
+      if (input.signal?.aborted) return aborted(path, input.signal.reason);
+      return notApplied(path, "denied", errorMessage(error, "The user did not approve the edit."));
+    }
+    if (input.signal?.aborted) return aborted(path, input.signal.reason);
+    if (!approved) {
+      return notApplied(
+        path,
+        "denied",
+        "The user denied this edit. Do not retry it unless the user asks again.",
+      );
+    }
+  }
+
+  let before = document.read();
   let result = document.edit(input.request.edits);
   if (result.status == "conflict") {
     return {
@@ -86,6 +156,16 @@ export async function writeWorkspaceAgentFile(input: {
       reason: result.reason,
       status: "not-applied",
     };
+  }
+  let after = result.value;
+  try {
+    input.control?.onApplied?.({
+      change: summarizeWorkspaceAgentChange(before, after),
+      path,
+      revert: () => revertWorkspaceAgentEdit(input.runtime, path, before, after),
+    });
+  } catch {
+    // Observers must not turn an applied edit into a failure.
   }
 
   let persistence: Extract<WorkspaceAgentWriteFileResult, { status: "applied" }>["persistence"];
@@ -104,11 +184,53 @@ export async function writeWorkspaceAgentFile(input: {
   return {
     appliedEdits: result.appliedEdits,
     generation: result.generation,
-    outputBytes: utf8ByteLength(result.value),
+    outputBytes: utf8ByteLength(after),
     path,
     persistence,
     status: "applied",
   };
+}
+
+/**
+ * Restores `before` by applying the inverse of an Agent edit to the shared
+ * document resolved through the workspace registry (never a CodeMirror view
+ * or a second Loro peer). Fails with "conflict" when the edited span changed.
+ */
+export async function revertWorkspaceAgentEdit(
+  runtime: Pick<WorkspaceAgentRuntime, "documents">,
+  path: string,
+  before: string,
+  after: string,
+): Promise<WorkspaceAgentRevertResult> {
+  let document;
+  try {
+    document = await runtime.documents.document(path);
+  } catch (error) {
+    return { message: errorMessage(error), status: "failed" };
+  }
+  let release = document.retain?.() ?? (() => {});
+  try {
+    let current = document.read();
+    if (current == before) return { status: "reverted" };
+    let inverse = inverseWorkspaceAgentEdit(before, after);
+    let result = document.edit([inverse]);
+    if (result.status == "conflict") {
+      return {
+        message: "The file changed after the Agent edit; revert it manually.",
+        status: "conflict",
+      };
+    }
+    try {
+      await document.flush();
+    } catch (error) {
+      return { message: errorMessage(error), status: "failed" };
+    }
+    return { status: "reverted" };
+  } catch (error) {
+    return { message: errorMessage(error), status: "failed" };
+  } finally {
+    release();
+  }
 }
 
 function projectEdits(value: string, edits: readonly WorkspaceAgentTextEdit[]) {
@@ -127,11 +249,7 @@ function projectEdits(value: string, edits: readonly WorkspaceAgentTextEdit[]) {
     }
   }
 
-  let output = value;
-  for (let edit of sorted.toReversed()) {
-    output = `${output.slice(0, edit.from)}${edit.insert}${output.slice(edit.to)}`;
-  }
-  return output;
+  return applyWorkspaceAgentEdits(value, sorted);
 }
 
 function conflictMessage(reason: "expected-text-mismatch" | "invalid-range" | "overlapping-edits") {

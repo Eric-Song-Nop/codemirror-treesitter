@@ -10,7 +10,9 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 
 - Depends on local `autocomplete`, `basic-setup`, `commands`, `language`, and
   `language-data` packages plus official CodeMirror state/view packages.
-- Uses KaTeX, Mermaid, and `beautiful-mermaid` for rich Markdown widgets.
+- Uses KaTeX, Mermaid, and `beautiful-mermaid` for rich Markdown widgets. All
+  three load lazily: KaTeX (and, for the web component, its CSS) is imported
+  on the first math node, and Mermaid on the first diagram.
   Mermaid previews use theme-tinted nodes, a neutral canvas, and shared host
   typography in the editor and HTML exports. Fallback flowchart shapes, labels,
   and connectors also follow the host's Mermaid tokens. Cached SVGs respond to
@@ -39,6 +41,10 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Render Markdown documents to sanitized HTML through
   `renderMarkdownToHtml(...)` using explicit block parsing followed by
   leaf-local inline parsing with the Tree-sitter Markdown grammars.
+- Sanitize Mermaid SVG with one element/attribute/CSS allowlist
+  (`src/core/svg-sanitizer.ts`) on both the live editor widget path and the
+  HTML export path. SVG that fails to parse or sanitize renders the Mermaid
+  error state; raw renderer markup is never inserted.
 - Provide scoped document CSS through `liveMdMarkdownDocumentCss()` so host apps
   can style exported HTML with the same `--live-md-*` theme tokens as the
   editor without importing app-level styles.
@@ -155,8 +161,10 @@ const editor = createLiveMdEditor({
   defaultValue: "# Draft",
   placeholder: "Start writing...",
   persistKey: "draft",
-  onChange({ value }) {
-    console.log(value);
+  onChange(change) {
+    // `change.value` stringifies the document on first read; prefer
+    // `change.update` for incremental work in large documents.
+    console.log(change.value.length);
   },
   config,
 });
@@ -169,6 +177,16 @@ editor.destroy();
 `createLiveMdEditor()` accepts `value`, `doc`, `defaultValue`, `persistKey`,
 `placeholder`, `readOnly`, `autofocus`, `focus`, `root`, `config`,
 `extensions`, `imageSource`, `linkBaseUrl`, `onChange`, and `onBlur`.
+`autofocus` (or its alias `focus`) defaults to `false`; pass `autofocus: true`
+when the editor should take focus on creation.
+`onChange` receives `{ update, view, value }` where `value` is a lazy getter:
+the document is only stringified when a listener reads it, and the string is
+cached per immutable document, so typing does not cost O(document) per
+keystroke. The controller's `value` getter shares the same cache.
+`persistKey` writes are debounced (`liveMdPersistDelay`, 500 ms) and flushed on
+blur, when the page becomes hidden (`visibilitychange`/`pagehide`), when the
+persist key changes, on `destroy()`, and on demand through
+`flushPersistence()`.
 `config.markdown.features` is the query-driven Markdown syntax layer. A
 `LiveMdMarkdownFeature` can contribute a Tree-sitter query and a leaf-scoped
 `analyze(...)` hook that returns DOM-free descriptors for marks, line classes,
@@ -207,7 +225,10 @@ through `extensions`.
 `liveMdCodeFenceHighlighting(...)` is still available for advanced hosts that
 need to override fenced-code highlighting explicitly. The controller exposes `view`, `value`,
 `ready`, `setValue()`, `setConfig()`, `setExtensions()`, `setPersistKey()`,
-`setPlaceholder()`, `setReadOnly()`, and `destroy()`.
+`setPlaceholder()`, `setReadOnly()`, `flushPersistence()`, and `destroy()`.
+`ready` also waits for a KaTeX load triggered by math in the initial document.
+`prepareLiveMd({ latex: true })` preloads KaTeX for hosts that prefer to pay
+for it up front.
 
 Query-driven editor features should use `analyze(...)` and return descriptor
 ranges in document coordinates. The hook receives capture helpers, `slice(...)`,
@@ -299,7 +320,17 @@ HTML exports without leaking workspace, reset, or component-library CSS.
 The element reflects the runtime API through `value`, `defaultValue`,
 `persistKey`, `placeholder`, `readOnly`, `dirty`, `selectionStart`,
 `selectionEnd`, `view`, `config`, `extensions`, `ready`, `markClean()`,
-`setSelectionRange(...)`, and `select()`.
+`setSelectionRange(...)`, and `select()`. `value` is computed from the editor
+document on access (cached per document), so `input` events do not stringify
+the document. The element only takes focus when the `autofocus` attribute is
+present.
+
+`ready` is created pending with the element and settles for the editor mounted
+by the current (or next) connection: it resolves after async language support
+and initial analysis, and rejects when mounting or async support fails. A
+rejection is only observed by hosts that await `ready`; `live-md-error` is the
+reporting channel, so ignoring `ready` never produces an unhandled rejection.
+After it settles, reconnecting the element creates a fresh `ready` promise.
 
 JavaScript hosts can add `liveMdImageSource(...)`, `liveMdLinkOpen(...)`, and
 ordinary CodeMirror theme extensions to the `extensions` property when a web
@@ -310,8 +341,13 @@ configuration, including plugin-style image assets and link behavior.
 for specialized fenced-code rendering.
 
 The element emits `input`, `change`, `live-md-ready`, `live-md-error`, and
-`select`. Styling is installed into Shadow DOM and can be themed with
-`--live-md-*` CSS custom properties on the host.
+`select`. Styling is installed into Shadow DOM through one constructed
+stylesheet shared by every editor (`adoptedStyleSheets`, with a `<style>`
+fallback) and can be themed with `--live-md-*` CSS custom properties on the
+host. KaTeX rules join that shared sheet when KaTeX first loads; KaTeX
+`@font-face` rules are installed once at document scope (shadow-root font
+faces are ignored by some browsers) and reference the KaTeX woff2 files as
+separate assets, so only the faces a document actually uses are downloaded.
 
 The side-effect `@codemirror-treesitter/live-md/register` entry remains
 available for simple hosts. It defines the default custom element immediately,
@@ -349,10 +385,20 @@ starts `prepareLiveMd()` in the background, and dispatches a global
   and trace data. It is not the production incremental analysis cache.
 - `src/core/markdown-html.ts`: Tree-sitter Markdown-to-HTML renderer and scoped
   document CSS helpers for hosts that need sanitized document export.
-- `src/element/*`: custom element implementation and style installation.
+- `src/core/svg-sanitizer.ts`: Mermaid SVG allowlist sanitizer shared by the
+  editor widget and HTML export.
+- `src/core/latex.ts` and `src/core/mermaid.ts`: lazy KaTeX loading and the
+  Mermaid renderer (with a render timeout hang guard).
+- `src/core/markdown-text.ts`: shared Markdown text helpers (CommonMark
+  backslash unescaping, fence language normalization, cache key building).
+- `src/element/*`: custom element implementation, shared stylesheet
+  installation, and the lazily imported KaTeX shadow CSS (`katex-styles.ts`).
+- `src/internal/testing.ts`: test-only `__test*` hooks. It is not reachable
+  from any package entry; tests import it by relative path.
 - `src/fixtures/*`: reusable sample content for examples and benchmarks.
 - `vite-plugin.ts`: raw CSS helper used by apps that need to import LiveMD CSS
-  in Vite builds.
+  in Vite builds. It rewrites KaTeX font URLs to emitted woff2 assets (or
+  `/@fs/` URLs on dev servers) instead of inlining base64 data.
 - `tests/*`: web component behavior, readonly commands, Markdown features,
   code fences, LaTeX, Mermaid, style installation, and newline behavior.
 

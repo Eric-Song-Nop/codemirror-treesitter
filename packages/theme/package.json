@@ -2,9 +2,19 @@
   "name": "@codemirror-treesitter/theme",
   "version": "0.0.0",
   "description": "Shared semantic theme helpers for the tree-sitter CodeMirror build",
+  "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/theme#readme",
+  "bugs": {
+    "url": "https://github.com/Eric-Song-Nop/codemirror-treesitter/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eric-Song-Nop/codemirror-treesitter.git",
+    "directory": "packages/theme"
+  },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,

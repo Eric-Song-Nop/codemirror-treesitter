@@ -1,7 +1,6 @@
 import { RangeSet, RangeSetBuilder, RangeValue, type Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, type WidgetType } from "@codemirror/view";
-import { isWhitespaceOnly, forEachLineInRange, splitRangeByLine } from "../util.js";
-import { type MarkdownTable } from "../widgets.js";
+import { forEachLineInRange, sameArrayItems, splitRangeByLine } from "../util.js";
 import { defaultLiveMdRenderKeyContext } from "../analysis/markdown-leaf-analysis.js";
 import { rangesOverlap } from "../analysis/ranges.js";
 import { emptyLiveMdLeafAnalysisTrace, type DocRange } from "../analysis/types.js";
@@ -472,14 +471,6 @@ type ProjectionReplacementSpec = {
   [projectionReplacementBoundary]?: true;
 };
 
-function sameArrayItems<T>(left: readonly T[], right: readonly T[]) {
-  if (left.length != right.length) return false;
-  for (let index = 0; index < left.length; index++) {
-    if (left[index] !== right[index]) return false;
-  }
-  return true;
-}
-
 function crossesLineBreak(build: LiveMdBuild, from: number, to: number) {
   if (from >= to) return false;
   let firstLine = build.state.doc.lineAt(from).number;
@@ -500,36 +491,4 @@ export function rangeTouchesActiveLine(build: LiveMdBuild, from: number, to: num
 
 export function rangeTouchesActiveSource(build: LiveMdBuild, from: number, to: number) {
   return build.activeSourceRanges.some((range) => rangesOverlap(range, { from, to }));
-}
-
-export function tableTouchesActiveLine(
-  build: LiveMdBuild,
-  from: number,
-  to: number,
-  table: MarkdownTable,
-) {
-  if (build.sourceIslandMode) return rangeTouchesActiveSource(build, from, to);
-  if (rangeTouchesActiveLine(build, from, to)) return true;
-  if (table.rows.length) return false;
-  let end = Math.min(to, build.state.doc.length);
-  let lastLine = build.state.doc.lineAt(Math.max(from, end - 1));
-  let nextLineNumber = lastLine.number + 1;
-  if (!build.activeLines.has(nextLineNumber) || nextLineNumber > build.state.doc.lines) {
-    return false;
-  }
-  let nextLine = build.state.doc.line(nextLineNumber);
-  return isWhitespaceOnly(build.state.sliceDoc(nextLine.from, nextLine.to));
-}
-
-export function isOnlyVisibleContentOnLine(
-  state: LiveMdBuild["state"],
-  lineFrom: number,
-  lineTo: number,
-  contentFrom: number,
-  contentTo: number,
-) {
-  return (
-    isWhitespaceOnly(state.sliceDoc(lineFrom, contentFrom)) &&
-    isWhitespaceOnly(state.sliceDoc(contentTo, lineTo))
-  );
 }

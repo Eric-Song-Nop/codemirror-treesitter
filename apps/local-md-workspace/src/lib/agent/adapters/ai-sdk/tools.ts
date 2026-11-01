@@ -1,4 +1,5 @@
 import { tool, type ToolExecutionOptions } from "ai";
+import { wrapUntrustedWorkspaceContent } from "../../application/untrusted-content.ts";
 import { z } from "zod";
 import type {
   WorkspaceAgentListMarkdownInput,
@@ -55,26 +56,33 @@ export function createWorkspaceAgentTools(session: WorkspaceAgentToolSession) {
       description: "List Markdown files in a workspace directory with stable cursor pagination.",
       inputSchema: listMarkdownSchema,
       execute: (input, options) => session.listMarkdown(input, toolExecution(options)),
+      toModelOutput: ({ output }) => untrustedOutput("list_markdown_files", output),
     }),
     read_file: tool({
       description:
         "Read a bounded line window from a Markdown file, including absolute UTF-16 offsets for exact edits.",
       inputSchema: readFileSchema,
       execute: (input, options) => session.readFile(input, toolExecution(options)),
+      toModelOutput: ({ output }) => untrustedOutput("read_file", output),
     }),
     search_markdown: tool({
       description:
         "Search Markdown files for a literal substring using bounded workspace scanning.",
       inputSchema: searchMarkdownSchema,
       execute: (input, options) => session.searchMarkdown(input, toolExecution(options)),
+      toModelOutput: ({ output }) => untrustedOutput("search_markdown", output),
     }),
     write_file: tool({
       description:
-        "Apply exact offset-based edits to any Markdown file in the current workspace and flush its filesystem projection.",
+        "Apply exact offset-based edits to a Markdown file in the current workspace and flush its filesystem projection. Edits to files other than the one open in the editor wait for the user's approval and may be denied.",
       inputSchema: writeFileSchema,
       execute: (input, options) => session.writeFile(input, toolExecution(options)),
     }),
   };
+}
+
+function untrustedOutput(toolName: string, output: unknown) {
+  return { type: "text" as const, value: wrapUntrustedWorkspaceContent(toolName, output) };
 }
 
 function toolExecution(options: ToolExecutionOptions<unknown>): WorkspaceAgentToolExecution {

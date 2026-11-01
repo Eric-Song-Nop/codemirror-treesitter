@@ -5,10 +5,15 @@ import type { LiveMdMermaidRenderResult } from "./runtime/render-cache.js";
 
 type BeautifulMermaidModule = typeof import("beautiful-mermaid");
 
-type MermaidRenderResult = {
+export type MermaidRenderResult = {
   bindFunctions?: (element: Element) => void;
   svg: string;
 };
+
+export type MermaidSvgRenderer = (source: string) => Promise<MermaidRenderResult>;
+
+/** Upper bound for one asynchronous Mermaid render before it is reported as failed. */
+export const liveMdMermaidRenderTimeout = 10_000;
 
 const beautifulMermaidThemeOptions: BeautifulMermaidRenderOptions = {
   accent: "var(--live-md-mermaid-accent, var(--live-md-accent, #0f766e))",
@@ -28,11 +33,18 @@ let beautifulMermaidPromise: Promise<BeautifulMermaidModule> | null = null;
 let mermaidPromise: Promise<Mermaid> | null = null;
 let mermaidRenderSequence = 0;
 
+/** Monotonic sequence shared by Mermaid render ids and widget render tokens. */
+export function nextMermaidRenderSequence() {
+  return ++mermaidRenderSequence;
+}
+
 export async function renderLiveMdMermaidResult(
   source: string,
+  renderer: MermaidSvgRenderer = renderMermaidSvg,
+  timeout = liveMdMermaidRenderTimeout,
 ): Promise<LiveMdMermaidRenderResult> {
   try {
-    let { svg, bindFunctions } = await renderMermaidSvg(source);
+    let { svg, bindFunctions } = await withRenderTimeout(renderer(source), timeout);
     return {
       bindFunctions,
       ok: true,
@@ -62,8 +74,24 @@ async function renderMermaidSvg(source: string): Promise<MermaidRenderResult> {
 
 async function renderMermaidSvgWithOfficialRenderer(source: string): Promise<MermaidRenderResult> {
   let mermaid = await loadMermaid();
-  let id = `cm-md-mermaid-${++mermaidRenderSequence}`;
+  let id = `cm-md-mermaid-${nextMermaidRenderSequence()}`;
   return mermaid.render(id, source);
+}
+
+/**
+ * Hang guard: a renderer that never settles (for example a pathological diagram
+ * stuck awaiting layout) resolves as a render error instead of leaving the
+ * widget or HTML export waiting forever.
+ */
+function withRenderTimeout<T>(render: Promise<T>, timeout: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Mermaid rendering timed out after ${timeout} ms`)),
+      timeout,
+    );
+  });
+  return Promise.race([render, expired]).finally(() => clearTimeout(timer));
 }
 
 function loadMermaid() {

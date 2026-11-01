@@ -6,6 +6,9 @@ import {
   type LiveMdInlineNode,
   type LiveMdTableCellModel,
 } from "./descriptors.js";
+import { unescapeMarkdownPunctuation } from "../markdown-text.js";
+import { firstNamedChild } from "../util.js";
+import { requestKatex } from "../latex.js";
 
 export type MarkdownInlineRenderSession = {
   dispose(): void;
@@ -186,6 +189,7 @@ function renderLatex(context: InlineRenderContext, node: SyntaxNode): LiveMdInli
   if (!tex) return [{ kind: "text", text: context.source.slice(node.from, node.to) }];
   let openingText = context.source.slice(opening.from, opening.to);
   let closingText = context.source.slice(closing.from, closing.to);
+  requestKatex();
   return [
     {
       displayMode: openingText.length > 1 || closingText.length > 1 || tex.includes("\n"),
@@ -272,10 +276,6 @@ function normalizeMarkdownTitle(source: string) {
   return unescapeMarkdownPunctuation(title);
 }
 
-function unescapeMarkdownPunctuation(value: string) {
-  return value.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "$1");
-}
-
 const namedCharacterReferences: Record<string, string> = {
   amp: "&",
   apos: "'",
@@ -326,8 +326,4 @@ function isValidCharacterReferenceCodePoint(codePoint: number) {
     codePoint <= 0x10ffff &&
     !(codePoint >= 0xd800 && codePoint <= 0xdfff)
   );
-}
-
-function firstNamedChild(node: SyntaxNode | null, name: string) {
-  return node?.namedChildren.find((child) => child.name == name) ?? null;
 }

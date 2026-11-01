@@ -634,8 +634,8 @@ describe("tree-sitter language data", () => {
     let state = EditorState.create({ doc, extensions: [support.extension] });
     let tree = syntaxTree(state);
 
-    expect(tree.resolveInner(doc.indexOf("color")).name).toBe("property_name");
-    expect(tree.resolveInner(doc.indexOf("value")).name).toBe("identifier");
+    expect(tree.resolveInner(doc.indexOf("color"), 1).name).toBe("property_name");
+    expect(tree.resolveInner(doc.indexOf("value"), 1).name).toBe("identifier");
     expect(
       state.languageDataAt<{ line?: string; block?: { open: string; close: string } }>(
         "commentTokens",
@@ -694,8 +694,8 @@ describe("tree-sitter language data", () => {
     let tree = syntaxTree(state);
 
     expect(tree.topNode.name).toBe("document");
-    expect(tree.resolveInner(doc.indexOf("message =")).name).toBe("identifier");
-    expect(tree.resolveInner(doc.indexOf("color")).name).toBe("property_name");
+    expect(tree.resolveInner(doc.indexOf("message ="), 1).name).toBe("identifier");
+    expect(tree.resolveInner(doc.indexOf("color"), 1).name).toBe("property_name");
     expect(
       state.languageDataAt<{ line?: string; block?: { open: string; close: string } }>(
         "commentTokens",
@@ -917,8 +917,8 @@ describe("tree-sitter language data", () => {
     let source = 'let 😀 = "𝌆";\n';
     let state = EditorState.create({ doc: source, extensions: [support.extension] });
     let tree = syntaxTree(state);
-    let identifier = tree.resolveInner(source.indexOf("😀"));
-    let stringFragment = tree.resolveInner(source.indexOf("𝌆"));
+    let identifier = tree.resolveInner(source.indexOf("😀"), 1);
+    let stringFragment = tree.resolveInner(source.indexOf("𝌆"), 1);
     let string = stringFragment.parent!;
 
     expect(identifier.name).toBe("identifier");

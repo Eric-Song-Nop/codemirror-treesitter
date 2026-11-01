@@ -1,6 +1,5 @@
 import * as projectionRecords from "../src/core/projection/project-leaf.js";
 // @vitest-environment happy-dom
-
 import {
   type ChangeDesc,
   Compartment,
@@ -27,16 +26,9 @@ import {
   type DocRange,
   type Highlighter,
 } from "@codemirror-treesitter/language";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import {
-  __testBuildCanonicalLiveMdAnalysis,
-  __testBuildLiveMdAnalysis,
-  __testFlushLiveMdAnalysis,
-  __testLiveMdAnalysis,
-  __testRefreshLiveMdSurface,
-  __testRefreshLiveMdSurfacePreservingState,
-  liveMdAnalysis,
-} from "../src/core/decorations.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { loadKatex } from "../src/core/latex.js";
+import { liveMdAnalysis } from "../src/core/decorations.js";
 import { emptyLiveMdLeafAnalysisTrace } from "../src/core/analysis/types.js";
 import { liveMdMarkdownFeatureFacet, liveMdMarkdownFeatures } from "../src/core/features.js";
 import {
@@ -93,6 +85,14 @@ import {
 import { liveMdCompositeEpoch, liveMdValueEpoch } from "../src/core/runtime/epochs.js";
 import { liveMdLinkBaseUrl, liveMdLinkInteractions, liveMdLinkOpen } from "../src/core/links.js";
 import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
+import {
+  __testBuildCanonicalLiveMdAnalysis,
+  __testBuildLiveMdAnalysis,
+  __testFlushLiveMdAnalysis,
+  __testLiveMdAnalysis,
+  __testRefreshLiveMdSurface,
+  __testRefreshLiveMdSurfacePreservingState,
+} from "../src/internal/testing.js";
 import { loadMarkdownParserService as loadLiveMdMarkdownParserService } from "@codemirror-treesitter/language-data/live-md";
 
 let locationDescriptor: PropertyDescriptor | undefined;
@@ -118,6 +118,12 @@ afterEach(() => {
   if (locationDescriptor) {
     Object.defineProperty(globalThis, "location", locationDescriptor);
   }
+});
+
+// KaTeX loads lazily; preload it so incremental and fresh analyses compare the
+// same rendered results instead of one pending placeholder.
+beforeAll(async () => {
+  await loadKatex();
 });
 
 describe("LiveMD analysis snapshot", () => {

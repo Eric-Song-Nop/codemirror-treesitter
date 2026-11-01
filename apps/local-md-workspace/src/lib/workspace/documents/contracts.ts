@@ -73,6 +73,11 @@ export interface CollaborativeDocument {
   edit(edits: readonly ExactTextEdit[]): EditResult;
   flush(): Promise<void>;
   read(): string;
+  /**
+   * Pins the document in its registry until the returned release runs.
+   * Unretained documents may be closed after an idle period.
+   */
+  retain?(): () => void;
   snapshot(): CollaborativeDocumentSnapshot;
   subscribe(listener: DocumentListener): () => void;
 }

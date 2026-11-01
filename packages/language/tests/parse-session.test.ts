@@ -243,6 +243,41 @@ describe("resumable nested parse sessions", () => {
     expect(created[0]!.deleteCalls).toBe(1);
   });
 
+  it("keeps the edited old tree as the incremental base when changes arrive mid-parse", () => {
+    let oldTrees: (NativeTree | null)[] = [];
+    let created: FakeNativeParser[] = [];
+    let pauseRoot = false;
+    let root = fakeParser(
+      ({ oldTree, resuming }) => {
+        if (!resuming) oldTrees.push(oldTree);
+        return pauseRoot ? pause : fakeTree(`root-${oldTrees.length}`);
+      },
+      [],
+      created,
+    );
+    keepNestedOnEqualLengthEdit(root);
+    let state = EditorState.create({ doc: "xxxx" });
+    let context = ParseContext.create(root, state);
+    expect(context.work(() => false)).toBe(true);
+
+    pauseRoot = true;
+    let first = changedContext(context, state, 0, "y");
+    expect(first.context.work(() => false)).toBe(false);
+    expect((oldTrees[1] as FakeNativeTree).label).toBe("edited-root-1");
+
+    // A second change while the first reparse is still in flight must edit
+    // and pass on the in-flight base instead of dropping it.
+    let second = changedContext(first.context, first.state, 1, "z");
+    pauseRoot = false;
+    expect(second.context.work(() => false)).toBe(true);
+    expect(oldTrees[2]).not.toBeNull();
+    expect((oldTrees[2] as FakeNativeTree).label).toBe("edited-root-2");
+    // One native root parser serves the whole lineage, reset between parses.
+    expect(created).toHaveLength(1);
+    expect(created[0]!.resetCalls).toBeGreaterThan(0);
+    expect(created[0]!.deleteCalls).toBe(0);
+  });
+
   it("keeps an old editor state's parse context usable after reconfiguration", () => {
     let calls = 0;
     let created: FakeNativeParser[] = [];
@@ -258,9 +293,13 @@ describe("resumable nested parse sessions", () => {
 
     void state.update({ effects: compartment.reconfigure(replacementLanguage.extension) }).state;
 
+    // The language switch deletes the lineage's native parser eagerly...
+    expect(created[0]!.deleteCalls).toBe(1);
+    // ...and the old state's context lazily creates a new one when reused.
     expect(() => ensureSyntaxTree(state, state.doc.length)).not.toThrow();
     expect(ensureSyntaxTree(state, state.doc.length)).not.toBeNull();
-    expect(created[0]!.deleteCalls).toBe(0);
+    expect(created).toHaveLength(2);
+    expect(created[1]!.deleteCalls).toBe(0);
   });
 
   it("checks the budget between tiny groups and resumes without replay before publishing", () => {
@@ -438,9 +477,12 @@ describe("resumable nested parse sessions", () => {
     expect(rootTrees[0]!.deleteCalls).toBe(1);
     expect(completedTree.deleteCalls).toBe(1);
 
+    // The old context no longer owns partial state in the shared root parser,
+    // so resetting it must not reset (and break) the successor's parse.
     context.reset();
     expect(closed).toBe(1);
-    expect(rootParsers[0]!.resetCalls).toBe(2);
+    expect(rootParsers).toHaveLength(1);
+    expect(rootParsers[0]!.resetCalls).toBe(1);
     expect(rootParsers[0]!.deleteCalls).toBe(0);
     expect(nestedParsers[0]!.resetCalls).toBe(1);
     expect(nestedParsers[0]!.deleteCalls).toBe(1);
@@ -487,6 +529,7 @@ describe("resumable nested parse sessions", () => {
       [{ parser: nested, ranges: rangeGroups }],
       rootParsers,
     );
+    keepNestedOnEqualLengthEdit(root);
     let state = EditorState.create({ doc: "xxxx" });
     let context = ParseContext.create(root, state);
 
@@ -555,7 +598,7 @@ describe("resumable nested parse sessions", () => {
 
     expect(closed).toBe(1);
     expect(rootParsers[0]!.resetCalls).toBe(1);
-    expect(rootParsers[0]!.deleteCalls).toBe(0);
+    expect(rootParsers[0]!.deleteCalls).toBe(1);
     expect(nestedParsers[0]!.resetCalls).toBe(1);
     expect(nestedParsers[0]!.deleteCalls).toBe(1);
     expect(pendingRootTree.deleteCalls).toBe(1);

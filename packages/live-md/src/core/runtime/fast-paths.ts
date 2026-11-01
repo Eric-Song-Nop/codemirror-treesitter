@@ -16,7 +16,13 @@ import {
   type SourceIslandIndex,
 } from "../analysis/markdown-source-islands.js";
 import { type DocRange } from "../analysis/types.js";
-import { hashDocRange, lineRangeFor, mapRange, rangesSame } from "../analysis/ranges.js";
+import {
+  containsRange,
+  hashDocRange,
+  lineRangeFor,
+  mapRange,
+  rangesSame,
+} from "../analysis/ranges.js";
 import {
   compileIncrementalDirectLayoutProjection,
   type LiveMdProjectionCompileInput,
@@ -315,8 +321,4 @@ function taskMarkerTextChecked(text: string, checked: boolean) {
 
 function recordMarkerRange(record: LeafAnalysisRecord) {
   return record.cacheSourceRange ?? record.range;
-}
-
-function containsRange(outer: DocRange, inner: DocRange) {
-  return outer.from <= inner.from && inner.to <= outer.to;
 }

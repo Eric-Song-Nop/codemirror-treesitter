@@ -19,6 +19,7 @@ import {
   type QueryProperties as TSQueryProperties,
   type Range as TSRange,
   Tree as TSTree,
+  type Node as TSNode,
   type Point,
 } from "web-tree-sitter";
 import {
@@ -119,17 +120,63 @@ export interface NestedParserSource {
   ranges: (tree: Tree) => NestedParserRanges;
 }
 
+/**
+ * Maps a grammar WASM URL passed to `TreeSitterParser.load` to what
+ * web-tree-sitter should load (a URL, a file path, or the bytes). The default
+ * is the identity; hosts that serve assets from bundler-specific URLs (for
+ * example Vite `/@fs/` paths under Node) can install their own.
+ */
+export type TreeSitterAssetResolver = (
+  url: string,
+) => string | Uint8Array | Promise<string | Uint8Array>;
+
+export interface TreeSitterParserLoadConfig extends TreeSitterParserConfig {
+  /** Per-call override of the resolver set with `TreeSitterParser.setAssetResolver`. */
+  resolveAsset?: TreeSitterAssetResolver;
+}
+
+let assetResolver: TreeSitterAssetResolver | null = null;
+const languageLoads = new Map<string, Promise<TSLanguage>>();
+
+/** Load each grammar once per resolved URL; failed loads are retried on the next request. */
+function loadLanguage(source: string | Uint8Array) {
+  if (typeof source != "string") return TSLanguage.load(source);
+  let found = languageLoads.get(source);
+  if (!found) {
+    found = TSLanguage.load(source);
+    languageLoads.set(source, found);
+    let current = found;
+    void current.catch(() => {
+      if (languageLoads.get(source) === current) languageLoads.delete(source);
+    });
+  }
+  return found;
+}
+
 let parserInit: Promise<void> | null = null;
 let queryCache = new WeakMap<TreeSitterParser, Map<string, TSQuery>>();
 const maxCachedQueriesPerParser = 64;
+const maxCachedHighlightRangesPerTree = 16;
 const editedTreeOwnership = new WeakMap<Tree, Set<Tree>>();
 const parserQueries = new WeakMap<TreeSitterParser, Set<TSQuery>>();
-type NativeQueryResource = { deleteNative: () => void; deleted: boolean };
-const managedQueryResources = new WeakMap<TSQuery, NativeQueryResource>();
+/** Owns one native query and deletes it at most once. */
+class NativeQueryOwner {
+  private deleted = false;
+
+  constructor(private readonly deleteNative: () => void) {}
+
+  dispose() {
+    if (this.deleted) return;
+    this.deleted = true;
+    this.deleteNative();
+  }
+}
+
+const managedQueryOwners = new WeakMap<TSQuery, NativeQueryOwner>();
 const nativeQueryFinalizer =
   typeof FinalizationRegistry == "undefined"
     ? null
-    : new FinalizationRegistry<NativeQueryResource>((resource) => disposeNativeQuery(resource));
+    : new FinalizationRegistry<NativeQueryOwner>((owner) => owner.dispose());
 
 function queryResources(parser: TreeSitterParser) {
   let queries = parserQueries.get(parser);
@@ -146,43 +193,35 @@ function createQuery(parser: TreeSitterParser, source: string) {
   return query;
 }
 
-function manageQuery(query: TSQuery) {
-  let resource = { deleteNative: query.delete.bind(query), deleted: false };
-  let managed!: TSQuery;
-  let deleteOverride: unknown;
-  let hasDeleteOverride = false;
-  let deleteManaged = () => {
-    nativeQueryFinalizer?.unregister(managed);
-    disposeNativeQuery(resource);
-  };
-  managed = new Proxy(query, {
-    get(target, property, receiver) {
-      if (property == "delete" && hasDeleteOverride) return deleteOverride;
-      if (property == "delete") return deleteManaged;
-      return Reflect.get(target, property, receiver) as unknown;
-    },
-    set(target, property, value) {
-      if (property == "delete") {
-        deleteOverride = value;
-        hasDeleteOverride = true;
-        return true;
-      }
-      return Reflect.set(target, property, value, target);
+/**
+ * Return a plain `Query` facade that shares the native query address with
+ * `query`. The owner keeps the original instance (so it can always delete the
+ * native query), while the facade is what callers hold: when it becomes
+ * unreachable the finalizer deletes the native query, and an explicit
+ * `delete()` does so once and unregisters the finalizer.
+ */
+function manageQuery(query: TSQuery): TSQuery {
+  let owner = new NativeQueryOwner(query.delete.bind(query));
+  let managed = Object.assign(
+    Object.create(Object.getPrototypeOf(query) as object),
+    query,
+  ) as TSQuery;
+  Object.defineProperty(managed, "delete", {
+    configurable: true,
+    writable: true,
+    value() {
+      nativeQueryFinalizer?.unregister(managed);
+      owner.dispose();
+      (managed as unknown as { 0: number })[0] = 0;
     },
   });
-  managedQueryResources.set(managed, resource);
-  nativeQueryFinalizer?.register(managed, resource, managed);
+  managedQueryOwners.set(managed, owner);
+  nativeQueryFinalizer?.register(managed, owner, managed);
   return managed;
 }
 
-function disposeNativeQuery(resource: NativeQueryResource) {
-  if (resource.deleted) return;
-  resource.deleted = true;
-  resource.deleteNative();
-}
-
 export function __testManagedQuery(query: TSQuery) {
-  return managedQueryResources.has(query);
+  return managedQueryOwners.has(query);
 }
 
 function disposeQueries(queries: Set<TSQuery>) {
@@ -193,6 +232,7 @@ function disposeQueries(queries: Set<TSQuery>) {
 export class TreeSitterParser implements TreeConfig {
   private readonly typeCache = new Map<string, NodeType>();
   private highlightQueryValue: TSQuery | null | undefined;
+  private highlightTagCache = new WeakMap<Tree, Map<string, Map<number, readonly Tag[]>>>();
   readonly styleTags: ReadonlyMap<string, readonly Tag[]>;
 
   private constructor(
@@ -248,10 +288,20 @@ export class TreeSitterParser implements TreeConfig {
     return parserInit;
   }
 
-  static async load(wasm: string | Uint8Array, config: TreeSitterParserConfig = {}) {
+  /**
+   * Install the default resolver applied to string grammar URLs passed to
+   * `load` (pass `null` to restore the identity resolver).
+   */
+  static setAssetResolver(resolver: TreeSitterAssetResolver | null) {
+    assetResolver = resolver;
+  }
+
+  static async load(wasm: string | Uint8Array, config: TreeSitterParserLoadConfig = {}) {
     await TreeSitterParser.init();
+    let resolve = config.resolveAsset ?? assetResolver;
+    let source = typeof wasm == "string" && resolve ? await resolve(wasm) : wasm;
     return new TreeSitterParser(
-      await TSLanguage.load(__testResolveWasmPath(wasm)),
+      await loadLanguage(source),
       config.props,
       config.styleTags,
       config.highlightQuery ?? null,
@@ -297,27 +347,56 @@ export class TreeSitterParser implements TreeConfig {
   clearQueryCache() {
     disposeQueries(queryResources(this));
     queryCache.delete(this);
+    this.highlightTagCache = new WeakMap();
     this.highlightQueryValue = this.language && this.highlightQuerySource ? undefined : null;
   }
 
+  /**
+   * Map node ids in `tree` to the tags of their highlight-query captures
+   * within `from`..`to`.
+   *
+   * Precedence: when several patterns capture the same node, the capture
+   * from the pattern that appears last in the query wins (Neovim semantics:
+   * later, more specific patterns refine earlier generic ones, which is how
+   * grammar `highlights.scm` files are written). Captures from that same
+   * pattern are combined. Capture names that map to no tag are ignored.
+   *
+   * Results are cached per tree and range.
+   */
   highlightTags(tree: Tree, from: number, to: number): Map<number, readonly Tag[]> | null {
-    if (!this.highlightQuery || !tree.tree) return null;
+    let query = this.highlightQuery;
+    if (!query || !tree.tree) return null;
+    let perTree = this.highlightTagCache.get(tree);
+    if (!perTree) this.highlightTagCache.set(tree, (perTree = new Map()));
+    let key = `${from}:${to}`;
+    let cached = perTree.get(key);
+    if (cached) return cached;
+
     let result = new Map<number, Tag[]>();
+    let winningPattern = new Map<number, number>();
     if (from >= to) return result;
     let root = tree.tree.rootNode;
     if (to <= root.startIndex || from >= root.endIndex) return result;
-    let captures = this.highlightQuery
-      // Query range indices cross the WASM boundary as UTF-16 byte offsets,
-      // unlike the code-unit indices exposed by syntax nodes and CodeMirror.
-      .captures(root, { startIndex: from * 2, endIndex: to * 2 })
-      .filter((capture) => capture.node.endIndex >= from && capture.node.startIndex <= to);
+    // Query range indices cross the WASM boundary as byte offsets of the UTF-16
+    // input, unlike the code-unit indices exposed by syntax nodes and CodeMirror.
+    let captures = query.captures(root, { startIndex: from * 2, endIndex: to * 2 });
     for (let capture of captures) {
+      if (capture.node.endIndex < from || capture.node.startIndex > to) continue;
       let tags = tagsForCapture(capture.name);
       if (!tags.length) continue;
-      let found = result.get(capture.node.id);
-      if (found) addTags(found, tags);
-      else result.set(capture.node.id, Array.from(tags));
+      let id = capture.node.id;
+      let previous = winningPattern.get(id);
+      if (previous === undefined || capture.patternIndex > previous) {
+        winningPattern.set(id, capture.patternIndex);
+        result.set(id, Array.from(tags));
+      } else if (capture.patternIndex == previous) {
+        addTags(result.get(id)!, tags);
+      }
     }
+    if (perTree.size >= maxCachedHighlightRangesPerTree) {
+      perTree.delete(perTree.keys().next().value as string);
+    }
+    perTree.set(key, result);
     return result;
   }
 
@@ -651,12 +730,15 @@ function nodeQueryCaptures(
 ): InternalQueryCapture[] {
   if (!root.node || !queryRangeOverlapsNode(root, options)) return [];
   let query = compileTreeSitterQuery(parser, source);
-  return query.captures(root.node, queryOptions(root, options)).map((capture, order) => ({
-    name: capture.name,
-    node: new SyntaxNode(root.tree, capture.node),
-    order,
-    patternIndex: capture.patternIndex,
-  }));
+  return query
+    .captures(root.node, queryOptions(root, options))
+    .filter((capture) => inQueryRange(capture.node, options))
+    .map((capture, order) => ({
+      name: capture.name,
+      node: new SyntaxNode(root.tree, capture.node),
+      order,
+      patternIndex: capture.patternIndex,
+    }));
 }
 
 function nodeQueryMatches(
@@ -667,19 +749,22 @@ function nodeQueryMatches(
 ): InternalQueryMatch[] {
   if (!root.node || !queryRangeOverlapsNode(root, options)) return [];
   let query = compileTreeSitterQuery(parser, source);
-  return query.matches(root.node, queryOptions(root, options)).map((match, order) => ({
-    assertedProperties: match.assertedProperties,
-    captures: match.captures.map((capture, captureOrder) => ({
-      name: capture.name,
-      node: new SyntaxNode(root.tree, capture.node),
-      order: captureOrder,
-      patternIndex: capture.patternIndex,
-    })),
-    order,
-    patternIndex: match.patternIndex,
-    refutedProperties: match.refutedProperties,
-    setProperties: match.setProperties,
-  }));
+  return query
+    .matches(root.node, queryOptions(root, options))
+    .filter((match) => match.captures.some((capture) => inQueryRange(capture.node, options)))
+    .map((match, order) => ({
+      assertedProperties: match.assertedProperties,
+      captures: match.captures.map((capture, captureOrder) => ({
+        name: capture.name,
+        node: new SyntaxNode(root.tree, capture.node),
+        order: captureOrder,
+        patternIndex: capture.patternIndex,
+      })),
+      order,
+      patternIndex: match.patternIndex,
+      refutedProperties: match.refutedProperties,
+      setProperties: match.setProperties,
+    }));
 }
 
 function parserForTree(tree: Tree) {
@@ -694,6 +779,14 @@ function queryOptions(root: SyntaxNode, options: TreeSitterQueryOptions): TSQuer
   if (options.from != null && options.from > root.from) queryOptions.startIndex = options.from * 2;
   if (options.to != null && options.to < queryNodeEnd(root)) queryOptions.endIndex = options.to * 2;
   return queryOptions;
+}
+
+/** Whether a capture node touches the requested `from`/`to` range. */
+function inQueryRange(node: TSNode, options: TreeSitterQueryOptions) {
+  return (
+    (options.from == null || node.endIndex >= options.from) &&
+    (options.to == null || node.startIndex <= options.to)
+  );
 }
 
 function queryRangeOverlapsNode(root: SyntaxNode, options: TreeSitterQueryOptions) {
@@ -738,31 +831,8 @@ function queryMatchTo(match: InternalQueryMatch) {
   return match.captures.reduce((to, capture) => Math.max(to, capture.node.to), 0);
 }
 
-export function __testResolveWasmPath(wasm: string | Uint8Array) {
-  if (typeof wasm != "string") return wasm;
-  if (isBrowserLike()) return wasm;
-  if (wasm.startsWith("/@fs/")) return wasm.slice(4);
-  let processLike = globalThis as typeof globalThis & { process?: { cwd?: () => string } };
-  let cwd = processLike.process?.cwd?.();
-  if (!cwd) return wasm;
-  if (wasm.startsWith("/node_modules/") || wasm.startsWith("/src/")) return cwd + wasm;
-  if (wasm.startsWith("/packages/") || wasm.startsWith("/apps/")) return workspaceRoot(cwd) + wasm;
-  return wasm;
-}
-
 export function __testCreateNestedTreeMatcher(nested: readonly NestedTree[]) {
   return new NestedTreeMatcher(nested);
-}
-
-function isBrowserLike() {
-  return (
-    typeof globalThis.location == "object" &&
-    typeof (globalThis as typeof globalThis & { document?: unknown }).document == "object"
-  );
-}
-
-function workspaceRoot(cwd: string) {
-  return cwd.replace(/\/(?:packages|apps)\/[^/]+$/, "");
 }
 
 function addTags(result: Tag[], tags: readonly Tag[]) {
@@ -1352,6 +1422,14 @@ function computeSyntaxTreeChangedRanges(transaction: Transaction): readonly DocR
   let newTree = syntaxTree(transaction.state);
   if (!oldTree.tree || !newTree.tree) return [{ from: 0, to: transaction.state.doc.length }];
 
+  // Fast path: the parse context already edited the old tree for this
+  // transaction (and possibly diffed it against the committed tree).
+  let known = transaction.state
+    .field(Language.state, false)
+    ?.context.changedRangesSince(oldTree, newTree, transaction.docChanged);
+  if (known) return known;
+  if (!canDiffTrees(oldTree, newTree)) return [{ from: 0, to: transaction.state.doc.length }];
+
   if (!transaction.docChanged) {
     return oldTree != newTree ? normalizeRanges(collectChangedRanges(oldTree, newTree)) : [];
   }
@@ -1367,6 +1445,14 @@ function computeSyntaxTreeChangedRanges(transaction: Transaction): readonly DocR
   } finally {
     if (editedOldTree != oldTree) disposeWrappedTree(editedOldTree);
   }
+}
+
+function canDiffTrees(oldTree: Tree, newTree: Tree) {
+  return (
+    !!oldTree.tree &&
+    !!newTree.tree &&
+    typeof (oldTree.tree as Partial<TSTree>).getChangedRanges == "function"
+  );
 }
 
 export function forceParsing(view: EditorView, upto = view.viewport.to, timeout = 100): boolean {
@@ -1416,43 +1502,104 @@ export class DocInput {
 
 type NativeParserResource = {
   deleted: boolean;
-  nestedParsers: Map<TreeSitterParser, TSParser>;
   parser: TSParser;
 };
 
-const parseContextParserResources = new WeakMap<object, NativeParserResource>();
-const parseContextParserFinalizer =
+const parserLineageFinalizer =
   typeof FinalizationRegistry == "undefined"
     ? null
-    : new FinalizationRegistry<NativeParserResource>((resource) => disposeParser(resource));
+    : new FinalizationRegistry<NativeParserResource>((resource) => deleteParserResource(resource));
 
-function registerParseContextParser(
-  context: object,
-  parser: TSParser,
-  nestedParsers: Map<TreeSitterParser, TSParser>,
-) {
-  let resource = { deleted: false, nestedParsers, parser };
-  parseContextParserResources.set(context, resource);
-  parseContextParserFinalizer?.register(context, resource, context);
+function deleteParserResource(resource: NativeParserResource) {
+  if (resource.deleted) return;
+  resource.deleted = true;
+  let parser = resource.parser as Partial<TSParser>;
+  if (typeof parser.delete == "function") parser.delete();
 }
 
-function disposeParser(resource: NativeParserResource) {
-  disposeParsers(resource.nestedParsers);
-  if (!resource.deleted) {
-    resource.deleted = true;
-    resource.parser.delete();
+function resetNativeParser(parser: TSParser) {
+  let resettable = parser as Partial<TSParser>;
+  if (typeof resettable.reset == "function") resettable.reset();
+}
+
+/**
+ * One native root parser shared by every ParseContext derived (through
+ * `changes`) from the same `ParseContext.create` call. A halted Tree-sitter
+ * parse resumes on the next `parse` call regardless of its arguments, so the
+ * lineage tracks which context left partial state in the parser and resets
+ * it before another context parses with it.
+ */
+class ParserLineage {
+  private resource: NativeParserResource | null;
+  private owner: ParseContext | null = null;
+
+  constructor(private readonly config: TreeSitterParser) {
+    this.resource = this.createResource();
+  }
+
+  private createResource(): NativeParserResource {
+    let resource = { deleted: false, parser: this.config.createParser() };
+    parserLineageFinalizer?.register(this, resource, this);
+    return resource;
+  }
+
+  acquire(context: ParseContext): TSParser {
+    if (!this.resource) this.resource = this.createResource();
+    if (this.owner && this.owner !== context) resetNativeParser(this.resource.parser);
+    this.owner = context;
+    return this.resource.parser;
+  }
+
+  /** Drop the partial parse that `context` may have left in the parser. */
+  release(context: ParseContext) {
+    if (this.owner !== context) return;
+    this.owner = null;
+    if (this.resource) resetNativeParser(this.resource.parser);
+  }
+
+  /** Delete the native parser now. A later `acquire` creates a fresh one. */
+  destroy() {
+    this.owner = null;
+    let resource = this.resource;
+    if (!resource) return;
+    this.resource = null;
+    parserLineageFinalizer?.unregister(this);
+    deleteParserResource(resource);
   }
 }
 
+type CommitBase = {
+  /** Incremental base of the last commit (null for a from-scratch parse). */
+  readonly tree: Tree | null;
+  /** The committed tree that base was diffed against. */
+  readonly committed: Tree;
+  /** Whether this context may delete `tree` once the ranges are known. */
+  owned: boolean;
+  ranges: readonly DocRange[] | null;
+  released: boolean;
+};
+
 class ParseContext {
-  private readonly tsParser: TSParser;
+  private readonly lineage: ParserLineage;
   private readonly nestedTSParsers = new Map<TreeSitterParser, TSParser>();
+  /**
+   * Incremental base for the next parse: the previous tree edited to match
+   * `state.doc`. Tree-sitter cannot yield partial trees, so while a parse is
+   * in flight this is also the tree published through `syntaxTree`.
+   */
   private oldTree: Tree | null = null;
+  private oldTreeOwned = false;
+  /** Set once `oldTree` was handed to a LanguageState; it then follows GC lifetime. */
+  private oldTreeExposed = false;
+  /** Whether `oldTree` is a navigable tree for `state.doc` that may be published. */
+  private oldTreePublishable = false;
+  /** The published tree that `oldTree` was edited from. */
+  private editedFrom: Tree | null = null;
+  private commitBase: CommitBase | null = null;
   private pendingTree: TSTree | null = null;
   private pendingTreeOwned = false;
   private treeBuild: NestedTreeBuild | null = null;
   private changedRanges: ChangedRangeIndex | null = null;
-  private oldTreeOwned = false;
   private skipped: { from: number; to: number }[] = [];
   private destroyed = false;
   scheduleOn: Promise<unknown> | null = null;
@@ -1462,11 +1609,9 @@ class ParseContext {
     readonly state: EditorState,
     public tree: Tree,
     public viewport: { from: number; to: number },
+    lineage?: ParserLineage,
   ) {
-    this.tsParser = parser.createParser();
-    if (parser instanceof TreeSitterParser) {
-      registerParseContextParser(this, this.tsParser, this.nestedTSParsers);
-    }
+    this.lineage = lineage ?? new ParserLineage(parser);
   }
 
   static create(parser: TreeSitterParser, state: EditorState) {
@@ -1492,7 +1637,7 @@ class ParseContext {
         let parsed =
           this.pendingTree ??
           this.parser.parseWith(
-            this.tsParser,
+            this.lineage.acquire(this),
             this.state.doc,
             this.oldTree?.tree ?? null,
             shouldStop,
@@ -1519,12 +1664,7 @@ class ParseContext {
           ).wrapTree(parsed, this.state.doc);
         }
         if (!tree) return false;
-        this.tree = tree;
-        this.pendingTree = null;
-        this.pendingTreeOwned = false;
-        this.treeBuild = null;
-        this.disposeOldTree(tree);
-        disposeParsers(this.nestedTSParsers);
+        this.commit(tree);
         return true;
       });
     } catch (error) {
@@ -1537,18 +1677,88 @@ class ParseContext {
     }
   }
 
-  takeTree() {
-    return this.work();
+  private commit(tree: Tree) {
+    this.tree = tree;
+    this.pendingTree = null;
+    this.pendingTreeOwned = false;
+    this.treeBuild = null;
+    // Keep the incremental base until the changed ranges against it are
+    // read (or the context is superseded), then delete it if it was never
+    // published.
+    this.releaseCommitBase();
+    this.commitBase = {
+      tree: this.oldTree,
+      committed: tree,
+      owned: this.oldTreeOwned && !this.oldTreeExposed,
+      ranges: null,
+      released: false,
+    };
+    this.oldTree = null;
+    this.oldTreeOwned = false;
+    this.oldTreeExposed = false;
+    this.oldTreePublishable = false;
+    disposeParsers(this.nestedTSParsers);
+  }
+
+  /**
+   * The tree to publish through `syntaxTree`: the committed tree, or, while a
+   * reparse is in flight, the previous tree edited to the current document.
+   */
+  publishedTree(): Tree {
+    if (this.tree.tree || !this.oldTreePublishable || !this.oldTree?.tree) return this.tree;
+    return this.oldTree;
+  }
+
+  /** @internal Record that `tree` (from `publishedTree`) is now visible to consumers. */
+  markPublished(tree: Tree) {
+    if (tree === this.oldTree) this.oldTreeExposed = true;
+  }
+
+  /**
+   * @internal Changed syntax ranges between `startTree` and `newTree` when this
+   * context produced `newTree` from `startTree`, or null when unknown.
+   */
+  changedRangesSince(
+    startTree: Tree,
+    newTree: Tree,
+    docChanged: boolean,
+  ): readonly DocRange[] | null {
+    if (newTree === this.oldTree && this.oldTreePublishable) {
+      // Only edited so far; the syntax is unchanged beyond the text edit.
+      return (docChanged ? startTree === this.editedFrom : startTree === newTree) ? [] : null;
+    }
+    let base = this.commitBase;
+    if (!base || base.committed !== newTree || newTree !== this.tree) return null;
+    if (docChanged ? startTree !== this.editedFrom : startTree !== base.tree) return null;
+    if (!base.ranges) {
+      if (base.released) return null;
+      base.ranges =
+        base.tree && canDiffTrees(base.tree, newTree)
+          ? normalizeRanges(collectChangedRanges(base.tree, newTree))
+          : [{ from: 0, to: newTree.length }];
+      this.releaseCommitBase();
+    }
+    return base.ranges;
+  }
+
+  private releaseCommitBase() {
+    let base = this.commitBase;
+    if (!base || base.released) return;
+    base.released = true;
+    if (base.owned && base.tree) disposeWrappedTree(base.tree, base.committed);
   }
 
   changes(changes: ChangeDesc, startState: EditorState, newState: EditorState) {
-    // A suspended parse has no published tree yet. Its edited base still
-    // describes startState and must survive another edit (and cancellation).
-    let base = this.tree.tree ? this.tree : (this.oldTree ?? this.tree);
-    let oldTree =
-      base.tree && !changes.empty
+    // While a parse is in flight `tree` is empty; continue from the old tree
+    // that was already edited for the previous change instead of dropping it.
+    let base = this.tree.tree ? this.tree : this.oldTree?.tree ? this.oldTree : null;
+    let edited =
+      base && !changes.empty
         ? this.parser.editWrappedTree(base, changes, startState.doc, newState.doc)
-        : base;
+        : (base ?? Tree.empty);
+    let handedOver = !!base && edited === this.oldTree;
+    // While suspended, keep accumulating dirty ranges so the resumed parse
+    // still re-checks everything edited since the last published tree.
     let changedRanges =
       !this.tree.tree && this.changedRanges
         ? this.changedRanges.mapAndAdd(changes)
@@ -1565,16 +1775,30 @@ class ParseContext {
       .filter((range) => range.from < range.to);
     let scheduleOn = this.scheduleOn;
     this.cancelPendingWork();
-    this.disposeOldTree(oldTree);
-    let cx = new ParseContext(this.parser, newState, Tree.empty, {
-      from: viewport.from,
-      to: viewport.to,
-    });
-    cx.oldTree = oldTree;
-    cx.oldTreeOwned = editedTreeOwnership.has(oldTree);
+    this.releaseCommitBase();
+    let cx = new ParseContext(
+      this.parser,
+      newState,
+      Tree.empty,
+      { from: viewport.from, to: viewport.to },
+      this.lineage,
+    );
+    cx.oldTree = edited;
+    cx.oldTreeOwned = handedOver ? this.oldTreeOwned : editedTreeOwnership.has(edited);
+    cx.oldTreeExposed = handedOver && this.oldTreeExposed;
+    cx.oldTreePublishable = this.parser instanceof TreeSitterParser && edited !== base;
+    cx.editedFrom = syntaxTree(startState);
     cx.changedRanges = changedRanges;
     cx.scheduleOn = scheduleOn;
     cx.skipped = skipped;
+    if (handedOver) {
+      this.oldTree = null;
+      this.oldTreeOwned = false;
+      this.oldTreeExposed = false;
+      this.oldTreePublishable = false;
+    } else {
+      this.disposeOldTree();
+    }
     return cx;
   }
 
@@ -1602,6 +1826,9 @@ class ParseContext {
     this.changedRanges = null;
     if (this.tree.tree) {
       this.oldTree = this.tree;
+      this.oldTreeOwned = false;
+      this.oldTreeExposed = true;
+      this.oldTreePublishable = true;
       this.pendingTree = this.tree.tree;
       this.pendingTreeOwned = false;
       this.tree = Tree.empty;
@@ -1623,15 +1850,26 @@ class ParseContext {
     };
     attempt(() => build?.cancel());
     attempt(() => disposeParsers(this.nestedTSParsers));
-    if (this.parser instanceof TreeSitterParser) {
-      attempt(() => this.tsParser.reset());
-      if (this.pendingTreeOwned && this.pendingTree) {
-        attempt(() => disposeNativeTree(this.pendingTree!));
-      }
+    attempt(() => this.lineage.release(this));
+    if (this.pendingTreeOwned && this.pendingTree) {
+      attempt(() => disposeNativeTree(this.pendingTree!));
     }
     this.pendingTree = null;
     this.pendingTreeOwned = false;
     if (failures.length) throw failures[0];
+  }
+
+  /**
+   * @internal Cancel pending work and delete the lineage's native parser now
+   * (used on language switch and view destroy). The context stays usable; a
+   * later parse lazily creates a new native parser.
+   */
+  releaseParser() {
+    try {
+      this.cancelPendingWork();
+    } finally {
+      this.lineage.destroy();
+    }
   }
 
   destroy() {
@@ -1646,19 +1884,20 @@ class ParseContext {
     };
     attempt(() => this.cancelPendingWork());
     attempt(() => this.disposeOldTree());
+    attempt(() => this.releaseCommitBase());
     this.destroyed = true;
-    let resource = parseContextParserResources.get(this);
-    if (resource) {
-      parseContextParserFinalizer?.unregister(this);
-      attempt(() => disposeParser(resource));
-    }
+    attempt(() => this.lineage.destroy());
     if (failures.length) throw failures[0];
   }
 
-  private disposeOldTree(retained: Tree | null = null) {
-    if (this.oldTreeOwned && this.oldTree) disposeWrappedTree(this.oldTree, retained);
+  private disposeOldTree() {
+    if (this.oldTreeOwned && this.oldTree && !this.oldTreeExposed) {
+      disposeWrappedTree(this.oldTree);
+    }
     this.oldTree = null;
     this.oldTreeOwned = false;
+    this.oldTreeExposed = false;
+    this.oldTreePublishable = false;
   }
 
   skipUntilInView(from: number, to: number) {
@@ -1700,12 +1939,13 @@ class LanguageState {
   readonly tree: Tree;
 
   constructor(readonly context: ParseContext) {
-    this.tree = context.tree;
+    this.tree = context.publishedTree();
+    context.markPublished(this.tree);
   }
 
   apply(tr: Transaction) {
     if (!tr.docChanged)
-      return this.tree == this.context.tree ? this : new LanguageState(this.context);
+      return this.tree == this.context.publishedTree() ? this : new LanguageState(this.context);
     let context = this.context.changes(tr.changes, tr.startState, tr.state);
     let start = now();
     context.work(Work.Apply);
@@ -1730,7 +1970,7 @@ Language.state = StateField.define<LanguageState>({
       if (effect.is(Language.setState)) return effect.value;
     }
     if (tr.startState.facet(language) != tr.state.facet(language)) {
-      value.context.cancelPendingWork();
+      value.context.releaseParser();
       return LanguageState.init(tr.state);
     }
     return value.apply(tr);
@@ -1793,7 +2033,7 @@ const parseWorker = ViewPlugin.fromClass(
       let field = this.view.state.field(Language.state, false);
       if (!field) return;
       if (
-        field.tree != field.context.tree ||
+        field.tree != field.context.publishedTree() ||
         !field.context.isDone(this.view.viewport.to + Work.MaxParseAhead)
       ) {
         this.working = requestIdle((deadline) => this.work(deadline));
@@ -1813,7 +2053,7 @@ const parseWorker = ViewPlugin.fromClass(
         let field = this.view.state.field(Language.state, false);
         if (!field) return;
         if (
-          field.tree == field.context.tree &&
+          field.tree == field.context.publishedTree() &&
           field.context.isDone(this.view.viewport.to + Work.MaxParseAhead)
         ) {
           return;
@@ -1825,7 +2065,7 @@ const parseWorker = ViewPlugin.fromClass(
         });
         this.chunkBudget -= Date.now() - now;
 
-        if (field.tree != field.context.tree) {
+        if (field.tree != field.context.publishedTree()) {
           this.view.dispatch({ effects: Language.setState.of(new LanguageState(field.context)) });
         }
         this.checkAsyncSchedule(field.context);
@@ -1837,6 +2077,11 @@ const parseWorker = ViewPlugin.fromClass(
 
     destroy() {
       if (this.working) this.working();
+      try {
+        this.view.state.field(Language.state, false)?.context.releaseParser();
+      } catch (error) {
+        logException(this.view.state, error);
+      }
     }
 
     isWorking() {
@@ -1875,9 +2120,9 @@ function collectChangedRanges(
   newTree: Tree,
   matcherStats?: NestedTreeMatcherStats,
 ): DocRange[] {
-  let ranges: DocRange[] = oldTree.tree
-    ? oldTree.tree
-        .getChangedRanges(newTree.tree!)
+  let ranges: DocRange[] = canDiffTrees(oldTree, newTree)
+    ? oldTree
+        .tree!.getChangedRanges(newTree.tree!)
         .map((range) => ({ from: range.startIndex, to: range.endIndex }))
     : [{ from: 0, to: newTree.length }];
 

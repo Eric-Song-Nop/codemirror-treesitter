@@ -69,3 +69,10 @@ vp run audit
 
 The audit checks that `basicSetup`, `minimalSetup`, and keymap ordering match
 the upstream expectations.
+
+## License and attribution
+
+This package is a derivative work of the official [`codemirror`](https://github.com/codemirror/basic-setup) basic-setup package by Marijn Haverbeke and others,
+distributed under the MIT License. The upstream copyright notice is retained
+alongside the project copyright in [`LICENSE`](./LICENSE). See the root
+[`NOTICE.md`](../../NOTICE.md) for the full list of derived components.

@@ -1,3 +1,5 @@
+import { hasControlCharacter, unescapeMarkdownPunctuation } from "./markdown-text.js";
+
 const allowedLinkProtocols = new Set(["http:", "https:", "mailto:", "tel:"]);
 const allowedBaseProtocols = new Set(["http:", "https:"]);
 
@@ -49,31 +51,10 @@ function parseAbsoluteLinkDestination(destination: string) {
   }
 }
 
-function hasControlCharacter(value: string) {
-  for (let index = 0; index < value.length; index++) {
-    let code = value.charCodeAt(index);
-    if (code < 32 || code == 127) return true;
-  }
-  return false;
-}
-
 function normalizeMarkdownDestination(source: null | string | undefined) {
   let destination = source?.trim() ?? "";
   if (destination.length >= 2 && destination[0] == "<" && destination.at(-1) == ">") {
     destination = destination.slice(1, -1).trim();
   }
   return unescapeMarkdownPunctuation(destination);
-}
-
-function unescapeMarkdownPunctuation(value: string) {
-  let result = "";
-  for (let index = 0; index < value.length; index++) {
-    let char = value[index];
-    if (char == "\\" && index + 1 < value.length) {
-      result += value[++index];
-    } else {
-      result += char;
-    }
-  }
-  return result;
 }

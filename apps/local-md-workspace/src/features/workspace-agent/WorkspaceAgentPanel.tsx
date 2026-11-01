@@ -3,11 +3,13 @@ import {
   CheckIcon,
   CircleAlertIcon,
   CircleIcon,
+  FileDiffIcon,
   KeyRoundIcon,
   PlusIcon,
   SendIcon,
   SparklesIcon,
   SquareIcon,
+  Undo2Icon,
   WrenchIcon,
   XIcon,
 } from "lucide-react";
@@ -28,12 +30,22 @@ import {
 import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { isMobileSidebarViewport } from "@/lib/workspace/constants";
-import type { WorkspaceAgentRunStatus, WorkspaceAgentSessionSummary } from "./useWorkspaceAgent";
+import type { WorkspaceAgentChangeSummary } from "@/lib/agent/domain/contracts";
+import type { WorkspaceAgentToolDisplayOutput } from "./chat-transport";
+import type {
+  WorkspaceAgentEditRecord,
+  WorkspaceAgentPendingApproval,
+  WorkspaceAgentRunStatus,
+  WorkspaceAgentSessionSummary,
+  WorkspaceAgentWriteDecision,
+} from "./useWorkspaceAgent";
 
 type WorkspaceAgentPanelProps = {
   activeSessionId: string;
+  approvals?: readonly WorkspaceAgentPendingApproval[];
   credentialLoading: boolean;
   credentialStored: boolean;
+  edits?: readonly WorkspaceAgentEditRecord[];
   error: string | null;
   hasApiKey: boolean;
   messages: readonly UIMessage[];
@@ -45,15 +57,22 @@ type WorkspaceAgentPanelProps = {
   onModelChange: (model: WorkspaceAgentModel) => void;
   onNewChat: () => void;
   onOpenSettings: () => void;
+  onResolveApproval?: (approvalId: string, decision: WorkspaceAgentWriteDecision) => void;
+  onRevertEdit?: (editId: string) => void;
   onSelectSession: (sessionId: string) => void;
   onSend: (prompt: string) => Promise<boolean>;
   onStop: () => void;
 };
 
+const noApprovals: readonly WorkspaceAgentPendingApproval[] = [];
+const noEdits: readonly WorkspaceAgentEditRecord[] = [];
+
 export function WorkspaceAgentPanel({
   activeSessionId,
+  approvals = noApprovals,
   credentialLoading,
   credentialStored,
+  edits = noEdits,
   error,
   hasApiKey,
   messages,
@@ -65,6 +84,8 @@ export function WorkspaceAgentPanel({
   onModelChange,
   onNewChat,
   onOpenSettings,
+  onResolveApproval,
+  onRevertEdit,
   onSelectSession,
   onSend,
   onStop,
@@ -131,7 +152,7 @@ export function WorkspaceAgentPanel({
   useEffect(() => {
     if (!open || !followOutputRef.current || (!messages.length && !error)) return;
     scrollEndRef.current?.scrollIntoView({ block: "end" });
-  }, [error, messages, open, resolvedActiveSessionId]);
+  }, [approvals, error, messages, open, resolvedActiveSessionId]);
 
   if (!open) return null;
 
@@ -215,11 +236,13 @@ export function WorkspaceAgentPanel({
               </DialogPrimitive.Title>
               <DialogPrimitive.Description asChild>
                 <p className="truncate text-[0.7rem] text-muted-foreground">
-                  {running
-                    ? t("agent.status.running")
-                    : workspaceAvailable
-                      ? t("agent.panel.subtitle")
-                      : t("agent.status.openWorkspace")}
+                  {approvals.length
+                    ? t("agent.status.awaitingApproval")
+                    : running
+                      ? t("agent.status.running")
+                      : workspaceAvailable
+                        ? t("agent.panel.subtitle")
+                        : t("agent.status.openWorkspace")}
                 </p>
               </DialogPrimitive.Description>
             </div>
@@ -314,6 +337,14 @@ export function WorkspaceAgentPanel({
                   <p className="text-sm text-muted-foreground">{t("agent.empty.description")}</p>
                 </Empty>
               )}
+
+              {edits.length ? (
+                <WorkspaceAgentEdits edits={edits} onRevertEdit={onRevertEdit} />
+              ) : null}
+
+              {approvals.length ? (
+                <WorkspaceAgentApprovals approvals={approvals} onResolve={onResolveApproval} />
+              ) : null}
 
               {error ? (
                 <div
@@ -523,16 +554,32 @@ function WorkspaceAgentMessage({
         {text ? <div className="wrap-break-word whitespace-pre-wrap">{text}</div> : null}
         {tools.map((part) => {
           let toolStatus = workspaceAgentToolStatus(part, status);
+          let target = toolTargetLabel(part.input);
+          let output = toolDisplayOutput(part);
           return (
-            <Badge
-              className="flex w-full gap-2 p-2"
-              key={part.toolCallId}
-              variant={toolStatus == "error" ? "destructive" : "secondary"}
-            >
-              <WrenchIcon aria-hidden />
-              <span className="min-w-0 truncate">{toolLabel(getToolName(part), t)}</span>
-              <span className="ml-auto">{t(`agent.tool.${toolStatus}` as TranslationKey)}</span>
-            </Badge>
+            <div className="space-y-1" key={part.toolCallId}>
+              <Badge
+                className="flex w-full gap-2 p-2"
+                variant={
+                  toolStatus == "error" || toolStatus == "denied" ? "destructive" : "secondary"
+                }
+              >
+                <WrenchIcon aria-hidden />
+                <span className="min-w-0 truncate">{toolLabel(getToolName(part), t)}</span>
+                <span className="ml-auto">{t(`agent.tool.${toolStatus}` as TranslationKey)}</span>
+              </Badge>
+              {target ? (
+                <div
+                  className="truncate px-2 font-mono text-[0.7rem] text-muted-foreground"
+                  data-agent-tool-target
+                  dir="auto"
+                  title={target}
+                >
+                  {target}
+                </div>
+              ) : null}
+              {output?.change ? <WorkspaceAgentChange change={output.change} /> : null}
+            </div>
           );
         })}
         {status == "running" && !text && !tools.length ? (
@@ -553,9 +600,179 @@ function workspaceAgentToolStatus(
   if (part.state == "output-error") return "error";
   if (part.state != "output-available")
     return runStatus == "running" ? "running" : runStatus == "error" ? "error" : "cancelled";
-  return (part.output as { status?: unknown } | null)?.status == "deduplicated"
-    ? "deduplicated"
-    : "success";
+  let status = (part.output as { status?: unknown } | null)?.status;
+  if (status == "deduplicated") return "deduplicated";
+  if (status == "denied") return "denied";
+  if (status == "not-applied") return "not-applied";
+  return "success";
+}
+
+function toolDisplayOutput(part: Parameters<typeof getToolName>[0]) {
+  if (part.state != "output-available") return null;
+  let output = part.output as Partial<WorkspaceAgentToolDisplayOutput> | null;
+  return output && typeof output == "object" ? output : null;
+}
+
+function toolTargetLabel(input: unknown) {
+  if (!input || typeof input != "object") return null;
+  let record = input as Record<string, unknown>;
+  for (let key of ["path", "directory", "query"]) {
+    let value = record[key];
+    if (typeof value == "string" && value) return key == "query" ? `“${value}”` : value;
+  }
+  return null;
+}
+
+function WorkspaceAgentChange({
+  change,
+  defaultOpen = false,
+}: {
+  change: WorkspaceAgentChangeSummary;
+  defaultOpen?: boolean;
+}) {
+  let { t } = useI18n();
+  let summary = t("agent.change.summary", { added: change.added, removed: change.removed });
+  return (
+    <details className="rounded-md border bg-muted/30 text-xs" open={defaultOpen || undefined}>
+      <summary className="flex cursor-pointer items-center gap-2 px-2 py-1.5">
+        <FileDiffIcon aria-hidden className="size-3.5 shrink-0" />
+        <span aria-label={summary} className="font-mono">
+          <span className="text-emerald-700 dark:text-emerald-400">+{change.added}</span>{" "}
+          <span className="text-destructive">−{change.removed}</span>
+        </span>
+        <span className="ml-auto text-muted-foreground">{t("agent.change.show")}</span>
+      </summary>
+      {change.diff ? (
+        <pre
+          className="max-h-60 overflow-auto border-t px-2 py-1.5 font-mono text-[0.68rem] leading-5 whitespace-pre"
+          data-agent-diff
+        >
+          {change.diff.split("\n").map((line, index) => (
+            <div
+              className={cn(
+                line.startsWith("+") && "bg-emerald-500/10 text-emerald-800 dark:text-emerald-300",
+                line.startsWith("-") && "bg-destructive/10 text-destructive",
+                line.startsWith("@@") && "text-muted-foreground",
+              )}
+              key={index}
+            >
+              {line || " "}
+            </div>
+          ))}
+        </pre>
+      ) : null}
+    </details>
+  );
+}
+
+function WorkspaceAgentApprovals({
+  approvals,
+  onResolve,
+}: {
+  approvals: readonly WorkspaceAgentPendingApproval[];
+  onResolve?: (approvalId: string, decision: WorkspaceAgentWriteDecision) => void;
+}) {
+  let { t } = useI18n();
+  return (
+    <section aria-label={t("agent.approval.label")} className="space-y-3">
+      {approvals.map((approval) => (
+        <div
+          className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm"
+          data-agent-approval
+          key={approval.id}
+          role="group"
+          aria-label={t("agent.approval.title", { path: approval.path })}
+        >
+          <div className="font-medium wrap-break-word" dir="auto">
+            {t("agent.approval.title", { path: approval.path })}
+          </div>
+          <p className="text-xs text-muted-foreground">{t("agent.approval.description")}</p>
+          <WorkspaceAgentChange change={approval.change} defaultOpen />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              className="min-h-11 touch-manipulation md:min-h-7"
+              size="sm"
+              type="button"
+              onClick={() => onResolve?.(approval.id, "allow-once")}
+            >
+              {t("agent.approval.allowOnce")}
+            </Button>
+            <Button
+              className="min-h-11 touch-manipulation md:min-h-7"
+              size="sm"
+              type="button"
+              variant="outline"
+              onClick={() => onResolve?.(approval.id, "allow-session")}
+            >
+              {t("agent.approval.allowSession")}
+            </Button>
+            <Button
+              className="min-h-11 touch-manipulation md:min-h-7"
+              size="sm"
+              type="button"
+              variant="destructive"
+              onClick={() => onResolve?.(approval.id, "deny")}
+            >
+              {t("agent.approval.deny")}
+            </Button>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function WorkspaceAgentEdits({
+  edits,
+  onRevertEdit,
+}: {
+  edits: readonly WorkspaceAgentEditRecord[];
+  onRevertEdit?: (editId: string) => void;
+}) {
+  let { t } = useI18n();
+  return (
+    <section className="space-y-1.5 rounded-lg border p-2" data-agent-edits>
+      <h3 className="px-1 text-[0.68rem] font-medium text-muted-foreground uppercase">
+        {t("agent.edits.title")}
+      </h3>
+      <ul className="space-y-1" role="list">
+        {edits.map((edit) => (
+          <li className="flex items-center gap-2 px-1 text-xs" key={edit.id}>
+            <span className="min-w-0 flex-1 truncate" dir="auto" title={edit.error ?? edit.path}>
+              {t("agent.edits.edited", { path: edit.path })}
+            </span>
+            <span className="shrink-0 font-mono text-muted-foreground">
+              +{edit.change.added} −{edit.change.removed}
+            </span>
+            {edit.status == "reverted" ? (
+              <span className="shrink-0 text-muted-foreground">{t("agent.edits.reverted")}</span>
+            ) : edit.status == "reverting" ? (
+              <span className="shrink-0 text-muted-foreground">{t("agent.edits.reverting")}</span>
+            ) : (
+              <>
+                {edit.status == "revert-failed" ? (
+                  <span className="shrink-0 text-destructive" title={edit.error}>
+                    {t("agent.edits.revertFailed")}
+                  </span>
+                ) : null}
+                <Button
+                  aria-label={`${t("agent.edits.revert")}: ${edit.path}`}
+                  className="min-h-11 shrink-0 touch-manipulation md:min-h-6"
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => onRevertEdit?.(edit.id)}
+                >
+                  <Undo2Icon data-icon="inline-start" aria-hidden />
+                  {t("agent.edits.revert")}
+                </Button>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 function toolLabel(name: string, t: ReturnType<typeof useI18n>["t"]) {

@@ -320,14 +320,6 @@ function lastLeafStartingAtOrBefore(leaves: SourceIslandIndex, position: number)
   return low - 1;
 }
 
-export function leafOwnsSelectionHead(
-  doc: Text,
-  leaf: LiveMdSourceIslandLeaf,
-  range: SelectionRange,
-) {
-  return leafOwnsCaret(doc, leaf, range.head, range.assoc);
-}
-
 export function leafOwnsCaret(
   doc: Text,
   leaf: LiveMdSourceIslandLeaf,

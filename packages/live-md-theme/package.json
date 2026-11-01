@@ -2,9 +2,19 @@
   "name": "@codemirror-treesitter/live-md-theme",
   "version": "0.0.0",
   "description": "Reusable LiveMD presentation theme token contract",
+  "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/live-md-theme#readme",
+  "bugs": {
+    "url": "https://github.com/Eric-Song-Nop/codemirror-treesitter/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eric-Song-Nop/codemirror-treesitter.git",
+    "directory": "packages/live-md-theme"
+  },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,

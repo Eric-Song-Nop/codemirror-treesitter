@@ -1,4 +1,4 @@
-import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, type Extension, type Text } from "@codemirror/state";
 import {
   syntaxTree,
   syntaxTreeAvailable,
@@ -27,26 +27,38 @@ import {
   setCodeFenceLanguages,
 } from "./languages.js";
 import type { LiveMdLinkBaseUrl } from "./links.js";
+import { pendingKatexLoad } from "./latex.js";
 import { waitForLiveMdAnalysis } from "./runtime/field.js";
 
 export type LiveMdEditorChange = {
   update: ViewUpdate;
-  value: string;
+  /**
+   * The full document text. This is a lazy getter: the document is only
+   * stringified when a listener reads it, and the result is cached per
+   * document, so prefer `update.state.doc` for incremental work.
+   */
+  readonly value: string;
   view: EditorView;
 };
 
 export type LiveMdEditorOptions = {
+  /** Focus the editor after creation. Defaults to `false`. */
   autofocus?: boolean;
   config?: LiveMdConfig;
   defaultValue?: string;
   doc?: string;
   extensions?: Extension;
+  /** Alias for `autofocus`. Defaults to `false`. */
   focus?: boolean;
   imageSource?: LiveMdImageSourceResolver | null;
   linkBaseUrl?: LiveMdLinkBaseUrl | null;
   onBlur?: (view: EditorView) => void;
   onChange?: (change: LiveMdEditorChange) => void;
   parent: Element | DocumentFragment;
+  /**
+   * `localStorage` key for the document. Writes are debounced and flushed on
+   * blur, when the page becomes hidden, and on `destroy()`.
+   */
   persistKey?: string | null;
   placeholder?: string;
   readOnly?: boolean;
@@ -56,6 +68,8 @@ export type LiveMdEditorOptions = {
 
 export type LiveMdEditorController = {
   destroy: () => void;
+  /** Write any pending debounced persistence immediately. */
+  flushPersistence: () => void;
   ready: Promise<void>;
   setConfig: (config: LiveMdConfig) => void;
   setExtensions: (extensions: Extension) => void;
@@ -63,9 +77,13 @@ export type LiveMdEditorController = {
   setPlaceholder: (placeholder: string) => void;
   setReadOnly: (readOnly: boolean) => void;
   setValue: (value: string) => void;
-  value: string;
+  /** The full document text, computed on access and cached per document. */
+  readonly value: string;
   view: EditorView;
 };
+
+/** Debounce window for `persistKey` writes. */
+export const liveMdPersistDelay = 500;
 
 export type LiveMdEditorHandle = LiveMdEditorController;
 
@@ -86,6 +104,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
   let pendingFenceDiscoveryRanges: DocRange[] = [];
   let view: EditorView;
   let initialValue = initialEditorValue(options, persistKey);
+  let persistence = createPersistenceScheduler(() => view.state.doc);
 
   view = new EditorView({
     parent: options.parent,
@@ -103,6 +122,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
         extensionsCompartment.of(options.extensions ?? []),
         EditorView.domEventHandlers({
           blur() {
+            persistence.flush();
             options.onBlur?.(view);
           },
         }),
@@ -130,17 +150,16 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
               );
           }
           if (!update.docChanged) return;
-          let value = update.state.doc.toString();
-          savePersistedValue(persistKey, value);
-          if (!suppressChange) {
-            options.onChange?.({ update, value, view });
+          if (persistKey) persistence.schedule(persistKey);
+          if (!suppressChange && options.onChange) {
+            options.onChange(createEditorChange(update, view));
           }
         }),
       ],
     }),
   });
 
-  if (options.autofocus ?? options.focus ?? true) view.focus();
+  if (options.autofocus ?? options.focus ?? false) view.focus();
 
   let markdownReady = loadMarkdownExtension().then((extension) => {
     if (cancelled) return;
@@ -183,14 +202,21 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
 
   let controller: LiveMdEditorController = {
     destroy() {
+      persistence.flush();
       cancelled = true;
       cleanupPlugins(activePluginCleanups);
       activePluginCleanups = [];
       view.destroy();
     },
+    flushPersistence() {
+      persistence.flush();
+    },
     ready: Promise.all([markdownReady, codeFenceReady]).then(async () => {
       await Promise.all(codeFenceLoads);
       if (!cancelled) await waitForLiveMdAnalysis(view, () => cancelled);
+      // Initial math triggers the lazy KaTeX load; widgets re-render when it lands.
+      // A failed load leaves the source visible and is not an editor failure.
+      await pendingKatexLoad()?.catch(() => {});
     }),
     setConfig(config) {
       reconfigureLiveMdConfig(normalizeLiveMdConfig(config));
@@ -201,6 +227,8 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       });
     },
     setPersistKey(nextPersistKey) {
+      // Pending writes belong to the key that was active when they were scheduled.
+      persistence.flush();
       persistKey = normalizePersistKey(nextPersistKey);
     },
     setPlaceholder(placeholder) {
@@ -214,7 +242,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       });
     },
     setValue(value) {
-      if (value == view.state.doc.toString()) return;
+      if (value.length == view.state.doc.length && value == liveMdDocString(view.state.doc)) return;
       suppressChange = true;
       try {
         view.dispatch({
@@ -227,7 +255,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       }
     },
     get value() {
-      return view.state.doc.toString();
+      return liveMdDocString(view.state.doc);
     },
     view,
   };
@@ -267,6 +295,76 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       view,
     });
   }
+}
+
+const docStrings = new WeakMap<Text, string>();
+
+/** Stringify a document once per immutable `Text` instance. */
+export function liveMdDocString(doc: Text) {
+  let value = docStrings.get(doc);
+  if (value == null) {
+    value = doc.toString();
+    docStrings.set(doc, value);
+  }
+  return value;
+}
+
+function createEditorChange(update: ViewUpdate, view: EditorView): LiveMdEditorChange {
+  return {
+    update,
+    get value() {
+      return liveMdDocString(update.state.doc);
+    },
+    view,
+  };
+}
+
+type PersistenceScheduler = {
+  flush: () => void;
+  schedule: (storageKey: string) => void;
+};
+
+function createPersistenceScheduler(currentDoc: () => Text): PersistenceScheduler {
+  let pendingKey: null | string = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let listening = false;
+  let ownerDocument = typeof document == "undefined" ? null : document;
+
+  function onVisibilityChange() {
+    if (ownerDocument?.visibilityState == "hidden") flush();
+  }
+
+  function setListening(next: boolean) {
+    if (listening == next || !ownerDocument) return;
+    listening = next;
+    if (next) {
+      ownerDocument.addEventListener("visibilitychange", onVisibilityChange);
+      globalThis.addEventListener?.("pagehide", flush);
+    } else {
+      ownerDocument.removeEventListener("visibilitychange", onVisibilityChange);
+      globalThis.removeEventListener?.("pagehide", flush);
+    }
+  }
+
+  function flush() {
+    if (timer != null) clearTimeout(timer);
+    timer = null;
+    setListening(false);
+    let storageKey = pendingKey;
+    pendingKey = null;
+    if (storageKey) savePersistedValue(storageKey, liveMdDocString(currentDoc()));
+  }
+
+  return {
+    flush,
+    schedule(storageKey) {
+      if (pendingKey != null && pendingKey != storageKey) flush();
+      pendingKey = storageKey;
+      if (timer != null) clearTimeout(timer);
+      timer = setTimeout(flush, liveMdPersistDelay);
+      setListening(true);
+    },
+  };
 }
 
 function initialEditorValue(options: LiveMdEditorOptions, persistKey: null | string) {
@@ -309,8 +407,7 @@ function loadPersistedValue(storageKey: string, fallback: string) {
   }
 }
 
-function savePersistedValue(storageKey: null | string, value: string) {
-  if (!storageKey) return;
+function savePersistedValue(storageKey: string, value: string) {
   let storage = browserLocalStorage();
   if (!storage) return;
   try {

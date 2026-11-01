@@ -1,12 +1,5 @@
 export const projectUrl = "https://github.com/Eric-Song-Nop/codemirror-treesitter";
 
-export type InitialDocumentSeedInput = {
-  docValue: string;
-  editorValue: string;
-  generatedRoom: boolean;
-  hasLocalSnapshot: boolean;
-};
-
 export function createInitialDocument(shareUrl: string) {
   return `# Collaborative LiveMD
 
@@ -20,18 +13,7 @@ Project: [Eric-Song-Nop/codemirror-treesitter](${projectUrl})
 2. Share this link to collaborate: <${shareUrl}>
 3. Everyone with the same link edits the same document.
 
-\`\`\`ts
-const share = "copy the URL, including the short #room id";
-console.log(share);
-\`\`\`
+The link carries an edit key in its \`#\` fragment, so treat it like a password.
+Rooms expire after 7 days and are deleted after a further retention period.
 `;
-}
-
-export function shouldSeedInitialDocument(input: InitialDocumentSeedInput) {
-  return (
-    input.generatedRoom &&
-    !input.hasLocalSnapshot &&
-    input.docValue.length == 0 &&
-    input.editorValue.length == 0
-  );
 }

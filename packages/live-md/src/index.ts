@@ -1,5 +1,6 @@
 export {
   createLiveMdEditor,
+  liveMdPersistDelay,
   type LiveMdEditorChange,
   type LiveMdEditorController,
   type LiveMdEditorHandle,

@@ -7,4 +7,7 @@ export default defineConfig({
     },
     exports: true,
   },
+  test: {
+    setupFiles: ["./tests/setup.ts"],
+  },
 });

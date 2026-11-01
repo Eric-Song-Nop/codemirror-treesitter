@@ -11,6 +11,10 @@
   "durable_objects": {
     "bindings": [
       {
+        "name": "COLLAB_CREATE_QUOTA",
+        "class_name": "CollabCreateQuota",
+      },
+      {
         "name": "COLLAB_ROOMS",
         "class_name": "CollabRoom",
       },
@@ -19,9 +23,25 @@
   "ratelimits": [
     {
       "name": "CREATE_SHARE_RATE_LIMITER",
-      "namespace_id": "43541",
+      "namespace_id": "43544",
       "simple": {
         "limit": 30,
+        "period": 60,
+      },
+    },
+    {
+      "name": "SHARE_SESSION_RATE_LIMITER",
+      "namespace_id": "43545",
+      "simple": {
+        "limit": 120,
+        "period": 60,
+      },
+    },
+    {
+      "name": "SHARE_WEBSOCKET_RATE_LIMITER",
+      "namespace_id": "43546",
+      "simple": {
+        "limit": 120,
         "period": 60,
       },
     },
@@ -31,7 +51,16 @@
       "tag": "v1",
       "new_sqlite_classes": ["CollabRoom"],
     },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["CollabCreateQuota"],
+    },
   ],
+  "vars": {
+    // Optional comma-separated CORS/WebSocket Origin allowlist. Blank keeps
+    // the permissive reflect-any-origin behavior.
+    "ALLOWED_ORIGINS": "",
+  },
   "observability": {
     "enabled": true,
   },

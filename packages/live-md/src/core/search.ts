@@ -85,11 +85,7 @@ const liveMdMarkdownSearchTest: SearchTest = (_match, state, from, to) =>
 
 liveMdSearchTests.add(liveMdMarkdownSearchTest);
 
-export function __testIsLiveMdSearchVisible(state: EditorState, from: number, to: number) {
-  return isLiveMdSearchVisible(state, from, to);
-}
-
-function isLiveMdSearchVisible(state: EditorState, from: number, to: number) {
+export function isLiveMdSearchVisible(state: EditorState, from: number, to: number) {
   if (from >= to) return true;
   let hidden = false;
   liveMdSearchVisibilityIndex(state).between(from, to, (hiddenFrom, hiddenTo) => {

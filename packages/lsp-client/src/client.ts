@@ -1,11 +1,22 @@
 import type * as lsp from "vscode-languageserver-protocol";
 import { showDialog } from "@codemirror/view";
 import { ChangeSet, ChangeDesc, MapMode, Text, type Extension } from "@codemirror/state";
-import { Language } from "@codemirror-treesitter/language";
+import { Language, LanguageDescription } from "@codemirror-treesitter/language";
 import { LSPPlugin, lspPlugin } from "./plugin.js";
 import { toPosition, fromPosition } from "./pos.js";
 import { Workspace, DefaultWorkspace, type WorkspaceFile } from "./workspace.js";
 import { lspTheme } from "./theme.js";
+
+// Replaced with the package.json version by the package's Vite/pack config.
+// Source consumers that alias this package without the define fall back to
+// omitting the version.
+declare const __LSP_CLIENT_VERSION__: string | undefined;
+
+// The `clientInfo` this client sends to servers in `initialize`.
+const lspClientInfo: { name: string; version?: string } = {
+  name: "@codemirror-treesitter/lsp-client",
+  ...(typeof __LSP_CLIENT_VERSION__ == "string" ? { version: __LSP_CLIENT_VERSION__ } : {}),
+};
 
 class Request<Result> {
   declare resolve: (result: Result) => void;
@@ -196,8 +207,11 @@ export type LSPClientConfig = {
   /// code embedded in the Markdown text when its language tag matches
   /// the name of the language used by the editor. You can provide a
   /// function here that returns a CodeMirror language object for a
-  /// given language tag to support more languages.
-  highlightLanguage?: (name: string) => Language | null;
+  /// given language tag to support more languages. It may also return
+  /// a `LanguageDescription`: while its grammar is still loading, hover
+  /// tooltips wait briefly for it, and other Markdown renders its code as
+  /// plain text.
+  highlightLanguage?: (name: string) => Language | LanguageDescription | null;
   /// By default, the client will only handle the server notifications
   /// `window/logMessage` (logging warnings and errors to the console)
   /// and `window/showMessage`. You can pass additional handlers here.
@@ -213,6 +227,11 @@ export type LSPClientConfig = {
   /// here will be included in the extension returned by
   /// [`LSPPlugin.create`](#lsp-client.LSPPlugin^create).
   extensions?: readonly (Extension | LSPClientExtension)[];
+  /// Called for client-side failures that have no caller to reject:
+  /// a failed `initialize` exchange, notifications that could not be
+  /// sent, and malformed messages received from the server (which are
+  /// dropped). Defaults to logging with `console.error`.
+  onError?: (client: LSPClient, error: Error) => void;
 };
 
 /// Objects of this type can be included in the
@@ -266,7 +285,7 @@ export class LSPClient {
     /// @internal
     readonly config: LSPClientConfig = {},
   ) {
-    this.initializing = new Promise((resolve, reject) => (this.init = { resolve, reject }));
+    this.initializing = this.createInitializing();
     this.timeout = config.timeout ?? 3000;
     this.workspace = config.workspace ? config.workspace(this) : new DefaultWorkspace(this);
 
@@ -299,26 +318,62 @@ export class LSPClient {
       }
     this.requestInner<lsp.InitializeParams, lsp.InitializeResult>("initialize", {
       processId: null,
-      clientInfo: { name: "@codemirror/lsp-client" },
+      clientInfo: { ...lspClientInfo },
       rootUri: this.config.rootUri || null,
       capabilities,
-    }).promise.then((resp) => {
-      this.serverCapabilities = resp.capabilities;
-      let sync = resp.capabilities.textDocumentSync;
-      this.supportSync = sync == null ? 0 : typeof sync == "number" ? sync : (sync.change ?? 0);
-      transport.send(JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} }));
-      this.init.resolve(null);
-    }, this.init.reject);
+    }).promise.then(
+      (resp) => {
+        this.serverCapabilities = resp.capabilities;
+        let sync = resp.capabilities.textDocumentSync;
+        this.supportSync = sync == null ? 0 : typeof sync == "number" ? sync : (sync.change ?? 0);
+        transport.send(JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} }));
+        this.init.resolve(null);
+      },
+      (error) => {
+        // A disconnect rejects the pending initialize request itself; only
+        // report failures for the transport that is still current.
+        if (this.transport === transport) this.reportError(error, "LSP initialize failed");
+        this.init.reject(error);
+      },
+    );
     this.workspace.connected();
     return this;
   }
 
   /// Disconnect the client from the server.
+  /// Pending requests are rejected with a "Client disconnected" error,
+  /// and a still-pending `initializing` promise is rejected the same way.
   disconnect() {
     if (this.transport) this.transport.unsubscribe(this.receiveMessageHandler);
+    this.transport = null;
     this.serverCapabilities = null;
-    this.initializing = new Promise((resolve, reject) => (this.init = { resolve, reject }));
+    this.supportSync = -1;
+    let pending = this.requests;
+    this.requests = [];
+    for (let req of pending) {
+      clearTimeout(req.timeout);
+      req.reject(new Error("Client disconnected"));
+    }
+    // No-op when initialization already completed.
+    this.init.reject(new Error("Client disconnected"));
+    this.initializing = this.createInitializing();
     this.workspace.disconnected();
+  }
+
+  private createInitializing() {
+    let promise = new Promise<null>((resolve, reject) => (this.init = { resolve, reject }));
+    // Initialization failures are reported through `onError`; don't let
+    // a rejected promise that nobody awaits become an unhandled rejection.
+    promise.catch(() => {});
+    return promise;
+  }
+
+  /// @internal
+  reportError(error: unknown, context?: string) {
+    let err = error instanceof Error ? error : new Error(errorMessage(error));
+    if (context) err = new Error(`${context}: ${err.message}`, { cause: error });
+    if (this.config.onError) this.config.onError(this, err);
+    else console.error("[lsp] " + err.message);
   }
 
   /// Create a plugin for this client, to add to an editor
@@ -360,10 +415,18 @@ export class LSPClient {
   }
 
   private receiveMessage(msg: string) {
-    const value = JSON.parse(msg) as
-      | lsp.ResponseMessage
-      | lsp.NotificationMessage
-      | lsp.RequestMessage;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(msg);
+    } catch (e) {
+      this.reportError(e, "Dropped malformed LSP message");
+      return;
+    }
+    if (!parsed || typeof parsed != "object" || Array.isArray(parsed)) {
+      this.reportError(new Error("expected a JSON-RPC object"), "Dropped malformed LSP message");
+      return;
+    }
+    const value = parsed as lsp.ResponseMessage | lsp.NotificationMessage | lsp.RequestMessage;
     if ("id" in value && !("method" in value)) {
       let index = this.requests.findIndex((r) => r.id == value.id);
       if (index < 0) {
@@ -394,7 +457,11 @@ export class LSPClient {
         id: value.id,
         error: { code: -32601 /* MethodNotFound */, message: "Method not implemented" },
       };
-      this.transport!.send(JSON.stringify(resp));
+      try {
+        this.transport?.send(JSON.stringify(resp));
+      } catch (e) {
+        this.reportError(e, "Failed to answer LSP server request");
+      }
     }
   }
 
@@ -425,10 +492,17 @@ export class LSPClient {
       params,
       setTimeout(() => this.timeoutRequest(req), this.timeout),
     );
+    if (!this.transport) {
+      clearTimeout(req.timeout);
+      req.reject(new Error("Client not connected"));
+      return req;
+    }
     this.requests.push(req);
     try {
-      this.transport!.send(JSON.stringify(data));
+      this.transport.send(JSON.stringify(data));
     } catch (e) {
+      clearTimeout(req.timeout);
+      this.requests.splice(this.requests.indexOf(req), 1);
       req.reject(e);
     }
     return req;
@@ -437,14 +511,27 @@ export class LSPClient {
   /// Send a notification to the server.
   notification<Params>(method: string, params: Params) {
     if (!this.transport) return;
-    void this.initializing.then(() => {
-      let data: lsp.NotificationMessage = {
-        jsonrpc: "2.0",
-        method,
-        params: params as any,
-      };
-      this.transport!.send(JSON.stringify(data));
-    });
+    void this.initializing.then(
+      () => {
+        // The client may have been disconnected while waiting.
+        if (!this.transport) return;
+        let data: lsp.NotificationMessage = {
+          jsonrpc: "2.0",
+          method,
+          params: params as any,
+        };
+        try {
+          this.transport.send(JSON.stringify(data));
+        } catch (e) {
+          this.reportError(e, `Failed to send ${method} notification`);
+        }
+      },
+      () => {
+        // Initialization failed or the client disconnected. The
+        // initialize failure was already reported through `onError`;
+        // the notification is dropped.
+      },
+    );
   }
 
   /// Cancel the in-progress request with the given parameter value
@@ -539,4 +626,9 @@ function mergeCapabilities(base: any, add?: any) {
       addProps.indexOf(prop) > -1 ? mergeCapabilities(base[prop], add[prop]) : base[prop];
   for (let prop of addProps) if (baseProps.indexOf(prop) < 0) result[prop] = add[prop];
   return result;
+}
+
+function errorMessage(error: unknown): string {
+  if (error && typeof error == "object" && "message" in error) return String(error.message);
+  return String(error);
 }

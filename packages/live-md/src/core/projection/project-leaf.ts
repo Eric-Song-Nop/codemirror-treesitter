@@ -12,7 +12,7 @@ import {
   forEachLeafAnalysisCacheRecord,
   forEachLeafAnalysisCacheRecordTouchingRanges,
 } from "../analysis/markdown-leaf-cache.js";
-import { rangesOverlap } from "../analysis/ranges.js";
+import { containsRange, rangesOverlap } from "../analysis/ranges.js";
 import { type DocRange } from "../analysis/types.js";
 import { liveMdLinkMark } from "../links.js";
 import { type LiveMdFeatureDescriptor } from "../features.js";
@@ -49,6 +49,7 @@ import {
   type LiveMdRenderStatus,
   type LiveMdWidgetSpec,
 } from "./types.js";
+import { keyParts } from "../markdown-text.js";
 
 const strongMark = Decoration.mark({ class: "cm-md-strong" });
 const emphasisMark = Decoration.mark({ class: "cm-md-emphasis" });
@@ -678,10 +679,6 @@ function rangeTouchesActiveSource(renderStatus: LiveMdRenderStatus, from: number
   );
 }
 
-function containsRange(outer: DocRange, inner: DocRange) {
-  return outer.from <= inner.from && inner.to <= outer.to;
-}
-
 function isOnlyVisibleContentOnLine(
   renderStatus: LiveMdRenderStatus,
   lineFrom: number,
@@ -864,15 +861,6 @@ function rangeKey(range: DocRange) {
 
 function relativeRangeKey(range: DocRange, offset: number) {
   return `${range.from - offset}-${range.to - offset}`;
-}
-
-function keyParts(...parts: readonly (boolean | number | string | null | undefined)[]) {
-  return parts
-    .map((part) => {
-      let text = part == null ? "" : String(part);
-      return `${text.length}:${text}`;
-    })
-    .join("|");
 }
 
 function materializeEffectSpec(

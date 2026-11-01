@@ -95,8 +95,19 @@ export interface WorkspaceDocumentChangeSource {
   ): WorkspaceDocumentChangeSubscription;
 }
 
+/** Live read/write permission for a browser-local workspace folder. */
+export interface WorkspaceHostPermission {
+  readonly state: PermissionState;
+  /** Re-queries the browser without prompting. */
+  check(): Promise<PermissionState>;
+  /** Prompts for access again; must be called from a user gesture. */
+  request(): Promise<PermissionState>;
+  subscribe(listener: (state: PermissionState) => void): () => void;
+}
+
 export type WorkspaceHostCapabilities = {
   findFilePathForHandle?: (handle: unknown) => Promise<string | null>;
+  permission?: WorkspaceHostPermission;
   queryPermission?: () => Promise<PermissionState>;
 };
 

@@ -1,5 +1,10 @@
 name: Grove CI/CD
 
+# Grove-scoped validation and deploy. Repository-wide gates (audit,
+# web-tree-sitter patch verification, full build, collab-editor types) run in
+# workspace-ci.yml on every push and pull request. The validation steps below
+# are intentionally kept because they gate the Grove deploy in the same job.
+
 on:
   pull_request:
     branches:
@@ -14,7 +19,6 @@ on:
       - "apps/grove-relay/worker-configuration.d.ts"
       - "apps/grove-relay/wrangler.jsonc"
       - "apps/grove-relay/wrangler.worker.ci.jsonc"
-      - "apps/grove-relay/wrangler.worker.jsonc"
       - "apps/local-md-workspace/index.html"
       - "apps/local-md-workspace/package.json"
       - "apps/local-md-workspace/public/**"
@@ -36,6 +40,7 @@ on:
       - "packages/live-md-theme-gruvbox/**"
       - "packages/live-md-loro/**"
       - "packages/opendal-wasm-browser/**"
+      - "packages/relay-core/**"
       - "packages/theme/**"
       - "packages/theme-catppuccin/**"
       - "packages/theme-github/**"
@@ -125,8 +130,7 @@ jobs:
               apps/grove-relay/vitest.config.ts | \
               apps/grove-relay/worker-configuration.d.ts | \
               apps/grove-relay/wrangler.jsonc | \
-              apps/grove-relay/wrangler.worker.ci.jsonc | \
-              apps/grove-relay/wrangler.worker.jsonc)
+              apps/grove-relay/wrangler.worker.ci.jsonc)
                 return 0
                 ;;
             esac
@@ -146,6 +150,7 @@ jobs:
               packages/live-md-loro/src/* | \
               packages/opendal-wasm-browser/src/* | \
               packages/opendal-wasm-browser/pkg/* | \
+              packages/relay-core/src/* | \
               packages/theme/src/* | \
               packages/theme-catppuccin/src/* | \
               packages/theme-github/src/* | \
@@ -191,6 +196,9 @@ jobs:
               packages/opendal-wasm-browser/package.json | \
               packages/opendal-wasm-browser/tsconfig.json | \
               packages/opendal-wasm-browser/vite.config.ts | \
+              packages/relay-core/package.json | \
+              packages/relay-core/tsconfig.json | \
+              packages/relay-core/vite.config.ts | \
               packages/theme/package.json | \
               packages/theme/tsconfig.json | \
               packages/theme/vite.config.ts | \
@@ -580,6 +588,8 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # TODO: Move Pages custom-domain and DNS record management out of inline
+      # shell into declarative config (Wrangler routes or Terraform).
       - name: Ensure Grove Pages custom domain
         if: ${{ needs.scope.outputs.deploy_target == 'production' }}
         env:

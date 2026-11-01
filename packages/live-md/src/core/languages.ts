@@ -22,6 +22,7 @@ import {
   type MarkdownParserService,
 } from "@codemirror-treesitter/language-data/live-md";
 import { EditorView } from "@codemirror/view";
+import { loadKatex } from "./latex.js";
 import liveMdMarkdownInlineQuerySource from "./queries/decorations-markdown-inline.scm?raw";
 import liveMdMarkdownQuerySource from "./queries/decorations-markdown.scm?raw";
 
@@ -100,12 +101,15 @@ const loadedCodeFenceLanguages = new Map<string, TreeSitterParser>();
 
 export type PrepareLiveMdOptions = {
   codeFences?: boolean;
+  /** Preload KaTeX, which otherwise loads on the first math node. */
+  latex?: boolean;
 };
 
 export async function prepareLiveMd(options: PrepareLiveMdOptions = {}) {
   await Promise.all([
     loadMarkdownExtension(),
     ...(options.codeFences ? [loadCodeFenceLanguages()] : []),
+    ...(options.latex ? [loadKatex()] : []),
   ]);
 }
 

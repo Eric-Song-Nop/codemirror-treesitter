@@ -102,6 +102,7 @@ type ShareRecordStore = Pick<Storage, "getItem" | "key" | "removeItem" | "setIte
 };
 
 let memoryShareRecords = new Map<string, string>();
+let hostSecretMemory = new Map<string, string>();
 
 export async function createOwnerShare({
   identity,
@@ -206,6 +207,7 @@ export async function revokeOwnerShare({
     revokedAt: result.revokedAt,
   };
   await writeOwnerShareRecord(identity, nextRecord);
+  forgetOwnerShareHostSecret(record);
   return nextRecord;
 }
 
@@ -259,8 +261,10 @@ export function ownerShareRecordPath(shareId: string) {
   return `${shareRecordStoragePrefix}${shareId}`;
 }
 
+const hostSecretStoragePrefix = "local-md-workspace:share-host-secret:";
+
 export function hostSecretStorageKey(shareId: string) {
-  return `local-md-workspace:share-host-secret:${shareId}`;
+  return `${hostSecretStoragePrefix}${shareId}`;
 }
 
 function ownerShareRecordForSource(
@@ -281,14 +285,105 @@ function saveHostSecret(
   hostSecret: string,
   store: Pick<Storage, "setItem"> | undefined,
 ) {
+  hostSecretMemory.set(key, hostSecret);
   let target = store ?? browserLocalStorage();
-  if (!target) throw new Error("Browser storage is required to host a shared file.");
+  if (!target) return key;
   try {
     target.setItem(key, hostSecret);
   } catch {
+    hostSecretMemory.delete(key);
     throw new Error("Browser storage is required to host a shared file.");
   }
   return key;
+}
+
+/**
+ * Host secrets authorize relay hosting, rotation, and revocation. Reads are
+ * memory-first; the durable copy lives in localStorage (unencrypted at rest in
+ * the browser profile) so the owner can re-host, rotate, or revoke from a new
+ * tab. `readHostSecret` callers are synchronous, which rules out IndexedDB.
+ */
+export function readOwnerShareHostSecret(
+  record: Pick<OwnerShareRecord, "hostSecretRef" | "shareId">,
+) {
+  let keys = [record.hostSecretRef, hostSecretStorageKey(record.shareId)];
+  migrateSessionHostSecrets(keys);
+  for (let key of keys) {
+    let cached = hostSecretMemory.get(key);
+    if (cached) return cached;
+  }
+  let local = browserLocalStorage();
+  for (let key of keys) {
+    let stored = safeGetItem(local, key);
+    if (stored) {
+      hostSecretMemory.set(key, stored);
+      return stored;
+    }
+  }
+  return null;
+}
+
+export function forgetOwnerShareHostSecret(
+  record: Pick<OwnerShareRecord, "hostSecretRef" | "shareId">,
+) {
+  let session = browserSessionStorage();
+  let local = browserLocalStorage();
+  for (let key of new Set([record.hostSecretRef, hostSecretStorageKey(record.shareId)])) {
+    hostSecretMemory.delete(key);
+    safeRemoveItem(session, key);
+    safeRemoveItem(local, key);
+  }
+}
+
+/**
+ * Moves host secrets left in sessionStorage by an interim build back to
+ * durable localStorage, then deletes the session copy. A no-op otherwise.
+ */
+export function migrateSessionHostSecrets(extraKeys: readonly string[] = []) {
+  let session = browserSessionStorage();
+  if (!session) return 0;
+  let keys = new Set(extraKeys);
+  try {
+    for (let index = 0; index < session.length; index++) {
+      let key = session.key(index);
+      if (key?.startsWith(hostSecretStoragePrefix)) keys.add(key);
+    }
+  } catch {
+    return 0;
+  }
+
+  let local = browserLocalStorage();
+  let moved = 0;
+  for (let key of keys) {
+    let value = safeGetItem(session, key);
+    if (!value) continue;
+    hostSecretMemory.set(key, value);
+    try {
+      if (!local?.getItem(key)) local?.setItem(key, value);
+    } catch {
+      // Page memory still holds the secret for this tab.
+      continue;
+    }
+    safeRemoveItem(session, key);
+    moved += 1;
+  }
+  return moved;
+}
+
+function safeGetItem(store: Pick<Storage, "getItem"> | null, key: string) {
+  try {
+    return store?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function safeRemoveItem(store: Pick<Storage, "removeItem"> | null, key: string) {
+  try {
+    store?.removeItem(key);
+  } catch {
+    // Best-effort cleanup.
+  }
 }
 
 function parseOwnerShareRecord(value: unknown): OwnerShareRecord {
@@ -423,6 +518,7 @@ function rawWorkspaceIdFromLegacyNamespace(
 
 export function resetOwnerShareRecordStoreForTests() {
   memoryShareRecords = new Map();
+  hostSecretMemory = new Map();
 }
 
 function shareRecordStore(): ShareRecordStore {
@@ -430,6 +526,20 @@ function shareRecordStore(): ShareRecordStore {
   if (storage) return storage;
 
   return memoryShareRecordStore;
+}
+
+function browserSessionStorage(): Storage | null {
+  try {
+    let storage = (globalThis as typeof globalThis & { window?: { sessionStorage?: Storage } })
+      .window?.sessionStorage;
+    if (storage) return storage;
+  } catch {}
+
+  let descriptor = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+  if (descriptor && "value" in descriptor && descriptor.value) {
+    return descriptor.value as Storage;
+  }
+  return null;
 }
 
 function browserLocalStorage(): Storage | null {

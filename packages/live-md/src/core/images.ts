@@ -1,4 +1,5 @@
 import { Facet, type Extension } from "@codemirror/state";
+import { hasControlCharacter, unescapeMarkdownPunctuation } from "./markdown-text.js";
 
 export type LiveMdResolvedImageSource = {
   height?: number;
@@ -61,27 +62,6 @@ export function normalizeMarkdownImageSource(source: string) {
   }
   if (hasControlCharacter(value)) return "";
   return unescapeMarkdownPunctuation(value);
-}
-
-function hasControlCharacter(value: string) {
-  for (let index = 0; index < value.length; index++) {
-    let code = value.charCodeAt(index);
-    if (code < 32 || code == 127) return true;
-  }
-  return false;
-}
-
-function unescapeMarkdownPunctuation(value: string) {
-  let result = "";
-  for (let index = 0; index < value.length; index++) {
-    let char = value[index];
-    if (char == "\\" && index + 1 < value.length) {
-      result += value[++index];
-    } else {
-      result += char;
-    }
-  }
-  return result;
 }
 
 function normalizeImageDimension(value: number | undefined) {

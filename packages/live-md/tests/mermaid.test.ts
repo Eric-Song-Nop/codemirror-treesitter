@@ -1,12 +1,11 @@
 // @vitest-environment happy-dom
-
 import DOMPurify from "dompurify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
 
 // Current security-hardened DOMPurify releases deliberately fail closed against
-// happy-dom's incomplete SVG implementation. The subprocess security regression
-// exercises the real sanitizer; this integration suite isolates LiveMD's renderer routing.
+// happy-dom's incomplete SVG implementation. mermaid-security.test.ts exercises
+// LiveMD's own SVG allowlist; this integration suite isolates renderer routing.
 vi.spyOn(DOMPurify, "sanitize").mockImplementation((value) => value as string);
 
 let locationDescriptor: PropertyDescriptor | undefined;

@@ -51,7 +51,7 @@ The root entry point is `src/index.ts`.
   `src/formatting.ts`, `src/rename.ts`, `src/definition.ts`,
   `src/references.ts`, and `src/signature.ts`: feature extensions.
 - `src/theme.ts`: LSP UI styling.
-- `tests/*`: position mapping and rendering coverage.
+- `tests/*`: position mapping, rendering, and client transport coverage.
 
 ## Relationship to Other Packages
 
@@ -66,6 +66,19 @@ official LSP client package.
   extensions or `languageServerExtensions()`.
 - Markdown returned by servers is rendered through `src/text.ts` and can be
   covered independently through rendering tests.
+- `highlightLanguage` may return a `Language` or a `LanguageDescription`. A
+  description whose grammar is not loaded yet starts loading; hover tooltips
+  wait up to one second for the grammars their code blocks need, and any code
+  whose grammar is still unavailable renders as plain text.
+- The client sends `clientInfo: { name: "@codemirror-treesitter/lsp-client",
+version }` on `initialize`; the version is inlined from `package.json` by the
+  package `vite.config.ts` define (`__LSP_CLIENT_VERSION__`) and omitted when
+  the source is consumed without that define.
+- `disconnect()` clears the transport and rejects in-flight and
+  initialization-blocked requests with `Client disconnected`. Initialize
+  failures, unsendable notifications, and malformed incoming frames (which are
+  dropped) are reported through the `onError` config callback, defaulting to
+  `console.error`.
 - `src/pos.ts` owns offset/line/character mapping and has dedicated tests
   because every LSP feature depends on that conversion.
 
@@ -81,3 +94,10 @@ vp run audit
 
 The audit checks upstream export parity and verifies that the implementation
 uses local Tree-sitter language and autocomplete packages.
+
+## License and attribution
+
+This package is a derivative work of [`@codemirror/lsp-client`](https://github.com/codemirror/lsp-client) by Marijn Haverbeke and others,
+distributed under the MIT License. The upstream copyright notice is retained
+alongside the project copyright in [`LICENSE`](./LICENSE). See the root
+[`NOTICE.md`](../../NOTICE.md) for the full list of derived components.

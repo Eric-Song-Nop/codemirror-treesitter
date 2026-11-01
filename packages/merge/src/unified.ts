@@ -17,7 +17,12 @@ import {
   type EditorState,
   type Range,
 } from "@codemirror/state";
-import { highlightingFor, highlightTree, language } from "@codemirror-treesitter/language";
+import {
+  highlightingFor,
+  highlightTree,
+  language,
+  type Language,
+} from "@codemirror-treesitter/language";
 import { Chunk, defaultDiffConfig } from "./chunk.js";
 import { computeChunks, ChunkField, mergeConfig } from "./merge.js";
 import type { Change, DiffConfig } from "./diff.js";
@@ -148,7 +153,19 @@ export function getOriginalDoc(state: EditorState): Text {
   return state.field(originalDoc);
 }
 
-const DeletionWidgets: WeakMap<readonly Change[], Decoration> = new WeakMap();
+const DeletionWidgets: WeakMap<readonly Change[], { lang: Language | null; deco: Decoration }> =
+  new WeakMap();
+
+// The language used to highlight deleted text. While the editor's grammar
+// is still loading (no language configured yet, or a placeholder built on a
+// skipping parser, which cannot parse directly), deletions render as plain
+// text. `deletedChunks` rebuilds its widgets once a loaded language is
+// configured, so they pick up highlighting without waiting for an edit.
+function deletionHighlightLanguage(state: EditorState): Language | null {
+  if (!state.facet(mergeConfig).syntaxHighlightDeletions) return null;
+  let lang = state.facet(language);
+  return lang && !lang.parser.isSkippingParser ? lang : null;
+}
 
 class DeletionWidget extends WidgetType {
   dom: HTMLElement | null = null;
@@ -164,16 +181,13 @@ class DeletionWidget extends WidgetType {
 }
 
 function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) {
+  let lang = deletionHighlightLanguage(state);
   let known = DeletionWidgets.get(chunk.changes);
-  if (known) return known;
+  if (known && known.lang == lang) return known.deco;
 
   let buildDOM = (view: EditorView) => {
-    let {
-      highlightChanges,
-      syntaxHighlightDeletions,
-      syntaxHighlightDeletionsMaxLength,
-      mergeControls,
-    } = state.facet(mergeConfig);
+    let { highlightChanges, syntaxHighlightDeletionsMaxLength, mergeControls } =
+      state.facet(mergeConfig);
     let dom = document.createElement("div");
     dom.className = "cm-deletedChunk";
     if (mergeControls) {
@@ -204,7 +218,6 @@ function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) 
     if (hideContent || chunk.fromA >= chunk.toA) return dom;
 
     let text = view.state.field(originalDoc).sliceString(chunk.fromA, chunk.endA);
-    let lang = syntaxHighlightDeletions && state.facet(language);
     let line: HTMLElement = makeLine();
     let changes = chunk.changes,
       changeI = 0,
@@ -270,7 +283,7 @@ function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) 
     side: -1,
     widget: new DeletionWidget(buildDOM),
   });
-  DeletionWidgets.set(chunk.changes, deco);
+  DeletionWidgets.set(chunk.changes, { lang, deco });
   return deco;
 }
 
@@ -326,7 +339,8 @@ function buildDeletedChunks(state: EditorState) {
 const deletedChunks = StateField.define<DecorationSet>({
   create: (state) => buildDeletedChunks(state),
   update(deco, tr) {
-    return tr.state.field(ChunkField, false) != tr.startState.field(ChunkField, false)
+    return tr.state.field(ChunkField, false) != tr.startState.field(ChunkField, false) ||
+      deletionHighlightLanguage(tr.state) != deletionHighlightLanguage(tr.startState)
       ? buildDeletedChunks(tr.state)
       : deco;
   },

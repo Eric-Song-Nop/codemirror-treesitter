@@ -1,128 +1,155 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { ShareRoom, relayCreateAdmittedHeader } from "@codemirror-treesitter/relay-core";
+import { encodeBase64 } from "@codemirror-treesitter/relay-core/client";
 import { LoroDoc } from "loro-crdt";
-import type { ShareRecord } from "./share.ts";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 const validShareId = "AAAAAAAAAAAAAAAAAAAAAA";
 const validHash = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
 vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
 
-describe("shared file Worker routes", () => {
-  it("rejects legacy room WebSockets for share Durable Objects", async () => {
-    let { CollabRoom } = await import("./worker.ts");
-    let room = Object.create(CollabRoom.prototype) as TestCollabRoom;
-    room.shareRecord = shareRecord();
+describe("collab editor Worker routes", () => {
+  it("runs the shared relay-core room and quota Durable Objects", async () => {
+    let { CollabCreateQuota, CollabRoom } = await import("./worker.ts");
+    let { CreateQuota } = await import("@codemirror-treesitter/relay-core");
 
-    let response = await room.fetch(
-      new Request(`http://example.test/api/doc/${validShareId}/ws`, {
-        headers: { Upgrade: "websocket" },
-      }),
-    );
-
-    expect(response.status).toBe(403);
-    expect(await response.text()).toBe("Share session required");
+    expect(Object.create(CollabRoom.prototype)).toBeInstanceOf(ShareRoom);
+    expect(Object.create(CollabCreateQuota.prototype)).toBeInstanceOf(CreateQuota);
   });
 
-  it("rate-limits public share creation before forwarding to a Durable Object", async () => {
+  it("no longer serves unauthenticated legacy room WebSockets", async () => {
     let { default: worker } = await import("./worker.ts");
-    let getByName = vi.fn();
+    let env = collabEnv();
+
     let response = await worker.fetch(
-      new Request("https://relay.example/api/shares", {
-        body: "{",
+      new Request("https://collab.example/api/doc/Ab3kP9qLm2xZ/ws", {
+        headers: { Upgrade: "websocket" },
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(404);
+    expect(env.COLLAB_ROOMS.getByName).not.toHaveBeenCalled();
+  });
+
+  it("does not create rooms through the per-share POST route", async () => {
+    let { default: worker } = await import("./worker.ts");
+    let env = collabEnv();
+
+    let response = await worker.fetch(
+      new Request(`https://collab.example/api/shares/${validShareId}`, {
+        body: JSON.stringify(createShareBody()),
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": validShareId,
+          [relayCreateAdmittedHeader]: "1",
+        },
         method: "POST",
       }),
-      {
-        COLLAB_ROOMS: { getByName },
-        CREATE_SHARE_RATE_LIMITER: {
-          limit: vi.fn(async () => ({ success: false })),
-        },
-      } as unknown as Env,
+      env,
+    );
+
+    expect(response.status).toBe(404);
+    expect(env.COLLAB_ROOMS.getByName).not.toHaveBeenCalled();
+    expect(env.COLLAB_CREATE_QUOTA.getByName).not.toHaveBeenCalled();
+    expect(env.CREATE_SHARE_RATE_LIMITER.limit).not.toHaveBeenCalled();
+  });
+
+  it("rate-limits and quota-admits room creation before waking a room", async () => {
+    let { default: worker } = await import("./worker.ts");
+    let limited = collabEnv({ create: false });
+    let response = await worker.fetch(createShareRequest(), limited);
+
+    expect(response.status).toBe(429);
+    expect(limited.COLLAB_ROOMS.getByName).not.toHaveBeenCalled();
+
+    let env = collabEnv();
+    let created = await worker.fetch(createShareRequest(), env);
+
+    expect(created.status).toBe(201);
+    expect(env.reserve).toHaveBeenCalledTimes(1);
+    expect(env.forwarded[0]!.headers.get(relayCreateAdmittedHeader)).toBe("1");
+  });
+
+  it.each([
+    ["session", "POST", {}, "SHARE_SESSION_RATE_LIMITER"],
+    ["ws", "GET", { Upgrade: "websocket" }, "SHARE_WEBSOCKET_RATE_LIMITER"],
+  ] as const)("rate-limits the %s route", async (action, method, headers, limiter) => {
+    let { default: worker } = await import("./worker.ts");
+    let env = collabEnv({ [limiter]: false });
+
+    let response = await worker.fetch(
+      new Request(`https://collab.example/api/shares/${validShareId}/${action}`, {
+        headers,
+        method,
+      }),
+      env,
     );
 
     expect(response.status).toBe(429);
-    expect(await response.json()).toEqual({ error: "Share creation rate limit exceeded" });
-    expect(getByName).not.toHaveBeenCalled();
+    expect(env.COLLAB_ROOMS.getByName).not.toHaveBeenCalled();
   });
 
-  it("compacts stored share update logs into a snapshot", async () => {
-    let { CollabRoom } = await import("./worker.ts");
-    let storage = new MemoryDurableObjectStorage();
-    let room = Object.create(CollabRoom.prototype) as TestCollabRoom & TestStorageRoom;
-    let doc = new LoroDoc();
-    doc.getText("markdown").insert(0, "# First\n");
-    doc.commit();
-    room.ctx = { storage };
-    room.dirty = false;
-    room.doc = doc;
-    room.firstDirtyAt = 0;
-    room.maxSaveTimer = null;
-    room.saveTimer = null;
-    room.saving = false;
+  it("rejects WebSocket upgrades from origins outside ALLOWED_ORIGINS", async () => {
+    let { default: worker } = await import("./worker.ts");
+    let env = Object.assign(collabEnv(), { ALLOWED_ORIGINS: "https://collab.example" as "" });
 
-    await room.appendStoredDocumentUpdates([new Uint8Array([1, 2, 3])]);
-    expect([...storage.records.keys()]).toEqual(
-      expect.arrayContaining(["update:000000000001", "updateLogBytes", "updateLogSequence"]),
+    let denied = await worker.fetch(
+      new Request(`https://collab.example/api/shares/${validShareId}/ws`, {
+        headers: { Origin: "https://evil.example", Upgrade: "websocket" },
+      }),
+      env,
     );
 
-    await room.flushSnapshot({ force: true });
-
-    expect(storage.records.has("snapshot")).toBe(true);
-    expect([...storage.records.keys()]).not.toEqual(
-      expect.arrayContaining(["update:000000000001", "updateLogBytes", "updateLogSequence"]),
-    );
+    expect(denied.status).toBe(403);
+    expect(env.COLLAB_ROOMS.getByName).not.toHaveBeenCalled();
   });
 });
 
-type TestCollabRoom = {
-  fetch(request: Request): Promise<Response>;
-  shareRecord: ShareRecord | null;
-};
-
-type TestStorageRoom = {
-  appendStoredDocumentUpdates(updates: Uint8Array[]): Promise<number>;
-  ctx: { storage: MemoryDurableObjectStorage };
-  dirty: boolean;
-  doc: LoroDoc;
-  firstDirtyAt: number;
-  flushSnapshot(options: { force?: boolean }): Promise<void>;
-  maxSaveTimer: ReturnType<typeof setTimeout> | null;
-  saveTimer: ReturnType<typeof setTimeout> | null;
-  saving: boolean;
-};
-
-class MemoryDurableObjectStorage {
-  records = new Map<string, unknown>();
-
-  async delete(keys: string | string[]) {
-    for (let key of Array.isArray(keys) ? keys : [keys]) this.records.delete(key);
-  }
-
-  async get<T>(key: string) {
-    return this.records.get(key) as T | undefined;
-  }
-
-  async list<T>(options: { prefix?: string } = {}) {
-    let result = new Map<string, T>();
-    for (let [key, value] of this.records) {
-      if (options.prefix && !key.startsWith(options.prefix)) continue;
-      result.set(key, value as T);
-    }
-    return result;
-  }
-
-  async put<T>(key: string, value: T) {
-    this.records.set(key, value);
-  }
+function collabEnv(
+  allowed: Partial<
+    Record<"create" | "SHARE_SESSION_RATE_LIMITER" | "SHARE_WEBSOCKET_RATE_LIMITER", boolean>
+  > = {},
+) {
+  let forwarded: Request[] = [];
+  let reserve = vi.fn(async () => ({ status: "reserved" as const }));
+  let fetch = vi.fn(async (request: Request) => {
+    forwarded.push(request);
+    return new Response(null, { status: request.method == "POST" ? 201 : 200 });
+  });
+  let env = {
+    ALLOWED_ORIGINS: "",
+    COLLAB_CREATE_QUOTA: { getByName: vi.fn(() => ({ reserve })) },
+    COLLAB_ROOMS: { getByName: vi.fn(() => ({ fetch })) },
+    CREATE_SHARE_RATE_LIMITER: rateLimiter(allowed.create ?? true),
+    SHARE_SESSION_RATE_LIMITER: rateLimiter(allowed.SHARE_SESSION_RATE_LIMITER ?? true),
+    SHARE_WEBSOCKET_RATE_LIMITER: rateLimiter(allowed.SHARE_WEBSOCKET_RATE_LIMITER ?? true),
+  };
+  return Object.assign(env as unknown as Env & typeof env, { forwarded, reserve });
 }
 
-function shareRecord(): ShareRecord {
+function rateLimiter(success: boolean) {
+  return { limit: vi.fn(async (_input: { key: string }) => ({ success })) };
+}
+
+function createShareBody() {
+  let doc = new LoroDoc();
+  let snapshot = doc.export({ mode: "snapshot" });
+  doc.free();
   return {
-    createdAt: Date.now(),
-    displayName: "note.md",
+    displayName: "Collaborative LiveMD",
     expiresAt: Date.now() + 60_000,
     guestSecretHash: validHash,
     hostSecretHash: validHash,
-    schemaVersion: 1,
     shareId: validShareId,
+    snapshot: encodeBase64(snapshot),
   };
+}
+
+function createShareRequest() {
+  return new Request("https://collab.example/api/shares", {
+    body: JSON.stringify(createShareBody()),
+    headers: { "Content-Type": "application/json", "Idempotency-Key": validShareId },
+    method: "POST",
+  });
 }

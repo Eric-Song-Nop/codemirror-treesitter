@@ -28,11 +28,11 @@ export class LiveMdEditorElement extends HTMLElementBase {
   private storedSelectionEnd = 0;
   private storedSelectionStart = 0;
   private storedValue = "";
-
-  ready: Promise<void> = Promise.resolve();
+  private readyState: ReadyDeferred;
 
   constructor() {
     super();
+    this.readyState = createReadyDeferred();
     this.shadow = this.attachShadow({ mode: "open" });
     installLiveMdStyles(this.shadow);
 
@@ -42,8 +42,21 @@ export class LiveMdEditorElement extends HTMLElementBase {
     this.shadow.append(this.mount);
   }
 
+  /**
+   * Settles once the editor mounted by the current (or next) connection has
+   * loaded its async language support and finished initial analysis. It stays
+   * pending until the element is connected, and rejects when mounting fails;
+   * the `live-md-error` event reports the same failure without requiring hosts
+   * to handle the rejection.
+   */
+  get ready(): Promise<void> {
+    return this.readyState.promise;
+  }
+
   connectedCallback() {
     if (this.controller) return;
+    if (this.readyState.settled) this.readyState = createReadyDeferred();
+    let readyState = this.readyState;
 
     let initialValue = this.explicitValue ? this.storedValue : this.defaultValue;
     let controller: LiveMdEditorController;
@@ -53,7 +66,7 @@ export class LiveMdEditorElement extends HTMLElementBase {
         config: this.editorConfig,
         defaultValue: initialValue,
         onBlur: () => this.dispatchPendingChange(),
-        onChange: ({ value }) => this.handleEditorInput(value),
+        onChange: () => this.handleEditorInput(),
         parent: this.mount,
         persistKey: this.persistKey,
         placeholder: this.placeholder,
@@ -63,7 +76,7 @@ export class LiveMdEditorElement extends HTMLElementBase {
         extensions: this.currentExtensions(),
       });
     } catch (error: unknown) {
-      this.ready = Promise.reject(error);
+      readyState.reject(error);
       this.dispatchLiveMdError(error);
       return;
     }
@@ -72,9 +85,11 @@ export class LiveMdEditorElement extends HTMLElementBase {
     this.controller = controller;
     if (this.cleanValue == null) this.cleanValue = controller.value;
     this.applyStoredSelection();
-    this.ready = controller.ready
-      .then(() => {
+    controller.ready.then(
+      () => {
+        // A controller replaced by a later connection hands the deferred over to its successor.
         if (this.controller != controller) return;
+        readyState.resolve();
         this.dispatchEvent(
           new CustomEvent("live-md-ready", {
             bubbles: true,
@@ -82,11 +97,13 @@ export class LiveMdEditorElement extends HTMLElementBase {
             detail: { view: this.view },
           }),
         );
-      })
-      .catch((error: unknown) => {
-        if (this.controller == controller) this.dispatchLiveMdError(error);
-        throw error;
-      });
+      },
+      (error: unknown) => {
+        if (this.controller != controller) return;
+        readyState.reject(error);
+        this.dispatchLiveMdError(error);
+      },
+    );
   }
 
   disconnectedCallback() {
@@ -266,8 +283,8 @@ export class LiveMdEditorElement extends HTMLElementBase {
     this.setSelectionRange(0, this.value.length);
   }
 
-  private handleEditorInput(value: string) {
-    this.storedValue = value;
+  private handleEditorInput() {
+    // The document text is read lazily through `value`; typing does not stringify it.
     this.dirtySinceChange = true;
     this.dispatchEvent(createInputEvent());
   }
@@ -371,6 +388,39 @@ export function defineLiveMdEditor(tagName = "live-md-editor") {
       tagName == "live-md-editor" ? LiveMdEditorElement : class extends LiveMdEditorElement {};
     customElements.define(tagName, constructor);
   }
+}
+
+type ReadyDeferred = {
+  promise: Promise<void>;
+  reject: (error: unknown) => void;
+  resolve: () => void;
+  settled: boolean;
+};
+
+function createReadyDeferred(): ReadyDeferred {
+  let resolvePromise!: () => void;
+  let rejectPromise!: (error: unknown) => void;
+  let promise = new Promise<void>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  // Only hosts that await `ready` observe a rejection; `live-md-error` is the reporting channel.
+  promise.catch(() => {});
+  let deferred: ReadyDeferred = {
+    promise,
+    reject(error) {
+      if (deferred.settled) return;
+      deferred.settled = true;
+      rejectPromise(error);
+    },
+    resolve() {
+      if (deferred.settled) return;
+      deferred.settled = true;
+      resolvePromise();
+    },
+    settled: false,
+  };
+  return deferred;
 }
 
 function createInputEvent() {

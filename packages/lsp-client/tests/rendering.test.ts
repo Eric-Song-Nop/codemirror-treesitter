@@ -1,6 +1,8 @@
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  LanguageDescription,
+  LanguageSupport,
   TreeSitterLanguage,
   TreeSitterParser,
   syntaxHighlighting,
@@ -10,7 +12,12 @@ import {
 } from "@codemirror-treesitter/language";
 import { LSPPlugin } from "../src/index.js";
 import { __testRenderTooltipContent } from "../src/hover.js";
-import { docToHTML, withContext } from "../src/text.js";
+import {
+  docToHTML,
+  fencedCodeLanguages,
+  preloadHighlightLanguages,
+  withContext,
+} from "../src/text.js";
 
 const javascriptWasm = new URL(
   "../../../node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm",
@@ -86,5 +93,45 @@ describe("LSP markdown rendering", () => {
     expect(html).toContain('class="kw"');
     expect(html).toContain('class="var"');
     expect(html).toContain('class="num"');
+  });
+
+  it("renders lazily loaded languages as plain text until their grammar loads", async () => {
+    let javascript = await javascriptLanguage();
+    let plain = stateWith(javascript);
+    let view = { state: plain } as unknown as LSPPlugin["view"];
+    let loads = 0;
+    let description = LanguageDescription.of({
+      name: "lazyscript",
+      load: async () => {
+        loads++;
+        return new LanguageSupport(javascript);
+      },
+    });
+    let lookup = (name: string) => (name == "lazyscript" ? description : null);
+    let markdown = "```lazyscript\nlet value = 1;\n```";
+    let render = () => withContext(view, lookup, () => docToHTML(markdown, "markdown"));
+
+    let before = render();
+    expect(before).not.toContain('class="kw"');
+    expect(before).toContain("let value = 1;");
+
+    expect(fencedCodeLanguages(markdown)).toEqual(["lazyscript"]);
+    await preloadHighlightLanguages(lookup, fencedCodeLanguages(markdown));
+    expect(description.support).toBeDefined();
+    expect(render()).toContain('class="kw"');
+    expect(loads).toBe(1);
+  });
+
+  it("stops waiting for a grammar that does not load in time", async () => {
+    let never = LanguageDescription.of({ name: "never", load: () => new Promise(() => {}) });
+    let failing = LanguageDescription.of({
+      name: "failing",
+      load: () => Promise.reject(new Error("missing wasm")),
+    });
+    let lookup = (name: string) => (name == "never" ? never : name == "failing" ? failing : null);
+    let started = Date.now();
+    await preloadHighlightLanguages(lookup, ["never", "failing", "unknown"], 20);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(never.support).toBeUndefined();
   });
 });

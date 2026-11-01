@@ -16,6 +16,7 @@
   "dependencies": {
     "@codemirror-treesitter/live-md": "workspace:*",
     "@codemirror-treesitter/live-md-loro": "workspace:*",
+    "@codemirror-treesitter/relay-core": "workspace:*",
     "@codemirror/view": "^6.43.0",
     "loro-crdt": "^1.12.3"
   },

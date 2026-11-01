@@ -217,6 +217,7 @@ this repository replace the language-aware layers above those primitives.
 | `packages/live-md-theme-catppuccin` | `@codemirror-treesitter/live-md-theme-catppuccin` | Catppuccin Latte/Macchiato LiveMD presentation themes.                                                                                  |
 | `packages/live-md-loro`             | `@codemirror-treesitter/live-md-loro`             | Optional Loro collaboration bindings for LiveMD documents, presence, custom text containers, direct actor edits, and undo/redo.         |
 | `packages/opendal-wasm-browser`     | `@codemirror-treesitter/opendal-wasm-browser`     | Experimental browser WASM wrapper for OpenDAL-backed cloud workspace storage.                                                           |
+| `packages/relay-core`               | `@codemirror-treesitter/relay-core`               | Private Cloudflare relay core shared by `grove-relay` and `collab-editor`: wire protocol, share limits, Durable Objects, and router.    |
 
 Each package directory has its own README with local responsibilities, public
 entry points, dependency boundaries, source layout, and validation notes.
@@ -246,9 +247,10 @@ entry points, dependency boundaries, source layout, and validation notes.
   editing, deletion, clipboard, and selection workflows.
 - `apps/live-md-loro-demo`: Two-peer LiveMD collaboration demo with simulated
   latency, offline queueing, and Loro snapshot resync.
-- `apps/collab-editor`: Cloudflare Workers app with a Durable Object room,
-  WebSocket Loro sync, local snapshot recovery, hash-based room URLs,
-  standalone share lifecycle APIs, and deployment/types tasks through Wrangler.
+- `apps/collab-editor`: Cloudflare Workers demo that runs the shared
+  `relay-core` share room: rate-limited room creation, `#share=…&key=…` links,
+  authenticated WebSocket Loro sync, local snapshot recovery, 7-day room
+  expiry, and deployment/types tasks through Wrangler.
 - `tools/audit.mjs`: Repository audit that checks package names, Lezer-free
   guarantees, public export parity, command and autocomplete stubs, basic setup
   parity, language-data metadata/load coverage, example coverage, merge/LSP
@@ -505,8 +507,8 @@ CodeMirror views without echoing the view update back into the CRDT.
 - Some upstream `language-data` entries that only have legacy stream modes are
   covered with compact in-repo grammar/style shims.
 - `grove-relay` persists Durable Object snapshots and bounded update logs for
-  Grove shared files. `collab-editor` keeps the separate generated-room demo
-  behavior.
+  Grove shared files. `collab-editor` runs the same `relay-core` share room for
+  its demo; unauthenticated legacy `/api/doc/:roomId/ws` rooms were removed.
 
 ## Parity Targets
 
@@ -559,6 +561,12 @@ The root script `vp run ready` runs the full local validation path:
 vp run ready
 ```
 
+In CI, `.github/workflows/workspace-ci.yml` runs these gates (plus
+`verify:web-tree-sitter` and the collab-editor/grove-relay Worker type checks)
+on every push and pull request to `main`. The Grove CI/CD workflow
+`.github/workflows/local-md-workspace.yml` stays path-scoped to Grove and keeps
+its own validation steps to gate the Grove relay and Pages deploys.
+
 Useful task selectors:
 
 ```bash
@@ -600,12 +608,14 @@ Production Grove deploys use the Cloudflare Pages project `grove` at
 origin, and the `grove-relay` Worker custom domain at
 `https://relay.grovemd.net`. The Grove CI/CD workflow enforces
 `VITE_DROPBOX_REDIRECT_URI=https://app.grovemd.net/` for Dropbox OAuth and builds
-the frontend against the relay custom domain. OneDrive and Google Drive provider
-adapters exist in source but are not exposed in the current Grove UI. It also runs
+the frontend against the relay custom domain. Dropbox is the only cloud provider
+in the current Grove UI; the shared PKCE OAuth helper in
+`apps/local-md-workspace/src/lib/workspace/providers/pkce-oauth.ts` is the base
+for adding another. It also runs
 `vp run local-md-workspace#i18n:check` to verify English/Chinese message keys and
 placeholders before tests. CI deploys the relay Worker with
 `apps/grove-relay/wrangler.worker.ci.jsonc`; the custom-domain route is kept in
-`apps/grove-relay/wrangler.worker.jsonc` for one-time provisioning by a token with
+`apps/grove-relay/wrangler.jsonc` for one-time provisioning by a token with
 zone route permissions.
 
 `vp run local-md-workspace#smoke:ui` expects the local Markdown workspace dev
@@ -622,6 +632,16 @@ smoke tests that need to exercise real Dropbox file IO. They are not product
 configuration, are not required for collaboration, and do not replace the
 app's Dropbox OAuth flow. Set `CHROME_PATH` if Chromium is not available in a
 standard app path or the Playwright browser cache.
+
+## Releasing
+
+Public `packages/*` are versioned with [Changesets](https://github.com/changesets/changesets).
+Run `vp exec changeset` in a change that affects a published package, pick the
+packages and bump type, and commit the generated `.changeset/*.md` file. On
+push to `main`, `.github/workflows/release.yml` runs `vp install` and
+`vp run ready`, then `changesets/action` either opens a "Version Packages" PR
+or, once that PR is merged, publishes to npm with the `NPM_TOKEN` secret.
+Private packages and `apps/*` are ignored. See `.changeset/README.md`.
 
 ## Documentation Map
 
@@ -647,3 +667,9 @@ The optional LiveMD Loro adapter uses the source-controlled
 [`vendor/loro-codemirror`](vendor/loro-codemirror/README.md) override for mixed-container
 and shared-document synchronization fixes. The LiveMD Loro build bundles this
 binding so published consumers receive the same implementation as workspace apps.
+
+## License
+
+MIT; see [`LICENSE`](./LICENSE). Several packages are derived from MIT-licensed
+CodeMirror and Lezer sources by Marijn Haverbeke and others; see
+[`NOTICE.md`](./NOTICE.md) for the upstream packages and copyright holders.

@@ -6,6 +6,10 @@ export function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
+export function containsRange(outer: DocRange, inner: DocRange) {
+  return outer.from <= inner.from && inner.to <= outer.to;
+}
+
 export function clampRangeToDoc(range: DocRange, docLength: number): DocRange {
   return {
     from: clamp(range.from, 0, docLength),

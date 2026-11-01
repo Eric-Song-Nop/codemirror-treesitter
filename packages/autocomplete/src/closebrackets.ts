@@ -16,7 +16,7 @@ import {
   type Extension,
   type StateCommand,
 } from "@codemirror/state";
-import { syntaxTree } from "@codemirror-treesitter/language";
+import { syntaxTree, type SyntaxNode } from "@codemirror-treesitter/language";
 
 /// Configures bracket closing behavior for a syntax (via
 /// [language data](#state.EditorState.languageDataAt)) using the `"closeBrackets"`
@@ -299,9 +299,21 @@ function handleSame(
       });
 }
 
+// Whether a syntax node (such as a string) starts at `pos`. Lezer string
+// tokens are leaves, but in Tree-sitter the innermost node is the opening
+// quote token (or, at `pos + 1`, a string fragment), so walk up through
+// the nodes that start at `pos`. A one-character leaf starting at `pos`
+// whose parent starts earlier is a closing quote and does not count.
 function nodeStart(state: EditorState, pos: number) {
-  let tree = syntaxTree(state).resolveInner(pos + 1);
-  return tree.parent && tree.from == pos;
+  for (
+    let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, 1);
+    node?.parent;
+    node = node.parent
+  ) {
+    if (node.from != pos) break;
+    if (node.firstChild || node.to > pos + 1) return true;
+  }
+  return false;
 }
 
 function probablyInString(
@@ -330,11 +342,37 @@ function probablyInString(
       }
       return true;
     }
-    let parent = node.to == pos && node.parent;
-    if (!parent) break;
+    // Lezer string tokens are leaves, but Tree-sitter string nodes have
+    // child tokens (opening quote, fragments, escapes, closing quote), so
+    // the cursor usually resolves to a fragment that does not itself start
+    // with the quote. Climb out of such leaves into the enclosing string.
+    let parent = node.parent;
+    if (
+      !parent ||
+      !(node.to == pos || (!node.firstChild && opensWithQuote(state, parent, node, quoteToken)))
+    )
+      break;
     node = parent;
   }
   return false;
+}
+
+// Whether `parent` begins with a separate opening-quote child token that
+// ends in `quoteToken` (allowing string prefixes such as `r"`), and `child`
+// comes after it.
+function opensWithQuote(
+  state: EditorState,
+  parent: SyntaxNode,
+  child: SyntaxNode,
+  quoteToken: string,
+) {
+  let first = parent.firstChild;
+  return (
+    !!first &&
+    first.from == parent.from &&
+    child.from >= first.to &&
+    state.sliceDoc(first.from, first.to).endsWith(quoteToken)
+  );
 }
 
 function canStartStringAt(state: EditorState, pos: number, prefixes: readonly string[]) {

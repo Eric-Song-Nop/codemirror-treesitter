@@ -19,6 +19,7 @@ import {
   type WorkspaceAgentUsage,
 } from "../../application/run-contracts.ts";
 import { createWorkspaceAgentToolSession } from "../../application/tool-session.ts";
+import type { WorkspaceAgentToolTarget } from "../../domain/contracts.ts";
 
 export type AiSdkModelBinding = {
   model: LanguageModel;
@@ -33,7 +34,7 @@ export async function runWorkspaceAgentWithAiSdkModel(
   if (!input.messages.length) throw new Error("At least one Agent message is required.");
   input.signal?.throwIfAborted();
   let emit = createEventEmitter(input.onEvent);
-  let session = createWorkspaceAgentToolSession(input.host, emit);
+  let session = createWorkspaceAgentToolSession(input.host, emit, input.writeControl);
   let agent = new ToolLoopAgent({
     instructions: WORKSPACE_AGENT_INSTRUCTIONS,
     maxRetries: WORKSPACE_AGENT_MAX_MODEL_RETRIES,
@@ -70,6 +71,10 @@ export async function runWorkspaceAgentWithAiSdkModel(
       emit({
         durationMs: event.toolExecutionMs,
         outcome: event.toolOutput.type == "tool-error" ? "error" : "success",
+        result:
+          event.toolOutput.type == "tool-result"
+            ? workspaceAgentToolResultStatus(event.toolOutput.output)
+            : undefined,
         toolCallId: event.toolCall.toolCallId,
         toolName: event.toolCall.toolName,
         type: "tool-finish",
@@ -77,6 +82,7 @@ export async function runWorkspaceAgentWithAiSdkModel(
     },
     onToolExecutionStart: (event) => {
       emit({
+        target: workspaceAgentToolTarget(event.toolCall.input),
         toolCallId: event.toolCall.toolCallId,
         toolName: event.toolCall.toolName,
         type: "tool-start",
@@ -107,6 +113,29 @@ function createEventEmitter(onEvent: WorkspaceAgentRunRequest["onEvent"]) {
       // UI observers must not interrupt a model run or a document transaction.
     }
   };
+}
+
+const toolTargetMaxCharacters = 512;
+
+/** Extracts only the display-safe target fields (path, directory, query). */
+export function workspaceAgentToolTarget(input: unknown): WorkspaceAgentToolTarget | undefined {
+  if (!input || typeof input != "object") return undefined;
+  let record = input as Record<string, unknown>;
+  let target: WorkspaceAgentToolTarget = {};
+  for (let key of ["path", "directory", "query"] as const) {
+    let value = record[key];
+    if (typeof value == "string") target[key] = value.slice(0, toolTargetMaxCharacters);
+  }
+  return Object.keys(target).length ? target : undefined;
+}
+
+/** Extracts only the status and failure reason of a tool result. */
+export function workspaceAgentToolResultStatus(output: unknown) {
+  if (!output || typeof output != "object") return undefined;
+  let record = output as Record<string, unknown>;
+  let status = typeof record.status == "string" ? record.status : undefined;
+  let reason = typeof record.reason == "string" ? record.reason : undefined;
+  return status || reason ? { reason, status } : undefined;
 }
 
 function modelMessages(messages: WorkspaceAgentRunRequest["messages"]): ModelMessage[] {

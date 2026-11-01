@@ -1,4 +1,5 @@
 import { hashStringValue } from "../analysis/ranges.js";
+import { keyParts } from "../markdown-text.js";
 
 let nextObjectEpoch = 1;
 const objectEpochs = new WeakMap<object, number>();
@@ -32,15 +33,6 @@ export function liveMdCompositeEpoch(...values: readonly unknown[]): number {
   let epochs = values.map(liveMdValueEpoch);
   if (epochs.every((epoch) => epoch == 0)) return 0;
   return hashStringValue(keyParts(...epochs)) || 1;
-}
-
-function keyParts(...parts: readonly (number | string)[]) {
-  return parts
-    .map((part) => {
-      let text = String(part);
-      return `${text.length}:${text}`;
-    })
-    .join("|");
 }
 
 function primitiveEpochText(value: boolean | number | string | bigint | symbol) {

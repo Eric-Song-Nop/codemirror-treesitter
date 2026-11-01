@@ -1,5 +1,9 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
+  // CI deploy config for .github/workflows/local-md-workspace.yml: the built
+  // Worker without the relay.grovemd.net custom-domain route. It must match
+  // wrangler.jsonc apart from "main" and "routes"; wrangler-config.test.ts
+  // enforces that.
   "name": "grove-relay",
   "main": "./dist/grove_relay/index.js",
   "compatibility_date": "2026-05-28",
@@ -52,6 +56,11 @@
       "new_sqlite_classes": ["GroveCreateQuota"],
     },
   ],
+  "vars": {
+    // Optional comma-separated CORS/WebSocket Origin allowlist. Blank keeps
+    // the permissive reflect-any-origin behavior.
+    "ALLOWED_ORIGINS": "",
+  },
   "observability": {
     "enabled": true,
   },

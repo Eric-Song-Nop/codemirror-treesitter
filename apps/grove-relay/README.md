@@ -53,7 +53,8 @@ configured at every deployment edge.
 
 ## API Shape
 
-- `POST /api/shares`
+- `POST /api/shares` (the only create entry point; `POST /api/shares/:shareId`
+  returns 404 and never wakes a room or consumes quota)
 - `POST /api/shares/:shareId/session`
 - `POST /api/shares/:shareId/rotate`
 - `POST /api/shares/:shareId/revoke`
@@ -68,21 +69,39 @@ a different document under the same id.
 - `GET /__debug` for local readiness checks used by
   `apps/local-md-workspace/scripts/dev.mjs`
 
+## Origin Allowlist
+
+`ALLOWED_ORIGINS` (a Wrangler var, blank by default) accepts comma-separated
+origins such as `https://grovemd.net,http://localhost:5173`. When set, CORS
+responses reflect only listed origins and WebSocket upgrades whose `Origin`
+header is present but not listed are rejected with 403; upgrades without an
+`Origin` header (non-browser clients) are allowed. When blank, any origin is
+reflected. Set it in `wrangler.jsonc` and `wrangler.worker.ci.jsonc`: deploys
+replace dashboard-set vars.
+
 ## Source Layout
 
-- `src/worker.ts`: Worker router plus the `GroveCreateQuota` and
-  `GroveShareRoom` Durable Objects.
-- `src/protocol.ts`: binary wire framing for relay messages and batches.
-- `src/share.ts`: share IDs, secrets, session records, request parsing,
-  expiration, retention, and hashing helpers.
-- `src/share-limits.ts`: request, snapshot, update, peer, session, and rate
-  limits.
-- `src/*.test.ts`: share validation, limits, and Worker route coverage.
+- `src/worker.ts`: thin Worker entry. `GroveCreateQuota` and `GroveShareRoom`
+  subclass `CreateQuota` and `ShareRoom` from `@codemirror-treesitter/relay-core`,
+  and `fetch` delegates to its `handleRelayRequest`. The wire protocol, share
+  validation, limits, Durable Object logic, and router live in
+  `packages/relay-core`.
+- `src/worker-*.test.ts`: Durable Object persistence, session, quota, and
+  Worker route coverage (including create admission and `ALLOWED_ORIGINS`).
+- `src/wrangler-config.test.ts`: keeps `wrangler.worker.ci.jsonc` in sync
+  with `wrangler.jsonc`.
 - `vite.config.ts`: Cloudflare Worker build config.
 - `vitest.config.ts`: Worker unit-test config without the Cloudflare Vite
   plugin.
-- `wrangler.worker.jsonc`: deployment config.
-- `wrangler.worker.ci.jsonc`: CI-oriented Wrangler config.
+- `wrangler.jsonc`: the single source Wrangler config (dev, build, types). The
+  Vite build writes the deployable `dist/grove_relay/wrangler.json` from it,
+  which `deploy`/`deploy:worker` use.
+- `wrangler.worker.ci.jsonc`: the CI deploy config used by
+  `.github/workflows/local-md-workspace.yml`: the built Worker without the
+  `relay.grovemd.net` custom-domain route. It must match `wrangler.jsonc`
+  apart from `main` and `routes` (enforced by `wrangler-config.test.ts`).
+  Wrangler does not inherit `durable_objects`, `ratelimits`, or `vars` into
+  `env.*` blocks, so environments would duplicate every binding.
 
 ## Commands
 
@@ -94,6 +113,7 @@ vp run grove-relay#build
 vp run grove-relay#test
 vp run grove-relay#types
 vp run grove-relay#deploy:worker
+vp run grove-relay#deploy:dry-run
 ```
 
 `local-md-workspace#dev` starts this relay automatically when

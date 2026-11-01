@@ -6,222 +6,125 @@ import {
 } from "@codemirror-treesitter/live-md";
 import { liveMdLoroCollaboration } from "@codemirror-treesitter/live-md-loro";
 import { LoroDoc, UndoManager } from "loro-crdt";
-import { WireKind, decodeWireFrame, encodeWireBatch, type WireMessage } from "./protocol.ts";
-import { isValidRoomId, selectRoomFromHash, type RoomSelection } from "./room.ts";
+import { createInitialDocument } from "./initial-document.ts";
+import {
+  ShareRoomConnection,
+  createRelayShare,
+  type ConnectionState,
+  type ShareAccess,
+} from "./share-client.ts";
+import { createShareCredentials, parseShareHash, shareHash, shareUrl } from "./share-link.ts";
 
-const room = ensureRoom();
-const roomId = room.id;
-const localSnapshotKey = `collab:${roomId}:snapshot`;
+const markdownTextKey = "markdown";
+const roomLifetimeMs = 7 * 24 * 60 * 60 * 1000;
+const origin = collaborationWorkerOrigin();
 const clientId = getOrCreateClientId();
 const doc = new LoroDoc();
 const undoManager = new UndoManager(doc, {});
-const restoredSnapshot = loadLocalSnapshot(localSnapshotKey);
-const clientCloseCodeMalformed = 4003;
-const clientCloseCodeStale = 4001;
-
-if (restoredSnapshot) doc.import(restoredSnapshot);
 
 let localSaveTimer: number | null = null;
+let localSnapshotKey: string | null = null;
 
-class CollaborationConnection {
-  private activeGeneration = 0;
-  private clientId: string;
-  private doc: LoroDoc;
-  private flushTimer: number | null = null;
-  private heartbeatTimer: number | null = null;
-  private lastMessageAt = 0;
-  private localSnapshotSent = false;
-  private queue: WireMessage[] = [];
-  private reconnectAttempt = 0;
-  private reconnectTimer: number | null = null;
-  private receivedServerSnapshot = false;
-  private restoredSnapshot: Uint8Array | null;
-  private roomId: string;
-  private socket: WebSocket | null = null;
+let statusLine = document.createElement("p");
+statusLine.className = "collab-status";
+statusLine.setAttribute("role", "status");
 
-  constructor(roomId: string, clientId: string, doc: LoroDoc, restoredSnapshot: Uint8Array | null) {
-    this.clientId = clientId;
-    this.doc = doc;
-    this.restoredSnapshot = restoredSnapshot;
-    this.roomId = roomId;
+await prepareLiveMd();
+defineLiveMdEditor();
+
+let access: ShareAccess;
+try {
+  access = await ensureShare();
+} catch (error: unknown) {
+  renderShell(null);
+  setStatus("unavailable", error instanceof Error ? error.message : String(error));
+  throw error;
+}
+
+renderShell(access);
+let connection = new ShareRoomConnection({
+  access,
+  clientId,
+  doc,
+  onState: setStatus,
+  origin,
+});
+
+doc.subscribeLocalUpdates(() => connection.markLocalChange());
+doc.subscribe(() => scheduleLocalSnapshotSave());
+
+void connection.connect();
+window.addEventListener("online", () => void connection.connect());
+window.addEventListener("offline", () => connection.pause());
+window.addEventListener("beforeunload", () => {
+  saveLocalSnapshot();
+  connection.close();
+});
+
+async function ensureShare(): Promise<ShareAccess> {
+  let link = parseShareHash(location.hash);
+  if (link) {
+    localSnapshotKey = snapshotStorageKey(link.shareId);
+    let restored = loadLocalSnapshot(localSnapshotKey);
+    if (restored) doc.import(restored);
+    let hostSecret = loadHostSecret(link.shareId);
+    return hostSecret
+      ? { role: "host", secret: hostSecret, shareId: link.shareId }
+      : { role: "guest", secret: link.guestSecret, shareId: link.shareId };
   }
 
-  close() {
-    this.activeGeneration++;
-    this.clearReconnectTimer();
-    this.clearFlushTimer();
-    this.stopHeartbeat();
-    this.socket?.close(1000, "Page closed");
-    this.socket = null;
+  // No valid share link: create a new rate-limited, quota-admitted share room.
+  let credentials = createShareCredentials();
+  let newLink = { guestSecret: credentials.guestSecret, shareId: credentials.shareId };
+  doc.getText(markdownTextKey).insert(0, createInitialDocument(shareUrl(location.href, newLink)));
+  doc.commit();
+  await createRelayShare(origin, credentials, doc.export({ mode: "snapshot" }), {
+    displayName: "Collaborative LiveMD",
+    expiresAt: Date.now() + roomLifetimeMs,
+  });
+  saveHostSecret(credentials.shareId, credentials.hostSecret);
+  history.replaceState(null, "", `/${shareHash(newLink)}`);
+  localSnapshotKey = snapshotStorageKey(credentials.shareId);
+  return { role: "host", secret: credentials.hostSecret, shareId: credentials.shareId };
+}
+
+function renderShell(share: ShareAccess | null) {
+  let shell = document.createElement("main");
+  shell.className = "collab-shell";
+  shell.appendChild(statusLine);
+
+  if (share) {
+    let editor = document.createElement("live-md-editor") as LiveMdEditorElement;
+    editor.setAttribute("autofocus", "");
+    editor.placeholder = "Start writing Markdown. Share this link to collaborate.";
+    editor.extensions = [liveMdLoroCollaboration({ doc, undoManager })];
+
+    let editorFrame = document.createElement("section");
+    editorFrame.className = "editor-frame";
+    editorFrame.setAttribute("aria-label", "Collaborative Markdown editor");
+    editorFrame.appendChild(editor);
+    shell.appendChild(editorFrame);
   }
 
-  connect() {
-    if (navigator.onLine === false) {
-      this.scheduleReconnect();
-      return;
-    }
+  document.querySelector<HTMLDivElement>("#app")!.replaceChildren(shell);
+}
 
-    this.clearReconnectTimer();
-    this.stopHeartbeat();
-    this.socket?.close(1000, "Reconnecting");
-
-    let generation = ++this.activeGeneration;
-    let socket = new WebSocket(this.websocketUrl());
-    socket.binaryType = "arraybuffer";
-    this.socket = socket;
-    this.receivedServerSnapshot = false;
-    this.lastMessageAt = Date.now();
-
-    socket.addEventListener("open", () => {
-      if (!this.isActive(generation, socket)) return;
-      this.reconnectAttempt = 0;
-      this.startHeartbeat(generation, socket);
-    });
-
-    socket.addEventListener("message", (event: MessageEvent<ArrayBuffer | string>) => {
-      if (!this.isActive(generation, socket)) return;
-      this.lastMessageAt = Date.now();
-      this.handleMessage(event.data);
-    });
-
-    socket.addEventListener("close", () => {
-      if (!this.isActive(generation, socket)) return;
-      this.socket = null;
-      this.stopHeartbeat();
-      this.scheduleReconnect();
-    });
-
-    socket.addEventListener("error", () => {
-      if (!this.isActive(generation, socket)) return;
-      socket.close();
-    });
-  }
-
-  enqueue(kind: WireKind, payload: Uint8Array) {
-    this.queue.push({ kind, payload: new Uint8Array(payload) });
-    this.scheduleFlush();
-  }
-
-  pause() {
-    this.clearReconnectTimer();
-    this.stopHeartbeat();
-    this.socket?.close(1000, "Offline");
-    this.socket = null;
-  }
-
-  private clearFlushTimer() {
-    if (this.flushTimer != null) clearTimeout(this.flushTimer);
-    this.flushTimer = null;
-  }
-
-  private clearReconnectTimer() {
-    if (this.reconnectTimer != null) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-  }
-
-  private flushQueue() {
-    this.flushTimer = null;
-    if (!this.queue.length || !this.readyToSend()) return;
-
-    let messages = this.queue.splice(0);
-    let frame = encodeWireBatch(messages);
-
-    try {
-      this.socket!.send(frame);
-    } catch {
-      this.queue.unshift(...messages);
-      this.socket?.close();
-    }
-  }
-
-  private handleMessage(data: ArrayBuffer | string) {
-    if (typeof data == "string") {
-      this.handleControlMessage(data);
-      return;
-    }
-
-    let messages = decodeWireFrame(data);
-    for (let message of messages) {
-      if (message.kind == WireKind.Doc || message.kind == WireKind.Snapshot) {
-        this.doc.import(message.payload);
-      }
-
-      if (message.kind == WireKind.Snapshot && !this.receivedServerSnapshot) {
-        this.receivedServerSnapshot = true;
-        if (this.restoredSnapshot && !this.localSnapshotSent) {
-          this.localSnapshotSent = true;
-          this.queue.unshift({
-            kind: WireKind.Snapshot,
-            payload: this.doc.export({ mode: "snapshot" }),
-          });
-        }
-        this.scheduleFlush();
-      }
-    }
-  }
-
-  private handleControlMessage(data: string) {
-    try {
-      JSON.parse(data);
-    } catch {
-      this.socket?.close(clientCloseCodeMalformed, "Malformed control message");
-    }
-  }
-
-  private isActive(generation: number, socket: WebSocket) {
-    return this.activeGeneration == generation && this.socket == socket;
-  }
-
-  private readyToSend() {
-    return this.socket?.readyState == WebSocket.OPEN && this.receivedServerSnapshot;
-  }
-
-  private reconnectDelay() {
-    let base = Math.min(250 * 2 ** this.reconnectAttempt, 10_000);
-    this.reconnectAttempt++;
-    return base + (crypto.getRandomValues(new Uint16Array(1))[0]! % 301);
-  }
-
-  private scheduleFlush() {
-    if (!this.readyToSend() || this.flushTimer != null) return;
-    this.flushTimer = window.setTimeout(() => this.flushQueue(), 50);
-  }
-
-  private scheduleReconnect() {
-    if (this.reconnectTimer != null || navigator.onLine === false) return;
-    this.reconnectTimer = window.setTimeout(() => {
-      this.reconnectTimer = null;
-      this.connect();
-    }, this.reconnectDelay());
-  }
-
-  private startHeartbeat(generation: number, socket: WebSocket) {
-    this.stopHeartbeat();
-    this.heartbeatTimer = window.setInterval(() => {
-      if (!this.isActive(generation, socket)) return;
-      if (Date.now() - this.lastMessageAt > 60_000) {
-        socket.close(clientCloseCodeStale, "Stale connection");
-        return;
-      }
-      if (socket.readyState == WebSocket.OPEN) socket.send(JSON.stringify({ type: "ping" }));
-    }, 25_000);
-  }
-
-  private stopHeartbeat() {
-    if (this.heartbeatTimer != null) clearInterval(this.heartbeatTimer);
-    this.heartbeatTimer = null;
-  }
-
-  private websocketUrl() {
-    let path = `/api/doc/${encodeURIComponent(this.roomId)}/ws`;
-    let url = new URL(path, collaborationWorkerOrigin());
-    url.protocol = url.protocol == "http:" || url.protocol == "ws:" ? "ws:" : "wss:";
-    let params = new URLSearchParams({
-      clientId: this.clientId,
-      hasLocalSnapshot: this.restoredSnapshot ? "1" : "0",
-    });
-    url.search = params.toString();
-    return url.toString();
+function setStatus(state: ConnectionState, detail?: string) {
+  let labels: Record<ConnectionState, string> = {
+    connected: "Connected",
+    connecting: "Connecting…",
+    offline: "Offline, retrying…",
+    unavailable: "This room is unavailable.",
+  };
+  statusLine.dataset.state = state;
+  statusLine.textContent =
+    detail && state != "connected" ? `${labels[state]} ${detail}` : labels[state];
+  if (state == "unavailable") {
+    let fresh = document.createElement("a");
+    fresh.href = "/";
+    fresh.textContent = "Start a new room";
+    statusLine.appendChild(document.createTextNode(" "));
+    statusLine.appendChild(fresh);
   }
 }
 
@@ -240,42 +143,29 @@ function collaborationWorkerOrigin(): string {
   }
 }
 
-await prepareLiveMd();
-defineLiveMdEditor();
+function snapshotStorageKey(shareId: string) {
+  return `collab:${shareId}:snapshot`;
+}
 
-let editor = document.createElement("live-md-editor") as LiveMdEditorElement;
-editor.setAttribute("autofocus", "");
-editor.placeholder = "Start writing Markdown. Share this link to collaborate.";
-editor.extensions = [liveMdLoroCollaboration({ doc, undoManager })];
+function hostSecretStorageKey(shareId: string) {
+  return `collab:${shareId}:host`;
+}
 
-let editorFrame = document.createElement("section");
-editorFrame.className = "editor-frame";
-editorFrame.setAttribute("aria-label", "Collaborative Markdown editor");
-editorFrame.appendChild(editor);
+function loadHostSecret(shareId: string) {
+  try {
+    return localStorage.getItem(hostSecretStorageKey(shareId));
+  } catch {
+    return null;
+  }
+}
 
-let shell = document.createElement("main");
-shell.className = "collab-shell";
-shell.appendChild(editorFrame);
-
-document.querySelector<HTMLDivElement>("#app")!.replaceChildren(shell);
-
-let connection = new CollaborationConnection(roomId, clientId, doc, restoredSnapshot);
-
-doc.subscribeLocalUpdates((bytes) => {
-  connection.enqueue(WireKind.Doc, bytes);
-});
-
-doc.subscribe(() => {
-  scheduleLocalSnapshotSave();
-});
-
-connection.connect();
-window.addEventListener("online", () => connection.connect());
-window.addEventListener("offline", () => connection.pause());
-window.addEventListener("beforeunload", () => {
-  saveLocalSnapshot();
-  connection.close();
-});
+function saveHostSecret(shareId: string, secret: string) {
+  try {
+    localStorage.setItem(hostSecretStorageKey(shareId), secret);
+  } catch {
+    // Without storage this browser rejoins as a guest, which can still edit.
+  }
+}
 
 function decodeBase64(value: string): Uint8Array {
   let binary = atob(value);
@@ -292,32 +182,6 @@ function encodeBase64(bytes: Uint8Array): string {
     chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
   }
   return btoa(chunks.join(""));
-}
-
-function ensureRoom(): RoomSelection {
-  let room = selectRoomFromHash(location.hash);
-  if (!room.generated) return room;
-
-  let pathRoomId = roomIdFromPath(location.pathname);
-  if (pathRoomId) {
-    history.replaceState(null, "", roomHash(pathRoomId, "/"));
-    return { generated: false, id: pathRoomId };
-  }
-
-  history.replaceState(null, "", roomHash(room.id));
-  return room;
-}
-
-function roomIdFromPath(pathname: string) {
-  let match = /^\/([^/]+)\/?$/.exec(pathname);
-  if (!match) return null;
-
-  let roomId = decodeURIComponent(match[1]!);
-  return isValidRoomId(roomId) ? roomId : null;
-}
-
-function roomHash(roomId: string, pathname = location.pathname) {
-  return `${pathname}${location.search}#${encodeURIComponent(roomId)}`;
 }
 
 function getOrCreateClientId() {
@@ -342,6 +206,7 @@ function loadLocalSnapshot(key: string): Uint8Array | null {
 }
 
 function saveLocalSnapshot() {
+  if (!localSnapshotKey) return;
   try {
     localStorage.setItem(localSnapshotKey, encodeBase64(doc.export({ mode: "snapshot" })));
   } catch {

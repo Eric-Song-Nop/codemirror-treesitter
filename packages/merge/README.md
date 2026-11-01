@@ -44,7 +44,7 @@ The root entry point is `src/index.ts`.
 - `src/unified.ts`: unified merge view implementation.
 - `src/deco.ts` and `src/theme.ts`: decorations and styling.
 - `src/merge.ts`: shared merge state and view helpers.
-- `tests/*`: diff and chunk behavior coverage.
+- `tests/*`: diff, chunk, and unified deletion-highlighting coverage.
 
 ## Relationship to Other Packages
 
@@ -58,7 +58,12 @@ against the official merge package.
   `mergeview`, `unified`, and `deco`.
 - `src/merge.ts` owns chunk state and navigation; `src/unified.ts` owns
   original-document state and accept/reject behavior.
-- The current automated tests focus on diff generation and chunk behavior.
+- Deleted-chunk widgets in `unifiedMergeView` are highlighted with the
+  editor's current language. While the grammar is still loading (no language
+  configured yet), they render as plain text; when a loaded language is
+  configured, the widgets are rebuilt with highlighting.
+- The automated tests cover diff generation, chunk behavior, and deletion
+  widget highlighting with the JavaScript grammar (happy-dom).
 
 ## Validation
 
@@ -72,3 +77,10 @@ vp run audit
 
 The audit checks upstream export parity and verifies that unified deletion
 highlighting uses local Tree-sitter language helpers.
+
+## License and attribution
+
+This package is a derivative work of [`@codemirror/merge`](https://github.com/codemirror/merge) by Marijn Haverbeke and others,
+distributed under the MIT License. The upstream copyright notice is retained
+alongside the project copyright in [`LICENSE`](./LICENSE). See the root
+[`NOTICE.md`](../../NOTICE.md) for the full list of derived components.

@@ -8,7 +8,7 @@ import {
   maxShareTtlMs,
   maxSnapshotBytes,
   shareRetentionMs,
-} from "./share-limits.ts";
+} from "@codemirror-treesitter/relay-core/client";
 
 vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
 

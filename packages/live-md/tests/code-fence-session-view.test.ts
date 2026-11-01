@@ -8,7 +8,7 @@ import {
   loadMarkdownExtension,
   setCodeFenceLanguages,
 } from "../src/core/languages.js";
-import { __testFlushLiveMdAnalysis, __testLiveMdAnalysis } from "../src/core/runtime/field.js";
+import { __testFlushLiveMdAnalysis, __testLiveMdAnalysis } from "../src/internal/testing.js";
 
 let locationDescriptor: PropertyDescriptor | undefined;
 beforeEach(() => {

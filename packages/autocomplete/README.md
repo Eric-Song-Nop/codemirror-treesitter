@@ -66,6 +66,11 @@ apps.
   `src/tooltip.ts`; matching logic is separated into `src/filter.ts`.
 - Tests currently cover completion source behavior, filtering, snippet-adjacent
   completion behavior, and close-bracket insertion/deletion.
+  `tests/closebrackets-syntax.test.ts` loads the JavaScript grammar WASM to
+  check quote handling inside strings and template literals.
+- `closeBrackets` string detection (`nodeStart`, `probablyInString`) accounts
+  for Tree-sitter string nodes having separate quote and fragment children,
+  unlike Lezer's leaf string tokens.
 
 ## Validation
 
@@ -79,3 +84,10 @@ vp run audit
 
 The audit checks upstream export parity and verifies that known completion
 context placeholders are not present.
+
+## License and attribution
+
+This package is a derivative work of [`@codemirror/autocomplete`](https://github.com/codemirror/autocomplete) by Marijn Haverbeke and others,
+distributed under the MIT License. The upstream copyright notice is retained
+alongside the project copyright in [`LICENSE`](./LICENSE). See the root
+[`NOTICE.md`](../../NOTICE.md) for the full list of derived components.

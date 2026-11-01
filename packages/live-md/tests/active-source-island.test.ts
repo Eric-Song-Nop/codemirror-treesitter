@@ -1,5 +1,4 @@
 // @vitest-environment happy-dom
-
 import {
   EditorSelection,
   EditorState,
@@ -12,13 +11,7 @@ import { ensureSyntaxTree, syntaxTree, type Tree } from "@codemirror-treesitter/
 import { EditorView, type DecorationSet } from "@codemirror/view";
 import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
-import {
-  __testBuildCanonicalLiveMdAnalysis,
-  __testBuildLiveMdAnalysis,
-  __testFlushLiveMdAnalysis,
-  __testLiveMdAnalysis,
-  liveMdAnalysis,
-} from "../src/core/decorations.js";
+import { liveMdAnalysis } from "../src/core/decorations.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
 import { liveMdMarkdownFeatures } from "../src/core/features.js";
 import {
@@ -34,6 +27,12 @@ import {
 } from "../src/core/analysis/markdown-source-islands.js";
 import { compileFullSurfaceProjection } from "../src/core/projection/compilers.js";
 import { type LiveMdAnalysis } from "../src/core/runtime/types.js";
+import {
+  __testBuildCanonicalLiveMdAnalysis,
+  __testBuildLiveMdAnalysis,
+  __testFlushLiveMdAnalysis,
+  __testLiveMdAnalysis,
+} from "../src/internal/testing.js";
 
 type SelectionSpec = number | { anchor: number; head: number };
 

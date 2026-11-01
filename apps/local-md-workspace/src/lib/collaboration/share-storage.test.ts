@@ -6,6 +6,8 @@ import { openMarkdownCollabDocument } from "./markdown-document.ts";
 import {
   createOwnerShare,
   hostSecretStorageKey,
+  migrateSessionHostSecrets,
+  readOwnerShareHostSecret,
   ownerShareRecordPath,
   readOwnerShareRecord,
   resetOwnerShareRecordStoreForTests,
@@ -57,12 +59,14 @@ beforeEach(() => {
     value: undefined,
   });
   window.localStorage.clear();
+  window.sessionStorage.clear();
   resetBrowserCollabMemoryStoreForTests();
   resetOwnerShareRecordStoreForTests();
 });
 
 afterEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
   resetBrowserCollabMemoryStoreForTests();
   resetOwnerShareRecordStoreForTests();
   if (indexedDbDescriptor) {
@@ -75,6 +79,86 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(window, "localStorage");
   }
+});
+
+describe("owner share host secret storage", () => {
+  it("reads the host secret memory-first and persists it durably for new tabs", async () => {
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let share = await createOwnerShare({
+      identity: backend.identity,
+      baseUrl: "https://example.test/workspace",
+      createRelayShare: async () => {},
+      document,
+      expiration: "7d",
+      file: { kind: "file", name: "note.md", path: "note.md" },
+      now: Date.UTC(2026, 5, 6),
+      relayOrigin: "https://relay.example",
+    });
+
+    let key = hostSecretStorageKey(share.record.shareId);
+    let hostSecret = localStorageValues.get(key);
+    expect(hostSecret).toEqual(expect.any(String));
+    expect(window.sessionStorage.getItem(key)).toBeNull();
+    expect(window.localStorage.getItem(ownerShareRecordPath(share.record.shareId))).not.toContain(
+      hostSecret!,
+    );
+
+    localStorageValues.delete(key);
+    expect(readOwnerShareHostSecret(share.record)).toBe(hostSecret);
+
+    // A new tab starts with empty page memory and reads the durable copy.
+    localStorageValues.set(key, hostSecret!);
+    resetOwnerShareRecordStoreForTests();
+    expect(readOwnerShareHostSecret(share.record)).toBe(hostSecret);
+  });
+
+  it("migrates interim sessionStorage host secrets back to localStorage once", () => {
+    let record = { hostSecretRef: hostSecretStorageKey("interim"), shareId: "interim" };
+    window.sessionStorage.setItem(record.hostSecretRef, "interim-secret");
+    window.sessionStorage.setItem(hostSecretStorageKey("other"), "other-secret");
+    localStorageValues.set(hostSecretStorageKey("legacy"), "legacy-secret");
+
+    expect(readOwnerShareHostSecret(record)).toBe("interim-secret");
+    expect(localStorageValues.get(record.hostSecretRef)).toBe("interim-secret");
+    expect(localStorageValues.get(hostSecretStorageKey("other"))).toBe("other-secret");
+    expect(window.sessionStorage.getItem(record.hostSecretRef)).toBeNull();
+    expect(window.sessionStorage.getItem(hostSecretStorageKey("other"))).toBeNull();
+    expect(migrateSessionHostSecrets()).toBe(0);
+    expect(
+      readOwnerShareHostSecret({
+        hostSecretRef: hostSecretStorageKey("legacy"),
+        shareId: "legacy",
+      }),
+    ).toBe("legacy-secret");
+  });
+
+  it("forgets the host secret after revocation", async () => {
+    let backend = createMemoryBackend([["note.md", "# First\n"]]);
+    let document = await openMarkdownCollabDocument(backend, "note.md");
+    let share = await createOwnerShare({
+      identity: backend.identity,
+      baseUrl: "https://example.test/workspace",
+      createRelayShare: async () => {},
+      document,
+      expiration: "7d",
+      file: { kind: "file", name: "note.md", path: "note.md" },
+      now: Date.UTC(2026, 5, 6),
+      relayOrigin: "https://relay.example",
+    });
+    let hostSecret = readOwnerShareHostSecret(share.record)!;
+
+    await revokeOwnerShare({
+      identity: backend.identity,
+      hostSecret,
+      record: share.record,
+      relayOrigin: "https://relay.example",
+      revokeRelayShare: async (_origin, shareId) => ({ revokedAt: 1, shareId }),
+    });
+
+    expect(readOwnerShareHostSecret(share.record)).toBeNull();
+    expect(localStorageValues.has(hostSecretStorageKey(share.record.shareId))).toBe(false);
+  });
 });
 
 describe("owner shared file metadata", () => {

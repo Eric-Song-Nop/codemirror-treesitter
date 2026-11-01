@@ -7,11 +7,13 @@
     "dev": "vp dev",
     "build": "vp build",
     "test": "vp test --config vitest.config.ts",
-    "deploy": "wrangler deploy --config wrangler.worker.jsonc",
-    "deploy:worker": "wrangler deploy --config wrangler.worker.jsonc",
-    "types": "wrangler types"
+    "deploy": "vp build && wrangler deploy --config dist/grove_relay/wrangler.json",
+    "deploy:worker": "vp build && wrangler deploy --config dist/grove_relay/wrangler.json",
+    "types": "wrangler types",
+    "deploy:dry-run": "vp build && wrangler deploy --dry-run --config dist/grove_relay/wrangler.json"
   },
   "dependencies": {
+    "@codemirror-treesitter/relay-core": "workspace:*",
     "loro-crdt": "^1.12.3"
   },
   "devDependencies": {

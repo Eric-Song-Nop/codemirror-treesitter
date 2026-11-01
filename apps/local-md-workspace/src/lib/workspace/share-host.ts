@@ -1,4 +1,4 @@
-import { hostSecretStorageKey, type OwnerShareRecord } from "@/lib/collaboration/share-storage";
+import { readOwnerShareHostSecret, type OwnerShareRecord } from "@/lib/collaboration/share-storage";
 import type { ShareRelayStatus } from "@/lib/collaboration/share-relay-connection";
 import type { ActiveOwnerShareRecord } from "@/lib/workspace/types";
 
@@ -16,15 +16,9 @@ export function mergeOwnerShareStatus(
   };
 }
 
+/** Reads the tab-scoped host secret; see `readOwnerShareHostSecret`. */
 export function readHostSecret(record: OwnerShareRecord) {
-  try {
-    return (
-      localStorage.getItem(record.hostSecretRef) ??
-      localStorage.getItem(hostSecretStorageKey(record.shareId))
-    );
-  } catch {
-    return null;
-  }
+  return readOwnerShareHostSecret(record);
 }
 
 export function getOrCreateOwnerShareClientId() {

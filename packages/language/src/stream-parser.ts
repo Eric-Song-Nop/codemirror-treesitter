@@ -1,4 +1,4 @@
-import { Text } from "@codemirror/state";
+import { type ChangeDesc, Text } from "@codemirror/state";
 import {
   Language,
   LanguageSupport,
@@ -38,11 +38,59 @@ type FullStreamParser<State> = Required<Omit<StreamParser<State>, "name">> & {
 
 type Point = { row: number; column: number };
 
+/** A completed stream parse: one flat token list plus per-line tokenizer states. */
+type StreamTree<State> = {
+  readonly rootNode: SimpleNode;
+  readonly doc: Text;
+  readonly unit: number;
+  readonly tabSize: number;
+  /** `lineStates[i]` is a copy of the tokenizer state before line `i + 1`. */
+  readonly lineStates: readonly State[];
+  /** `lineTokenEnd[i]` is the number of tokens produced through line `i + 1`. */
+  readonly lineTokenEnd: readonly number[];
+  readonly nextId: number;
+};
+
+/**
+ * The previous stream tree after an edit: only its first `reuseLines` lines
+ * (all before the first change) are still valid. Not navigable as a tree for
+ * the new document, so it is never published; it only seeds the next parse.
+ */
+type EditedStreamTree<State> = {
+  readonly rootNode: SimpleNode;
+  readonly base: StreamTree<State>;
+  readonly reuseLines: number;
+};
+
+/** Tokenizer progress for one document, kept across parse work slices. */
+type StreamProgress<State> = {
+  line: number;
+  state: State;
+  readonly unit: number;
+  readonly tabSize: number;
+  readonly tokens: SimpleNode[];
+  readonly lineStates: State[];
+  readonly lineTokenEnd: number[];
+  nextId: number;
+};
+
+/** Tokenizer states cached for indentation queries, per document. */
+type IndentStates<State> = {
+  readonly unit: number;
+  readonly tabSize: number;
+  /** `states[i]` is the state before line `i + 1`; `live` is the state after the last one. */
+  readonly states: State[];
+  live: State;
+};
+
 class StreamParserAdapter<State> implements TreeConfig {
   readonly styleTags = new Map<string, readonly Tag[]>();
   private readonly typeCache = new Map<string, NodeType>();
   private readonly tokenIds = new Map<string, number>();
   private readonly tokenNames = new Map<string, string>();
+  private readonly progress = new WeakMap<Text, StreamProgress<State>>();
+  private readonly completed = new WeakMap<Text, StreamTree<State>>();
+  private readonly indentStates = new WeakMap<Text, IndentStates<State>>();
 
   constructor(
     readonly streamParser: FullStreamParser<State>,
@@ -57,48 +105,136 @@ class StreamParserAdapter<State> implements TreeConfig {
     return this.wrapTree(this.parseWith({}, doc), doc) ?? Tree.empty;
   }
 
-  parseWith(_parser: unknown, doc: Text, _oldTree: unknown = null, shouldStop?: () => boolean) {
-    let context = ParseContext.get();
-    let unit = context ? getIndentUnit(context.state) : 2;
-    let tabSize = context?.state.tabSize ?? 4;
-    let state = this.streamParser.startState(unit);
-    let children: SimpleNode[] = [];
-    let id = 1;
-
-    for (let lineNumber = 1; lineNumber <= doc.lines; lineNumber++) {
-      if (shouldStop?.()) return null;
-      let line = doc.line(lineNumber);
-      let stream = new StringStream(line.text, tabSize, unit);
-      if (stream.eol()) {
-        this.streamParser.blankLine(state, stream.indentUnit);
-      } else {
-        while (!stream.eol()) {
-          let token = readToken(this.streamParser.token, stream, state);
-          if (token && stream.pos > stream.start) {
-            children.push(
-              new SimpleNode(
-                this.nodeNameForToken(token),
-                this.nodeIdForToken(token),
-                line.from + stream.start,
-                line.from + stream.pos,
-                id++,
-                true,
-              ),
-            );
-          }
-        }
-      }
+  /**
+   * Tokenize `doc`, resuming from the progress saved by an earlier slice for
+   * the same document, and reusing the unchanged line prefix of `oldTree`.
+   * Returns null when `shouldStop` interrupts; the next call continues from
+   * the last completed line.
+   */
+  parseWith(
+    _parser: unknown,
+    doc: Text,
+    oldTree: unknown = null,
+    shouldStop?: () => boolean,
+  ): StreamTree<State> | null {
+    let progress = this.progress.get(doc);
+    if (!progress) {
+      let context = ParseContext.get();
+      let unit = context ? getIndentUnit(context.state) : 2;
+      let tabSize = context?.state.tabSize ?? 4;
+      progress = this.startProgress(oldTree, unit, tabSize);
+      this.progress.set(doc, progress);
     }
 
-    return { rootNode: new SimpleNode("Document", 0, 0, doc.length, 0, true, children) };
+    while (progress.line <= doc.lines) {
+      if (shouldStop?.()) return null;
+      let line = doc.line(progress.line);
+      progress.lineStates.push(this.streamParser.copyState(progress.state));
+      this.tokenizeLine(
+        progress.state,
+        line.text,
+        progress.tabSize,
+        progress.unit,
+        (start, end, token) => {
+          progress!.tokens.push(
+            new SimpleNode(
+              this.nodeNameForToken(token),
+              this.nodeIdForToken(token),
+              line.from + start,
+              line.from + end,
+              progress!.nextId++,
+              true,
+            ),
+          );
+        },
+      );
+      progress.lineTokenEnd.push(progress.tokens.length);
+      progress.line++;
+    }
+
+    this.progress.delete(doc);
+    // Prefix tokens are shared with the tree they were reused from and are
+    // re-parented to this root; older trees keep working for the shared prefix.
+    let tree: StreamTree<State> = {
+      rootNode: new SimpleNode("Document", 0, 0, doc.length, 0, true, progress.tokens),
+      doc,
+      unit: progress.unit,
+      tabSize: progress.tabSize,
+      lineStates: progress.lineStates,
+      lineTokenEnd: progress.lineTokenEnd,
+      nextId: progress.nextId,
+    };
+    this.completed.set(doc, tree);
+    return tree;
   }
 
-  wrapTree(tree: { rootNode: SimpleNode } | null, doc: Text) {
+  private startProgress(oldTree: unknown, unit: number, tabSize: number): StreamProgress<State> {
+    let edited = oldTree as EditedStreamTree<State> | null;
+    let base = edited && "base" in edited ? edited.base : null;
+    if (base && base.unit == unit && base.tabSize == tabSize) {
+      // lineStates[reuse] (the state before the first re-tokenized line) must exist.
+      let reuse = Math.max(0, Math.min(edited!.reuseLines, base.lineStates.length - 1));
+      if (reuse > 0) {
+        return {
+          line: reuse + 1,
+          state: this.streamParser.copyState(base.lineStates[reuse]!),
+          unit,
+          tabSize,
+          tokens: base.rootNode.children.slice(0, base.lineTokenEnd[reuse - 1]),
+          lineStates: base.lineStates.slice(0, reuse),
+          lineTokenEnd: base.lineTokenEnd.slice(0, reuse),
+          nextId: base.nextId,
+        };
+      }
+    }
+    return {
+      line: 1,
+      state: this.streamParser.startState(unit),
+      unit,
+      tabSize,
+      tokens: [],
+      lineStates: [],
+      lineTokenEnd: [],
+      nextId: 1,
+    };
+  }
+
+  private tokenizeLine(
+    state: State,
+    text: string,
+    tabSize: number,
+    unit: number,
+    onToken?: (start: number, end: number, token: string) => void,
+  ) {
+    let stream = new StringStream(text, tabSize, unit);
+    if (stream.eol()) {
+      this.streamParser.blankLine(state, stream.indentUnit);
+      return;
+    }
+    while (!stream.eol()) {
+      let token = readToken(this.streamParser.token, stream, state);
+      if (token && stream.pos > stream.start) onToken?.(stream.start, stream.pos, token);
+    }
+  }
+
+  wrapTree(tree: StreamTree<State> | null, doc: Text) {
     return tree ? new Tree(tree as never, this, doc.length) : null;
   }
 
-  editWrappedTree(tree: Tree) {
-    return tree;
+  /** Keep the tokenizer states and tokens of the lines before the first change. */
+  editWrappedTree(tree: Tree, changes: ChangeDesc, oldDoc: Text) {
+    let native = tree.tree as unknown as StreamTree<State> | EditedStreamTree<State> | null;
+    if (!native || changes.empty) return tree;
+    let firstChange = -1;
+    changes.iterChangedRanges((fromA) => {
+      if (firstChange < 0) firstChange = fromA;
+    });
+    let unchangedLines = oldDoc.lineAt(firstChange).number - 1;
+    let base = "base" in native ? native.base : native;
+    let reuseLines =
+      "base" in native ? Math.min(native.reuseLines, unchangedLines) : unchangedLines;
+    let edited: EditedStreamTree<State> = { rootNode: base.rootNode, base, reuseLines };
+    return new Tree(edited as never, this, 0);
   }
 
   nodeType(type: string, id: number, named: boolean, top = false, error = false) {
@@ -121,20 +257,35 @@ class StreamParserAdapter<State> implements TreeConfig {
   }
 
   private indent(cx: TreeIndentContext) {
-    let state = this.streamParser.startState(cx.unit);
-    let upto = cx.state.doc.lineAt(cx.pos).from;
-    for (let pos = 0; pos < upto; ) {
-      let line = cx.state.doc.lineAt(pos);
-      if (line.length) {
-        let stream = new StringStream(line.text, cx.state.tabSize, cx.unit);
-        while (!stream.eol()) readToken(this.streamParser.token, stream, state);
-      } else {
-        this.streamParser.blankLine(state, cx.unit);
-      }
-      pos = line.to + 1;
-    }
+    let lineNumber = cx.state.doc.lineAt(cx.pos).number;
+    let state = this.stateBeforeLine(cx.state.doc, lineNumber, cx.unit, cx.state.tabSize);
     let line = cx.lineAt(cx.pos);
     return this.streamParser.indent(state, /^\s*(.*)/.exec(line.text)![1]!, cx);
+  }
+
+  /**
+   * A copy of the tokenizer state before `lineNumber`, taken from a completed
+   * parse of this document when there is one, otherwise from a per-document
+   * cache that only tokenizes lines not seen by an earlier query.
+   */
+  private stateBeforeLine(doc: Text, lineNumber: number, unit: number, tabSize: number): State {
+    let copy = this.streamParser.copyState;
+    let tree = this.completed.get(doc);
+    if (tree && tree.unit == unit && tree.tabSize == tabSize) {
+      let state = tree.lineStates[lineNumber - 1];
+      if (state !== undefined) return copy(state);
+    }
+    let cache = this.indentStates.get(doc);
+    if (!cache || cache.unit != unit || cache.tabSize != tabSize) {
+      cache = { unit, tabSize, states: [], live: this.streamParser.startState(unit) };
+      this.indentStates.set(doc, cache);
+    }
+    while (cache.states.length < lineNumber) {
+      cache.states.push(copy(cache.live));
+      if (cache.states.length == lineNumber) break;
+      this.tokenizeLine(cache.live, doc.line(cache.states.length).text, tabSize, unit);
+    }
+    return copy(cache.states[lineNumber - 1]!);
   }
 
   private nodeNameForToken(token: string) {
@@ -213,6 +364,8 @@ type SimpleCursor = {
 
 class SimpleNode {
   parent: SimpleNode | null = null;
+  /** Position in `parent.children`. */
+  index = 0;
   readonly isError = false;
   readonly isMissing = false;
   readonly isExtra = false;
@@ -228,7 +381,10 @@ class SimpleNode {
     readonly isNamed: boolean,
     readonly children: readonly SimpleNode[] = [],
   ) {
-    for (let child of children) child.parent = this;
+    children.forEach((child, index) => {
+      child.parent = this;
+      child.index = index;
+    });
   }
 
   get childCount() {
@@ -269,10 +425,7 @@ class SimpleNode {
   }
 
   get nextSibling() {
-    let siblings = this.parent?.children;
-    if (!siblings) return null;
-    let index = siblings.indexOf(this);
-    return index < 0 ? null : (siblings[index + 1] ?? null);
+    return this.parent?.children[this.index + 1] ?? null;
   }
 
   get nextNamedSibling() {
@@ -281,10 +434,7 @@ class SimpleNode {
   }
 
   get previousSibling() {
-    let siblings = this.parent?.children;
-    if (!siblings) return null;
-    let index = siblings.indexOf(this);
-    return index <= 0 ? null : (siblings[index - 1] ?? null);
+    return this.index > 0 ? (this.parent?.children[this.index - 1] ?? null) : null;
   }
 
   get previousNamedSibling() {
@@ -359,9 +509,7 @@ class SimpleNode {
   }
 
   firstChildForIndex(index: number) {
-    return (
-      this.children.find((child) => child.endIndex > index || child.startIndex >= index) ?? null
-    );
+    return this.children[firstChildEndingAfter(this.children, index)] ?? null;
   }
 
   firstNamedChildForIndex(index: number) {
@@ -373,8 +521,10 @@ class SimpleNode {
 
   descendantForIndex(start: number, end = start): SimpleNode | null {
     if (end < this.startIndex || start > this.endIndex) return null;
-    for (let child of this.children) {
-      let found = child.descendantForIndex(start, end);
+    // Children are sorted and disjoint: binary search instead of scanning.
+    let from = firstChildEndingAfter(this.children, start - 1);
+    for (let i = from; i < this.children.length && this.children[i]!.startIndex <= end; i++) {
+      let found = this.children[i]!.descendantForIndex(start, end);
       if (found) return found;
     }
     return this;
@@ -566,7 +716,8 @@ class SimpleTreeCursor implements SimpleCursor {
   }
 
   gotoFirstChildForPosition(position: Point) {
-    let child = this.node.firstChildForIndex(position.column);
+    // Stream trees report every position on row 0.
+    let child = position.row > 0 ? null : this.node.firstChildForIndex(position.column);
     if (!child) return false;
     this.node = child;
     return true;
@@ -632,6 +783,18 @@ function tagsForName(
     else current = Array.isArray(value) ? value : [value as Tag];
   }
   return current;
+}
+
+/** Index of the first child whose end is after `index` (children are sorted). */
+function firstChildEndingAfter(children: readonly SimpleNode[], index: number) {
+  let low = 0;
+  let high = children.length;
+  while (low < high) {
+    let middle = (low + high) >> 1;
+    if (children[middle]!.endIndex > index) high = middle;
+    else low = middle + 1;
+  }
+  return low;
 }
 
 function containsNode(parent: SimpleNode, child: SimpleNode): boolean {

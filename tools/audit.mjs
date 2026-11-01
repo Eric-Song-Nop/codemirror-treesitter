@@ -23,6 +23,15 @@ const upstreamLspClientIndexUrl =
   "https://raw.githubusercontent.com/codemirror/lsp-client/main/src/index.ts";
 const examplesUrl = "https://codemirror.net/examples/";
 
+const derivedPackageDirectories = new Set([
+  "autocomplete",
+  "codemirror",
+  "commands",
+  "language",
+  "lsp-client",
+  "merge",
+]);
+
 const officialPackageNames = new Set([
   "@codemirror/language",
   "@codemirror/language-data",
@@ -75,6 +84,7 @@ let failures = 0;
 
 async function main() {
   await checkPackageNames();
+  await checkPackageLicenses();
   await checkNoLezerDependencies();
   await checkAppOnlyStateDependencies();
   await checkLanguagePublicExports();
@@ -436,8 +446,8 @@ async function checkBuiltStreamLanguageWorks() {
   if (!tree) fail("built StreamLanguage did not produce a syntax tree");
   else {
     let doc = state.doc.toString();
-    let keyword = syntaxTree(state).resolveInner(doc.indexOf("let")).name;
-    let string = syntaxTree(state).resolveInner(doc.indexOf('"ok"')).name;
+    let keyword = syntaxTree(state).resolveInner(doc.indexOf("let"), 1).name;
+    let string = syntaxTree(state).resolveInner(doc.indexOf('"ok"'), 1).name;
     if (keyword != "keyword") fail(`built StreamLanguage keyword node was ${keyword}`);
     if (string != "string") fail(`built StreamLanguage string node was ${string}`);
   }
@@ -459,6 +469,27 @@ async function checkPackageNames() {
     }
   }
   pass("package names use the @codemirror-treesitter scope");
+}
+
+async function checkPackageLicenses() {
+  let packages = await workspacePackageJsons("packages");
+  for (let file of packages) {
+    let dir = path.dirname(file);
+    let licenseFile = path.join(dir, "LICENSE");
+    if (!(await exists(licenseFile))) {
+      fail(`${relative(dir)} is missing a LICENSE file`);
+      continue;
+    }
+    let license = await readText(licenseFile);
+    if (!license.includes("MIT License")) fail(`${relative(licenseFile)} is not the MIT License`);
+    if (
+      derivedPackageDirectories.has(path.basename(dir)) &&
+      !license.includes("Marijn Haverbeke")
+    ) {
+      fail(`${relative(licenseFile)} drops the upstream CodeMirror copyright notice`);
+    }
+  }
+  pass("every package ships an MIT LICENSE and derived packages keep the upstream notice");
 }
 
 async function checkNoLezerDependencies() {

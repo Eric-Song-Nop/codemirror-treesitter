@@ -83,6 +83,9 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `packages/live-md-loro`: Optional Loro collaboration bindings for LiveMD.
 - `packages/opendal-wasm-browser`: Experimental browser WASM wrapper for
   OpenDAL-backed cloud workspace storage.
+- `packages/relay-core`: Private shared Cloudflare relay core (wire protocol,
+  share validation/limits, share-room and create-quota Durable Objects, and
+  the rate-limited router) used by `apps/grove-relay` and `apps/collab-editor`.
 - `vendor/loro-codemirror`: Maintained MIT-licensed Loro binding source; the root
   override and LiveMD Loro bundled build use it for synchronization fixes.
 - `vendor/web-tree-sitter`: Vendored `web-tree-sitter` runtime package used by
@@ -127,7 +130,9 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   `loro-codemirror` from `packages/live-md`.
 - Grove shared-file relay APIs belong in `apps/grove-relay`; the
   `apps/collab-editor` Cloudflare app remains a separate collaboration demo.
-  Package code should remain browser/library oriented.
+  Both Workers share `packages/relay-core`, the only package allowed to import
+  `cloudflare:workers`; browsers import only its `/client` entry. Other
+  package code should remain browser/library oriented.
 - Dropbox workspace access belongs in `apps/local-md-workspace` and
   `packages/opendal-wasm-browser`. Do not put Dropbox OAuth, relay hosting, or
   File System Access API assumptions into core editor packages.
@@ -213,6 +218,11 @@ vp run collab-editor#types
 ```
 
 `vp run` with no task lists every task in the workspace.
+
+Release flow: add a changeset with `vp exec changeset` for any change to a
+public `packages/*` package and commit the `.changeset/*.md` file. Pushes to
+`main` run `.github/workflows/release.yml`, which runs `vp run ready` and then
+`changesets/action` to open a version PR or publish with `NPM_TOKEN`.
 
 ## Documentation Expectations
 

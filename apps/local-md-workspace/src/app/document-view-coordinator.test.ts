@@ -56,6 +56,29 @@ describe("WorkspaceDocumentViewCoordinator", () => {
     expect(fixture.coordinator.current()).toBe(candidateB.context);
   });
 
+  it("retains the viewed document until its view is released", async () => {
+    let fixture = createFixture();
+    let candidateA = fixture.candidate("A", "a.md");
+    let candidateB = fixture.candidate("B", "b.md");
+
+    await fixture.coordinator.select({
+      signal: fixture.coordinator.begin(candidateA.file.path),
+      prepare: async () => candidateA.prepared,
+    });
+    expect(candidateA.retain).toHaveBeenCalledOnce();
+    expect(candidateA.releaseHold).not.toHaveBeenCalled();
+
+    await fixture.coordinator.select({
+      signal: fixture.coordinator.begin(candidateB.file.path),
+      prepare: async () => candidateB.prepared,
+    });
+    expect(candidateA.releaseHold).toHaveBeenCalledOnce();
+    expect(candidateB.retain).toHaveBeenCalledOnce();
+
+    fixture.coordinator.dispose();
+    expect(candidateB.releaseHold).toHaveBeenCalledOnce();
+  });
+
   it("keeps the next loading indicator visible while clearing the current view", async () => {
     let fixture = createFixture();
     let candidate = fixture.candidate("A", "a.md");
@@ -123,11 +146,14 @@ function createFixture() {
     let file = { kind: "file" as const, name: path, path };
     let flush = vi.fn(async () => {});
     let dispose = vi.fn(async () => {});
+    let releaseHold = vi.fn();
+    let retain = vi.fn(() => releaseHold);
     let document = {
       dispose,
       docId: `document:${id}`,
       flush,
       path,
+      retain,
     } as unknown as WorkspaceCollaborativeDocument;
     let context = { collabDocument: document, file } as WorkspaceDocumentContext;
     let release = vi.fn();
@@ -137,7 +163,18 @@ function createFixture() {
       activate,
       view: { document, file, saveState: "saved", value: `# ${id}\n` },
     };
-    return { activate, context, dispose, file, flush, prepared, release, retire };
+    return {
+      activate,
+      context,
+      dispose,
+      file,
+      flush,
+      prepared,
+      release,
+      releaseHold,
+      retain,
+      retire,
+    };
   }
 
   return { candidate, coordinator, store };

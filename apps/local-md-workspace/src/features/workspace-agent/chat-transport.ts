@@ -1,7 +1,11 @@
 import { createUIMessageStream, type ChatTransport, type UIMessage, type UIMessageChunk } from "ai";
-import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
+import type {
+  WorkspaceAgentHost,
+  WorkspaceAgentWriteControl,
+} from "@/lib/agent/application/host-port";
 import { redactWorkspaceAgentErrorMessage } from "@/lib/agent/application/runtime-error";
 import type { WorkspaceAgentRunResult } from "@/lib/agent/application/run-contracts";
+import type { WorkspaceAgentChangeSummary } from "@/lib/agent/domain/contracts";
 import type {
   DeepSeekWorkspaceAgentRunInput,
   WorkspaceAgentModel,
@@ -17,7 +21,15 @@ type WorkspaceAgentTransportOptions = {
     host: WorkspaceAgentHost;
     model: WorkspaceAgentModel;
     runner: WorkspaceAgentRunner;
+    writeControl?: WorkspaceAgentWriteControl;
   };
+};
+
+/** Display-only tool output: status plus, for writes, the path and change. */
+export type WorkspaceAgentToolDisplayOutput = {
+  change?: WorkspaceAgentChangeSummary;
+  path?: string;
+  status: "deduplicated" | "denied" | "not-applied" | "success";
 };
 
 export function createWorkspaceAgentChatTransport({
@@ -33,6 +45,7 @@ export function createWorkspaceAgentChatTransport({
         execute: async ({ writer }) => {
           let text = "";
           let toolIds = new Map<string, string>();
+          let edits = new Map<string, { change: WorkspaceAgentChangeSummary; path: string }>();
           let write = (chunk: UIMessageChunk) => {
             if (!abortSignal?.aborted) writer.write(chunk);
           };
@@ -42,14 +55,15 @@ export function createWorkspaceAgentChatTransport({
             text += delta;
             write({ delta, id: `${responseId}-text`, type: "text-delta" });
           };
-          let toolId = (callId: string, name: string) => {
+          let toolId = (callId: string, name: string, target?: Record<string, string>) => {
             let id = toolIds.get(callId);
             if (id) return id;
             id = `${responseId}-tool-${toolIds.size + 1}`;
             toolIds.set(callId, id);
             write({
               dynamic: true,
-              input: {},
+              // Only display-safe targets (path, directory, query) are surfaced.
+              input: target ?? {},
               toolCallId: id,
               toolName: name,
               type: "tool-input-available",
@@ -65,8 +79,11 @@ export function createWorkspaceAgentChatTransport({
             model: configuration.model,
             onEvent: (event) => {
               if (event.type == "text-delta") writeText(event.delta);
-              else if (event.type == "tool-start") toolId(event.toolCallId, event.toolName);
-              else if (event.type == "tool-finish" || event.type == "tool-deduplicated") {
+              else if (event.type == "tool-start") {
+                toolId(event.toolCallId, event.toolName, event.target);
+              } else if (event.type == "file-edit-applied") {
+                edits.set(event.toolCallId, { change: event.change, path: event.path });
+              } else if (event.type == "tool-finish" || event.type == "tool-deduplicated") {
                 let id = toolId(event.toolCallId, event.toolName);
                 if (event.type == "tool-finish" && event.outcome == "error") {
                   write({
@@ -75,9 +92,19 @@ export function createWorkspaceAgentChatTransport({
                     type: "tool-output-error",
                   });
                 } else {
-                  let status = event.type == "tool-deduplicated" ? "deduplicated" : "success";
+                  let output: WorkspaceAgentToolDisplayOutput = {
+                    ...edits.get(event.toolCallId),
+                    status:
+                      event.type == "tool-deduplicated"
+                        ? "deduplicated"
+                        : event.result?.reason == "denied"
+                          ? "denied"
+                          : event.result?.status == "not-applied"
+                            ? "not-applied"
+                            : "success",
+                  };
                   write({
-                    output: { status },
+                    output,
                     toolCallId: id,
                     type: "tool-output-available",
                   });
@@ -85,6 +112,7 @@ export function createWorkspaceAgentChatTransport({
               }
             },
             signal: abortSignal,
+            writeControl: configuration.writeControl,
           });
           writeText(result.message.content.slice(text.length));
           if (text) write({ id: `${responseId}-text`, type: "text-end" });

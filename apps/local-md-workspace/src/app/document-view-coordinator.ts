@@ -80,7 +80,10 @@ export class WorkspaceDocumentViewCoordinator {
       this.releaseActiveView(true);
       if (!this.isCurrent(input.signal)) return null;
 
-      let installed = candidate.activate();
+      let activated = candidate.activate();
+      // Pin the viewed document so registry idle/LRU eviction never closes it
+      // underneath the editor; released together with the view.
+      let installed = retainViewDocument(activated, candidate.view);
       this.active = installed;
       try {
         publishWorkspaceDocumentView(this.store, candidate.view);
@@ -112,6 +115,24 @@ export class WorkspaceDocumentViewCoordinator {
   private assertOpen() {
     if (this.closed) throw new Error("The workspace document view coordinator is closed.");
   }
+}
+
+function retainViewDocument(
+  installed: InstalledWorkspaceDocumentView,
+  view: WorkspaceDocumentView,
+): InstalledWorkspaceDocumentView {
+  let releaseHold = view.document.retain?.() ?? (() => {});
+  return {
+    context: installed.context,
+    release: () => {
+      try {
+        installed.release();
+      } finally {
+        releaseHold();
+      }
+    },
+    retire: installed.retire,
+  };
 }
 
 function releaseInstalledView(

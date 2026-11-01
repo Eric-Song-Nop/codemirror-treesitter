@@ -26,6 +26,8 @@
         "./packages/live-md-theme-gruvbox/src/index.ts"
       ],
       "@codemirror-treesitter/live-md-loro": ["./packages/live-md-loro/src/index.ts"],
+      "@codemirror-treesitter/relay-core/client": ["./packages/relay-core/src/client.ts"],
+      "@codemirror-treesitter/relay-core": ["./packages/relay-core/src/index.ts"],
       "loro-codemirror": ["./vendor/loro-codemirror/src/index.ts"]
     }
   }

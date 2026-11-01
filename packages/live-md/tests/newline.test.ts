@@ -1,9 +1,8 @@
 // @vitest-environment happy-dom
-
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
-import { __testFlushLiveMdAnalysis } from "../src/core/decorations.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
+import { __testFlushLiveMdAnalysis } from "../src/internal/testing.js";
 
 let locationDescriptor: PropertyDescriptor | undefined;
 
