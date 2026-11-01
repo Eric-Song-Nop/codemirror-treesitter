@@ -1,8 +1,12 @@
 import { LoroDoc, VersionVector } from "loro-crdt";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { WireKind, encodeWireBatch, encodeWireMessage } from "./protocol.ts";
-import { maxSnapshotBytes } from "./share-limits.ts";
-import type { ShareRecord } from "./share.ts";
+import {
+  WireKind,
+  encodeWireBatch,
+  encodeWireMessage,
+  maxSnapshotBytes,
+  type ShareRecord,
+} from "@codemirror-treesitter/relay-core/client";
 
 const validShareId = "AAAAAAAAAAAAAAAAAAAAAA";
 const validHash = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";

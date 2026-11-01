@@ -31,7 +31,7 @@ body {
 
 .collab-shell {
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100svh;
   min-height: 100svh;
   padding: clamp(14px, 2.4vw, 28px);
@@ -79,10 +79,25 @@ live-md-editor {
     padding: 0;
   }
 
+  .collab-status {
+    margin: 6px 12px;
+  }
+
   .editor-frame {
     width: 100%;
     border-width: 0;
     border-radius: 0;
     box-shadow: none;
   }
+}
+
+.collab-status {
+  width: min(100%, 1080px);
+  margin: 0 auto 8px;
+  color: #68727d;
+  font-size: 0.85rem;
+}
+
+.collab-status[data-state="unavailable"] {
+  color: #9a3f2f;
 }

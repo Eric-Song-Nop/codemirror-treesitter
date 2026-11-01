@@ -1,18 +1,17 @@
 import { LoroDoc, VersionVector } from "loro-crdt";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { relayCreateAdmittedHeader } from "@codemirror-treesitter/relay-core";
 import {
   encodeBase64,
   hashShareSecret,
-  shareSessionTtlMs,
-  type ShareRecord,
-  type ShareSessionRecord,
-} from "./share.ts";
-import {
   maxShareGuestPeers,
   maxSharePeers,
   maxShareSessions,
   maxSyncVersionVectorEntries,
-} from "./share-limits.ts";
+  shareSessionTtlMs,
+  type ShareRecord,
+  type ShareSessionRecord,
+} from "@codemirror-treesitter/relay-core/client";
 
 const validShareId = "AAAAAAAAAAAAAAAAAAAAAA";
 const hostSecret = "h".repeat(43);
@@ -361,6 +360,30 @@ describe("Grove share sessions", () => {
     });
   });
 
+  it("refuses to create a share without the router's admission header", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    let storage = new MemoryDurableObjectStorage();
+    let room = await createTestRoom(storage);
+    room.initialized = false;
+    room.shareRecord = null;
+    let doc = new LoroDoc();
+    let snapshot = doc.export({ mode: "snapshot" });
+    doc.free();
+
+    let response = await createShare(
+      room,
+      await testShareRecord(now),
+      snapshot,
+      validShareId,
+      false,
+    );
+
+    expect(response.status).toBe(404);
+    expect(storage.records.size).toBe(0);
+    expect(room.shareRecord).toBeNull();
+  });
+
   it("persists exact request and snapshot digests for new create replays", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);
@@ -575,9 +598,11 @@ async function createShare(
   record: ShareRecord,
   snapshot: Uint8Array,
   idempotencyKey: string | null = validShareId,
+  admitted = true,
 ) {
   let headers = new Headers({ "Content-Type": "application/json" });
   if (idempotencyKey != null) headers.set("Idempotency-Key", idempotencyKey);
+  if (admitted) headers.set(relayCreateAdmittedHeader, "1");
   return room.fetch(
     new Request(`https://relay.example/api/shares/${validShareId}`, {
       body: JSON.stringify({

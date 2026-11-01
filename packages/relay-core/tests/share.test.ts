@@ -10,8 +10,8 @@ import {
   shareCleanupDueAt,
   timingSafeEqualString,
   type ShareRecord,
-} from "./share.ts";
-import { maxShareTtlMs, maxSnapshotBytes } from "./share-limits.ts";
+} from "../src/share.ts";
+import { maxShareTtlMs, maxSnapshotBytes } from "../src/share-limits.ts";
 
 const validShareId = "AAAAAAAAAAAAAAAAAAAAAA";
 const validSecret = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";

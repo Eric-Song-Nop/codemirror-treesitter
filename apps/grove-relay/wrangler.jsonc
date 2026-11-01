@@ -59,6 +59,11 @@
       "new_sqlite_classes": ["GroveCreateQuota"],
     },
   ],
+  "vars": {
+    // Optional comma-separated CORS/WebSocket Origin allowlist. Blank keeps
+    // the permissive reflect-any-origin behavior.
+    "ALLOWED_ORIGINS": "",
+  },
   "observability": {
     "enabled": true,
   },

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { LoroDoc } from "loro-crdt";
-import { decodeBase64, encodeBase64, type ShareRecord } from "./share.ts";
+import { relayCreateAdmittedHeader } from "@codemirror-treesitter/relay-core";
+import {
+  decodeBase64,
+  encodeBase64,
+  type ShareRecord,
+} from "@codemirror-treesitter/relay-core/client";
 
 const validShareId = "AAAAAAAAAAAAAAAAAAAAAA";
 const validHash = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
@@ -323,6 +328,113 @@ describe("shared file Worker routes", () => {
     },
   );
 
+  it("does not create or reserve quota through the per-share POST route", async () => {
+    let { default: worker } = await import("./worker.ts");
+    let reserve = vi.fn(async () => ({ status: "reserved" as const }));
+    let getByName = vi.fn();
+    let createLimiter = rateLimiter(true);
+    let shareId = randomShareId();
+    let response = await worker.fetch(
+      new Request(`https://relay.example/api/shares/${shareId}`, {
+        body: JSON.stringify({ ...createShareBody(), shareId }),
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": shareId,
+          [relayCreateAdmittedHeader]: "1",
+        },
+        method: "POST",
+      }),
+      relayEnv(getByName, {}, { CREATE_SHARE_RATE_LIMITER: createLimiter, reserve }),
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Not found" });
+    expect(getByName).not.toHaveBeenCalled();
+    expect(reserve).not.toHaveBeenCalled();
+    expect(createLimiter.limit).not.toHaveBeenCalled();
+  });
+
+  it("marks only quota-admitted creates and strips the marker from client requests", async () => {
+    let { default: worker } = await import("./worker.ts");
+    let forwarded: Request[] = [];
+    let fetch = vi.fn(async (request: Request) => {
+      forwarded.push(request);
+      return new Response(null, { status: 201 });
+    });
+    let getByName = vi.fn(() => ({ fetch }));
+    let env = relayEnv(getByName);
+
+    await worker.fetch(createShareRequest(), env);
+    await worker.fetch(
+      new Request(`https://relay.example/api/shares/${validShareId}/session`, {
+        body: "{}",
+        headers: { [relayCreateAdmittedHeader]: "1" },
+        method: "POST",
+      }),
+      env,
+    );
+
+    expect(forwarded[0]!.headers.get(relayCreateAdmittedHeader)).toBe("1");
+    expect(forwarded[1]!.headers.has(relayCreateAdmittedHeader)).toBe(false);
+  });
+
+  it("reflects any origin when ALLOWED_ORIGINS is unset", async () => {
+    let { default: worker } = await import("./worker.ts");
+    let response = await worker.fetch(
+      new Request("https://relay.example/api/shares", {
+        headers: { Origin: "https://anywhere.example" },
+        method: "OPTIONS",
+      }),
+      relayEnv(vi.fn()),
+    );
+
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("https://anywhere.example");
+  });
+
+  it("reflects only allowlisted origins when ALLOWED_ORIGINS is set", async () => {
+    let { default: worker } = await import("./worker.ts");
+    let env = {
+      ...relayEnv(vi.fn()),
+      ALLOWED_ORIGINS: "https://grovemd.net, http://localhost:5173/",
+    } as unknown as Env;
+    let preflight = (origin: string) =>
+      worker.fetch(
+        new Request("https://relay.example/api/shares", {
+          headers: { Origin: origin },
+          method: "OPTIONS",
+        }),
+        env,
+      );
+
+    let allowed = await preflight("http://localhost:5173");
+    let denied = await preflight("https://evil.example");
+
+    expect(allowed.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:5173");
+    expect(denied.headers.has("Access-Control-Allow-Origin")).toBe(false);
+  });
+
+  it.each([
+    ["https://evil.example", 403, false],
+    ["https://grovemd.net", 200, true],
+    [null, 200, true],
+  ] as const)(
+    "applies ALLOWED_ORIGINS to WebSocket upgrades from %s",
+    async (origin, expectedStatus, forwarded) => {
+      let { default: worker } = await import("./worker.ts");
+      let getByName = vi.fn(() => ({ fetch: vi.fn(async () => new Response(null)) }));
+      let headers = new Headers({ Upgrade: "websocket" });
+      if (origin) headers.set("Origin", origin);
+
+      let response = await worker.fetch(
+        new Request(`https://relay.example/api/shares/${validShareId}/ws`, { headers }),
+        { ...relayEnv(getByName), ALLOWED_ORIGINS: "https://grovemd.net" } as unknown as Env,
+      );
+
+      expect(response.status).toBe(expectedStatus);
+      expect(getByName).toHaveBeenCalledTimes(forwarded ? 1 : 0);
+    },
+  );
+
   it("compacts stored share update logs into a snapshot", async () => {
     let { GroveShareRoom } = await import("./worker.ts");
     let storage = new MemoryDurableObjectStorage();
@@ -496,6 +608,14 @@ function relayEnv(
     SHARE_WEBSOCKET_RATE_LIMITER:
       overrides.SHARE_WEBSOCKET_RATE_LIMITER ?? rateLimiter(allowed.websocket ?? true),
   } as unknown as Env;
+}
+
+function randomShareId() {
+  let bytes = crypto.getRandomValues(new Uint8Array(16));
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 }
 
 function rateLimiter(success: boolean) {
