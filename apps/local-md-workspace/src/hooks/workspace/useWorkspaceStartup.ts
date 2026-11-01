@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { completeDropboxRedirectOAuthIfPresent } from "@/lib/workspace/providers/dropbox/oauth";
+import { runWorkspaceEffect } from "@/app/effect-bridge";
+import { useWorkspaceApplication } from "@/app/WorkspaceApplicationProvider";
+import type { ReplaceWorkspaceRuntime } from "@/hooks/workspace/workspace-editor-session";
+import {
+  completeDropboxRedirectOAuthIfPresent,
+  type DropboxRedirectAccessToken,
+} from "@/lib/workspace/providers/dropbox/oauth";
 import {
   takeDropboxRedirectDraft,
   type DropboxRedirectDraft,
@@ -22,7 +28,7 @@ import {
   type StoredWorkspaceKind,
 } from "@/lib/workspace/store";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
-import { createBrowserLocalWorkspaceRuntime } from "@/lib/workspace/runtime/browser-local-runtime";
+import { openLocalWorkspace } from "@/lib/workspace/runtime/browser-local-runtime";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type MutableRef<T> = {
@@ -58,13 +64,13 @@ type UseWorkspaceStartupOptions = {
     appKey: string;
     expiresAt: number;
     identity?: OpendalWorkspaceIdentity;
-  }) => void;
+  }) => Promise<void>;
   setErrorMessage: (message: string) => void;
   setRestoreChecking: (checking: boolean) => void;
   setRetryLoadPath: (path: string | null) => void;
   setSidebarOpen: (open: boolean) => void;
   setStoredLocalWorkspace: (record: StoredLocalWorkspaceRecord | null) => void;
-  replaceWorkspaceRuntime: (runtime: WorkspaceRuntime) => Promise<void>;
+  replaceWorkspaceRuntime: ReplaceWorkspaceRuntime;
   storedDropboxConfig: StoredDropboxWorkspaceConfig | null;
   storedLocalWorkspace: StoredLocalWorkspaceRecord | null;
   storedWorkspaceKind: StoredWorkspaceKind | null;
@@ -93,10 +99,13 @@ export function useWorkspaceStartup({
   storedWorkspaceKind,
   workspaceRuntime,
 }: UseWorkspaceStartupOptions) {
+  let { runtime: effectRuntime } = useWorkspaceApplication();
   let dropboxAutoRestoreAttemptedRef = useRef(false);
-  let dropboxRedirectCompletionRef = useRef<
-    ReturnType<typeof completeDropboxRedirectOAuthIfPresent> | undefined
-  >(undefined);
+  // Completing the redirect consumes the stored PKCE transaction, so it runs
+  // once per page and is not tied to this component's (StrictMode) lifetime.
+  let dropboxRedirectCompletionRef = useRef<Promise<DropboxRedirectAccessToken | null> | undefined>(
+    undefined,
+  );
   let dropboxRedirectPendingRef = useRef(isDropboxRedirectCallbackWindow());
   let sharedDraftLaunchRef = useRef(readSharedMarkdownDraftLaunch());
   let [sharedDraftLaunchChecked, setSharedDraftLaunchChecked] = useState(
@@ -121,14 +130,16 @@ export function useWorkspaceStartup({
 
     void (async () => {
       try {
-        let completion = (dropboxRedirectCompletionRef.current ??=
-          completeDropboxRedirectOAuthIfPresent());
+        let completion = (dropboxRedirectCompletionRef.current ??= runWorkspaceEffect(
+          effectRuntime,
+          completeDropboxRedirectOAuthIfPresent(),
+        ));
         let token = await completion;
         if (canceled || !token) return;
 
         let draft = takeDropboxRedirectDraft();
         let restoreDraft = draft?.appKey == token.appKey ? draft : null;
-        setDropboxRedirectAccessToken(token);
+        await setDropboxRedirectAccessToken(token);
 
         await openDropboxWorkspace(
           {
@@ -159,6 +170,7 @@ export function useWorkspaceStartup({
       canceled = true;
     };
   }, [
+    effectRuntime,
     openDropboxWorkspace,
     setBusy,
     setDropboxConnecting,
@@ -229,6 +241,7 @@ export function useWorkspaceStartup({
     }
 
     let canceled = false;
+    let cancel = new AbortController();
     setRestoreChecking(true);
 
     void (async () => {
@@ -243,16 +256,11 @@ export function useWorkspaceStartup({
         }
         if (canceled) return;
 
-        let runtime = await createBrowserLocalWorkspaceRuntime({
-          handle: record.handle,
-          workspaceId: record.id,
-        });
+        let runtime = await replaceWorkspaceRuntime(
+          openLocalWorkspace({ handle: record.handle, workspaceId: record.id }),
+          { signal: cancel.signal },
+        );
         clearDropboxAccessToken();
-        if (canceled) {
-          await runtime.dispose();
-          return;
-        }
-        await replaceWorkspaceRuntime(runtime);
         setSidebarOpen(defaultSidebarOpen());
         await loadTree(runtime, loadWorkspaceSelectedPath(runtime.identity), {
           saveBeforeSelect: false,
@@ -269,6 +277,7 @@ export function useWorkspaceStartup({
 
     return () => {
       canceled = true;
+      cancel.abort();
     };
   }, [
     browserSupported,

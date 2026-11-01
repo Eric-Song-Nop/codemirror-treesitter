@@ -5,29 +5,37 @@ import {
   type OpendalPathMutationResult,
   type OpendalWriteCondition,
 } from "@codemirror-treesitter/opendal-wasm-browser";
-import type { OpendalOperatorHost } from "./opendal-operator-host.ts";
+import { Effect } from "effect";
+import type {
+  OpendalHostError,
+  OpendalHostRequest,
+  OpendalOperatorHost,
+} from "./opendal-operator-host.ts";
 import {
   BrowserWorkspacePathLock,
   type WorkspacePathLock,
   type WorkspacePathLockIntent,
 } from "./workspace-path-lock.ts";
 import {
-  WorkspaceStorageError,
   storageErrorFromOpendal,
-  type SourceObservation,
-  type SourceProbe,
-  type SourceRevision,
-  type SourceSnapshot,
-  type WorkspaceCommitRequest,
-  type WorkspaceCommitResult,
-  type WorkspaceDeleteRequest,
-  type WorkspaceEntry,
-  type WorkspaceMetadata,
-  type WorkspaceMoveRequest,
-  type WorkspaceObjectStore,
-  type WorkspaceObjectStoreCapabilities,
-  type WorkspacePathMutationResult,
-  type WorkspaceTargetCondition,
+  workspaceStorageError,
+  type WorkspaceStoreError,
+} from "./errors.ts";
+import type {
+  SourceObservation,
+  SourceProbe,
+  SourceRevision,
+  SourceSnapshot,
+  WorkspaceCommitRequest,
+  WorkspaceCommitResult,
+  WorkspaceDeleteRequest,
+  WorkspaceEntry,
+  WorkspaceMetadata,
+  WorkspaceMoveRequest,
+  WorkspaceObjectStore,
+  WorkspaceObjectStoreCapabilities,
+  WorkspacePathMutationResult,
+  WorkspaceTargetCondition,
 } from "./types.ts";
 
 type HashBytes = (bytes: Uint8Array) => Promise<string>;
@@ -38,6 +46,11 @@ export type OpendalWorkspaceObjectStoreOptions = {
   lock?: WorkspacePathLock;
 };
 
+/**
+ * Conditional object storage over an OpenDAL operator host. Every operation is
+ * an Effect that holds the workspace path locks for its duration; storage
+ * failures are translated into the tagged {@link WorkspaceStoreError} union.
+ */
 export class OpendalWorkspaceObjectStore implements WorkspaceObjectStore {
   readonly capabilities: WorkspaceObjectStoreCapabilities;
   readonly id: string;
@@ -60,355 +73,400 @@ export class OpendalWorkspaceObjectStore implements WorkspaceObjectStore {
   }
 
   probe(path: string) {
-    let normalizedPath = normalizeObjectPath(path);
-    return this.withLock([{ mode: "shared", path: normalizedPath }], () =>
-      this.probeUnlocked(normalizedPath),
-    );
+    return Effect.suspend(() => {
+      let normalizedPath = normalizeObjectPath(path);
+      return this.probeUnlocked(normalizedPath).pipe(
+        this.withLock([{ mode: "shared", path: normalizedPath }]),
+      );
+    });
   }
 
   read(path: string) {
-    let normalizedPath = normalizeObjectPath(path);
-    return this.withLock([{ mode: "shared", path: normalizedPath }], () =>
-      this.readUnlocked(normalizedPath),
-    );
+    return Effect.suspend(() => {
+      let normalizedPath = normalizeObjectPath(path);
+      return this.readUnlocked(normalizedPath).pipe(
+        this.withLock([{ mode: "shared", path: normalizedPath }]),
+      );
+    });
   }
 
   listDirectory(path: string) {
-    let normalizedPath = normalizeObjectPath(path, true);
-    return this.withLock([{ mode: "shared", path: normalizedPath }], async () => {
-      try {
-        let entries = await this.host.run({
-          execute: (operator) => operator.list(normalizedPath),
-          operation: "read",
-        });
-        return entries.map(metadataToWorkspaceEntry);
-      } catch (error) {
-        throw translateStorageFailure(error);
-      }
+    return Effect.suspend(() => {
+      let normalizedPath = normalizeObjectPath(path, true);
+      return this.runHost({
+        execute: (operator) => operator.list(normalizedPath),
+        operation: "read",
+      }).pipe(
+        Effect.map((entries) => entries.map(metadataToWorkspaceEntry)),
+        Effect.mapError(translateStorageFailure),
+        this.withLock([{ mode: "shared", path: normalizedPath }]),
+      );
     });
   }
 
   commit(request: WorkspaceCommitRequest) {
-    let path = normalizeObjectPath(request.path);
-    return this.withLock([{ mode: "exclusive", path }], () =>
-      this.commitUnlocked({ ...request, bytes: Uint8Array.from(request.bytes), path }),
-    );
+    return Effect.suspend(() => {
+      let path = normalizeObjectPath(request.path);
+      return this.commitUnlocked({ ...request, bytes: Uint8Array.from(request.bytes), path }).pipe(
+        this.withLock([{ mode: "exclusive", path }]),
+      );
+    });
   }
 
   createDirectory(path: string, condition: WorkspaceTargetCondition) {
-    let normalizedPath = normalizeObjectPath(path);
-    return this.withLock([{ mode: "exclusive", path: normalizedPath }], () =>
-      this.createDirectoryUnlocked(normalizedPath, condition),
-    );
+    return Effect.suspend(() => {
+      let normalizedPath = normalizeObjectPath(path);
+      return this.createDirectoryUnlocked(normalizedPath, condition).pipe(
+        this.withLock([{ mode: "exclusive", path: normalizedPath }]),
+      );
+    });
   }
 
   delete(request: WorkspaceDeleteRequest) {
-    let path = normalizeObjectPath(request.path);
-    return this.withLock([{ mode: "exclusive", path }], () =>
-      this.deleteUnlocked({ ...request, path }),
-    );
+    return Effect.suspend(() => {
+      let path = normalizeObjectPath(request.path);
+      return this.deleteUnlocked({ ...request, path }).pipe(
+        this.withLock([{ mode: "exclusive", path }]),
+      );
+    });
   }
 
   move(request: WorkspaceMoveRequest) {
-    let from = normalizeObjectPath(request.from);
-    let to = normalizeObjectPath(request.to);
-    return this.withLock(
-      [
-        { mode: "exclusive", path: from },
-        { mode: "exclusive", path: to },
-      ],
-      () => this.moveUnlocked({ ...request, from, to }),
+    return Effect.suspend(() => {
+      let from = normalizeObjectPath(request.from);
+      let to = normalizeObjectPath(request.to);
+      return this.moveUnlocked({ ...request, from, to }).pipe(
+        this.withLock([
+          { mode: "exclusive", path: from },
+          { mode: "exclusive", path: to },
+        ]),
+      );
+    });
+  }
+
+  private withLock(intents: WorkspacePathLockIntent[]) {
+    return this.lock.withLocks({ intents, workspaceId: this.id });
+  }
+
+  private runHost<T>(request: OpendalHostRequest<T>) {
+    return this.host.run(request);
+  }
+
+  private probeUnlocked(
+    path: string,
+  ): Effect.Effect<SourceObservation<SourceProbe>, WorkspaceStoreError> {
+    return this.runHost({ execute: (operator) => operator.stat(path), operation: "read" }).pipe(
+      Effect.map(
+        (metadata): SourceObservation<SourceProbe> => ({
+          state: "present",
+          value: {
+            kind: metadata.kind,
+            metadata: metadataToWorkspaceMetadata(metadata),
+            revision: selectAtomicRevision(metadata, this.host.operatorInfo.capabilities),
+          },
+        }),
+      ),
+      Effect.catch(observationFromFailure<SourceProbe>),
     );
   }
 
-  private withLock<T>(intents: WorkspacePathLockIntent[], execute: () => Promise<T>) {
-    return this.lock.run({ execute, intents, workspaceId: this.id });
+  private readUnlocked(
+    path: string,
+  ): Effect.Effect<SourceObservation<SourceSnapshot>, WorkspaceStoreError> {
+    return Effect.gen({ self: this }, function* () {
+      let first = yield* this.runHost({
+        execute: (operator) => operator.read(path),
+        operation: "read",
+      }).pipe(Effect.result);
+      if (first._tag == "Failure")
+        return yield* observationFromFailure<SourceSnapshot>(first.failure);
+
+      if (first.success.metadataBinding == "same-read") {
+        return {
+          state: "present",
+          value: yield* this.snapshotFromBytes(
+            first.success.bytes,
+            first.success.metadata,
+            "bound",
+          ),
+        } satisfies SourceObservation<SourceSnapshot>;
+      }
+
+      for (let attempt = 0; attempt < this.captureAttempts; attempt++) {
+        let sample = yield* this.captureSandwich(path).pipe(Effect.result);
+        if (sample._tag == "Failure") {
+          return yield* observationFromFailure<SourceSnapshot>(sample.failure);
+        }
+        if (sample.success) return sample.success;
+      }
+
+      return {
+        error: workspaceStorageError({
+          code: "temporary",
+          message: `Could not establish a stable source observation for ${path}.`,
+          retryable: true,
+        }),
+        state: "unavailable",
+      } satisfies SourceObservation<SourceSnapshot>;
+    });
   }
 
-  private async probeUnlocked(path: string): Promise<SourceObservation<SourceProbe>> {
-    try {
-      let metadata = await this.host.run({
+  /** One stat-read-stat sample; `null` when the metadata changed under the read. */
+  private captureSandwich(
+    path: string,
+  ): Effect.Effect<SourceObservation<SourceSnapshot> | null, OpendalHostError> {
+    return Effect.gen({ self: this }, function* () {
+      let before = yield* this.runHost({
         execute: (operator) => operator.stat(path),
         operation: "read",
       });
-      return {
-        state: "present",
-        value: {
-          kind: metadata.kind,
-          metadata: metadataToWorkspaceMetadata(metadata),
-          revision: selectAtomicRevision(metadata, this.host.operatorInfo.capabilities),
-        },
-      };
-    } catch (error) {
-      return observationFromFailure(error);
-    }
-  }
-
-  private async readUnlocked(path: string): Promise<SourceObservation<SourceSnapshot>> {
-    let first;
-    try {
-      first = await this.host.run({
+      let read = yield* this.runHost({
         execute: (operator) => operator.read(path),
         operation: "read",
       });
-    } catch (error) {
-      return observationFromFailure(error);
-    }
-
-    if (first.metadataBinding == "same-read") {
-      return {
-        state: "present",
-        value: await this.snapshotFromBytes(first.bytes, first.metadata, "bound"),
-      };
-    }
-
-    for (let attempt = 0; attempt < this.captureAttempts; attempt++) {
-      try {
-        let before = await this.host.run({
-          execute: (operator) => operator.stat(path),
-          operation: "read",
-        });
-        let read = await this.host.run({
-          execute: (operator) => operator.read(path),
-          operation: "read",
-        });
-        if (read.metadataBinding == "same-read") {
-          return {
-            state: "present",
-            value: await this.snapshotFromBytes(read.bytes, read.metadata, "bound"),
-          };
-        }
-        let after = await this.host.run({
-          execute: (operator) => operator.stat(path),
-          operation: "read",
-        });
-        if (!sameMetadataSample(before, after)) continue;
-
-        let hasStableAtomicToken = Boolean(
-          matchingAtomicRevision(before, after, this.host.operatorInfo.capabilities),
-        );
+      if (read.metadataBinding == "same-read") {
         return {
           state: "present",
-          value: await this.snapshotFromBytes(
-            read.bytes,
-            after,
-            hasStableAtomicToken ? "bound" : "observed",
-          ),
-        };
-      } catch (error) {
-        return observationFromFailure(error);
+          value: yield* this.snapshotFromBytes(read.bytes, read.metadata, "bound"),
+        } satisfies SourceObservation<SourceSnapshot>;
       }
-    }
+      let after = yield* this.runHost({
+        execute: (operator) => operator.stat(path),
+        operation: "read",
+      });
+      if (!sameMetadataSample(before, after)) return null;
 
-    return {
-      error: new WorkspaceStorageError({
-        code: "temporary",
-        message: `Could not establish a stable source observation for ${path}.`,
-        retryable: true,
-      }),
-      state: "unavailable",
-    };
+      let hasStableAtomicToken = Boolean(
+        matchingAtomicRevision(before, after, this.host.operatorInfo.capabilities),
+      );
+      return {
+        state: "present",
+        value: yield* this.snapshotFromBytes(
+          read.bytes,
+          after,
+          hasStableAtomicToken ? "bound" : "observed",
+        ),
+      } satisfies SourceObservation<SourceSnapshot>;
+    });
   }
 
-  private async snapshotFromBytes(
+  private snapshotFromBytes(
     bytes: Uint8Array,
     metadata: OpendalMetadata,
     capture: "bound" | "observed",
-  ): Promise<SourceSnapshot> {
-    let stableBytes = Uint8Array.from(bytes);
-    let contentHash = await this.hashBytes(stableBytes);
-    let workspaceMetadata = metadataToWorkspaceMetadata(metadata);
-    let atomic =
-      capture == "bound"
-        ? selectAtomicRevision(metadata, this.host.operatorInfo.capabilities)
-        : undefined;
-    return {
-      bytes: stableBytes,
-      capture,
-      contentHash,
-      metadata: workspaceMetadata,
-      revision: atomic ?? observedFingerprint(contentHash, metadata.kind, workspaceMetadata),
-    };
+  ): Effect.Effect<SourceSnapshot> {
+    return Effect.gen({ self: this }, function* () {
+      let stableBytes = Uint8Array.from(bytes);
+      let contentHash = yield* Effect.promise(() => this.hashBytes(stableBytes));
+      let workspaceMetadata = metadataToWorkspaceMetadata(metadata);
+      let atomic =
+        capture == "bound"
+          ? selectAtomicRevision(metadata, this.host.operatorInfo.capabilities)
+          : undefined;
+      return {
+        bytes: stableBytes,
+        capture,
+        contentHash,
+        metadata: workspaceMetadata,
+        revision: atomic ?? observedFingerprint(contentHash, metadata.kind, workspaceMetadata),
+      };
+    });
   }
 
-  private async commitUnlocked(request: WorkspaceCommitRequest): Promise<WorkspaceCommitResult> {
-    let writeCondition: OpendalWriteCondition | undefined;
-    if (request.condition.kind == "if-absent") {
-      if (this.host.operatorInfo.capabilities.writeConditions.ifNotExists) {
-        writeCondition = { kind: "if-not-exists" };
-      } else {
-        let current = await this.probeUnlocked(request.path);
-        if (current.state == "present")
-          return { current: current.value.revision, status: "conflict" };
-        if (current.state == "unavailable") throw current.error;
-      }
-    } else if (request.condition.kind == "if-unchanged") {
-      writeCondition = writeConditionForRevision(
-        request.condition.revision,
-        this.host.operatorInfo.capabilities,
-      );
-      if (!writeCondition) {
-        let current = await this.readUnlocked(request.path);
-        if (current.state == "missing") return { status: "conflict" };
-        if (current.state == "unavailable") throw current.error;
-        if (!sameRevision(current.value.revision, request.condition.revision)) {
-          return { current: current.value.revision, status: "conflict" };
+  private commitUnlocked(
+    request: WorkspaceCommitRequest,
+  ): Effect.Effect<WorkspaceCommitResult, WorkspaceStoreError> {
+    return Effect.gen({ self: this }, function* () {
+      let writeCondition: OpendalWriteCondition | undefined;
+      if (request.condition.kind == "if-absent") {
+        if (this.host.operatorInfo.capabilities.writeConditions.ifNotExists) {
+          writeCondition = { kind: "if-not-exists" };
+        } else {
+          let current = yield* this.probeUnlocked(request.path);
+          if (current.state == "present") {
+            return { current: current.value.revision, status: "conflict" } as const;
+          }
+          if (current.state == "unavailable") return yield* Effect.fail(current.error);
+        }
+      } else if (request.condition.kind == "if-unchanged") {
+        writeCondition = writeConditionForRevision(
+          request.condition.revision,
+          this.host.operatorInfo.capabilities,
+        );
+        if (!writeCondition) {
+          let current = yield* this.readUnlocked(request.path);
+          if (current.state == "missing") return { status: "conflict" } as const;
+          if (current.state == "unavailable") return yield* Effect.fail(current.error);
+          if (!sameRevision(current.value.revision, request.condition.revision)) {
+            return { current: current.value.revision, status: "conflict" } as const;
+          }
         }
       }
-    }
 
-    let receipt;
-    try {
-      receipt = await this.host.run({
+      let write = yield* this.runHost({
         execute: (operator) =>
           operator.write({ bytes: request.bytes, condition: writeCondition, path: request.path }),
         operation: writeCondition ? "conditional-mutation" : "unconditional-mutation",
-      });
-    } catch (error) {
-      if (error instanceof OpendalBrowserError) {
-        if (error.code == "already-exists" || error.code == "condition-failed") {
-          return { current: await this.currentRevisionUnlocked(request.path), status: "conflict" };
+      }).pipe(Effect.result);
+      if (write._tag == "Failure") {
+        let error = write.failure;
+        if (error instanceof OpendalBrowserError) {
+          if (error.code == "already-exists" || error.code == "condition-failed") {
+            return {
+              current: yield* this.currentRevisionUnlocked(request.path),
+              status: "conflict",
+            } as const;
+          }
+          if (error.mutationOutcome == "unknown") {
+            return {
+              reconcilePaths: error.reconcilePaths ?? [request.path],
+              status: "unknown",
+            } as const;
+          }
         }
-        if (error.mutationOutcome == "unknown") {
-          return { reconcilePaths: error.reconcilePaths ?? [request.path], status: "unknown" };
-        }
+        return yield* Effect.fail(translateStorageFailure(error));
       }
-      throw translateStorageFailure(error);
-    }
 
-    if (receipt.metadataBinding == "write-response") {
-      let revision = selectAtomicRevision(receipt.metadata, this.host.operatorInfo.capabilities);
-      if (revision) return { revision, status: "committed" };
-    }
+      let receipt = write.success;
+      if (receipt.metadataBinding == "write-response") {
+        let revision = selectAtomicRevision(receipt.metadata, this.host.operatorInfo.capabilities);
+        if (revision) return { revision, status: "committed" } as const;
+      }
 
-    let readback = await this.readUnlocked(request.path);
-    if (readback.state != "present" || !equalBytes(readback.value.bytes, request.bytes)) {
-      return { reconcilePaths: [request.path], status: "unknown" };
-    }
-    return { revision: readback.value.revision, status: "committed" };
+      let readback = yield* this.readUnlocked(request.path);
+      if (readback.state != "present" || !equalBytes(readback.value.bytes, request.bytes)) {
+        return { reconcilePaths: [request.path], status: "unknown" } as const;
+      }
+      return { revision: readback.value.revision, status: "committed" } as const;
+    });
   }
 
-  private async currentRevisionUnlocked(path: string) {
-    let current = await this.readUnlocked(path);
-    return current.state == "present" ? current.value.revision : undefined;
+  private currentRevisionUnlocked(path: string) {
+    return this.readUnlocked(path).pipe(
+      Effect.map((current) => (current.state == "present" ? current.value.revision : undefined)),
+    );
   }
 
-  private async createDirectoryUnlocked(
+  private createDirectoryUnlocked(
     path: string,
     condition: WorkspaceTargetCondition,
-  ): Promise<WorkspacePathMutationResult> {
-    if (condition.kind == "if-absent") {
-      let current = await this.probeUnlocked(path);
-      if (current.state == "present") {
-        return { path, reason: "target-exists", status: "conflict" };
+  ): Effect.Effect<WorkspacePathMutationResult, WorkspaceStoreError> {
+    return Effect.gen({ self: this }, function* () {
+      if (condition.kind == "if-absent") {
+        let current = yield* this.probeUnlocked(path);
+        if (current.state == "present") {
+          return { path, reason: "target-exists", status: "conflict" } as const;
+        }
+        if (current.state == "unavailable") return yield* Effect.fail(current.error);
       }
-      if (current.state == "unavailable") throw current.error;
-    }
-    try {
-      await this.host.run({
+      let created = yield* this.runHost({
         execute: (operator) => operator.createDirectory(path),
         operation: "unconditional-mutation",
-      });
-      return { status: "applied" };
-    } catch (error) {
+      }).pipe(Effect.result);
+      if (created._tag == "Success") return { status: "applied" } as const;
+      let error = created.failure;
       if (error instanceof OpendalBrowserError && error.code == "already-exists") {
         return condition.kind == "unconditional"
-          ? { status: "applied" }
-          : { path, reason: "target-exists", status: "conflict" };
+          ? ({ status: "applied" } as const)
+          : ({ path, reason: "target-exists", status: "conflict" } as const);
       }
       if (error instanceof OpendalBrowserError && error.mutationOutcome == "unknown") {
-        return { reconcilePaths: error.reconcilePaths ?? [path], status: "unknown" };
+        return { reconcilePaths: error.reconcilePaths ?? [path], status: "unknown" } as const;
       }
-      throw translateStorageFailure(error);
-    }
+      return yield* Effect.fail(translateStorageFailure(error));
+    });
   }
 
-  private async deleteUnlocked(
+  private deleteUnlocked(
     request: WorkspaceDeleteRequest,
-  ): Promise<WorkspacePathMutationResult> {
-    if (request.condition.kind == "if-unchanged") {
-      let current = await this.readUnlocked(request.path);
-      if (current.state == "missing") {
-        return { path: request.path, reason: "source-missing", status: "conflict" };
+  ): Effect.Effect<WorkspacePathMutationResult, WorkspaceStoreError> {
+    return Effect.gen({ self: this }, function* () {
+      if (request.condition.kind == "if-unchanged") {
+        let current = yield* this.readUnlocked(request.path);
+        if (current.state == "missing") {
+          return { path: request.path, reason: "source-missing", status: "conflict" } as const;
+        }
+        if (current.state == "unavailable") return yield* Effect.fail(current.error);
+        if (!sameRevision(current.value.revision, request.condition.revision)) {
+          return {
+            current: current.value.revision,
+            path: request.path,
+            reason: "source-changed",
+            status: "conflict",
+          } as const;
+        }
       }
-      if (current.state == "unavailable") throw current.error;
-      if (!sameRevision(current.value.revision, request.condition.revision)) {
-        return {
-          current: current.value.revision,
-          path: request.path,
-          reason: "source-changed",
-          status: "conflict",
-        };
-      }
-    }
 
-    try {
-      let result = await this.host.run({
+      let deleted = yield* this.runHost({
         execute: (operator) =>
           operator.delete({ path: request.path, recursive: request.recursive ?? false }),
         operation: "unconditional-mutation",
-      });
-      return operatorMutationResult(result);
-    } catch (error) {
+      }).pipe(Effect.result);
+      if (deleted._tag == "Success") return operatorMutationResult(deleted.success);
+      let error = deleted.failure;
       if (error instanceof OpendalBrowserError && error.code == "not-found") {
         return request.condition.kind == "unconditional"
-          ? { status: "applied" }
-          : { path: request.path, reason: "source-missing", status: "conflict" };
+          ? ({ status: "applied" } as const)
+          : ({ path: request.path, reason: "source-missing", status: "conflict" } as const);
       }
-      throw translateStorageFailure(error);
-    }
+      return yield* Effect.fail(translateStorageFailure(error));
+    });
   }
 
-  private async moveUnlocked(request: WorkspaceMoveRequest): Promise<WorkspacePathMutationResult> {
-    let source = await this.probeUnlocked(request.from);
-    if (source.state == "missing") {
-      return { path: request.from, reason: "source-missing", status: "conflict" };
-    }
-    if (source.state == "unavailable") throw source.error;
-
-    if (request.sourceCondition.kind == "if-unchanged") {
-      let current = source.value.revision ? source : await this.readUnlocked(request.from);
-      if (current.state != "present") {
-        if (current.state == "unavailable") throw current.error;
-        return { path: request.from, reason: "source-missing", status: "conflict" };
+  private moveUnlocked(
+    request: WorkspaceMoveRequest,
+  ): Effect.Effect<WorkspacePathMutationResult, WorkspaceStoreError> {
+    return Effect.gen({ self: this }, function* () {
+      let source = yield* this.probeUnlocked(request.from);
+      if (source.state == "missing") {
+        return { path: request.from, reason: "source-missing", status: "conflict" } as const;
       }
-      if (
-        !current.value.revision ||
-        !sameRevision(current.value.revision, request.sourceCondition.revision)
-      ) {
-        return {
-          current: current.value.revision,
-          path: request.from,
-          reason: "source-changed",
-          status: "conflict",
-        };
-      }
-    }
+      if (source.state == "unavailable") return yield* Effect.fail(source.error);
 
-    if (request.targetCondition.kind == "if-absent") {
-      let target = await this.probeUnlocked(request.to);
-      if (target.state == "present") {
-        return { path: request.to, reason: "target-exists", status: "conflict" };
+      if (request.sourceCondition.kind == "if-unchanged") {
+        let current: SourceObservation<SourceProbe | SourceSnapshot> = source.value.revision
+          ? source
+          : yield* this.readUnlocked(request.from);
+        if (current.state != "present") {
+          if (current.state == "unavailable") return yield* Effect.fail(current.error);
+          return { path: request.from, reason: "source-missing", status: "conflict" } as const;
+        }
+        if (
+          !current.value.revision ||
+          !sameRevision(current.value.revision, request.sourceCondition.revision)
+        ) {
+          return {
+            current: current.value.revision,
+            path: request.from,
+            reason: "source-changed",
+            status: "conflict",
+          } as const;
+        }
       }
-      if (target.state == "unavailable") throw target.error;
-    }
 
-    try {
-      let result = await this.host.run({
+      if (request.targetCondition.kind == "if-absent") {
+        let target = yield* this.probeUnlocked(request.to);
+        if (target.state == "present") {
+          return { path: request.to, reason: "target-exists", status: "conflict" } as const;
+        }
+        if (target.state == "unavailable") return yield* Effect.fail(target.error);
+      }
+
+      let moved = yield* this.runHost({
         execute: (operator) =>
           operator.rename({ from: request.from, kind: request.kind, to: request.to }),
         operation: "unconditional-mutation",
-      });
-      return operatorMutationResult(result);
-    } catch (error) {
+      }).pipe(Effect.result);
+      if (moved._tag == "Success") return operatorMutationResult(moved.success);
+      let error = moved.failure;
       if (error instanceof OpendalBrowserError && error.code == "already-exists") {
-        return { path: request.to, reason: "target-exists", status: "conflict" };
+        return { path: request.to, reason: "target-exists", status: "conflict" } as const;
       }
       if (error instanceof OpendalBrowserError && error.code == "not-found") {
-        return { path: request.from, reason: "source-missing", status: "conflict" };
+        return { path: request.from, reason: "source-missing", status: "conflict" } as const;
       }
-      throw translateStorageFailure(error);
-    }
+      return yield* Effect.fail(translateStorageFailure(error));
+    });
   }
 }
 
@@ -545,18 +603,18 @@ function metadataToWorkspaceEntry(metadata: OpendalMetadata): WorkspaceEntry {
   };
 }
 
-function observationFromFailure<T>(error: unknown): SourceObservation<T> {
+function observationFromFailure<T>(
+  error: OpendalHostError,
+): Effect.Effect<SourceObservation<T>, WorkspaceStoreError> {
   if (error instanceof OpendalBrowserError) {
-    if (error.code == "not-found") return { state: "missing" };
-    return { error: storageErrorFromOpendal(error), state: "unavailable" };
+    if (error.code == "not-found") return Effect.succeed({ state: "missing" });
+    return Effect.succeed({ error: storageErrorFromOpendal(error), state: "unavailable" });
   }
-  throw error;
+  return Effect.fail(error);
 }
 
-function translateStorageFailure(error: unknown) {
-  if (error instanceof WorkspaceStorageError) return error;
-  if (error instanceof OpendalBrowserError) return storageErrorFromOpendal(error);
-  throw error;
+function translateStorageFailure(error: OpendalHostError): WorkspaceStoreError {
+  return error instanceof OpendalBrowserError ? storageErrorFromOpendal(error) : error;
 }
 
 function operatorMutationResult(result: OpendalPathMutationResult): WorkspacePathMutationResult {

@@ -7,15 +7,40 @@ const DROPBOX_REQUIRED_SCOPES = [
 const ONEDRIVE_REQUIRED_SCOPES = ["Files.ReadWrite"];
 const GOOGLE_DRIVE_REQUIRED_SCOPES = ["https://www.googleapis.com/auth/drive.file"];
 
+import { Predicate } from "effect";
+
 export function errorToMessage(error: unknown) {
   return workspaceErrorMessage(error);
+}
+
+/**
+ * Typed failures from the Effect layers are `Schema.TaggedError`s whose
+ * `message` is already the user-facing English text the mapping below and the
+ * i18n catalog understand. Wrapper errors are unwrapped to the failure they
+ * carry, so the message for a failed credential renewal is the message of the
+ * provider error behind it (for example a blocked authorization popup).
+ */
+function userFacingError(error: unknown): unknown {
+  let current = error;
+  for (let depth = 0; depth < 4; depth++) {
+    if (
+      Predicate.isTagged(current, "WorkspaceAuthRenewalFailed") &&
+      Predicate.hasProperty(current, "reason")
+    ) {
+      current = current.reason;
+      continue;
+    }
+    return current;
+  }
+  return current;
 }
 
 export function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name == "AbortError";
 }
 
-export function workspaceErrorMessage(error: unknown) {
+export function workspaceErrorMessage(rawError: unknown) {
+  let error = userFacingError(rawError);
   let message = error instanceof Error ? error.message : String(error);
   let normalized = normalizeErrorText(message);
 

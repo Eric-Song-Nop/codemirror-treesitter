@@ -1,3 +1,5 @@
+import { Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   authorizeDropboxWithPkce,
@@ -21,7 +23,7 @@ describe("Dropbox OAuth PKCE helpers", () => {
 
   it("creates the RFC 7636 S256 code challenge", async () => {
     await expect(
-      createDropboxPkceChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+      Effect.runPromise(createDropboxPkceChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")),
     ).resolves.toBe("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
   });
 
@@ -99,13 +101,15 @@ describe("Dropbox OAuth PKCE helpers", () => {
       sessionStorage: memoryStorage(values),
     });
 
-    void authorizeDropboxWithPkce({
-      allowFullPageRedirect: true,
-      appKey: " app-key ",
-      onBeforeFullPageRedirect: onBeforeRedirect,
-      redirectUri: "http://127.0.0.1:5173/",
-      scopes: ["files.metadata.read"],
-    }).catch(() => {});
+    let redirect = Effect.runFork(
+      authorizeDropboxWithPkce({
+        allowFullPageRedirect: true,
+        appKey: " app-key ",
+        onBeforeFullPageRedirect: onBeforeRedirect,
+        redirectUri: "http://127.0.0.1:5173/",
+        scopes: ["files.metadata.read"],
+      }),
+    );
     await waitFor(() => assign.mock.calls.length == 1);
 
     expect(onBeforeRedirect).toHaveBeenCalledTimes(1);
@@ -129,6 +133,7 @@ describe("Dropbox OAuth PKCE helpers", () => {
     expect(transaction.state).toBe(redirectContext.state);
     expect(transaction.codeVerifier).toEqual(expect.any(String));
     expect(authUrl.searchParams.get("code_challenge")).toEqual(expect.any(String));
+    await Effect.runPromise(Fiber.interrupt(redirect));
   });
 
   it("rejects promptly when the Dropbox authorization popup is closed", async () => {
@@ -154,10 +159,12 @@ describe("Dropbox OAuth PKCE helpers", () => {
       setTimeout: globalThis.setTimeout.bind(globalThis),
     });
 
-    let authorization = authorizeDropboxWithPkce({
-      appKey: "app-key",
-      redirectUri: "http://127.0.0.1:5173/",
-    });
+    let authorization = Effect.runPromise(
+      authorizeDropboxWithPkce({
+        appKey: "app-key",
+        redirectUri: "http://127.0.0.1:5173/",
+      }),
+    );
     await waitFor(() => popup.location.href.startsWith(DROPBOX_AUTHORIZE_URL));
     popupClosed = true;
 
@@ -194,10 +201,12 @@ describe("Dropbox OAuth PKCE helpers", () => {
       },
     });
 
-    let token = await completeDropboxRedirectOAuthIfPresent({
-      search: "?state=state&code=code",
-      storage,
-    });
+    let token = await Effect.runPromise(
+      completeDropboxRedirectOAuthIfPresent({
+        search: "?state=state&code=code",
+        storage,
+      }),
+    );
 
     expect(token?.accessToken).toBe("access-token");
     expect(token?.appKey).toBe("app-key");
@@ -242,10 +251,12 @@ describe("Dropbox OAuth PKCE helpers", () => {
       },
     });
 
-    let token = await completeDropboxRedirectOAuthIfPresent({
-      search: "?state=state&code=code",
-      storage,
-    });
+    let token = await Effect.runPromise(
+      completeDropboxRedirectOAuthIfPresent({
+        search: "?state=state&code=code",
+        storage,
+      }),
+    );
 
     expect(token?.accessToken).toBe("token");
     expect(token?.expiresAt).toEqual(expect.any(Number));
@@ -257,7 +268,7 @@ describe("Dropbox OAuth PKCE helpers", () => {
     );
     vi.stubGlobal("fetch", fetch);
 
-    await expect(fetchDropboxAccountIdentity("access-token")).resolves.toEqual({
+    await expect(Effect.runPromise(fetchDropboxAccountIdentity("access-token"))).resolves.toEqual({
       id: "dbid:fetched-account",
       kind: "account",
     });
@@ -298,11 +309,101 @@ describe("Dropbox OAuth PKCE helpers", () => {
     });
 
     await expect(
-      completeDropboxRedirectOAuthIfPresent({
-        search: "?state=callback-state&code=code",
-        storage,
-      }),
-    ).rejects.toThrow("Dropbox authorization state did not match.");
+      Effect.runPromise(
+        completeDropboxRedirectOAuthIfPresent({
+          search: "?state=callback-state&code=code",
+          storage,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "OAuthAuthorizationError",
+      message: "Dropbox authorization state did not match.",
+      reason: "state-mismatch",
+    });
+  });
+
+  it("fails a blocked popup with a typed error and the mapped message", async () => {
+    vi.stubGlobal("window", { open: vi.fn(() => null) });
+
+    await expect(
+      Effect.runPromise(
+        authorizeDropboxWithPkce({ appKey: "app-key", redirectUri: "http://127.0.0.1:5173/" }),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "OAuthAuthorizationError",
+      message: "Dropbox authorization popup was blocked.",
+      reason: "popup-blocked",
+    });
+  });
+
+  it("closes the popup and removes its listeners when the authorization is interrupted", async () => {
+    let popup = {
+      close: vi.fn(),
+      document: { title: "" },
+      focus: vi.fn(),
+      closed: false,
+      location: { href: "about:blank" },
+    };
+    let removeEventListener = vi.fn();
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      clearInterval: globalThis.clearInterval.bind(globalThis),
+      clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      open: vi.fn(() => popup),
+      removeEventListener,
+      setInterval: globalThis.setInterval.bind(globalThis),
+      setTimeout: globalThis.setTimeout.bind(globalThis),
+    });
+
+    let fiber = Effect.runFork(
+      authorizeDropboxWithPkce({ appKey: "app-key", redirectUri: "http://127.0.0.1:5173/" }),
+    );
+    await waitFor(() => popup.location.href.startsWith(DROPBOX_AUTHORIZE_URL));
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(popup.close).toHaveBeenCalled();
+    expect(removeEventListener).toHaveBeenCalledWith("message", expect.any(Function));
+  });
+
+  it("retries a transient account identity failure, then succeeds", async () => {
+    let fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("busy", { status: 503 }))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(tokenResponse({ account_id: "dbid:retried" }));
+    vi.stubGlobal("fetch", fetch);
+
+    let program = Effect.gen(function* () {
+      let lookup = yield* Effect.forkChild(fetchDropboxAccountIdentity("access-token"));
+      yield* TestClock.adjust("10 seconds");
+      return yield* Fiber.join(lookup);
+    }).pipe(Effect.provide(TestClock.layer()));
+
+    await expect(Effect.runPromise(program)).resolves.toEqual({
+      id: "dbid:retried",
+      kind: "account",
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry a rejected account identity request", async () => {
+    let fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error_description: "invalid_access_token" }), {
+          status: 401,
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      Effect.runPromise(fetchDropboxAccountIdentity("access-token")),
+    ).rejects.toMatchObject({
+      _tag: "OAuthRequestError",
+      message: "invalid_access_token",
+      retryable: false,
+      status: 401,
+    });
+    expect(fetch).toHaveBeenCalledOnce();
   });
 });
 

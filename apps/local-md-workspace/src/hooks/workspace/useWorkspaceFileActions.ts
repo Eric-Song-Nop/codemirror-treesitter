@@ -1,6 +1,11 @@
+import { Effect } from "effect";
 import { useCallback, useState, type RefObject } from "react";
 import type { LiveMdEditorElement, LiveMdMarkdownConfig } from "@codemirror-treesitter/live-md";
 import type { WorkspaceDocumentViewCoordinator } from "@/app/document-view-coordinator";
+import type {
+  OpenWorkspaceRuntime,
+  ReplaceWorkspaceRuntime,
+} from "@/hooks/workspace/workspace-editor-session";
 import type { WorkspaceCollaborativeDocument } from "@/lib/workspace/documents";
 import { openStandaloneHtmlPrintView } from "@/lib/export/browser-print";
 import {
@@ -58,7 +63,7 @@ type UseWorkspaceFileActionsOptions = {
   beginDocumentViewChange: (path?: string) => AbortSignal;
   cancelImageUpload: () => void;
   collabDocumentRef: MutableRef<WorkspaceCollaborativeDocument | null>;
-  createDropboxRuntime: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceRuntime>;
+  openDropboxRuntime: (config: StoredDropboxWorkspaceConfig) => OpenWorkspaceRuntime;
   discardMaterializedDraft: (source: SingleFileSource | null) => void;
   documentViews: WorkspaceDocumentViewCoordinator;
   editorElementRef: RefObject<LiveMdEditorElement | null>;
@@ -77,7 +82,7 @@ type UseWorkspaceFileActionsOptions = {
   setDropboxConnecting: (connecting: boolean) => void;
   setErrorMessage: (message: string) => void;
   setRetryLoadPath: (path: string | null) => void;
-  replaceWorkspaceRuntime: (runtime: WorkspaceRuntime) => Promise<void>;
+  replaceWorkspaceRuntime: ReplaceWorkspaceRuntime;
   singleFileSourceRef: MutableRef<SingleFileSource | null>;
   storedDropboxConfig: StoredDropboxWorkspaceConfig | null;
   t: TFunction;
@@ -89,7 +94,7 @@ export function useWorkspaceFileActions({
   beginDocumentViewChange,
   cancelImageUpload,
   collabDocumentRef,
-  createDropboxRuntime,
+  openDropboxRuntime,
   discardMaterializedDraft,
   documentViews,
   editorElementRef,
@@ -335,22 +340,27 @@ export function useWorkspaceFileActions({
       setRetryLoadPath(null);
       try {
         let path = normalizeMarkdownPath(rawPath);
-        let runtime =
-          workspaceRuntimeRef.current?.identity.kind == "opendal-dropbox"
-            ? workspaceRuntimeRef.current
-            : await createDropboxRuntime({
+        let writeDraft = (runtime: WorkspaceRuntime) =>
+          Effect.promise(() =>
+            runtime.documentSource.commit({ condition: { kind: "if-absent" }, path, value }),
+          ).pipe(
+            Effect.flatMap((result) =>
+              result.status == "committed"
+                ? Effect.succeed(runtime)
+                : Effect.die(new Error(`Workspace write for ${path} ended with ${result.status}.`)),
+            ),
+          );
+        let current = workspaceRuntimeRef.current;
+        // A new Dropbox runtime is written to while it is still a candidate, so
+        // a failed write releases it instead of leaking it.
+        let runtime = await replaceWorkspaceRuntime(
+          current?.identity.kind == "opendal-dropbox"
+            ? writeDraft(current)
+            : openDropboxRuntime({
                 appKey,
                 root: storedDropboxConfig?.root ?? defaultDropboxRoot(),
-              });
-        let result = await runtime.documentSource.commit({
-          condition: { kind: "if-absent" },
-          path,
-          value,
-        });
-        if (result.status != "committed") {
-          throw new Error(`Workspace write for ${path} ended with ${result.status}.`);
-        }
-        await replaceWorkspaceRuntime(runtime);
+              }).pipe(Effect.flatMap(writeDraft)),
+        );
         await loadTree(runtime, path, { saveBeforeSelect: false });
         discardMaterializedDraft(source);
         setSaveAsDropboxDialogOpen(false);
@@ -362,7 +372,7 @@ export function useWorkspaceFileActions({
       }
     },
     [
-      createDropboxRuntime,
+      openDropboxRuntime,
       cancelImageUpload,
       currentMarkdownValue,
       discardMaterializedDraft,

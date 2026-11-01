@@ -1,4 +1,5 @@
 import { sha256ContentHash } from "@/lib/workspace/storage/opendal-workspace-object-store";
+import { effectObjectStore, type PromiseObjectStore } from "@/test/effect-object-store";
 import type {
   SourceObservation,
   SourceProbe,
@@ -9,7 +10,6 @@ import type {
   WorkspaceDeleteRequest,
   WorkspaceEntry,
   WorkspaceMoveRequest,
-  WorkspaceObjectStore,
   WorkspaceObjectStoreCapabilities,
   WorkspacePathMutationResult,
   WorkspaceStorageKind,
@@ -47,7 +47,7 @@ export function createMemoryWorkspaceRuntime(
     name: options.name ?? "Memory",
     sourceAliases: options.sourceAliases,
   };
-  let store = new MemoryWorkspaceObjectStore(identity.id, files);
+  let store = effectObjectStore(new MemoryWorkspaceObjectStore(identity.id, files));
   let documentSource = new OpendalWorkspaceDocumentService(store);
   let documents = new DefaultWorkspaceDocuments({
     changes: null,
@@ -81,7 +81,7 @@ const memoryCapabilities: WorkspaceObjectStoreCapabilities = {
   },
 };
 
-class MemoryWorkspaceObjectStore implements WorkspaceObjectStore {
+class MemoryWorkspaceObjectStore implements PromiseObjectStore {
   readonly capabilities = memoryCapabilities;
   private readonly binaryFiles = new Map<string, Uint8Array>();
   private readonly directories = new Set<string>([""]);

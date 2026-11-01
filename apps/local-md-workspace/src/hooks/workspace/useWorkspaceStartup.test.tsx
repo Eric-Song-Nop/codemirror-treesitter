@@ -3,6 +3,9 @@
 import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { Effect } from "effect";
+import { createWorkspaceApplication } from "@/app/workspace-application";
+import { WorkspaceApplicationProvider } from "@/app/WorkspaceApplicationProvider";
 import { createMemoryWorkspaceRuntime } from "@/test/memory-workspace-runtime";
 
 const dropboxOAuthMocks = vi.hoisted(() => ({
@@ -59,8 +62,8 @@ describe("useWorkspaceStartup", () => {
       state: string;
     } | null>();
     dropboxOAuthMocks.completeRedirect
-      .mockReturnValueOnce(completion.promise)
-      .mockResolvedValueOnce(null);
+      .mockReturnValueOnce(Effect.promise(() => completion.promise))
+      .mockReturnValueOnce(Effect.succeed(null));
     let options = createStartupOptions();
 
     await act(async () => {
@@ -93,7 +96,17 @@ describe("useWorkspaceStartup", () => {
   });
 });
 
+const application = createWorkspaceApplication();
+
 function StartupHarness({ options }: { options: ReturnType<typeof createStartupOptions> }) {
+  return (
+    <WorkspaceApplicationProvider application={application}>
+      <StartupHook options={options} />
+    </WorkspaceApplicationProvider>
+  );
+}
+
+function StartupHook({ options }: { options: ReturnType<typeof createStartupOptions> }) {
   useWorkspaceStartup(options);
   return null;
 }
@@ -119,13 +132,13 @@ function createStartupOptions() {
     selectedFileRef: { current: selectedFile },
     setBusy: vi.fn(),
     setDropboxConnecting: vi.fn(),
-    setDropboxRedirectAccessToken: vi.fn(),
+    setDropboxRedirectAccessToken: vi.fn(async () => {}),
     setErrorMessage: vi.fn(),
     setRestoreChecking: vi.fn(),
     setRetryLoadPath: vi.fn(),
     setSidebarOpen: vi.fn(),
     setStoredLocalWorkspace: vi.fn(),
-    replaceWorkspaceRuntime: vi.fn(async () => {}),
+    replaceWorkspaceRuntime: vi.fn(async () => workspaceRuntime),
     storedDropboxConfig: null,
     storedLocalWorkspace: null,
     storedWorkspaceKind: null,

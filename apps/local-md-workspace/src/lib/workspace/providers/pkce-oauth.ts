@@ -11,7 +11,18 @@
  *   the provider's message type and the exact expected state.
  * - The code verifier is written to `sessionStorage` only for a full-page redirect
  *   and is removed as soon as the callback is read.
+ *
+ * Authorization and token exchange are Effects failing with the typed errors in
+ * `oauth-errors.ts`. Interrupting an authorization closes its popup and removes
+ * its listeners; interrupting a token exchange aborts the request. The token
+ * exchange is never retried, because an authorization code is single-use.
  */
+import { Effect, Predicate } from "effect";
+import {
+  OAuthAuthorizationError,
+  OAuthRequestError,
+  isRetryableHttpStatus,
+} from "./oauth-errors.ts";
 
 export type PkceOAuthProviderConfig<Identity> = {
   authorizeUrl: string;
@@ -105,26 +116,37 @@ export function createPkceVerifier(bytes: Uint8Array) {
   return base64Url(bytes);
 }
 
-export async function createPkceChallenge(verifier: string) {
+export const createPkceChallenge = Effect.fn("createPkceChallenge")(function* (verifier: string) {
   let data = new TextEncoder().encode(verifier);
-  let digest = await globalThis.crypto.subtle.digest("SHA-256", data);
+  let digest = yield* Effect.promise(() => globalThis.crypto.subtle.digest("SHA-256", data));
   return base64Url(new Uint8Array(digest));
-}
+});
 
 export function createPkceOAuthClient<Identity>(config: PkceOAuthProviderConfig<Identity>) {
   let name = config.displayName;
 
+  let authorizationError = (reason: OAuthAuthorizationError["reason"], message: string) =>
+    new OAuthAuthorizationError({ message, provider: name, reason });
+
+  let clientIdRequired = () =>
+    authorizationError("client-id-required", `${name} ${config.clientIdLabel} is required.`);
+
   let requireClientId = (value: string) => {
     let clientId = value.trim();
-    if (!clientId) throw new Error(`${name} ${config.clientIdLabel} is required.`);
+    if (!clientId) throw clientIdRequired();
     return clientId;
   };
 
   let callbackError = (error: string, description: string | undefined) => {
-    if (error == "access_denied") return `${name} authorization was denied.`;
-    return description
-      ? `${name} authorization failed: ${description}`
-      : `${name} authorization failed: ${error}`;
+    if (error == "access_denied") {
+      return authorizationError("denied", `${name} authorization was denied.`);
+    }
+    return authorizationError(
+      "failed",
+      description
+        ? `${name} authorization failed: ${description}`
+        : `${name} authorization failed: ${error}`,
+    );
   };
 
   let createAuthorizeUrl = (options: {
@@ -214,7 +236,7 @@ export function createPkceOAuthClient<Identity>(config: PkceOAuthProviderConfig<
   };
 
   let waitForPopupCode = (popup: Window, authUrl: URL, expectedState: string) =>
-    new Promise<string>((resolve, reject) => {
+    Effect.callback<string, OAuthAuthorizationError>((resume) => {
       let cleanup = () => {
         window.removeEventListener("message", handleMessage);
         window.clearInterval(closedPoll);
@@ -229,19 +251,28 @@ export function createPkceOAuthClient<Identity>(config: PkceOAuthProviderConfig<
         closePopup(popup);
 
         if (event.data.error) {
-          reject(new Error(callbackError(event.data.error, event.data.errorDescription)));
+          resume(Effect.fail(callbackError(event.data.error, event.data.errorDescription)));
         } else if (event.data.code) {
-          resolve(event.data.code);
+          resume(Effect.succeed(event.data.code));
         } else {
-          reject(new Error(`${name} authorization did not return a code.`));
+          resume(
+            Effect.fail(
+              authorizationError("missing-code", `${name} authorization did not return a code.`),
+            ),
+          );
         }
       };
 
       let timeout = window.setTimeout(() => {
         cleanup();
         closePopup(popup);
-        reject(
-          new Error(`${name} authorization timed out. Reconnect ${name} workspace to continue.`),
+        resume(
+          Effect.fail(
+            authorizationError(
+              "timed-out",
+              `${name} authorization timed out. Reconnect ${name} workspace to continue.`,
+            ),
+          ),
         );
       }, POPUP_TIMEOUT_MS);
       let closedPoll = window.setInterval(() => {
@@ -252,19 +283,28 @@ export function createPkceOAuthClient<Identity>(config: PkceOAuthProviderConfig<
         if (!closed) return;
 
         cleanup();
-        reject(new Error(`${name} authorization was closed before it completed.`));
+        resume(
+          Effect.fail(
+            authorizationError("closed", `${name} authorization was closed before it completed.`),
+          ),
+        );
       }, POPUP_CLOSED_POLL_MS);
 
       window.addEventListener("message", handleMessage);
       popup.location.href = authUrl.href;
+
+      return Effect.sync(() => {
+        cleanup();
+        closePopup(popup);
+      });
     });
 
-  let exchangeCodeForToken = async (options: {
+  let exchangeCodeForToken = Effect.fn("PkceOAuth.exchangeCodeForToken")(function* (options: {
     clientId: string;
     code: string;
     codeVerifier: string;
     redirectUri: string;
-  }): Promise<PkceAccessToken<Identity>> => {
+  }) {
     let body = new URLSearchParams();
     body.set("client_id", options.clientId);
     body.set("code", options.code);
@@ -272,42 +312,67 @@ export function createPkceOAuthClient<Identity>(config: PkceOAuthProviderConfig<
     body.set("grant_type", "authorization_code");
     body.set("redirect_uri", options.redirectUri);
 
-    let response = await fetch(config.tokenUrl, {
-      body,
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
+    let { payload, response } = yield* Effect.tryPromise({
+      catch: (cause) =>
+        new OAuthRequestError({
+          cause,
+          message: Predicate.isError(cause) ? cause.message : String(cause),
+          provider: name,
+          request: "token-exchange",
+          retryable: true,
+        }),
+      try: async (signal) => {
+        let response = await fetch(config.tokenUrl, {
+          body,
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          method: "POST",
+          signal,
+        });
+        let payload: unknown = await response.json().catch(() => null);
+        return { payload, response };
       },
-      method: "POST",
     });
-    let payload = await response.json().catch(() => null);
 
     if (!response.ok) {
-      throw new Error(
-        oauthErrorMessage(payload) ?? `${name} token exchange failed (${response.status}).`,
-      );
+      return yield* new OAuthRequestError({
+        message:
+          oauthErrorMessage(payload) ?? `${name} token exchange failed (${response.status}).`,
+        provider: name,
+        request: "token-exchange",
+        retryable: isRetryableHttpStatus(response.status),
+        status: response.status,
+      });
     }
 
     let tokenResponse = parseTokenResponse(payload, config.parseTokenIdentity);
     if (!tokenResponse) {
-      throw new Error(`${name} token exchange returned an invalid response.`);
+      return yield* new OAuthRequestError({
+        message: `${name} token exchange returned an invalid response.`,
+        provider: name,
+        request: "token-exchange",
+        retryable: false,
+        status: response.status,
+      });
     }
 
     return {
       accessToken: tokenResponse.accessToken,
       expiresAt: Date.now() + tokenResponse.expiresIn * 1000,
       ...(tokenResponse.identity ? { identity: tokenResponse.identity } : {}),
-    };
-  };
+    } satisfies PkceAccessToken<Identity>;
+  });
 
-  let startRedirect = async (options: {
+  let startRedirect = Effect.fn("PkceOAuth.startRedirect")(function* (options: {
     clientId: string;
     onBeforeRedirect?: (context: PkceFullPageRedirectContext) => void;
     redirectUri: string;
     scopes: string[];
-  }): Promise<never> => {
+  }) {
     let codeVerifier = randomPkceValue();
     let state = randomPkceValue();
-    let codeChallenge = await createPkceChallenge(codeVerifier);
+    let codeChallenge = yield* createPkceChallenge(codeVerifier);
     let authUrl = createAuthorizeUrl({
       clientId: options.clientId,
       codeChallenge,
@@ -332,8 +397,9 @@ export function createPkceOAuthClient<Identity>(config: PkceOAuthProviderConfig<
     });
 
     window.location.assign(authUrl.href);
-    return new Promise<never>(() => {});
-  };
+    // The page is navigating away; the authorization completes on reload.
+    return yield* Effect.never;
+  });
 
   return {
     createAuthorizeUrl,
@@ -377,27 +443,36 @@ export function createPkceOAuthClient<Identity>(config: PkceOAuthProviderConfig<
       return true;
     },
 
-    async authorize(options: PkceAuthorizeOptions) {
-      let clientId = requireClientId(options.clientId);
+    /**
+     * Authorizes in a popup, falling back to a full-page redirect when allowed.
+     * A redirect never completes: the page navigates away.
+     */
+    authorize: Effect.fn("PkceOAuth.authorize")(function* (options: PkceAuthorizeOptions) {
+      let clientId = options.clientId.trim();
+      if (!clientId) return yield* clientIdRequired();
       let redirectUri = options.redirectUri ?? defaultPkceRedirectUri();
       let scopes = [...(options.scopes ?? config.defaultScopes)];
       let popup = openPopup();
       if (!popup) {
         if (options.allowFullPageRedirect) {
-          return startRedirect({
+          return yield* startRedirect({
             clientId,
             onBeforeRedirect: options.onBeforeFullPageRedirect,
             redirectUri,
             scopes,
           });
         }
-        throw new Error(`${name} authorization popup was blocked.`);
+        return yield* authorizationError(
+          "popup-blocked",
+          `${name} authorization popup was blocked.`,
+        );
       }
+      let openedPopup = popup;
 
-      try {
+      return yield* Effect.gen(function* () {
         let codeVerifier = randomPkceValue();
         let state = randomPkceValue();
-        let codeChallenge = await createPkceChallenge(codeVerifier);
+        let codeChallenge = yield* createPkceChallenge(codeVerifier);
         let authUrl = createAuthorizeUrl({
           clientId,
           codeChallenge,
@@ -406,33 +481,43 @@ export function createPkceOAuthClient<Identity>(config: PkceOAuthProviderConfig<
           state,
         });
 
-        let code = await waitForPopupCode(popup, authUrl, state);
-        return exchangeCodeForToken({ clientId, code, codeVerifier, redirectUri });
-      } catch (error) {
-        closePopup(popup);
-        throw error;
-      }
-    },
+        let code = yield* waitForPopupCode(openedPopup, authUrl, state);
+        return yield* exchangeCodeForToken({ clientId, code, codeVerifier, redirectUri });
+      }).pipe(Effect.onError(() => Effect.sync(() => closePopup(openedPopup))));
+    }),
 
-    async completeRedirectIfPresent(
+    completeRedirectIfPresent: Effect.fn("PkceOAuth.completeRedirectIfPresent")(function* (
       options: { search?: string | URLSearchParams; storage?: Storage } = {},
-    ): Promise<PkceRedirectAccessToken<Identity> | null> {
+    ) {
       let callback = parsePkceOAuthCallback(options.search ?? window.location.search);
       if (!callback) return null;
 
       let transaction = takeTransaction(options.storage);
       clearOAuthCallbackFromUrl();
 
-      if (!transaction) throw new Error(`${name} authorization state was not found.`);
+      if (!transaction) {
+        return yield* authorizationError(
+          "state-missing",
+          `${name} authorization state was not found.`,
+        );
+      }
       if (callback.state != transaction.state) {
-        throw new Error(`${name} authorization state did not match.`);
+        return yield* authorizationError(
+          "state-mismatch",
+          `${name} authorization state did not match.`,
+        );
       }
       if (callback.error) {
-        throw new Error(callbackError(callback.error, callback.errorDescription));
+        return yield* callbackError(callback.error, callback.errorDescription);
       }
-      if (!callback.code) throw new Error(`${name} authorization did not return a code.`);
+      if (!callback.code) {
+        return yield* authorizationError(
+          "missing-code",
+          `${name} authorization did not return a code.`,
+        );
+      }
 
-      let token = await exchangeCodeForToken({
+      let token = yield* exchangeCodeForToken({
         clientId: transaction.clientId,
         code: callback.code,
         codeVerifier: transaction.codeVerifier,
@@ -445,8 +530,8 @@ export function createPkceOAuthClient<Identity>(config: PkceOAuthProviderConfig<
         redirectUri: transaction.redirectUri,
         scopes: transaction.scopes,
         state: transaction.state,
-      };
-    },
+      } satisfies PkceRedirectAccessToken<Identity>;
+    }),
   };
 }
 

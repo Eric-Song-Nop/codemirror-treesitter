@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { effectObjectStore, type PromiseObjectStore } from "@/test/effect-object-store";
 import type { WorkspaceObjectStore } from "../storage/types.ts";
 import {
   OpendalWorkspaceAssetService,
@@ -112,8 +113,8 @@ describe("OpenDAL workspace product services", () => {
   });
 });
 
-function objectStore(overrides: Partial<WorkspaceObjectStore> = {}): WorkspaceObjectStore {
-  return {
+function objectStore(overrides: Partial<PromiseObjectStore> = {}): WorkspaceObjectStore {
+  return effectObjectStore({
     capabilities: {
       commit: { ifAbsent: "atomic", ifUnchanged: "atomic" },
       createDirectory: { ifAbsent: "observed", supported: true },
@@ -137,7 +138,7 @@ function objectStore(overrides: Partial<WorkspaceObjectStore> = {}): WorkspaceOb
     probe: async () => ({ state: "missing" }),
     read: async () => ({ state: "missing" }),
     ...overrides,
-  };
+  });
 }
 
 function entry(path: string, kind: "directory" | "file") {

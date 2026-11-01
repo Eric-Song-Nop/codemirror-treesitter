@@ -1,4 +1,26 @@
-import type { OpendalBrowserError } from "@codemirror-treesitter/opendal-wasm-browser";
+import type { Effect } from "effect";
+import type { WorkspaceStorageError, WorkspaceStoreError } from "./errors.ts";
+
+export {
+  isPermissionDeniedError,
+  isWorkspaceStorageError,
+  storageErrorFromOpendal,
+  workspaceStorageError,
+  WorkspaceAuthExpired,
+  WorkspaceAuthRenewalFailed,
+  WorkspaceConflict,
+  WorkspaceHostDisposed,
+  WorkspaceMutationNotApplied,
+  WorkspaceNotFound,
+  WorkspacePermissionDenied,
+  WorkspaceStorageFailure,
+  WorkspaceTransientFailure,
+  WorkspaceUnsupported,
+  WorkspaceUnsupportedImage,
+  type WorkspaceStorageError,
+  type WorkspaceStorageErrorCode,
+  type WorkspaceStoreError,
+} from "./errors.ts";
 
 export type WorkspaceStorageKind =
   | "local"
@@ -37,33 +59,6 @@ export type SourceProbe = {
   metadata: WorkspaceMetadata;
   revision?: SourceRevision;
 };
-
-export type WorkspaceStorageErrorCode =
-  | "already-exists"
-  | "authentication-expired"
-  | "condition-failed"
-  | "permission-denied"
-  | "rate-limited"
-  | "temporary"
-  | "unknown"
-  | "unsupported";
-
-export class WorkspaceStorageError extends Error {
-  readonly code: WorkspaceStorageErrorCode;
-  readonly retryable: boolean;
-
-  constructor(input: {
-    cause?: unknown;
-    code: WorkspaceStorageErrorCode;
-    message: string;
-    retryable?: boolean;
-  }) {
-    super(input.message, { cause: input.cause });
-    this.name = "WorkspaceStorageError";
-    this.code = input.code;
-    this.retryable = input.retryable ?? (input.code == "rate-limited" || input.code == "temporary");
-  }
-}
 
 export type SourceObservation<T> =
   | { state: "missing" }
@@ -151,53 +146,29 @@ export type WorkspaceObjectStoreCapabilities = {
   };
 };
 
+/**
+ * Conditional object storage for one workspace. Operations are Effects whose
+ * error channel is the typed {@link WorkspaceStoreError} union; programming
+ * errors (invalid paths) are defects.
+ */
 export interface WorkspaceObjectStore {
   readonly capabilities: WorkspaceObjectStoreCapabilities;
   readonly id: string;
 
-  commit(request: WorkspaceCommitRequest): Promise<WorkspaceCommitResult>;
+  commit(
+    request: WorkspaceCommitRequest,
+  ): Effect.Effect<WorkspaceCommitResult, WorkspaceStoreError>;
   createDirectory(
     path: string,
     condition: WorkspaceTargetCondition,
-  ): Promise<WorkspacePathMutationResult>;
-  delete(request: WorkspaceDeleteRequest): Promise<WorkspacePathMutationResult>;
-  listDirectory(path: string): Promise<WorkspaceEntry[]>;
-  move(request: WorkspaceMoveRequest): Promise<WorkspacePathMutationResult>;
-  probe(path: string): Promise<SourceObservation<SourceProbe>>;
-  read(path: string): Promise<SourceObservation<SourceSnapshot>>;
-}
-
-const permissionDeniedErrorNames = new Set(["NotAllowedError", "SecurityError"]);
-
-/**
- * True when an error (or any error in its cause chain) is a File System Access
- * permission failure: a DOM `NotAllowedError`/`SecurityError`, or a storage or
- * OpenDAL error already classified as `permission-denied`.
- */
-export function isPermissionDeniedError(error: unknown): boolean {
-  let seen = new Set<unknown>();
-  let current = error;
-  while (current && typeof current == "object" && !seen.has(current)) {
-    seen.add(current);
-    let record = current as { cause?: unknown; code?: unknown; name?: unknown };
-    if (record.code == "permission-denied") return true;
-    if (typeof record.name == "string" && permissionDeniedErrorNames.has(record.name)) return true;
-    current = record.cause;
-  }
-  return false;
-}
-
-export function storageErrorFromOpendal(error: OpendalBrowserError) {
-  let code: WorkspaceStorageErrorCode =
-    error.code == "not-found"
-      ? "unknown"
-      : error.code != "permission-denied" && isPermissionDeniedError(error.cause)
-        ? "permission-denied"
-        : error.code;
-  return new WorkspaceStorageError({
-    cause: error,
-    code,
-    message: error.message,
-    retryable: error.retryable,
-  });
+  ): Effect.Effect<WorkspacePathMutationResult, WorkspaceStoreError>;
+  delete(
+    request: WorkspaceDeleteRequest,
+  ): Effect.Effect<WorkspacePathMutationResult, WorkspaceStoreError>;
+  listDirectory(path: string): Effect.Effect<WorkspaceEntry[], WorkspaceStoreError>;
+  move(
+    request: WorkspaceMoveRequest,
+  ): Effect.Effect<WorkspacePathMutationResult, WorkspaceStoreError>;
+  probe(path: string): Effect.Effect<SourceObservation<SourceProbe>, WorkspaceStoreError>;
+  read(path: string): Effect.Effect<SourceObservation<SourceSnapshot>, WorkspaceStoreError>;
 }
