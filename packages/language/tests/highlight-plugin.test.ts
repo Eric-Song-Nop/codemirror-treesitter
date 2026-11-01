@@ -7,6 +7,7 @@ import {
   TreeSitterLanguage,
   TreeSitterParser,
   classHighlighter,
+  forceParsing,
   syntaxHighlighting,
   syntaxTree,
   syntaxTreeAvailable,
@@ -78,6 +79,9 @@ describe("syntax highlighting while a reparse is in flight", () => {
         extensions: [javascript.extension, syntaxHighlighting(classHighlighter)],
       }),
     });
+    // The initial parse budget is short; on a cold runner it may not finish in
+    // time, so complete it explicitly before counting decorations.
+    expect(forceParsing(view, view.state.doc.length, 5_000)).toBe(true);
     let before = view.contentDOM.querySelectorAll(".tok-keyword").length;
     expect(before).toBeGreaterThan(0);
 
