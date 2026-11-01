@@ -254,6 +254,30 @@ describe("highlight tags", () => {
     expect(classAt("MAX_VALUE")).toContain("const");
   });
 
+  it("lets the last matching highlight pattern win for a node", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    let javascript = TreeSitterLanguage.define({
+      name: "javascript",
+      parser: await javascriptParser,
+      highlightQuery: javascriptHighlights,
+    });
+    let doc = "FOO();\nlet value = Bar;\n";
+    let tree = javascript.parser.parse(Text.of(doc.split("\n")));
+    let tagMap = javascript.parser.highlightTags(tree, 0, doc.length)!;
+    let foo = tree.resolve(0, 1);
+    expect(foo.name).toBe("identifier");
+    // (identifier) @variable, @function (call), @constructor (^[A-Z]) and
+    // @constant (^[A-Z_][A-Z\d_]+$) all match; @constant is the last pattern.
+    expect(tagMap.get(foo.id)).toEqual(Array.from(tagsForCapture("constant")));
+    let bar = tree.resolve(doc.indexOf("Bar"), 1);
+    expect(tagMap.get(bar.id)).toEqual(Array.from(tagsForCapture("constructor")));
+
+    expect(javascript.parser.highlightTags(tree, 0, doc.length)).toBe(tagMap);
+    let firstLine = javascript.parser.highlightTags(tree, 0, 5)!;
+    expect(firstLine.has(foo.id)).toBe(true);
+    expect(firstLine.has(bar.id)).toBe(false);
+  });
+
   it("does not materialize every sibling for ranged highlighting", async () => {
     javascriptParser ??= TreeSitterParser.load(javascriptWasm);
     let javascript = TreeSitterLanguage.define({

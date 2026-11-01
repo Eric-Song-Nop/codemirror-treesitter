@@ -4,6 +4,26 @@ This directory vendors `web-tree-sitter` from npm package version `0.26.9`.
 The workspace root `package.json` overrides `web-tree-sitter` to this package
 until the cursor range navigation binding fix is available upstream.
 
+## Library Status
+
+As of the D-series review fixes, `@codemirror-treesitter/language` (and
+`language-data`) no longer depend on this patch: the wrapper `TreeCursor`
+probes the native `gotoFirstChildForIndex`/`gotoFirstChildForPosition` once
+per runtime against `Node.firstChildForIndex` and, when the probe fails (as it
+does on upstream 0.26.9), implements those jumps (and `moveTo`, `enter`,
+ranged iteration) in JavaScript on top of `gotoFirstChild` and
+`gotoNextSibling`. npm consumers on unpatched upstream `web-tree-sitter`
+therefore get correct behavior; this patch now only buys speed on very flat
+trees (the JavaScript scan is linear in preceding siblings) and keeps the Gate
+A native-cursor tests meaningful. Removing the override is a separate
+decision.
+
+The same upstream 0.26.9 binding also mis-applies the byte-range query
+options (`Query.captures/matches` with `startIndex`/`endIndex` return
+captures from the wrong span), and this patch does not fix that. The library
+therefore restricts queries with point ranges (`startPosition`/`endPosition`)
+and filters by byte offsets in JavaScript.
+
 ## Why This Exists
 
 `TreeCursor.gotoFirstChildForIndex(...)` and

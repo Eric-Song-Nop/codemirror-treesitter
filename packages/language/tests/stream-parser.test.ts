@@ -1,7 +1,9 @@
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  ParseContext,
   StreamLanguage,
+  type TreeSitterParser,
   ensureSyntaxTree,
   getIndentation,
   syntaxTree,
@@ -61,8 +63,8 @@ describe("stream parser compatibility", () => {
 
     expect(language.name).toBe("demo-stream");
     expect(tree.topNode.name).toBe("Document");
-    expect(tree.resolveInner(doc.indexOf("let")).name).toBe("keyword");
-    expect(tree.resolveInner(doc.indexOf('"ok"')).name).toBe("string");
+    expect(tree.resolveInner(doc.indexOf("let"), 1).name).toBe("keyword");
+    expect(tree.resolveInner(doc.indexOf('"ok"'), 1).name).toBe("string");
     expect(state.languageDataAt("commentTokens", 0)).toEqual([{ line: "//" }]);
   });
 
@@ -98,7 +100,9 @@ describe("stream parser compatibility", () => {
     });
     let tree = ensureSyntaxTree(transaction.state, transaction.state.doc.length)!;
 
-    expect(tree.resolveInner(transaction.state.doc.toString().indexOf('"ok"')).name).toBe("string");
+    expect(tree.resolveInner(transaction.state.doc.toString().indexOf('"ok"'), 1).name).toBe(
+      "string",
+    );
   });
 
   it("uses stream parser indentation and legacy support", () => {
@@ -112,5 +116,64 @@ describe("stream parser compatibility", () => {
     expect(getIndentation(state, state.doc.line(2).from)).toBe(2);
     expect(getIndentation(state, state.doc.line(3).from)).toBe(0);
     expect(support.language.name).toBe("demo-stream");
+  });
+
+  it("resumes long stream parses across work slices and reuses the unchanged prefix", () => {
+    let tokenizedLines = 0;
+    let countingParser: StreamParser<DemoState> = {
+      ...demoParser,
+      token(stream, state) {
+        if (stream.sol()) tokenizedLines++;
+        return demoParser.token(stream, state);
+      },
+    };
+    let language = StreamLanguage.define(countingParser);
+    let lines = Array.from({ length: 2_000 }, (_, index) =>
+      index % 10 == 0 ? "{" : index % 10 == 9 ? "}" : `let v${index} = ${index};`,
+    );
+    let state = EditorState.create({ doc: lines.join("\n") });
+    let parser = language.parser as unknown as TreeSitterParser;
+    let context = ParseContext.create(parser, state);
+
+    // At most 300 lines per slice: the parse needs several slices.
+    let slices = 0;
+    let done = false;
+    while (!done) {
+      let budget = 300;
+      done = context.work(() => budget-- <= 0);
+      slices++;
+      expect(slices).toBeLessThan(20);
+    }
+    expect(slices).toBeGreaterThan(5);
+    expect(tokenizedLines).toBe(state.doc.lines);
+    expect(context.tree.length).toBe(state.doc.length);
+
+    // Editing the last line only re-tokenizes from that line.
+    tokenizedLines = 0;
+    let last = state.doc.line(state.doc.lines);
+    let transaction = state.update({ changes: { from: last.from, insert: "  " } });
+    let next = context.changes(transaction.changes, state, transaction.state);
+    expect(next.work(() => false)).toBe(true);
+    expect(tokenizedLines).toBe(1);
+    expect(next.tree.resolveInner(transaction.state.doc.line(5).from + 4, 1).name).toBe("variable");
+  });
+
+  it("answers stream indentation from cached line states", () => {
+    let tokenizedLines = 0;
+    let language = StreamLanguage.define<DemoState>({
+      ...demoParser,
+      token(stream, state) {
+        if (stream.sol()) tokenizedLines++;
+        return demoParser.token(stream, state);
+      },
+    });
+    let doc = Array.from({ length: 200 }, (_, index) => (index < 3 ? "{" : "value")).join("\n");
+    let state = EditorState.create({ doc, extensions: [language.extension] });
+    expect(ensureSyntaxTree(state, state.doc.length, 5_000)).not.toBeNull();
+
+    tokenizedLines = 0;
+    expect(getIndentation(state, state.doc.line(150).from)).toBe(6);
+    expect(getIndentation(state, state.doc.line(199).from)).toBe(6);
+    expect(tokenizedLines).toBe(0);
   });
 });

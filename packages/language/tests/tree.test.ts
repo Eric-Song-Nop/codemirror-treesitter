@@ -15,8 +15,12 @@ import {
   syntaxTree,
   syntaxTreeAvailable,
 } from "../src/index.js";
-import { __testResolveWasmPath } from "../src/language.js";
-import { SyntaxNode, TreeCursor } from "../src/tree.js";
+import {
+  SyntaxNode,
+  TreeCursor,
+  __testProbeNativeRangeJumps,
+  __testSetRangeJumpMode,
+} from "../src/tree.js";
 import declarationMatchQuerySource from "./queries/declaration-match.scm?raw";
 import type { Tree } from "../src/index.js";
 import type { NodeIterator } from "../src/tree.js";
@@ -61,7 +65,7 @@ async function markdownState(doc: string) {
 
 function stackNames(state: EditorState, pos: number) {
   let names: string[] = [];
-  for (let cur: NodeIterator | null = syntaxTree(state).resolveStack(pos); cur; cur = cur.next) {
+  for (let cur: NodeIterator | null = syntaxTree(state).resolveStack(pos, 1); cur; cur = cur.next) {
     names.push(cur.node.name);
   }
   return names;
@@ -246,42 +250,23 @@ describe("tree-sitter tree wrapper", () => {
     ).toBe("answer");
   });
 
-  it("keeps Vite file URLs intact in browsers and resolves them for Node", () => {
-    let viteUrl = "/@fs/Users/example/project/node_modules/tree-sitter-x/tree-sitter-x.wasm";
-    expect(__testResolveWasmPath(viteUrl)).toBe(
-      "/Users/example/project/node_modules/tree-sitter-x/tree-sitter-x.wasm",
-    );
-    let cwd = (globalThis as typeof globalThis & { process: { cwd: () => string } }).process.cwd();
-    let workspaceRoot = cwd.replace(/\/(?:packages|apps)\/[^/]+$/, "");
-    expect(__testResolveWasmPath("/packages/language-data/src/wasm/tree-sitter-sql.wasm")).toBe(
-      `${workspaceRoot}/packages/language-data/src/wasm/tree-sitter-sql.wasm`,
-    );
-    expect(__testResolveWasmPath("/src/wasm/tree-sitter-sql.wasm")).toBe(
-      `${cwd}/src/wasm/tree-sitter-sql.wasm`,
-    );
+  it("resolves grammar URLs through the configured asset resolver and loads each once", async () => {
+    let requested: string[] = [];
+    let first = await TreeSitterParser.load("virtual:javascript.wasm", {
+      resolveAsset(url) {
+        requested.push(url);
+        return javascriptWasm;
+      },
+    });
+    let second = await TreeSitterParser.load("virtual:javascript.wasm", {
+      resolveAsset: () => javascriptWasm,
+    });
+    let direct = await TreeSitterParser.load(javascriptWasm);
 
-    let globals = globalThis as typeof globalThis & {
-      document?: unknown;
-      location?: unknown;
-    };
-    let documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
-    let locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, "location");
-    try {
-      Object.defineProperty(globals, "document", {
-        configurable: true,
-        value: {},
-      });
-      Object.defineProperty(globals, "location", {
-        configurable: true,
-        value: new URL("http://127.0.0.1:5173/"),
-      });
-      expect(__testResolveWasmPath(viteUrl)).toBe(viteUrl);
-    } finally {
-      if (documentDescriptor) Object.defineProperty(globalThis, "document", documentDescriptor);
-      else Reflect.deleteProperty(globals, "document");
-      if (locationDescriptor) Object.defineProperty(globalThis, "location", locationDescriptor);
-      else Reflect.deleteProperty(globals, "location");
-    }
+    expect(requested).toEqual(["virtual:javascript.wasm"]);
+    expect(first).not.toBe(second);
+    expect(first.language).toBe(second.language);
+    expect(direct.language).toBe(first.language);
   });
 
   it("resolves node stacks from the innermost syntax node to the root", async () => {
@@ -303,9 +288,9 @@ describe("tree-sitter tree wrapper", () => {
     let doc = "function f() {\n  return left + 1;\n}\n";
     let state = await javascriptState(doc);
     let tree = syntaxTree(state);
-    let functionName = tree.resolveInner(doc.indexOf("f()"));
+    let functionName = tree.resolveInner(doc.indexOf("f()"), 1);
     let functionNode = functionName.parent!;
-    let binaryNode = tree.resolveInner(doc.indexOf("+")).parent!;
+    let binaryNode = tree.resolveInner(doc.indexOf("+"), 1).parent!;
 
     expect(functionName.name).toBe("identifier");
     expect(functionName.fieldName).toBe("name");
@@ -422,7 +407,7 @@ describe("tree-sitter tree wrapper", () => {
     expect(cursor.next()).toBe(true);
     expect(cursor.name).toBe("identifier");
 
-    let atBeta = tree.cursorAt(beta)!;
+    let atBeta = tree.cursorAt(beta, 1)!;
     expect(atBeta.name).toBe("identifier");
     expect(
       atBeta.matchContext([
@@ -441,7 +426,7 @@ describe("tree-sitter tree wrapper", () => {
       if (node.name == "identifier") identifiers.push(node.text);
     });
     expect(identifiers).toEqual(["alpha", "beta", "gamma"]);
-    direct.moveTo(beta);
+    direct.moveTo(beta, 1);
     expect(direct.name).toBe("identifier");
     expect(direct.prev()).toBe(true);
 
@@ -508,44 +493,209 @@ describe("tree-sitter tree wrapper", () => {
     }
   });
 
-  it("delegates wrapper child index jumps to native tree cursors", async () => {
+  it("never calls the broken native cursor range jumps from wrapper cursors", async () => {
     let doc = "let alpha = beta + gamma;\n";
     let state = await javascriptState(doc);
     let parsed = ensureSyntaxTree(state, doc.length, 5_000)!;
     let nativeCursor = parsed.tree!.rootNode.walk();
-    let nativeCursorPrototype = Object.getPrototypeOf(nativeCursor) as {
-      gotoFirstChildForIndex(index: number): boolean;
-    };
-    let descriptor = Object.getOwnPropertyDescriptor(
-      nativeCursorPrototype,
-      "gotoFirstChildForIndex",
-    )!;
-    let calls: number[] = [];
+    let nativeCursorPrototype = Object.getPrototypeOf(nativeCursor) as object;
     nativeCursor.delete();
-
-    Object.defineProperty(nativeCursorPrototype, "gotoFirstChildForIndex", {
-      configurable: true,
-      value(this: unknown, index: number) {
-        calls.push(index);
-        return (descriptor.value as (this: unknown, index: number) => boolean).call(this, index);
-      },
-    });
+    let names = ["gotoFirstChildForIndex", "gotoFirstChildForPosition"] as const;
+    let descriptors = names.map(
+      (name) => [name, Object.getOwnPropertyDescriptor(nativeCursorPrototype, name)!] as const,
+    );
+    let calls: string[] = [];
+    for (let [name] of descriptors) {
+      Object.defineProperty(nativeCursorPrototype, name, {
+        configurable: true,
+        value() {
+          calls.push(name);
+          return false;
+        },
+      });
+    }
+    __testSetRangeJumpMode("javascript");
     try {
       let cursor = syntaxTree(state).cursor()!;
       try {
         let beta = doc.indexOf("beta");
         expect(cursor.firstChildForIndex(beta)).toBe(true);
         expect(cursor.name).toBe("lexical_declaration");
-        expect(cursor.firstChildForIndex(beta)).toBe(true);
+        expect(cursor.firstChildForPosition(pointAt(doc, beta))).toBe(true);
         expect(cursor.name).toBe("variable_declarator");
+        expect(cursor.firstChildForIndex(0)).toBe(true);
+        expect(cursor.name).toBe("identifier");
+        expect(cursor.parent()).toBe(true);
+        expect(cursor.name).toBe("variable_declarator");
+        expect(cursor.firstChildForIndex(doc.length)).toBe(false);
+        expect(cursor.name).toBe("variable_declarator");
+        cursor.moveTo(beta, 1);
+        expect(cursor.name).toBe("identifier");
+        expect(cursor.from).toBe(beta);
       } finally {
         cursor.delete();
       }
     } finally {
-      Object.defineProperty(nativeCursorPrototype, "gotoFirstChildForIndex", descriptor);
+      __testSetRangeJumpMode("auto");
+      for (let [name, descriptor] of descriptors) {
+        Object.defineProperty(nativeCursorPrototype, name, descriptor);
+      }
     }
+    expect(calls).toEqual([]);
+  });
 
-    expect(calls).toEqual([doc.indexOf("beta"), doc.indexOf("beta")]);
+  it("only trusts native cursor range jumps that pass the runtime probe", async () => {
+    let doc = "let a = 1;\nlet b = 2;\nlet c = 3;\n";
+    let state = await javascriptState(doc);
+    let root = syntaxTree(state).tree!.rootNode;
+    let walker = root.walk();
+    let prototype = Object.getPrototypeOf(walker) as object;
+    walker.delete();
+    let descriptors = (["gotoFirstChildForIndex", "gotoFirstChildForPosition"] as const).map(
+      (name) => [name, Object.getOwnPropertyDescriptor(prototype, name)!] as const,
+    );
+    // Emulate the upstream 0.26.9 shim: child index 0 reads as failure, and
+    // a miss (-1) reads as success without moving.
+    for (let [name] of descriptors) {
+      Object.defineProperty(prototype, name, {
+        configurable: true,
+        value(this: { gotoFirstChild(): boolean; gotoNextSibling(): boolean }) {
+          return this.gotoFirstChild() && this.gotoNextSibling();
+        },
+      });
+    }
+    try {
+      expect(__testProbeNativeRangeJumps(root)).toBe(false);
+    } finally {
+      for (let [name, descriptor] of descriptors)
+        Object.defineProperty(prototype, name, descriptor);
+    }
+    // The vendored workspace runtime carries the binding fix.
+    expect(__testProbeNativeRangeJumps(root)).toBe(true);
+  });
+
+  it("publishes the edited old tree and stays incremental while a reparse is in flight", async () => {
+    javascriptParser ??= TreeSitterParser.load(javascriptWasm);
+    let language = TreeSitterLanguage.define({
+      name: "javascript",
+      parser: await javascriptParser,
+    });
+    let doc = Array.from({ length: 400 }, (_, index) => `let value${index} = ${index};`).join("\n");
+    let state = completedState(EditorState.create({ doc, extensions: [language.extension] }));
+    let parseWith = language.parser.parseWith.bind(language.parser);
+    let oldTrees: unknown[] = [];
+    let stopImmediately = true;
+    Object.defineProperty(language.parser, "parseWith", {
+      configurable: true,
+      value: (...args: Parameters<TreeSitterParser["parseWith"]>) => {
+        let [nativeParser, parseDoc, oldTree, shouldStop, ranges] = args;
+        oldTrees.push(oldTree);
+        return parseWith(
+          nativeParser,
+          parseDoc,
+          oldTree,
+          stopImmediately ? () => true : shouldStop,
+          ranges,
+        );
+      },
+    });
+
+    let state1 = state.update({ changes: { from: 0, insert: "/*" } }).state;
+    expect(syntaxTreeAvailable(state1)).toBe(false);
+    let published = syntaxTree(state1);
+    expect(published.type.name).toBe("program");
+    expect(published.length).toBe(state1.doc.length);
+    let last = state1.doc.toString().indexOf("value399");
+    expect(published.resolveInner(last, 1).name).toBe("identifier");
+    expect(published.resolveInner(last, 1).from).toBe(last);
+
+    let state2 = state1.update({ changes: { from: 2, insert: "x" } }).state;
+    expect(oldTrees.at(-1)).not.toBeNull();
+    expect(syntaxTree(state2).type.name).toBe("program");
+
+    stopImmediately = false;
+    let completed = ensureSyntaxTree(state2, state2.doc.length, 5_000)!;
+    expect(completed).not.toBeNull();
+    expect(oldTrees.at(-1)).not.toBeNull();
+    expect(completed.length).toBe(state2.doc.length);
+    expect(completed.topNode.firstChild!.name).toBe("ERROR");
+  });
+
+  it("uses Lezer side semantics when resolving at token boundaries", async () => {
+    let doc = "let alpha = beta;\n";
+    let state = await javascriptState(doc);
+    let tree = syntaxTree(state);
+    let beta = doc.indexOf("beta");
+    let end = beta + "beta".length;
+
+    expect(tree.resolve(beta + 1, 0).name).toBe("identifier");
+    expect(tree.resolve(beta, 1).name).toBe("identifier");
+    expect(tree.resolve(beta, 0).name).toBe("variable_declarator");
+    expect(tree.resolve(beta, -1).name).toBe("variable_declarator");
+    expect(tree.resolve(end, -1).name).toBe("identifier");
+    expect(tree.resolve(end, 0).name).toBe("lexical_declaration");
+    expect(tree.resolve(end, 1).name).toBe(";");
+    expect(tree.resolve(0, 0).name).toBe("program");
+    expect(tree.resolve(doc.length, 0).name).toBe("program");
+
+    let identifier = tree.resolve(beta, 1);
+    expect(identifier.resolve(doc.indexOf("alpha"), 1).name).toBe("identifier");
+    expect(identifier.resolve(doc.indexOf("alpha"), 1).from).toBe(doc.indexOf("alpha"));
+
+    let cursor = tree.cursorAt(beta, 0)!;
+    try {
+      expect(cursor.name).toBe("variable_declarator");
+      cursor.moveTo(beta, 1);
+      expect(cursor.name).toBe("identifier");
+      cursor.moveTo(end, -1);
+      expect(cursor.name).toBe("identifier");
+      expect(cursor.to).toBe(end);
+    } finally {
+      cursor.delete();
+    }
+  });
+
+  it("matches native first-child-for-index results with the JavaScript cursor jumps", async () => {
+    let itemCount = 50;
+    let doc = Array.from({ length: itemCount }, (_, index) => `- item ${index}`).join("\n") + "\n";
+    let state = await markdownState(doc);
+    let parsed = ensureSyntaxTree(state, doc.length, 10_000)!;
+    let nativeList = parsed.tree!.rootNode.child(0)!.child(0)!;
+    let list = new SyntaxNode(syntaxTree(state), nativeList);
+    __testSetRangeJumpMode("javascript");
+    try {
+      for (let index of [
+        0,
+        nativeList.startIndex,
+        doc.indexOf("- item 1\n"),
+        doc.indexOf("- item 25") + 3,
+        doc.indexOf("- item 49"),
+        nativeList.endIndex - 1,
+        nativeList.endIndex,
+        doc.length + 1,
+      ]) {
+        let expected = nativeList.firstChildForIndex(index);
+        for (let mode of ["index", "position"] as const) {
+          let cursor = list.cursor()!;
+          try {
+            let moved =
+              mode == "index"
+                ? cursor.firstChildForIndex(index)
+                : cursor.firstChildForPosition(pointAt(doc, index));
+            expect(moved).toBe(!!expected);
+            if (expected) {
+              expect(cursor.nodeId).toBe(expected.id);
+              expect(cursor.parent()).toBe(true);
+            }
+            expect(cursor.nodeId).toBe(nativeList.id);
+          } finally {
+            cursor.delete();
+          }
+        }
+      }
+    } finally {
+      __testSetRangeJumpMode("auto");
+    }
   });
 
   it("jumps to a middle markdown list item without changing cursor roots", async () => {
@@ -841,7 +991,7 @@ describe("tree-sitter tree wrapper", () => {
     let value = doc.indexOf("value");
     let { state, html, javascript } = await mixedHtmlState(doc);
 
-    expect(syntaxTree(state).resolveInner(value).name).toBe("identifier");
+    expect(syntaxTree(state).resolveInner(value, 1).name).toBe("identifier");
     expect(syntaxTree(state).prop(languageDataProp)).toBe(html.data);
     expect(state.languageDataAt("mode", value)).toEqual(["javascript"]);
     expect(state.languageDataAt("mode", doc.indexOf("main"))).toEqual(["html"]);
@@ -880,11 +1030,11 @@ describe("tree-sitter tree wrapper", () => {
     state = state.update({}).state;
     expect(sawContext()).toBe(true);
     expect(skippedRange()).toEqual({ from: scriptFrom, to: scriptTo });
-    expect(syntaxTree(state).resolveInner(delayed).name).not.toBe("identifier");
+    expect(syntaxTree(state).resolveInner(delayed, 1).name).not.toBe("identifier");
     expect(javascript.isActiveAt(state, delayed)).toBe(false);
 
     let tree = ensureSyntaxTree(state, scriptTo, 5_000)!;
-    expect(tree.resolveInner(delayed).name).toBe("identifier");
+    expect(tree.resolveInner(delayed, 1).name).toBe("identifier");
     expect(tree.nestedAt(delayed)?.topNode.type.prop(languageDataProp)).toBe(javascript.data);
   });
 
@@ -894,7 +1044,7 @@ describe("tree-sitter tree wrapper", () => {
     let scriptTo = doc.indexOf("</script>");
     let { state, javascript, resolveLoaded } = await asyncNestedMixedHtmlState(doc);
 
-    expect(syntaxTree(state).resolveInner(delayed).name).not.toBe("identifier");
+    expect(syntaxTree(state).resolveInner(delayed, 1).name).not.toBe("identifier");
     expect(syntaxTreeAvailable(state, scriptTo)).toBe(false);
     expect(ensureSyntaxTree(state, scriptTo, 100)).toBe(null);
 
@@ -902,7 +1052,7 @@ describe("tree-sitter tree wrapper", () => {
     await Promise.resolve();
 
     let tree = ensureSyntaxTree(state, scriptTo, 5_000)!;
-    expect(tree.resolveInner(delayed).name).toBe("identifier");
+    expect(tree.resolveInner(delayed, 1).name).toBe("identifier");
     expect(tree.nestedAt(delayed)?.topNode.type.prop(languageDataProp)).toBe(javascript.data);
     expect(syntaxTreeAvailable(state, scriptTo)).toBe(true);
   });
@@ -910,12 +1060,12 @@ describe("tree-sitter tree wrapper", () => {
   it("passes edited old nested trees back into tree-sitter", async () => {
     let doc = "<main><script>let value = 1;</script></main>";
     let { state } = await mixedHtmlState(doc);
-    let before = syntaxTree(state).resolveInner(doc.indexOf("value"));
+    let before = syntaxTree(state).resolveInner(doc.indexOf("value"), 1);
     let inserted = "<!-- heading -->";
     let tr = state.update({ changes: { from: 0, insert: inserted } });
     let updatedTree = ensureSyntaxTree(tr.state, tr.state.doc.length, 5_000);
     expect(updatedTree).not.toBeNull();
-    let after = updatedTree!.resolveInner(doc.indexOf("value") + inserted.length);
+    let after = updatedTree!.resolveInner(doc.indexOf("value") + inserted.length, 1);
 
     expect(after.name).toBe("identifier");
     expect(after.node?.id).toBe(before.node?.id);
@@ -928,7 +1078,7 @@ describe("tree-sitter tree wrapper", () => {
     let doc = "let first = 1;\nlet middle = 2;\nlet last = 3;\n";
     let state = EditorState.create({ doc, extensions: [language.extension] });
     let oldTree = syntaxTree(state).tree!;
-    let beforeMiddle = syntaxTree(state).resolveInner(doc.indexOf("middle"));
+    let beforeMiddle = syntaxTree(state).resolveInner(doc.indexOf("middle"), 1);
     let tr = state.update({
       changes: [
         { from: doc.indexOf("1"), to: doc.indexOf("1") + 1, insert: "10;\nlet inserted = 11" },
@@ -941,7 +1091,7 @@ describe("tree-sitter tree wrapper", () => {
     let changed = editedOldTree.getChangedRanges(newTree);
     let middleFrom = newDoc.indexOf("middle");
     let middleTo = middleFrom + "middle".length;
-    let afterMiddle = syntaxTree(tr.state).resolveInner(middleFrom);
+    let afterMiddle = syntaxTree(tr.state).resolveInner(middleFrom, 1);
 
     expect(newDoc).toBe("let first = 10;\nlet inserted = 11;\nlet middle = 2;\nlet last = 30;\n");
     expect(afterMiddle.node?.id).toBe(beforeMiddle.node?.id);
@@ -990,7 +1140,9 @@ describe("tree-sitter tree wrapper", () => {
 
       expect(syntaxTreeChangedRanges(transaction)).toEqual([{ from: 0, to: 24 }]);
       expect(syntaxTreeChangedRanges(transaction)).toEqual([{ from: 0, to: 24 }]);
-      expect(editCalls).toBe(1);
+      // The parse context already edited the old tree for this transaction;
+      // changed ranges reuse that edit instead of editing again.
+      expect(editCalls).toBe(0);
     } finally {
       Object.defineProperty(language.parser, "editWrappedTree", {
         configurable: true,
@@ -1073,16 +1225,16 @@ describe("tree-sitter tree wrapper", () => {
       from: doc.indexOf("let second"),
       to: doc.indexOf("</script>", doc.indexOf("let second")),
     };
-    let beforeSecond = syntaxTree(state).resolveInner(second);
+    let beforeSecond = syntaxTree(state).resolveInner(second, 1);
 
-    expect(syntaxTree(state).resolveInner(first).name).toBe("identifier");
+    expect(syntaxTree(state).resolveInner(first, 1).name).toBe("identifier");
     expect(beforeSecond.name).toBe("identifier");
     expect(javascript.findRegions(state)).toEqual([firstRange, secondRange]);
 
     let tr = state.update({ changes: { from: first, to: first + "first".length, insert: "one" } });
     let updatedTree = ensureSyntaxTree(tr.state, tr.state.doc.length, 5_000);
     expect(updatedTree).not.toBeNull();
-    let afterSecond = updatedTree!.resolveInner(second - "first".length + "one".length);
+    let afterSecond = updatedTree!.resolveInner(second - "first".length + "one".length, 1);
 
     expect(afterSecond.name).toBe("identifier");
     expect(afterSecond.node?.id).toBe(beforeSecond.node?.id);
@@ -1097,7 +1249,7 @@ describe("tree-sitter tree wrapper", () => {
     expect(syntaxTreeAvailable(state)).toBe(false);
 
     let tree = ensureSyntaxTree(state, state.doc.length, 5_000);
-    expect(tree?.resolveInner(doc.indexOf("done")).name).toBe("identifier");
+    expect(tree?.resolveInner(doc.indexOf("done"), 1).name).toBe("identifier");
     expect(syntaxTreeAvailable(state)).toBe(true);
   });
 
@@ -1110,7 +1262,7 @@ describe("tree-sitter tree wrapper", () => {
     expect(field.context.isDone(state.doc.length)).toBe(false);
 
     expect(field.context.work(5_000)).toBe(true);
-    expect(field.context.tree.resolveInner(doc.indexOf("done")).name).toBe("identifier");
+    expect(field.context.tree.resolveInner(doc.indexOf("done"), 1).name).toBe("identifier");
   });
 
   it("iterates nested trees in document order and respects range filters", async () => {
@@ -1202,7 +1354,7 @@ describe("tree-sitter tree wrapper", () => {
 
     expect(events).toEqual([">array", ">number", ">number", "<number", "<array"]);
 
-    let array = tree.resolveInner(doc.indexOf("[")).parent!;
+    let array = tree.resolveInner(doc.indexOf("["), 1).parent!;
     let nodeEvents: string[] = [];
     array.iterate(
       (node) => {

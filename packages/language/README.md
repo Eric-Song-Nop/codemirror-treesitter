@@ -9,9 +9,12 @@ parsers while keeping the public CodeMirror language surface.
 
 - Depends on `@codemirror/state`, `@codemirror/view`, `style-mod`, and
   `web-tree-sitter`.
-- Uses the root `web-tree-sitter` override, which currently resolves to the
-  vendored runtime in `vendor/web-tree-sitter` for a cursor range navigation
-  binding patch.
+- Works on unpatched upstream `web-tree-sitter@^0.26.9`: the package only
+  calls the `TreeCursor.gotoFirstChildForIndex/Position` wasm shims after a
+  runtime probe proves them correct (they are broken upstream), and never uses
+  the broken byte-range (`startIndex`/`endIndex`) query options. The workspace root
+  still overrides `web-tree-sitter` to the vendored, patched runtime in
+  `vendor/web-tree-sitter`, but the library no longer depends on that patch.
 - Built as an ES module package with Vite+ `vp pack`.
 - Intentionally does not depend on Lezer or `@codemirror/language`.
 - Exports only `.` and `./package.json` from the built package.
@@ -72,6 +75,7 @@ The root entry point is `src/index.ts`.
 - `src/incremental.ts`: shared dirty-range and range-set patching helpers.
 - `src/stream-parser.ts` and `src/stringstream.ts`: compatibility layer for
   stream-parser style languages.
+- `tests/setup.ts`: installs the test asset resolver for Vite `/@fs/` URLs.
 - `tests/*`: parser, highlighting, indentation, folding, incremental parsing,
   isolate, and stream-parser coverage.
 
@@ -105,14 +109,66 @@ ownership rules:
 - `resetTo(cursor)` copies the full native cursor state, including root and
   parent path. Use it when a traversal needs to restore a cursor position
   without losing parent access.
-- `firstChildForIndex(...)` and `firstChildForPosition(...)` delegate to the
-  native Tree-sitter range navigation APIs. Success means the cursor moved to
-  the same child that `SyntaxNode.firstChildForIndex(...)` would return, and
-  `parent()` must return to the original parent after a successful jump.
+- `firstChildForIndex(...)` and `firstChildForPosition(...)` (and the
+  `moveTo`, `enter`, `resolve`, and ranged-iteration paths built on them) use
+  the native range-navigation shims only after a one-time runtime probe shows
+  they agree with `Node.firstChildForIndex(...)`; upstream 0.26.9's shims fail
+  that probe, and the cursor then scans children with `gotoFirstChild` plus
+  `gotoNextSibling` in JavaScript. Success means the cursor moved to the first
+  child ending after the target, and `parent()` returns to the original parent
+  after a successful jump. The JavaScript scan is linear in preceding siblings
+  (about 1 ms per 5,000 siblings), so very flat trees are slower on an
+  unpatched runtime.
+- `resolve`, `resolveInner`, `resolveStack`, `cursorAt`, `moveTo`, and `enter`
+  follow Lezer `side` semantics: `-1` also enters nodes ending at the
+  position, `1` also enters nodes starting at it, and `0` only enters nodes
+  that strictly contain it. Nested-tree lookup (`nestedAt`) keeps accepting
+  both range boundaries for side `0`.
 - Range-navigation hot paths such as `Tree.iterate(...)`, `Tree.cursorAt(...)`,
   `TreeCursor.moveTo(...)`, `TreeCursor.enter(...)`, and LiveMD leaf walks must
   not materialize `SyntaxNode.children`, `SyntaxNode.namedChildren`, or scan
   large sibling lists from the beginning.
+
+## Parsing and Highlighting Behavior
+
+- Tree-sitter cannot yield partial trees. When a reparse misses its time
+  budget, the parse context keeps the previous tree, edited to match the new
+  document, as its incremental base, and `syntaxTree(state)` returns that
+  edited tree until the new one is committed (so highlighting, folding,
+  indentation, and bracket matching keep working). Further edits during that
+  window edit the same base again instead of dropping it.
+  `syntaxTreeAvailable` and `ensureSyntaxTree` still report only committed
+  trees. Stream languages publish no tree during the window; the highlighter
+  then keeps its previous decorations mapped through the edits.
+- `syntaxTreeChangedRanges(tr)` reuses the edit the parse context already made
+  for the transaction (and diffs it against the committed tree once) instead of
+  editing the old tree again.
+- Highlight-query precedence: when several patterns capture the same node,
+  the capture from the pattern that appears last in the query wins (Neovim
+  semantics; later, more specific patterns refine earlier generic ones).
+  Captures from that winning pattern are combined; capture names that map to
+  no tag are ignored. Queries run only over the requested rows (through point
+  ranges; the byte-range query options are broken in upstream 0.26.9) and the
+  result is cached per tree and range. Nested trees that do not intersect the
+  range are not queried.
+- Grammars without a highlight query fall back to node-name heuristics over
+  underscore-separated name segments (for example `template_string` is a
+  string, while `template_substitution` and `*_expression` containers get no
+  literal tag). Expect coarser highlighting for those grammars.
+- `StreamLanguage` keeps tokenizer progress per document across work slices,
+  so documents larger than one slice finish parsing; edits reuse the tokens
+  and per-line states of every line before the first change, and indentation
+  reads the cached per-line states instead of re-tokenizing from line 1.
+
+## Grammar Assets
+
+`TreeSitterParser.load(url, config)` passes string URLs through an asset
+resolver before loading them. The default is the identity; install one with
+`TreeSitterParser.setAssetResolver(resolver)` or pass `config.resolveAsset`
+for one call (for example to map Vite `/@fs/` URLs to file paths under Node;
+this package's own test setup does that in `tests/setup.ts`). Each resolved
+URL is loaded once and the `Language` is shared by every parser created from
+it.
 
 ## Native Resource Lifetime
 
@@ -120,13 +176,20 @@ ownership rules:
   traversal callbacks. A cursor returned directly to a caller still follows the
   `TreeCursor` ownership contract above.
 - Wrapped native trees are reference-counted across temporary and published
-  wrappers. Incremental-edit copies are released as soon as matching finishes;
-  published trees are released when their wrapper becomes unreachable. Call
+  wrappers. Incremental-edit copies that were never published are deleted
+  once a new tree is committed and its changed ranges are read (or the
+  context is superseded); any tree that was ever returned by `syntaxTree` is
+  released when its wrapper becomes unreachable, because other states and
+  plugins may still hold it. The finalization registry is only a safety net. Call
   `Tree.delete()` when an exclusively owned published tree graph can be
   released earlier. Incremental reuse creates independent wrappers for shared
   native trees, and repeated calls are safe.
 - `TreeSitterParser.parse(...)` deletes its one-shot native parser before it
-  returns. Long-lived editor parse contexts retain one native parser; callers
+  returns. Editor parse contexts share one native root parser per lineage
+  (every context derived from one `ParseContext.create`), reset between
+  parses; it is deleted when the language is switched and when the view is
+  destroyed, and recreated lazily if an older state parses again. Nested
+  parsers are created per build and deleted when the build commits. Callers
   that create a `ParseContext` directly may call `destroy()` when finished.
 - Compiled queries live with their `TreeSitterParser`. Call
   `clearQueryCache()` to release both cached helper queries and the highlight
@@ -145,6 +208,15 @@ vp run audit
 
 `verify:web-tree-sitter` replays the vendored cursor range navigation patch
 against a clean `web-tree-sitter@0.26.9` package and checks the patched wasm
-checksums before the language tests run Gate A. The audit checks that this
+checksums before the language tests run Gate A (the native-cursor Gate A
+tests exercise the vendored runtime; the package code itself does not use
+those native methods). The audit checks that this
 package exposes the upstream `@codemirror/language` public names and that
 Tree-sitter highlight helpers are available.
+
+## License and attribution
+
+This package is a derivative work of [`@codemirror/language`](https://github.com/codemirror/language) and, for the `NodeProp`/`Tree` API in `src/tree.ts`, [`@lezer/common`](https://github.com/lezer-parser/common) by Marijn Haverbeke and others,
+distributed under the MIT License. The upstream copyright notice is retained
+alongside the project copyright in [`LICENSE`](./LICENSE). See the root
+[`NOTICE.md`](../../NOTICE.md) for the full list of derived components.

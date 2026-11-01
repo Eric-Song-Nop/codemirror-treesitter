@@ -2,9 +2,19 @@
   "name": "@codemirror-treesitter/language-data",
   "version": "0.0.0",
   "description": "Tree-sitter language metadata and dynamic loading for the CodeMirror code editor",
+  "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/language-data#readme",
+  "bugs": {
+    "url": "https://github.com/Eric-Song-Nop/codemirror-treesitter/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eric-Song-Nop/codemirror-treesitter.git",
+    "directory": "packages/language-data"
+  },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "type": "module",
   "sideEffects": false,

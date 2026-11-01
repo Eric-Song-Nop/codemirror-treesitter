@@ -89,6 +89,19 @@ retryable.
 uses `?url` and `?raw` imports for grammar WASM files and highlight queries
 provided by dependencies. Loader helpers choose the correct path for
 browser-like runtimes, Vite local development, and Node-based tests/builds.
+These loaders resolve paths themselves, so they do not need the
+`TreeSitterParser.setAssetResolver(...)` hook from
+`@codemirror-treesitter/language`. `TreeSitterParser.load(...)` memoizes the
+grammar `Language` per resolved URL, so a grammar requested by several
+loaders (for example Markdown Inline for the Markdown language and the
+Markdown parser service, or JavaScript as a language and as an HTML nested
+parser) is fetched and compiled once.
+
+Grammars without a published highlight query (those whose spec has no
+`highlightQuery`) are highlighted by `styleTags` and the node-name heuristics
+in `@codemirror-treesitter/language`, which are coarser than query-based
+highlighting. Query-based grammars follow the "last matching pattern wins"
+precedence documented there.
 
 ## Relationship to Other Packages
 

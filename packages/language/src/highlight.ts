@@ -143,6 +143,8 @@ class TreeHighlighter {
   decorations: DecorationSet;
   decoratedTo: number;
   tree: ReturnType<typeof syntaxTree>;
+  /** Decorations were mapped across edits without a tree; rebuild once one lands. */
+  stale = false;
   markCache: Record<string, Decoration> = Object.create(null);
 
   constructor(readonly view: EditorView) {
@@ -158,6 +160,19 @@ class TreeHighlighter {
     let { viewport } = update.view;
     let decoratedToMapped = update.changes.mapPos(this.decoratedTo, 1);
     if (
+      !tree.tree &&
+      this.tree.tree &&
+      update.docChanged &&
+      !styleChange &&
+      !update.viewportChanged
+    ) {
+      // No tree to publish while a reparse is in flight (Tree-sitter has no
+      // partial trees): keep the old decorations mapped through the edit
+      // rather than clearing them, and keep the old tree for comparisons.
+      this.decorations = this.decorations.map(update.changes);
+      this.decoratedTo = decoratedToMapped;
+      this.stale = true;
+    } else if (
       tree.length < viewport.to &&
       !styleChange &&
       tree.type == this.tree.type &&
@@ -169,8 +184,10 @@ class TreeHighlighter {
       update.viewportChanged ||
       styleChange ||
       tree.type != this.tree.type ||
+      this.stale ||
       !canPatchHighlight(update)
     ) {
+      this.stale = false;
       this.tree = tree;
       this.decorations = this.buildDeco(update.view, highlighters);
       this.decoratedTo = viewport.to;
@@ -292,7 +309,10 @@ function collectQueryTags(
     let tags = current.config?.highlightTags?.(current, from, to);
     if (tags) result.set(current, tags);
     for (let index = current.nested.length - 1; index >= 0; index--) {
-      pending.push(current.nested[index]!.tree);
+      let nest = current.nested[index]!;
+      // Only query nested trees that can contribute spans to this range.
+      if (nest.ranges.some((range) => range.to >= from && range.from <= to))
+        pending.push(nest.tree);
     }
   }
   return result;
@@ -473,6 +493,29 @@ const keywordTypes = new Set([
   "yield",
 ]);
 
+/** Name segments marking container nodes that must not inherit a literal style. */
+const containerSegments = new Set([
+  "argument",
+  "arguments",
+  "body",
+  "clause",
+  "declaration",
+  "expression",
+  "interpolation",
+  "list",
+  "parameters",
+  "pattern",
+  "statement",
+  "substitution",
+]);
+
+/**
+ * Fallback tags for grammars that ship no highlight query (and for nodes the
+ * query does not capture). These are name heuristics over underscore-separated
+ * node-name segments, so `template_string` is a string while
+ * `template_substitution` or `member_expression` (containers whose children
+ * would inherit the style) get no literal tag.
+ */
 function tagsForNode(node: SyntaxNode): readonly Tag[] {
   let configured =
     node.tree.config && "styleTags" in node.tree.config
@@ -483,18 +526,23 @@ function tagsForNode(node: SyntaxNode): readonly Tag[] {
   let name = node.name;
   if (node.type.isError || name == "ERROR") return [tags.invalid];
   if (/comment/i.test(name)) return [tags.comment];
-  if (/string|char|template/.test(name)) return [tags.string];
-  if (/regex|regexp/.test(name)) return [tags.regexp];
-  if (/number|integer|float/.test(name)) return [tags.number, tags.literal];
-  if (/boolean|true|false/.test(name)) return [tags.bool, tags.atom];
-  if (/null|undefined|nil|none/.test(name)) return [tags.atom];
-  if (/property_identifier|field_identifier|member/.test(name)) return [tags.propertyName];
-  if (/type_identifier|primitive_type|type_name/.test(name)) return [tags.typeName];
-  if (/class_name/.test(name)) return [tags.className];
-  if (name == "identifier") return [tags.variableName];
   if (keywordTypes.has(name)) return [tags.keyword];
   if (/^[()[\]{}.,;:]$/.test(name)) return [tags.punctuation];
   if (/^[+\-*/%=!<>|&~^]+$/.test(name)) return [tags.operator];
+  if (name == "identifier") return [tags.variableName];
+  let segments = name.toLowerCase().split(/[_.-]+/);
+  if (segments.some((segment) => containerSegments.has(segment))) return [];
+  let has = (...words: string[]) => segments.some((segment) => words.includes(segment));
+  if (has("regex", "regexp")) return [tags.regexp];
+  if (has("string", "char", "character", "template")) return [tags.string];
+  if (has("number", "integer", "float")) return [tags.number, tags.literal];
+  if (has("boolean", "true", "false")) return [tags.bool, tags.atom];
+  if (has("null", "undefined", "nil", "none")) return [tags.atom];
+  if (/^(?:property|field|shorthand_property|member)_identifier$/.test(name)) {
+    return [tags.propertyName];
+  }
+  if (/^(?:type_identifier|primitive_type|type_name)$/.test(name)) return [tags.typeName];
+  if (name == "class_name") return [tags.className];
   return [];
 }
 
