@@ -1,4 +1,10 @@
 import { Compartment, EditorState, type Extension, type Text } from "@codemirror/state";
+import {
+  syntaxTree,
+  syntaxTreeAvailable,
+  syntaxTreeChangedRanges,
+  type DocRange,
+} from "@codemirror-treesitter/language";
 import { minimalSetup } from "@codemirror-treesitter/basic-setup";
 import { EditorView, placeholder as placeholderExtension, type ViewUpdate } from "@codemirror/view";
 import {
@@ -14,8 +20,7 @@ import { liveMarkdown } from "./extension.js";
 import { liveMdMarkdownFeatures } from "./features.js";
 import type { LiveMdImageSourceResolver } from "./images.js";
 import {
-  changedCodeFenceLanguageNames,
-  codeFenceLanguageNames,
+  syntaxCodeFenceLanguageNames,
   codeFenceLanguagesField,
   loadCodeFenceLanguages,
   loadMarkdownExtension,
@@ -95,6 +100,8 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
   let liveMdConfig = normalizeLiveMdConfig(options.config);
   let persistKey = normalizePersistKey(options.persistKey);
   let pendingCodeFenceLanguages = new Set<string>();
+  let codeFenceLoads = new Set<Promise<void>>();
+  let pendingFenceDiscoveryRanges: DocRange[] = [];
   let view: EditorView;
   let initialValue = initialEditorValue(options, persistKey);
   let persistence = createPersistenceScheduler(() => view.state.doc);
@@ -120,11 +127,30 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
           },
         }),
         EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            pendingFenceDiscoveryRanges = pendingFenceDiscoveryRanges.map((range) => ({
+              from: update.changes.mapPos(range.from, -1),
+              to: update.changes.mapPos(range.to, 1),
+            }));
+            update.changes.iterChangedRanges((_fromA, _toA, from, to) => {
+              pendingFenceDiscoveryRanges.push({ from, to });
+            });
+          }
+          if (syntaxTreeAvailable(update.state)) {
+            let ranges = [
+              ...pendingFenceDiscoveryRanges,
+              ...update.transactions.flatMap((transaction) => [
+                ...syntaxTreeChangedRanges(transaction),
+              ]),
+            ];
+            pendingFenceDiscoveryRanges = [];
+            if (ranges.length)
+              void loadEncounteredCodeFenceLanguages(
+                syntaxCodeFenceLanguageNames(syntaxTree(update.state), update.state.doc, ranges),
+              );
+          }
           if (!update.docChanged) return;
           if (persistKey) persistence.schedule(persistKey);
-          void loadEncounteredCodeFenceLanguages(
-            changedCodeFenceLanguageNames(update.startState.doc, update.state.doc, update.changes),
-          );
           if (!suppressChange && options.onChange) {
             options.onChange(createEditorChange(update, view));
           }
@@ -142,9 +168,23 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
     });
   });
 
-  let codeFenceReady = loadEncounteredCodeFenceLanguages(codeFenceLanguageNames(initialValue));
+  let codeFenceReady = markdownReady.then(async () => {
+    if (cancelled) return;
+    await waitForLiveMdAnalysis(view, () => cancelled);
+    if (!cancelled)
+      await loadEncounteredCodeFenceLanguages(
+        syntaxCodeFenceLanguageNames(syntaxTree(view.state), view.state.doc),
+      );
+  });
 
-  async function loadEncounteredCodeFenceLanguages(encounteredNames: Iterable<string>) {
+  function loadEncounteredCodeFenceLanguages(encounteredNames: Iterable<string>): Promise<void> {
+    let promise = loadEncountered(encounteredNames);
+    codeFenceLoads.add(promise);
+    void promise.finally(() => codeFenceLoads.delete(promise));
+    return promise;
+  }
+
+  async function loadEncountered(encounteredNames: Iterable<string>) {
     let current = view.state.field(codeFenceLanguagesField, false) ?? new Map();
     let names = Array.from(encounteredNames).filter(
       (name) => !current.has(name) && !pendingCodeFenceLanguages.has(name),
@@ -172,6 +212,7 @@ export function createLiveMdEditor(options: LiveMdEditorOptions): LiveMdEditorCo
       persistence.flush();
     },
     ready: Promise.all([markdownReady, codeFenceReady]).then(async () => {
+      await Promise.all(codeFenceLoads);
       if (!cancelled) await waitForLiveMdAnalysis(view, () => cancelled);
       // Initial math triggers the lazy KaTeX load; widgets re-render when it lands.
       // A failed load leaves the source visible and is not an editor failure.

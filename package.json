@@ -23,6 +23,7 @@
     "vite-plus": "catalog:"
   },
   "overrides": {
+    "loro-codemirror": "file:vendor/loro-codemirror",
     "vite": "catalog:",
     "vitest": "catalog:",
     "web-tree-sitter": "file:vendor/web-tree-sitter"

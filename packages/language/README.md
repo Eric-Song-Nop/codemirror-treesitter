@@ -11,8 +11,7 @@ parsers while keeping the public CodeMirror language surface.
   `web-tree-sitter`.
 - Works on unpatched upstream `web-tree-sitter@^0.26.9`: the package only
   calls the `TreeCursor.gotoFirstChildForIndex/Position` wasm shims after a
-  runtime probe proves them correct (they are broken upstream), and never uses
-  the broken byte-range (`startIndex`/`endIndex`) query options. The workspace root
+  runtime probe proves them correct (they are broken upstream). The workspace root
   still overrides `web-tree-sitter` to the vendored, patched runtime in
   `vendor/web-tree-sitter`, but the library no longer depends on that patch.
 - Built as an ES module package with Vite+ `vp pack`.
@@ -30,9 +29,16 @@ parsers while keeping the public CodeMirror language surface.
 - Wrap Tree-sitter nodes and cursors with CodeMirror-facing `Tree`,
   `SyntaxNode`, `NodeType`, `NodeProp`, and cursor APIs.
 - Expose low-level Tree-sitter query helpers for cached query compilation and
-  capture collection over wrapped trees and nodes.
+  capture collection over wrapped trees and nodes. Public query `from`/`to`
+  ranges use document UTF-16 offsets, converted to native byte ranges internally.
+  An explicit `to: 0` returns no results; equal nonzero bounds retain native
+  point-query behavior.
 - Maintain incremental parsing, parse scheduling, viewport-aware parsing, and
-  syntax-tree availability helpers.
+  syntax-tree availability helpers. The configured outer language metadata
+  remains available while the initial syntax tree is pending. Edits that interrupt
+  root or nested parsing retain the edited complete tree as their incremental base
+  and accumulate dirty ranges until parsing finishes, including across insertions
+  and deletions.
 - Support nested parsing through included ranges and
   `TreeSitterParser.getSkippingParser(...)` for async parser loading. Nested
   parser sources may return one merged range list or an iterable of grouped
@@ -147,9 +153,9 @@ ownership rules:
   the capture from the pattern that appears last in the query wins (Neovim
   semantics; later, more specific patterns refine earlier generic ones).
   Captures from that winning pattern are combined; capture names that map to
-  no tag are ignored. Queries run only over the requested rows (through point
-  ranges; the byte-range query options are broken in upstream 0.26.9) and the
-  result is cached per tree and range. Nested trees that do not intersect the
+  no tag are ignored. Queries run only over the requested range (converted to
+  native byte offsets) and the result is cached per tree and range. Nested
+  trees that do not intersect the
   range are not queried.
 - Grammars without a highlight query fall back to node-name heuristics over
   underscore-separated name segments (for example `template_string` is a
@@ -213,6 +219,13 @@ tests exercise the vendored runtime; the package code itself does not use
 those native methods). The audit checks that this
 package exposes the upstream `@codemirror/language` public names and that
 Tree-sitter highlight helpers are available.
+
+`TreeSitterParser.startTreeBuild(nativeTree, doc, oldTree?, nestedParsers?)`
+provides resumable nested-tree wrapping for callers with their own parse scheduling.
+Call `work(shouldStop)` until it returns a `Tree`, or `cancel()` before discarding
+unfinished work. The builder owns the input native tree until completion transfers
+ownership to the returned wrapper. A caller-provided nested-parser map remains
+caller-owned and must be deleted when its session ends.
 
 ## License and attribution
 

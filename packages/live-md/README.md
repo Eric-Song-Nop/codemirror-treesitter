@@ -13,15 +13,20 @@ an HTML renderer, scoped document CSS helpers, a CSS export, and a unified
 - Uses KaTeX, Mermaid, and `beautiful-mermaid` for rich Markdown widgets. All
   three load lazily: KaTeX (and, for the web component, its CSS) is imported
   on the first math node, and Mermaid on the first diagram.
+  Mermaid previews use theme-tinted nodes, a neutral canvas, and shared host
+  typography in the editor and HTML exports. Fallback flowchart shapes, labels,
+  and connectors also follow the host's Mermaid tokens. Cached SVGs respond to
+  theme changes without rerendering; mounted diagrams have isolated arrow markers.
 - Built as an ES module package with Vite+ `vp pack`.
 - Keeps collaboration optional. Loro-specific code belongs in
   `@codemirror-treesitter/live-md-loro`, not this package.
-- LiveMD currently uses a full-walk immutable semantic cache baseline: the
-  production Markdown block cursor owns leaf/context/marker discovery, each
-  leaf produces DOM-free descriptors, unchanged leaf records can reuse their
-  prior analysis objects across edits, and projection maps descriptors to
-  CodeMirror decorations and widgets. Range-local changed-leaf analysis and
-  direct incremental projection remain follow-up work.
+- LiveMD uses range-local immutable semantic caches: the Markdown block cursor
+  discovers affected leaves, contexts, and markers; unchanged leaves reuse their
+  analysis objects; projection maps descriptors to decorations and widgets.
+  Direct layout patches rebuild structural line classes only around affected
+  records, with all projection work included in the trace. Pending edits map
+  persistent decoration ranges and repair only touched replacement boundaries.
+  Initialization and invalidated analysis inputs still require full discovery.
 
 ## Responsibilities
 
@@ -425,6 +430,10 @@ Cloudflare-specific code, and concrete theme packages.
   ordinary edits. Custom query-driven Markdown features run during per-leaf
   semantic analysis and project through the same direct and surface layers as
   built-in descriptors.
+- Visible surface projections retain mapped compiled coverage across edits.
+  Semantic commits invalidate changed effect ranges and changed active source
+  islands; pending interaction and source-reveal holes are compiled again on
+  commit. Renderer and parser context changes still require a full refresh.
 - The changed-leaf harness remains a range-local oracle check on top of the
   production block cursor. Its result is `Gate B: PASS` for range-local
   changed-leaf discovery: local changed leaves match the full-walk oracle, and
@@ -452,3 +461,24 @@ The LiveMD test suite covers web component behavior, readonly commands,
 leaf-local analysis equivalence against the canonical semantic oracle,
 feature registration, code fences, LaTeX, Mermaid, newline editing, Markdown
 HTML rendering, and style installation.
+
+### Code fence grammar discovery
+
+The editor discovers code-fence languages from completed Markdown syntax, including
+fences nested in blockquotes and lists. Syntax changed ranges limit subsequent
+queries, and `ready` waits for the initial encountered grammars. Indented code and
+fence contents cannot suppress loading of a later real fence.
+
+### Incremental code fence parsing
+
+Attached editor surfaces retain up to 16 fence parser sessions, keyed by mapped
+content positions independently of render-result keys. Additional visible requests
+wait in a coalesced metadata queue; pending native sessions are never evicted to
+admit later fences, and unfinished work rotates between turns. Editing a fence applies a
+minimal source change to its previous tree and supplies that tree to Tree-sitter.
+Theme changes reuse the completed tree. Parsing, nested grammar wrapping, and
+highlight windows yield and resume under a shared per-surface time budget. Native
+highlight queries use bounded UTF-16 byte ranges and skip unrelated nested trees; partial
+or stale results are not published. The session owner cancels stale work on edits
+and releases native resources on eviction, pruning, and view destruction. Unattached
+state-only render oracles use disposable parsing resources.

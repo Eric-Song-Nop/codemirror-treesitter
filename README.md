@@ -663,6 +663,11 @@ Private packages and `apps/*` are ignored. See `.changeset/README.md`.
 - This README: repository-level architecture, workspace structure, apps, and
   LiveMD web component/API reference.
 
+The optional LiveMD Loro adapter uses the source-controlled
+[`vendor/loro-codemirror`](vendor/loro-codemirror/README.md) override for mixed-container
+and shared-document synchronization fixes. The LiveMD Loro build bundles this
+binding so published consumers receive the same implementation as workspace apps.
+
 ## License
 
 MIT; see [`LICENSE`](./LICENSE). Several packages are derived from MIT-licensed

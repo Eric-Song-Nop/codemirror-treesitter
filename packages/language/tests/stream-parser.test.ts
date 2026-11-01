@@ -1,9 +1,10 @@
 import { EditorState } from "@codemirror/state";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   ParseContext,
   StreamLanguage,
   type TreeSitterParser,
+  Tree,
   ensureSyntaxTree,
   getIndentation,
   syntaxTree,
@@ -65,6 +66,30 @@ describe("stream parser compatibility", () => {
     expect(tree.topNode.name).toBe("Document");
     expect(tree.resolveInner(doc.indexOf("let"), 1).name).toBe("keyword");
     expect(tree.resolveInner(doc.indexOf('"ok"'), 1).name).toBe("string");
+    expect(state.languageDataAt("commentTokens", 0)).toEqual([{ line: "//" }]);
+  });
+
+  it("keeps language metadata available before a budgeted parse is published", () => {
+    let language = StreamLanguage.define(demoParser);
+    let clock = 0;
+    // ParseContext uses Date.now for its initial 20ms budget. Force a yield
+    // before the first line without relying on machine speed or actual waits.
+    let timer = vi.spyOn(Date, "now").mockImplementation(() => (clock += 25));
+    let state: EditorState;
+    try {
+      state = EditorState.create({ doc: "let value = 1;", extensions: [language.extension] });
+    } finally {
+      timer.mockRestore();
+    }
+    expect(syntaxTree(state)).toBe(Tree.empty);
+    expect(state.languageDataAt("commentTokens", 0)).toEqual([{ line: "//" }]);
+    expect(language.isActiveAt(state, 0)).toBe(true);
+    expect(ensureSyntaxTree(state, state.doc.length, 5_000)).not.toBeNull();
+    // Finishing a context does not mutate the immutable state's published tree.
+    expect(syntaxTree(state)).toBe(Tree.empty);
+    expect(state.languageDataAt("commentTokens", 0)).toEqual([{ line: "//" }]);
+    state = state.update({}).state;
+    expect(syntaxTree(state)).not.toBe(Tree.empty);
     expect(state.languageDataAt("commentTokens", 0)).toEqual([{ line: "//" }]);
   });
 

@@ -86,6 +86,8 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `packages/relay-core`: Private shared Cloudflare relay core (wire protocol,
   share validation/limits, share-room and create-quota Durable Objects, and
   the rate-limited router) used by `apps/grove-relay` and `apps/collab-editor`.
+- `vendor/loro-codemirror`: Maintained MIT-licensed Loro binding source; the root
+  override and LiveMD Loro bundled build use it for synchronization fixes.
 - `vendor/web-tree-sitter`: Vendored `web-tree-sitter` runtime package used by
   the root override while the local cursor range navigation binding patch is
   needed.

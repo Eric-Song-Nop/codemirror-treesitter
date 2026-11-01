@@ -1,4 +1,4 @@
-import { Text } from "@codemirror/state";
+import { type Text } from "@codemirror/state";
 import { Decoration } from "@codemirror/view";
 import { cachedLiveMdCodeFenceHighlightResult } from "../runtime/render-cache.js";
 import { addMark } from "./emit.js";
@@ -16,7 +16,6 @@ export function addCodeFenceHighlights(
   if (contentFrom >= contentTo) return;
 
   let source = build.state.sliceDoc(contentFrom, contentTo);
-  let sourceText = Text.of(source.split("\n"));
   let result = cachedLiveMdCodeFenceHighlightResult(
     build.renderCache,
     build.trace,
@@ -25,9 +24,10 @@ export function addCodeFenceHighlights(
     build.codeFenceHighlighters,
     recordRenderKey,
     language,
+    { from: contentFrom, to: contentTo },
   );
   let emitRelativeFrom = Math.max(0, emitFrom - contentFrom);
-  let emitRelativeTo = Math.min(sourceText.length, emitTo - contentFrom);
+  let emitRelativeTo = Math.min(source.length, emitTo - contentFrom);
   if (emitRelativeFrom >= emitRelativeTo) return;
 
   for (let span of result.spans) {
@@ -35,9 +35,14 @@ export function addCodeFenceHighlights(
     let to = Math.min(span.to, emitRelativeTo);
     if (from >= to) continue;
     let decoration = Decoration.mark({ class: span.className });
-    splitTextRangeByLine(sourceText, from, to, (rangeFrom, rangeTo) => {
-      addMark(build, contentFrom + rangeFrom, contentFrom + rangeTo, decoration);
-    });
+    splitTextRangeByLine(
+      build.state.doc,
+      contentFrom + from,
+      contentFrom + to,
+      (rangeFrom, rangeTo) => {
+        addMark(build, rangeFrom, rangeTo, decoration);
+      },
+    );
   }
 }
 

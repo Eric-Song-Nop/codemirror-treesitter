@@ -77,9 +77,8 @@ export const workspaceAliases = {
   ).pathname,
   "@codemirror-treesitter/relay-core": new URL("packages/relay-core/src/index.ts", import.meta.url)
     .pathname,
-  "loro-codemirror/sync": new URL("node_modules/loro-codemirror/src/sync.ts", import.meta.url)
-    .pathname,
-  "loro-codemirror": new URL("node_modules/loro-codemirror/src/index.ts", import.meta.url).pathname,
+  "loro-codemirror/sync": new URL("vendor/loro-codemirror/src/sync.ts", import.meta.url).pathname,
+  "loro-codemirror": new URL("vendor/loro-codemirror/src/index.ts", import.meta.url).pathname,
 };
 
 type WorkspaceAlias = keyof typeof workspaceAliases;

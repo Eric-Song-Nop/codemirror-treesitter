@@ -18,19 +18,6 @@ export function LoroExtensions(
   getText?: (doc: LoroDoc) => LoroText,
 ): Extension;
 
-export function LoroEphemeralPlugin(
-  doc: LoroDoc,
-  ephemeral: EphemeralStore,
-  user: LoroCodemirrorPresence["user"],
-  getTextFromDoc?: (doc: LoroDoc) => LoroText,
-): Extension[];
-
-export function LoroUndoPlugin(
-  doc: LoroDoc,
-  undoManager: UndoManager,
-  getTextFromDoc?: (doc: LoroDoc) => LoroText,
-): Extension[];
-
 export function undo(view: EditorView): boolean;
 
 export function redo(view: EditorView): boolean;

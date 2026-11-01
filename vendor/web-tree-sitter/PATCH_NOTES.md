@@ -18,11 +18,10 @@ trees (the JavaScript scan is linear in preceding siblings) and keeps the Gate
 A native-cursor tests meaningful. Removing the override is a separate
 decision.
 
-The same upstream 0.26.9 binding also mis-applies the byte-range query
-options (`Query.captures/matches` with `startIndex`/`endIndex` return
-captures from the wrong span), and this patch does not fix that. The library
-therefore restricts queries with point ranges (`startPosition`/`endPosition`)
-and filters by byte offsets in JavaScript.
+Note that the `startIndex`/`endIndex` query options are not broken upstream:
+they take byte offsets of the UTF-16 input (two bytes per code unit), unlike
+node `startIndex`/`endIndex`, which the binding reports in code units. The
+library converts its UTF-16 ranges before passing them to native queries.
 
 ## Why This Exists
 

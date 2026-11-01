@@ -374,7 +374,12 @@ export class TreeSitterParser implements TreeConfig {
 
     let result = new Map<number, Tag[]>();
     let winningPattern = new Map<number, number>();
-    let captures = query.captures(tree.tree.rootNode, rowRangeOptions(tree, from, to));
+    if (from >= to) return result;
+    let root = tree.tree.rootNode;
+    if (to <= root.startIndex || from >= root.endIndex) return result;
+    // Query range indices cross the WASM boundary as byte offsets of the UTF-16
+    // input, unlike the code-unit indices exposed by syntax nodes and CodeMirror.
+    let captures = query.captures(root, { startIndex: from * 2, endIndex: to * 2 });
     for (let capture of captures) {
       if (capture.node.endIndex < from || capture.node.startIndex > to) continue;
       let tags = tagsForCapture(capture.name);
@@ -498,6 +503,31 @@ export class TreeSitterParser implements TreeConfig {
     return result;
   }
 
+  /** Start resumable nested-tree wrapping. Cancel unfinished work before discarding it.
+   * This builder owns the native tree; a completed result transfers ownership to the caller.
+   */
+  startTreeBuild(
+    tree: TSTree,
+    doc: Text,
+    oldTree: Tree | null = null,
+    nestedParsers?: Map<TreeSitterParser, TSParser>,
+  ): { work(shouldStop?: () => boolean): Tree | null; cancel(): void } {
+    let build = new NestedTreeBuild(this, tree, doc, oldTree, nestedParsers);
+    let completed = false;
+    return {
+      work(shouldStop) {
+        let result = build.work(shouldStop);
+        completed ||= result != null;
+        return result;
+      },
+      cancel() {
+        if (completed) return;
+        build.cancel();
+        disposeNativeTree(tree);
+      },
+    };
+  }
+
   editTree(tree: TSTree, changes: ChangeDesc, oldDoc: Text, newDoc: Text): TSTree {
     let edited = tree.copy();
     try {
@@ -546,10 +576,7 @@ export class TreeSitterParser implements TreeConfig {
         if (nestedOwnership) for (let owned of nestedOwnership) ownedTrees.add(owned);
       }
       editedNativeTree = this.editTree(tree.tree, changes, oldDoc, newDoc);
-      let editedTree = rememberTreeDoc(
-        new Tree(editedNativeTree, this, newDoc.length, nested),
-        newDoc,
-      );
+      let editedTree = new Tree(editedNativeTree, this, newDoc.length, nested);
       ownedTrees.add(editedTree);
       editedTreeOwnership.set(editedTree, ownedTrees);
       return editedTree;
@@ -745,10 +772,13 @@ function parserForTree(tree: Tree) {
 }
 
 function queryOptions(root: SyntaxNode, options: TreeSitterQueryOptions): TSQueryOptions {
-  let from = options.from != null && options.from > root.from ? options.from : null;
-  let to = options.to != null && options.to < queryNodeEnd(root) ? options.to : null;
-  if (from == null && to == null) return {};
-  return rowRangeOptions(root.tree, from ?? root.from, to ?? queryNodeEnd(root));
+  let queryOptions: TSQueryOptions = {};
+  // Native query index ranges use bytes, unlike node offsets and the public
+  // wrapper's UTF-16 code-unit ranges. The parser feeds UTF-16 to Tree-sitter,
+  // so each code unit (including each surrogate) occupies exactly two bytes.
+  if (options.from != null && options.from > root.from) queryOptions.startIndex = options.from * 2;
+  if (options.to != null && options.to < queryNodeEnd(root)) queryOptions.endIndex = options.to * 2;
+  return queryOptions;
 }
 
 /** Whether a capture node touches the requested `from`/`to` range. */
@@ -759,30 +789,10 @@ function inQueryRange(node: TSNode, options: TreeSitterQueryOptions) {
   );
 }
 
-const treeDocs = new WeakMap<Tree, Text>();
-
-/** Remember the document a tree was parsed or edited for, so queries can use point ranges. */
-function rememberTreeDoc(tree: Tree, doc: Text) {
-  treeDocs.set(tree, doc);
-  return tree;
-}
-
-/**
- * Restrict a query to the rows around `from`..`to`. web-tree-sitter 0.26.9
- * mis-applies the byte-range query options (`startIndex`/`endIndex` return
- * captures from the wrong span), while point ranges work. Rows are a superset
- * of the byte range, so callers filter captures by byte offsets afterwards.
- * Without a known document the query runs unrestricted.
- */
-function rowRangeOptions(tree: Tree, from: number, to: number): TSQueryOptions {
-  let doc = treeDocs.get(tree);
-  if (!doc || doc.length != tree.length) return {};
-  let startRow = doc.lineAt(Math.max(0, Math.min(from, doc.length))).number - 1;
-  let endRow = doc.lineAt(Math.max(0, Math.min(to, doc.length))).number;
-  return { startPosition: { row: startRow, column: 0 }, endPosition: { row: endRow, column: 0 } };
-}
-
 function queryRangeOverlapsNode(root: SyntaxNode, options: TreeSitterQueryOptions) {
+  // Native end byte 0 means unbounded. An explicit public zero upper bound
+  // contains no document content and must not accidentally query the whole tree.
+  if (options.to === 0) return false;
   let from = options.from ?? 0;
   let to = options.to ?? Number.POSITIVE_INFINITY;
   return from <= queryNodeEnd(root) && to >= root.from;
@@ -920,8 +930,6 @@ function cloneWrappedTree(root: Tree) {
       frame.source.length,
       frame.nested,
     );
-    let sourceDoc = treeDocs.get(frame.source);
-    if (sourceDoc) rememberTreeDoc(cloned, sourceDoc);
     frames.pop();
     let parent = frames[frames.length - 1];
     if (!parent) return cloned;
@@ -965,10 +973,7 @@ class NestedTreeBuild {
           !frame.groups &&
           frame.sourceIndex >= frame.parser.nestedParsers.length
         ) {
-          let completed = rememberTreeDoc(
-            new Tree(frame.nativeTree, frame.parser, this.doc.length, frame.nested),
-            this.doc,
-          );
+          let completed = new Tree(frame.nativeTree, frame.parser, this.doc.length, frame.nested);
           disposeTree(frame.outer);
           this.frames.pop();
           let parent = this.frames[this.frames.length - 1];
@@ -1097,7 +1102,7 @@ class NestedTreeBuild {
     return {
       parser,
       nativeTree,
-      outer: rememberTreeDoc(new Tree(nativeTree, parser, this.doc.length), this.doc),
+      outer: new Tree(nativeTree, parser, this.doc.length),
       oldMatcher: new NestedTreeMatcher(oldTree?.nested ?? [], undefined, true),
       nested: [],
       sourceIndex: 0,
@@ -1164,6 +1169,25 @@ class ChangedRangeIndex {
     return ranges.length ? new ChangedRangeIndex(ranges) : ChangedRangeIndex.empty;
   }
 
+  mapAndAdd(changes: ChangeDesc) {
+    let ranges = this.ranges.map((range) => ({
+      from: changes.mapPos(range.from, -1),
+      to: changes.mapPos(range.to, 1),
+    }));
+    changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+      ranges.push({ from: fromB, to: toB });
+    });
+    // Keep zero-width deletion ranges: they also invalidate nested reuse.
+    ranges.sort((a, b) => a.from - b.from || a.to - b.to);
+    let merged: DocRange[] = [];
+    for (let range of ranges) {
+      let last = merged[merged.length - 1];
+      if (last && range.from <= last.to) last.to = Math.max(last.to, range.to);
+      else merged.push(range);
+    }
+    return new ChangedRangeIndex(merged);
+  }
+
   touches(ranges: readonly DocRange[]) {
     return ranges.some((range) => this.touchesRange(range));
   }
@@ -1223,7 +1247,7 @@ export class Language {
       language.of(this),
       EditorState.languageData.of((state, pos, side) => {
         let top = topNodeAt(state, pos, side);
-        let data = top.type.prop(languageDataProp);
+        let data = languageDataFacetAt(state, top);
         if (!data) return [];
         let base = state.facet(data);
         let sub = top.type.prop(sublanguageProp);
@@ -1243,7 +1267,7 @@ export class Language {
   }
 
   isActiveAt(state: EditorState, pos: number, side: -1 | 0 | 1 = -1) {
-    return topNodeAt(state, pos, side).type.prop(languageDataProp) == this.data;
+    return languageDataFacetAt(state, topNodeAt(state, pos, side)) == this.data;
   }
 
   findRegions(state: EditorState) {
@@ -1277,6 +1301,16 @@ function topNodeAt(state: EditorState, pos: number, side: -1 | 0 | 1) {
   let tree = syntaxTree(state);
   return (
     (topLang && topLang.allowsNesting ? tree.nestedAt(pos, side) : null)?.topNode ?? tree.topNode
+  );
+}
+
+function languageDataFacetAt(state: EditorState, top: SyntaxNode) {
+  // The initial parse may yield before publishing any tree. The configured
+  // outer language is still known, so comments and other metadata must not
+  // disappear while syntax is pending. Published nested trees remain decisive.
+  return (
+    top.type.prop(languageDataProp) ??
+    (top.tree == Tree.empty ? state.facet(language)?.data : undefined)
   );
 }
 
@@ -1723,6 +1757,12 @@ class ParseContext {
         ? this.parser.editWrappedTree(base, changes, startState.doc, newState.doc)
         : (base ?? Tree.empty);
     let handedOver = !!base && edited === this.oldTree;
+    // While suspended, keep accumulating dirty ranges so the resumed parse
+    // still re-checks everything edited since the last published tree.
+    let changedRanges =
+      !this.tree.tree && this.changedRanges
+        ? this.changedRanges.mapAndAdd(changes)
+        : ChangedRangeIndex.fromChanges(changes);
     let viewport = {
       from: changes.mapPos(this.viewport.from, -1),
       to: changes.mapPos(this.viewport.to, 1),
@@ -1748,7 +1788,7 @@ class ParseContext {
     cx.oldTreeExposed = handedOver && this.oldTreeExposed;
     cx.oldTreePublishable = this.parser instanceof TreeSitterParser && edited !== base;
     cx.editedFrom = syntaxTree(startState);
-    cx.changedRanges = ChangedRangeIndex.fromChanges(changes);
+    cx.changedRanges = changedRanges;
     cx.scheduleOn = scheduleOn;
     cx.skipped = skipped;
     if (handedOver) {

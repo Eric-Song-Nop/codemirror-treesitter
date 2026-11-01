@@ -14,7 +14,8 @@
   },
   "files": [
     "dist",
-    "LICENSE"
+    "LICENSE",
+    "LICENSE.loro-codemirror"
   ],
   "type": "module",
   "sideEffects": false,
@@ -40,8 +41,5 @@
     "happy-dom": "^20.0.11",
     "typescript": "^6.0.3",
     "vite-plus": "catalog:"
-  },
-  "inlinedDependencies": {
-    "loro-codemirror": "0.3.3"
   }
 }

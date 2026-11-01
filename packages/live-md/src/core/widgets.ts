@@ -18,7 +18,11 @@ import {
   type LatexRenderResult,
 } from "./latex.js";
 import { resolveLiveMdLinkHref } from "./links.js";
-import { nextMermaidRenderSequence, renderLiveMdMermaidResult } from "./mermaid.js";
+import {
+  nextMermaidRenderSequence,
+  renderLiveMdMermaidResult,
+  scopeMermaidMarkers,
+} from "./mermaid.js";
 import { sanitizeMermaidSvgElement } from "./svg-sanitizer.js";
 import { hashString } from "./analysis/ranges.js";
 import { isAsciiDigit } from "./util.js";
@@ -617,7 +621,9 @@ function applyMermaidResult(
 ) {
   // The editor applies the same allowlist sanitizer as HTML export; anything it
   // rejects renders the error state instead of falling back to raw markup.
-  let sanitized = result.ok ? sanitizeMermaidSvgElement(result.svg, element.ownerDocument) : result;
+  let sanitized = result.ok
+    ? sanitizeMermaidSvgElement(scopeMermaidMarkers(result.svg), element.ownerDocument)
+    : result;
   if (sanitized.ok) {
     let render = element.ownerDocument.createElement("div");
     render.className = "cm-md-mermaid-render";

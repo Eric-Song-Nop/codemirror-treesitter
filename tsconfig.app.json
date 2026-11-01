@@ -30,7 +30,7 @@
       "@codemirror-treesitter/theme-gruvbox": ["./packages/theme-gruvbox/src/index.ts"],
       "@codemirror-treesitter/relay-core/client": ["./packages/relay-core/src/client.ts"],
       "@codemirror-treesitter/relay-core": ["./packages/relay-core/src/index.ts"],
-      "loro-codemirror": ["./node_modules/loro-codemirror/src/index.ts"]
+      "loro-codemirror": ["./vendor/loro-codemirror/src/index.ts"]
     },
     "types": ["vite-plus/client"],
     "noFallthroughCasesInSwitch": true
