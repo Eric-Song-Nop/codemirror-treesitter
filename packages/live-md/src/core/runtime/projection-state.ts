@@ -1,10 +1,4 @@
-import {
-  type ChangeDesc,
-  type Range,
-  RangeSet,
-  RangeSetBuilder,
-  type RangeValue,
-} from "@codemirror/state";
+import { type ChangeDesc, type Range, RangeSet, type RangeValue } from "@codemirror/state";
 import { patchRangeSet } from "@codemirror-treesitter/language";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import { type DocRange } from "../analysis/types.js";
@@ -56,31 +50,6 @@ export function joinProjectionSets(sets: ProjectionSets): DecorationSet {
     sets.interactiveDecorations,
     sets.destructiveDecorations,
   ]);
-}
-
-export function mergeProjectionSets(
-  primary: ProjectionSets,
-  secondary: ProjectionSets,
-): ProjectionSets {
-  return {
-    atomicRanges: RangeSet.join([primary.atomicRanges, secondary.atomicRanges]),
-    destructiveDecorations: RangeSet.join([
-      primary.destructiveDecorations,
-      secondary.destructiveDecorations,
-    ]),
-    interactiveDecorations: RangeSet.join([
-      primary.interactiveDecorations,
-      secondary.interactiveDecorations,
-    ]),
-    sourceSafeDecorations: RangeSet.join([
-      primary.sourceSafeDecorations,
-      secondary.sourceSafeDecorations,
-    ]),
-    structuralLineDecorations: RangeSet.join([
-      primary.structuralLineDecorations,
-      secondary.structuralLineDecorations,
-    ]),
-  };
 }
 
 export function mapProjectionSets(
@@ -259,19 +228,6 @@ export function restoreProjectionSets(
   };
 }
 
-export function filterProjectionSetsToRanges(
-  sets: ProjectionSets,
-  ranges: readonly DocRange[],
-): ProjectionSets {
-  return {
-    atomicRanges: filterRangeSetToRanges(sets.atomicRanges, ranges),
-    destructiveDecorations: filterRangeSetToRanges(sets.destructiveDecorations, ranges),
-    interactiveDecorations: filterRangeSetToRanges(sets.interactiveDecorations, ranges),
-    sourceSafeDecorations: filterRangeSetToRanges(sets.sourceSafeDecorations, ranges),
-    structuralLineDecorations: filterRangeSetToRanges(sets.structuralLineDecorations, ranges),
-  };
-}
-
 export function collectRangeSetRanges<T extends RangeValue>(
   rangeSet: RangeSet<T>,
   ranges: readonly DocRange[],
@@ -291,31 +247,6 @@ export function clearRangeSetRanges<T extends RangeValue>(
   ranges: readonly DocRange[],
 ) {
   return ranges.length ? patchRangeSet(rangeSet, ranges, []) : rangeSet;
-}
-
-function filterRangeSetToRanges<T extends RangeValue>(
-  rangeSet: RangeSet<T>,
-  ranges: readonly DocRange[],
-): RangeSet<T> {
-  if (!ranges.length) return RangeSet.empty;
-  let collected: Range<T>[] = [];
-  let builder = new RangeSetBuilder<T>();
-  for (let range of ranges) {
-    rangeSet.between(range.from, range.to, (from, to, value) => {
-      collected.push(value.range(from, to));
-    });
-  }
-  collected.sort(
-    (left, right) =>
-      left.from - right.from ||
-      left.value.startSide - right.value.startSide ||
-      left.to - right.to ||
-      left.value.endSide - right.value.endSide,
-  );
-  for (let range of collected) {
-    builder.add(range.from, range.to, range.value);
-  }
-  return builder.finish();
 }
 
 function patchOwnedRangeSet<T extends RangeValue>(

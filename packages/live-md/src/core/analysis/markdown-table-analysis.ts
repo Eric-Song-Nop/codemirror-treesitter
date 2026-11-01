@@ -88,14 +88,6 @@ export function analyzeMarkdownTableAnalysis(
   };
 }
 
-export function analyzeMarkdownTableDescriptor(
-  doc: Text,
-  tree: Tree,
-  range: DocRange,
-): LiveMdDescriptor | null {
-  return analyzeMarkdownTableAnalysis(doc, tree, range).descriptor;
-}
-
 function tableAnalysisFromSource(
   doc: Text,
   range: DocRange,

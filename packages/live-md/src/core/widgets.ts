@@ -1,4 +1,4 @@
-import { Decoration, EditorView, WidgetType } from "@codemirror/view";
+import { EditorView, WidgetType } from "@codemirror/view";
 import {
   type LiveMdImageRenderResult,
   type LiveMdMermaidRenderHandle,
@@ -11,9 +11,15 @@ import {
   liveMdTableContentKey,
 } from "./analysis/descriptors.js";
 import { resolveLiveMdImageSource, type LiveMdImageSourceResolver } from "./images.js";
-import { renderLatexFormula, type LatexFormula, type LatexRenderResult } from "./latex.js";
+import {
+  renderLatexFormula,
+  whenKatexLoaded,
+  type LatexFormula,
+  type LatexRenderResult,
+} from "./latex.js";
 import { resolveLiveMdLinkHref } from "./links.js";
-import { renderLiveMdMermaidResult } from "./mermaid.js";
+import { nextMermaidRenderSequence, renderLiveMdMermaidResult } from "./mermaid.js";
+import { sanitizeMermaidSvgElement } from "./svg-sanitizer.js";
 import { hashString } from "./analysis/ranges.js";
 import { isAsciiDigit } from "./util.js";
 
@@ -30,7 +36,6 @@ const defaultMermaidHeight = 160;
 const tableRowHeight = 28;
 
 const latexWidgetResults = new WeakMap<LatexWidget, LatexRenderResult>();
-let mermaidRenderSequence = 0;
 
 export class TaskCheckboxWidget extends WidgetType {
   private checked: boolean;
@@ -110,28 +115,25 @@ export class LatexWidget extends WidgetType {
     );
   }
 
-  toDOM() {
+  toDOM(view: EditorView) {
     let element = document.createElement(this.block ? "div" : "span");
     element.className = this.displayMode
       ? "cm-md-latex cm-md-latex-display"
       : "cm-md-latex cm-md-latex-inline";
     element.dataset.source = this.source;
 
-    let rendered =
-      latexWidgetResults.get(this) ??
-      renderLatexFormula({
-        block: this.block,
-        displayMode: this.displayMode,
-        source: this.source,
-        tex: this.tex,
-      });
-    if (rendered.ok) {
-      element.innerHTML = rendered.html;
-    } else {
-      element.classList.add("is-error");
-      element.textContent = this.source;
-      if (rendered.message) element.title = rendered.message;
+    let formula = {
+      block: this.block,
+      displayMode: this.displayMode,
+      source: this.source,
+      tex: this.tex,
+    };
+    let rendered = latexWidgetResults.get(this);
+    if (!rendered || rendered.pending) {
+      rendered = renderLatexFormula(formula);
+      if (!rendered.pending) latexWidgetResults.set(this, rendered);
     }
+    renderLatexInto(element, formula, rendered, () => requestWidgetMeasure(view));
 
     return element;
   }
@@ -436,7 +438,7 @@ function appendInlineContent(
         break;
       }
       case "latex":
-        parent.append(tableInlineLatex(node));
+        parent.append(tableInlineLatex(node, context));
         break;
       case "link": {
         let element = document.createElement("a");
@@ -488,26 +490,48 @@ function tableInlineImage(
   return image;
 }
 
-function tableInlineLatex(node: Extract<LiveMdInlineContent[number], { kind: "latex" }>) {
+function tableInlineLatex(
+  node: Extract<LiveMdInlineContent[number], { kind: "latex" }>,
+  context: TableInlineDomContext,
+) {
   let element = document.createElement("span");
   element.className = node.displayMode
     ? "cm-md-latex cm-md-latex-display"
     : "cm-md-latex cm-md-latex-inline";
   element.dataset.source = node.source;
-  let rendered = renderLatexFormula({
+  let formula = {
     block: false,
     displayMode: node.displayMode,
     source: node.source,
     tex: node.tex,
-  });
+  };
+  renderLatexInto(element, formula, renderLatexFormula(formula), context.requestMeasure);
+  return element;
+}
+
+function renderLatexInto(
+  element: HTMLElement,
+  formula: LatexFormula,
+  rendered: LatexRenderResult,
+  requestMeasure: () => void,
+) {
   if (rendered.ok) {
     element.innerHTML = rendered.html;
-  } else {
-    element.classList.add("is-error");
-    element.textContent = node.source;
-    if (rendered.message) element.title = rendered.message;
+    return;
   }
-  return element;
+  element.textContent = formula.source;
+  if (rendered.pending) {
+    // KaTeX loads lazily on the first math node; show the source until it arrives.
+    element.classList.add("is-pending");
+    whenKatexLoaded(() => {
+      element.classList.remove("is-pending");
+      renderLatexInto(element, formula, renderLatexFormula(formula), requestMeasure);
+      if (element.isConnected) requestMeasure();
+    });
+    return;
+  }
+  element.classList.add("is-error");
+  if (rendered.message) element.title = rendered.message;
 }
 
 function bindPreviewBoundarySelection(
@@ -557,7 +581,7 @@ function renderMermaidInto(
   heights: LiveMdMeasuredHeights | null,
   view: EditorView,
 ) {
-  let renderToken = String(++mermaidRenderSequence);
+  let renderToken = String(nextMermaidRenderSequence());
   element.dataset.mermaidRenderToken = renderToken;
   element.classList.remove("is-error");
   element.removeAttribute("title");
@@ -591,35 +615,21 @@ function applyMermaidResult(
   heights: LiveMdMeasuredHeights | null,
   fallbackHeightKey: string,
 ) {
-  if (result.ok) {
-    let render = document.createElement("div");
+  // The editor applies the same allowlist sanitizer as HTML export; anything it
+  // rejects renders the error state instead of falling back to raw markup.
+  let sanitized = result.ok ? sanitizeMermaidSvgElement(result.svg, element.ownerDocument) : result;
+  if (sanitized.ok) {
+    let render = element.ownerDocument.createElement("div");
     render.className = "cm-md-mermaid-render";
-    appendSvg(render, result.svg);
+    render.append(sanitized.element);
     element.replaceChildren(render);
-    result.bindFunctions?.(render);
+    if (result.ok) result.bindFunctions?.(render);
   } else {
     element.classList.add("is-error");
     element.replaceChildren(mermaidMessage("Unable to render Mermaid diagram"));
-    if (result.message) element.title = result.message;
+    if (sanitized.message) element.title = sanitized.message;
   }
   rememberMermaidElementHeight(element, heights, result.resultKey, fallbackHeightKey);
-}
-
-function appendSvg(parent: HTMLElement, svg: string) {
-  let svgElement = parseSvg(svg);
-  if (svgElement) {
-    parent.append(svgElement);
-  } else {
-    parent.innerHTML = svg;
-  }
-}
-
-function parseSvg(svg: string) {
-  if (typeof DOMParser == "undefined") return null;
-  let parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
-  if (parsed.querySelector("parsererror")) return null;
-  if (parsed.documentElement.localName.toLowerCase() != "svg") return null;
-  return document.importNode(parsed.documentElement, true);
 }
 
 function isCurrentMermaidRender(element: HTMLElement, renderToken: string) {
@@ -723,14 +733,6 @@ function requestMeasureFrame(callback: () => void) {
 function requestWidgetMeasure(view: EditorView) {
   // EditorView already coalesces measure requests into its next animation frame.
   view.requestMeasure();
-}
-
-export function replaceWithWidget(from: number, to: number, widget: WidgetType, block = false) {
-  return {
-    decoration: Decoration.replace({ block, widget }),
-    from,
-    to,
-  };
 }
 
 function applyTableAlignment(

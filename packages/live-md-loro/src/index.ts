@@ -1,8 +1,13 @@
 import { EditorState, StateEffect, Transaction, type Extension } from "@codemirror/state";
-import { ViewPlugin, type EditorView } from "@codemirror/view";
+import { ViewPlugin, type EditorView, type PluginValue, type ViewUpdate } from "@codemirror/view";
 import type { LiveMdPlugin } from "@codemirror-treesitter/live-md";
-import { LoroExtensions, redo as loroRedo, undo as loroUndo } from "loro-codemirror";
-import { loroSyncAnnotation } from "loro-codemirror/sync";
+import {
+  LoroEphemeralPlugin,
+  LoroUndoPlugin,
+  redo as loroRedo,
+  undo as loroUndo,
+} from "loro-codemirror";
+import { LoroSyncPluginValue, loroSyncAnnotation } from "loro-codemirror/sync";
 import type {
   EphemeralStore,
   LoroDoc,
@@ -38,11 +43,15 @@ const drainLoroInitGuard = StateEffect.define<void>();
 
 export function liveMdLoroCollaboration(options: LiveMdLoroCollaborationOptions): Extension {
   let getTextFromDoc = createCollaborationLoroTextGetter(options.text);
+  let { doc, presence, undoManager } = options;
   return [
     markLoroSyncTransactionsRemote(),
-    LoroExtensions(options.doc, options.presence, options.undoManager, getTextFromDoc),
-    syncExternalLocalLoroEdits(options.doc, getTextFromDoc),
-    drainMatchingInitialLoroDispatch(options.doc, getTextFromDoc),
+    // Mirrors loro-codemirror's LoroExtensions(), with the sync plugin wrapped so
+    // its init guard is drained independently of extension ordering.
+    loroSyncWithDrainedInitGuard(doc, getTextFromDoc),
+    undoManager ? LoroUndoPlugin(doc, undoManager, getTextFromDoc) : [],
+    presence ? LoroEphemeralPlugin(doc, presence.ephemeral, presence.user, getTextFromDoc) : [],
+    syncExternalLocalLoroEdits(doc, getTextFromDoc),
   ];
 }
 
@@ -96,26 +105,44 @@ function transactionHasLoroSyncAnnotation(transaction: Transaction) {
   return transaction.annotation(loroSyncAnnotation) != null;
 }
 
-function drainMatchingInitialLoroDispatch(
+/**
+ * loro-codemirror's sync plugin arms an `isInitDispatch` guard in a microtask
+ * queued by its constructor and only clears it on the next view update. When the
+ * editor and Loro texts already match it never dispatches, so the guard would
+ * swallow the user's first edit. The wrapper constructs the sync plugin itself
+ * and queues its drain microtask afterwards, so the drain always runs after the
+ * guard is armed, no matter where this extension sits among other extensions.
+ */
+function loroSyncWithDrainedInitGuard(
   doc: LoroDoc,
   getTextFromDoc: (doc: LoroDoc) => LoroText,
 ): Extension {
-  return ViewPlugin.define((view) => {
-    let destroyed = false;
+  return ViewPlugin.define((view) => new DrainedLoroSyncPluginValue(view, doc, getTextFromDoc));
+}
 
+class DrainedLoroSyncPluginValue implements PluginValue {
+  private destroyed = false;
+  private sync: LoroSyncPluginValue;
+
+  constructor(view: EditorView, doc: LoroDoc, getTextFromDoc: (doc: LoroDoc) => LoroText) {
+    this.sync = new LoroSyncPluginValue(view, doc, getTextFromDoc);
+    // FIFO microtask order guarantees this runs after the sync plugin's init task.
     queueMicrotask(() => {
-      if (destroyed) return;
+      if (this.destroyed) return;
+      // A differing text means the init replacement was dispatched and consumed the guard.
       if (view.state.doc.toString() != getTextFromDoc(doc).toString()) return;
-      // Clear loro-codemirror's armed init guard when no initial replacement was needed.
       view.dispatch({ effects: drainLoroInitGuard.of() });
     });
+  }
 
-    return {
-      destroy() {
-        destroyed = true;
-      },
-    };
-  });
+  update(update: ViewUpdate) {
+    this.sync.update(update);
+  }
+
+  destroy() {
+    this.destroyed = true;
+    this.sync.destroy();
+  }
 }
 
 function syncExternalLocalLoroEdits(

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
-import { StateField, Transaction } from "@codemirror/state";
+import { Prec, StateField, Transaction, type Extension } from "@codemirror/state";
+import { EditorView, ViewPlugin } from "@codemirror/view";
 import { createLiveMdEditor } from "@codemirror-treesitter/live-md";
 import { loroSyncAnnotation } from "loro-codemirror/sync";
 import { EphemeralStore, LoroDoc, UndoManager } from "loro-crdt";
@@ -236,6 +237,54 @@ describe("liveMdLoroCollaboration", () => {
     await editor.ready;
     destroyTestEditor(editor);
   });
+
+  for (let { name, arrange } of [
+    {
+      name: "after other view plugins",
+      arrange: (collaboration: Extension, other: Extension) => [other, collaboration],
+    },
+    {
+      name: "before other view plugins",
+      arrange: (collaboration: Extension, other: Extension) => [collaboration, other],
+    },
+    {
+      name: "at lowest precedence",
+      arrange: (collaboration: Extension, other: Extension) => [other, Prec.lowest(collaboration)],
+    },
+    {
+      name: "at highest precedence",
+      arrange: (collaboration: Extension, other: Extension) => [other, Prec.highest(collaboration)],
+    },
+  ]) {
+    it(`keeps the first keystroke when texts already match ${name}`, async () => {
+      let doc = ownNative(new LoroDoc());
+      let text = ownNative(doc.getText("markdown"));
+      text.insert(0, "shared");
+      doc.commit();
+      let otherPluginMicrotasks = 0;
+      let other = ViewPlugin.define(() => {
+        queueMicrotask(() => otherPluginMicrotasks++);
+        return {};
+      });
+
+      // A bare view keeps unrelated LiveMD dispatches from consuming the guard by accident.
+      let view = new EditorView({
+        doc: "shared",
+        extensions: arrange(liveMdLoroCollaboration({ doc }), other),
+        parent: document.body.appendChild(document.createElement("div")),
+      });
+      ownResource(view, () => view.destroy());
+      await flushMicrotasks();
+      expect(otherPluginMicrotasks).toBe(1);
+
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: "!" },
+        userEvent: "input.type",
+      });
+
+      expect(text.toString()).toBe("shared!");
+    });
+  }
 
   it("marks imported Loro changes as remote CodeMirror transactions", async () => {
     let doc = ownNative(new LoroDoc());

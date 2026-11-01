@@ -120,6 +120,7 @@ import {
   revealProjectionSets,
 } from "./projection-state.js";
 import { createLiveMdRenderCache, type LiveMdRenderCache } from "./render-cache.js";
+import { sameArrayItems } from "../util.js";
 
 const defaultCodeFenceHighlighters = [liveMdDefaultCodeFenceHighlighter] as const;
 const liveMdSchedulerQuietDelay = 24;
@@ -2190,18 +2191,13 @@ function mergeLiveMdLeafAnalysisTraces(
   return merged;
 }
 
-export function __testBuildLiveMdAnalysis(state: EditorState) {
+export function buildLiveMdAnalysisSnapshot(state: EditorState) {
   return liveMdAnalysisSnapshot(state, buildLiveMdAnalysis(state));
 }
 
-export function __testBuildCanonicalLiveMdAnalysis(
-  state: EditorState,
-  renderCache?: LiveMdRenderCache,
-) {
-  return buildCanonicalLiveMdAnalysis(state, renderCache);
-}
-
-export function __testLiveMdAnalysis(view: EditorView | { state: EditorState }): LiveMdAnalysis {
+export function liveMdViewAnalysisSnapshot(
+  view: EditorView | { state: EditorState },
+): LiveMdAnalysis {
   let plugin =
     "plugin" in view && typeof view.plugin == "function" ? view.plugin(liveMdSurfacePlugin) : null;
   let surfaceSnapshot = plugin
@@ -2218,7 +2214,7 @@ export type LiveMdAnalysisTraceSnapshot = Pick<
 export function unstableLiveMdAnalysisTrace(
   view: EditorView | { state: EditorState },
 ): LiveMdAnalysisTraceSnapshot {
-  let analysis = __testLiveMdAnalysis(view);
+  let analysis = liveMdViewAnalysisSnapshot(view);
   let trace = analysis.semanticTrace ?? analysis.trace;
   return {
     fallbackCount: trace.fallbackCount,
@@ -2227,16 +2223,15 @@ export function unstableLiveMdAnalysisTrace(
   };
 }
 
-export function __testRefreshLiveMdSurface(view: EditorView) {
-  view.plugin(liveMdSurfacePlugin)?.refreshForTest();
+export function refreshLiveMdSurface(view: EditorView, { preserveState = false } = {}) {
+  let plugin = view.plugin(liveMdSurfacePlugin);
+  if (preserveState) plugin?.refreshPreservingStateForTest();
+  else plugin?.refreshForTest();
 }
 
-export function __testRefreshLiveMdSurfacePreservingState(view: EditorView) {
-  view.plugin(liveMdSurfacePlugin)?.refreshPreservingStateForTest();
-}
-
-export async function __testFlushLiveMdAnalysis(view: EditorView) {
-  for (let index = 0; index < 120; index++) {
+/** Wait a bounded number of scheduler turns for pending analysis to finish. */
+export async function flushLiveMdAnalysisTurns(view: EditorView, maxTurns = 120) {
+  for (let index = 0; index < maxTurns; index++) {
     if (!view.state.field(liveMdAnalysisField).pending) return;
     await waitForScheduledTurn();
   }
@@ -2262,7 +2257,7 @@ function waitForScheduledTurn() {
   });
 }
 
-function buildCanonicalLiveMdAnalysis(
+export function buildCanonicalLiveMdAnalysis(
   state: EditorState,
   renderCache?: LiveMdRenderCache,
 ): LiveMdAnalysis {
@@ -2342,14 +2337,6 @@ function buildCanonicalLiveMdAnalysis(
     trace,
     tree,
   };
-}
-
-function sameArrayItems<T>(left: readonly T[], right: readonly T[]) {
-  if (left.length != right.length) return false;
-  for (let index = 0; index < left.length; index++) {
-    if (left[index] != right[index]) return false;
-  }
-  return true;
 }
 
 function sameSetItems<T>(left: ReadonlySet<T>, right: ReadonlySet<T>) {

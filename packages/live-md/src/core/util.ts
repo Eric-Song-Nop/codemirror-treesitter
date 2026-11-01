@@ -58,3 +58,16 @@ export function hasAncestor(node: SyntaxNode | null, name: string) {
   }
   return false;
 }
+
+export function firstNamedChild(node: SyntaxNode | null, name: string) {
+  return node?.namedChildren.find((child) => child.name == name) ?? null;
+}
+
+/** Shallow, identity-based array equality. */
+export function sameArrayItems<T>(left: readonly T[], right: readonly T[]) {
+  if (left.length != right.length) return false;
+  for (let index = 0; index < left.length; index++) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}

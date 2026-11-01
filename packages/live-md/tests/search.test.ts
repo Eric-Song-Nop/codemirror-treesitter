@@ -4,13 +4,15 @@ import { ensureSyntaxTree } from "@codemirror-treesitter/language";
 import { loadMarkdownParserService } from "@codemirror-treesitter/language-data";
 import { describe, expect, it } from "vite-plus/test";
 import { liveMarkdown } from "../src/core/extension.js";
-import { __testLiveMdAnalysis, liveMdAnalysis } from "../src/core/decorations.js";
+import { liveMdAnalysis } from "../src/core/decorations.js";
 import {
   liveMdMarkdownParserServiceFacet,
   loadMarkdownExtension,
   type LiveMdMarkdownParserService,
 } from "../src/core/languages.js";
-import { __testIsLiveMdSearchVisible, liveMdSearch } from "../src/core/search.js";
+import { liveMdSearch } from "../src/core/search.js";
+import { __testLiveMdAnalysis } from "../src/internal/testing.js";
+import { __testIsLiveMdSearchVisible } from "../src/internal/search-testing.js";
 
 describe("LiveMD Markdown search", () => {
   it("treats rendered Markdown syntax as hidden search content", async () => {

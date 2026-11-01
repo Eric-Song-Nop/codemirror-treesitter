@@ -218,12 +218,6 @@ export function disposeLeafAnalysisResumeState(
   resumeState.inlineSession = null;
 }
 
-export function cancelLeafAnalysisResumeState(
-  resumeState: LeafAnalysisResumeState | null | undefined,
-) {
-  disposeLeafAnalysisResumeState(resumeState);
-}
-
 export function createLeafAnalysisCache(
   records: readonly LeafAnalysisRecord[],
   nextCacheId: number,

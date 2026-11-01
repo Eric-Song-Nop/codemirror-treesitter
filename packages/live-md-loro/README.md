@@ -31,7 +31,9 @@ plugin and extension helpers needed to bind a LiveMD editor to a `LoroDoc`.
   `commitLiveMdLoroExternalEdit(...)` into every bound editor without writing
   the resulting CodeMirror transaction back into Loro.
 - Drain the initial Loro dispatch guard when the editor document already
-  matches the Loro document, avoiding a redundant initial replacement.
+  matches the Loro document, so the first local edit is not dropped. The drain
+  runs inside a wrapper around loro-codemirror's sync plugin, so it does not
+  depend on where the extension sits among other extensions or precedences.
 
 ## Public Entry
 
@@ -122,9 +124,10 @@ editing.
 
 ## Current Implementation Notes
 
-- `src/index.ts` is intentionally small: it wraps `LoroExtensions`, resolves
-  the LiveMD text container, exports undo/redo, and drains the initial
-  dispatch guard when editor and Loro content already match.
+- `src/index.ts` is intentionally small: it composes loro-codemirror's sync,
+  undo, and ephemeral plugins (mirroring `LoroExtensions`), wraps the sync
+  plugin to drain its initial dispatch guard when editor and Loro content
+  already match, resolves the LiveMD text container, and exports undo/redo.
 - String-key collaboration getters release every fresh native `LoroText`
   wrapper after its synchronous upstream use. Custom getter results remain
   caller-owned and are never freed by this package.

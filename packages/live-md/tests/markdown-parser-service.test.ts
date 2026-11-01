@@ -1,12 +1,11 @@
 // @vitest-environment happy-dom
-
 import { EditorState } from "@codemirror/state";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror-treesitter/language";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { createLiveMdEditor } from "../src/core/editor.js";
 import { liveMarkdown } from "../src/core/extension.js";
 import { loadMarkdownExtension } from "../src/core/languages.js";
-import { __testIsLiveMdSearchVisible } from "../src/core/search.js";
+import { __testIsLiveMdSearchVisible } from "../src/internal/search-testing.js";
 
 let locationDescriptor: PropertyDescriptor | undefined;
 

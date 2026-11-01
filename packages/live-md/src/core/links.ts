@@ -60,11 +60,11 @@ export function liveMdLinkMark(destination: null | string | undefined, baseUrl: 
   return cached;
 }
 
-export function __testLiveMdLinkMarkCacheSize() {
+export function liveMdLinkMarkCacheSize() {
   return linkMarkCache.size;
 }
 
-export function __testClearLiveMdLinkMarkCache() {
+export function clearLiveMdLinkMarkCache() {
   linkMarkCache.clear();
 }
 

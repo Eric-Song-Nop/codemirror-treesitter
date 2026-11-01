@@ -150,7 +150,7 @@ describe("public LiveMD stylesheet", () => {
 });
 
 describe("web component shadow stylesheet", () => {
-  it("inlines KaTeX font URLs when LiveMD is consumed through source aliases", async () => {
+  it("loads KaTeX and its CSS lazily with fonts as separate assets through source aliases", async () => {
     let root = await mkdtemp(join(workspaceRoot, ".tmp-live-md-source-style-"));
 
     try {
@@ -179,24 +179,41 @@ describe("web component shadow stylesheet", () => {
           write: false,
         },
       });
-      let javascript = collectBuildOutputs(result)
-        .filter((output) => output.type == "chunk")
+      let outputs = collectBuildOutputs(result);
+      let chunks = outputs.filter((output) => output.type == "chunk");
+      let entry = chunks
+        .filter((output) => output.isEntry)
         .map((output) => String(output.code))
         .join("\n");
+      let javascript = chunks.map((output) => String(output.code)).join("\n");
+      let fontAssets = outputs.filter(
+        (output) => output.type == "asset" && /KaTeX_.*\.woff2$/.test(output.fileName),
+      );
 
+      expect(entry).toContain(".live-md-codemirror .cm-md-latex-inline .katex");
+      expect(entry).toContain(".live-md-codemirror .cm-md-mermaid");
+      expect(entry).toContain("Noto Serif");
+      expect(entry).toContain("font-synthesis: weight style");
+      expect(entry).toContain(".live-md-codemirror.live-md-codemirror .cm-scroller");
+      expect(entry).toContain(".live-md-codemirror.live-md-codemirror .cm-content");
+      expect(entry).toContain(".live-md-codemirror.live-md-codemirror .cm-line");
+      expect(entry).toContain("--live-md-mermaid-accent");
+      expect(entry).toContain("--live-md-mermaid-font");
+      // KaTeX rules, fonts, and the renderer stay out of the entry until math appears.
+      expect(entry).not.toContain(".katex .katex-mathml");
+      expect(entry).not.toContain("KaTeX_Main");
+      expect(entry).not.toContain("KaTeX parse error");
+      expect(javascript).toContain("KaTeX parse error");
       expect(javascript).toContain(".katex .katex-mathml");
-      expect(javascript).toContain("data:font/woff2;base64");
-      expect(javascript).toContain(".live-md-codemirror .cm-md-latex-inline .katex");
-      expect(javascript).toContain(".live-md-codemirror .cm-md-mermaid");
-      expect(javascript).toContain("Noto Serif");
-      expect(javascript).toContain("font-synthesis: weight style");
-      expect(javascript).toContain(".live-md-codemirror.live-md-codemirror .cm-scroller");
-      expect(javascript).toContain(".live-md-codemirror.live-md-codemirror .cm-content");
-      expect(javascript).toContain(".live-md-codemirror.live-md-codemirror .cm-line");
-      expect(javascript).toContain("--live-md-mermaid-accent");
-      expect(javascript).toContain("--live-md-mermaid-font");
+      expect(javascript).not.toContain("data:font/woff2");
       expect(javascript).not.toContain("url(fonts/KaTeX_");
       expect(javascript).not.toContain('@import "katex/dist/katex.css"');
+      expect(fontAssets.map((output) => output.fileName)).toEqual(
+        expect.arrayContaining([expect.stringMatching(/KaTeX_Main-Regular.*\.woff2$/)]),
+      );
+      for (let font of fontAssets) {
+        expect(javascript).toContain(font.fileName.replace(/^.*\//u, ""));
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -206,6 +223,7 @@ describe("web component shadow stylesheet", () => {
 type BuildOutput = {
   code?: unknown;
   fileName: string;
+  isEntry?: boolean;
   source?: unknown;
   type: string;
 };

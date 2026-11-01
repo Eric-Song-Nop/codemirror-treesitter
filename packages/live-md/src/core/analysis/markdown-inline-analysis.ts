@@ -20,6 +20,7 @@ import {
   matchRoot,
 } from "./query.js";
 import { type DocRange, type LiveMdLeafAnalysisTrace } from "./types.js";
+import { requestKatex } from "../latex.js";
 
 export type MarkdownInlineAnalysisInput = {
   blockTree: Tree;
@@ -55,17 +56,6 @@ const simpleInlineCaptureHandlers: Record<string, SimpleInlineCaptureHandler> = 
   syntax: (_doc, descriptors, node) => addSyntax(descriptors, nodeRange(node)),
   uriAutolink: applyUriAutolink,
 };
-
-export function analyzeMarkdownInlineDescriptors(
-  input: MarkdownInlineAnalysisInput,
-): LiveMdDescriptor[] {
-  let session = createMarkdownInlineAnalysisSession(input);
-  try {
-    return session.analyze(input.within);
-  } finally {
-    session.dispose();
-  }
-}
 
 export function createMarkdownInlineAnalysisSession(
   input: MarkdownInlineAnalysisSessionInput,
@@ -314,6 +304,7 @@ function applyLatex(
   let formula = readLatexFormula(doc, node, openingDelimiter, closingDelimiter);
   if (!formula) return false;
 
+  requestKatex();
   descriptors.push({
     formula: {
       ...formula,

@@ -5,12 +5,21 @@ import { fileURLToPath } from "node:url";
 
 const runtimeCssPath = fileURLToPath(new URL("src/style.css", import.meta.url));
 
+type RawCssPluginContext = {
+  emitFile?: (file: { name: string; source: Uint8Array; type: "asset" }) => string;
+};
+
 export function liveMdRawCssPlugin() {
   let rawQueries = ["?raw", "?live-md-raw"];
   let rawExtensions = [".css", ".scm"];
+  // Vite dev servers (including Vitest) cannot emit files; they serve fonts through /@fs/.
+  let serve = false;
   return {
     enforce: "pre" as const,
     name: "live-md-raw-css",
+    configResolved(config: { command?: string }) {
+      serve = config.command == "serve";
+    },
     resolveId(source: string, importer?: string) {
       let rawImport = parseRawImport(source, rawQueries, rawExtensions);
       if (!rawImport) return null;
@@ -21,13 +30,15 @@ export function liveMdRawCssPlugin() {
       }
       return `${resolve(dirname(importer), rawImport.fileName)}${rawImport.query}`;
     },
-    load(id: string) {
+    load(this: RawCssPluginContext, id: string) {
       let rawImport = parseRawImport(id, rawQueries, rawExtensions);
       if (!rawImport) return null;
       let { fileName } = rawImport;
       let sourceText = readFileSync(fileName, "utf8");
       if (isRuntimeCss(fileName)) sourceText = stripKatexImport(sourceText);
-      if (isKatexCss(fileName)) sourceText = inlineKatexFontData(sourceText, fileName);
+      if (isKatexCss(fileName)) {
+        return katexCssModule(sourceText, fileName, serve ? null : this.emitFile?.bind(this));
+      }
       return `export default ${JSON.stringify(sourceText)};`;
     },
   };
@@ -41,15 +52,39 @@ function parseRawImport(source: string, queries: readonly string[], extensions: 
   return { fileName, query };
 }
 
-function inlineKatexFontData(css: string, katexCssPath: string) {
+/**
+ * KaTeX font faces become separate woff2 assets referenced by absolute URL
+ * instead of base64 data, so documents without math (or using only a few
+ * faces) never download the rest. Builds emit each font as an asset; dev
+ * servers reference the installed file through `/@fs/`.
+ */
+function katexCssModule(
+  css: string,
+  katexCssPath: string,
+  emitFile: RawCssPluginContext["emitFile"] | null,
+) {
   let fontDirectory = resolve(dirname(katexCssPath), "fonts");
-  return css.replace(
-    /src: url\(fonts\/([^)]*\.woff2)\) format\("woff2"\), url\(fonts\/[^)]*\.woff\) format\("woff"\), url\(fonts\/[^)]*\.ttf\) format\("truetype"\);/g,
-    (_match, fileName: string) => {
-      let fontData = readFileSync(resolve(fontDirectory, fileName), "base64");
-      return `src: url(${JSON.stringify(`data:font/woff2;base64,${fontData}`)}) format("woff2");`;
-    },
-  );
+  let parts: string[] = [];
+  let lastIndex = 0;
+  let pattern =
+    /src: url\(fonts\/([^)]*\.woff2)\) format\("woff2"\), url\(fonts\/[^)]*\.woff\) format\("woff"\), url\(fonts\/[^)]*\.ttf\) format\("truetype"\);/g;
+  for (let match of css.matchAll(pattern)) {
+    let fontFile = match[1]!;
+    let fontPath = resolve(fontDirectory, fontFile);
+    let url = emitFile
+      ? `import.meta.ROLLUP_FILE_URL_${emitFile({
+          name: fontFile,
+          source: readFileSync(fontPath),
+          type: "asset",
+        })}`
+      : JSON.stringify(`/@fs${normalizePath(fontPath).replace(/^(?!\/)/, "/")}`);
+    parts.push(JSON.stringify(css.slice(lastIndex, match.index) + "src: url("));
+    parts.push(`JSON.stringify(${url})`);
+    parts.push(JSON.stringify(') format("woff2");'));
+    lastIndex = match.index + match[0].length;
+  }
+  parts.push(JSON.stringify(css.slice(lastIndex)));
+  return `export default ${parts.join(" + ")};`;
 }
 
 function isKatexCss(fileName: string) {

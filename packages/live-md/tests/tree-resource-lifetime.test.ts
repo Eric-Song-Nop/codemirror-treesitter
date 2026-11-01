@@ -1,7 +1,7 @@
 import { Tree, TreeSitterParser } from "@codemirror-treesitter/language";
 import { describe, expect, it } from "vite-plus/test";
 import { deleteLiveMdTree } from "../src/core/languages.js";
-import * as renderCacheInternals from "../src/core/runtime/render-cache.js";
+import { __testCountNativeTrees } from "../src/internal/testing.js";
 import type { Tree as NativeTree } from "web-tree-sitter";
 
 function fakeNativeTree(label: string, deleted: string[]): NativeTree {
@@ -60,14 +60,8 @@ describe("LiveMD tree resource lifetime", () => {
         { parser, tree, ranges: [{ from: 0, to: 1 }] },
       ]);
     }
-    let count = (
-      renderCacheInternals as typeof renderCacheInternals & {
-        __testCountNativeTrees?(tree: Tree): number;
-      }
-    ).__testCountNativeTrees;
-
-    expect(() => count?.(tree)).not.toThrow();
-    expect(count?.(tree)).toBe(depth);
+    expect(() => __testCountNativeTrees(tree)).not.toThrow();
+    expect(__testCountNativeTrees(tree)).toBe(depth);
     tree.delete();
   });
 });

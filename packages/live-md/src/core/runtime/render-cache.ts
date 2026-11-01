@@ -17,6 +17,7 @@ import { type MarkdownTable } from "../widgets.js";
 import { type LiveMdTableModel } from "../analysis/descriptors.js";
 import { hashString } from "../analysis/ranges.js";
 import { liveMdObjectEpoch } from "./epochs.js";
+import { keyParts } from "../markdown-text.js";
 
 export type LiveMdRenderCache = {
   codeFenceHighlights: Map<string, LiveMdCodeFenceHighlightResult>;
@@ -81,7 +82,6 @@ const mermaidRendererVersion = "mermaid-request-result-v1";
 const codeFenceRendererVersion = "code-fence-highlight-v1";
 const codeFenceExactSourceKeyLimit = 16 * 1024;
 
-export const liveMdFullQueryRenderKey = "live-md-full-query";
 export const liveMdRenderCacheLimits = {
   codeFenceHighlights: 256,
   images: 256,
@@ -175,7 +175,8 @@ export function cachedLiveMdLatexResult(
 
   trace.heavyRenderStarts++;
   let result = renderLatexFormula(formula);
-  cache.latex.set(key, result);
+  // Pending results (KaTeX still loading) must be re-rendered on the next analysis.
+  if (!result.pending) cache.latex.set(key, result);
   return result;
 }
 
@@ -335,7 +336,7 @@ function markdownTable(table: LiveMdTableModel): MarkdownTable {
   };
 }
 
-function countNativeTrees(tree: Tree): number {
+export function countNativeTrees(tree: Tree): number {
   let count = 0;
   let pending = [tree];
   let visited = new Set<Tree>();
@@ -347,17 +348,4 @@ function countNativeTrees(tree: Tree): number {
     for (let nested of current.nested) pending.push(nested.tree);
   }
   return count;
-}
-
-export function __testCountNativeTrees(tree: Tree) {
-  return countNativeTrees(tree);
-}
-
-function keyParts(...parts: readonly (boolean | number | string | null | undefined)[]) {
-  return parts
-    .map((part) => {
-      let text = part == null ? "" : String(part);
-      return `${text.length}:${text}`;
-    })
-    .join("|");
 }

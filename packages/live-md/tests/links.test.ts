@@ -1,23 +1,18 @@
 // @vitest-environment happy-dom
-
 import { EditorState, type Extension } from "@codemirror/state";
 import { ensureSyntaxTree } from "@codemirror-treesitter/language";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import {
-  __testFlushLiveMdAnalysis,
-  __testLiveMdAnalysis,
-  liveMdAnalysis,
-} from "../src/core/decorations.js";
+import { liveMdAnalysis } from "../src/core/decorations.js";
 import { createLiveMdEditor, type LiveMdEditorController } from "../src/core/editor.js";
 import { codeFenceLanguagesField, loadMarkdownExtension } from "../src/core/languages.js";
+import { liveMdLinkMark, liveMdLinkOpen, type LiveMdLinkBaseUrl } from "../src/core/links.js";
 import {
   __testClearLiveMdLinkMarkCache,
+  __testFlushLiveMdAnalysis,
+  __testLiveMdAnalysis,
   __testLiveMdLinkMarkCacheSize,
-  liveMdLinkMark,
-  liveMdLinkOpen,
-  type LiveMdLinkBaseUrl,
-} from "../src/core/links.js";
+} from "../src/internal/testing.js";
 
 let openLink: ReturnType<typeof vi.fn>;
 let locationDescriptor: PropertyDescriptor | undefined;
