@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { useWorkspaceApplication } from "@/app/WorkspaceApplicationProvider";
 import { useI18n } from "@/lib/i18n";
 import { useWorkspaceAgentHost, type WorkspaceAgentHostRefs } from "./useWorkspaceAgentHost";
 import { WorkspaceAgentPanel } from "./WorkspaceAgentPanel";
@@ -26,14 +27,23 @@ export function WorkspaceAgentFeature({
   let { t } = useI18n();
   let credentials = useWorkspaceAgentCredentials();
   let createRunHost = useWorkspaceAgentHost(hostRefs);
+  let { documentViews } = useWorkspaceApplication();
+  let getOpenDocumentPath = useCallback(
+    () => documentViews.current()?.file.path ?? null,
+    [documentViews],
+  );
   let {
     activeSessionId,
+    approvals,
+    edits,
     error,
     errorCode,
     hasApiKey,
     messages,
     model,
     newChat,
+    resolveApproval,
+    revertEdit,
     selectSession,
     send,
     sessions,
@@ -41,6 +51,7 @@ export function WorkspaceAgentFeature({
     stop,
   } = useWorkspaceAgent({
     getApiKey: credentials.getApiKey,
+    getOpenDocumentPath,
     scopeKey,
     subscribeToCredentials: credentials.subscribe,
     workspaceKey,
@@ -55,8 +66,10 @@ export function WorkspaceAgentFeature({
   return (
     <WorkspaceAgentPanel
       activeSessionId={activeSessionId}
+      approvals={approvals}
       credentialLoading={credentials.status == "checking"}
       credentialStored={credentials.hasStoredKey}
+      edits={edits}
       error={displayedError}
       hasApiKey={hasApiKey}
       messages={messages}
@@ -68,6 +81,8 @@ export function WorkspaceAgentFeature({
       onModelChange={setModel}
       onNewChat={newChat}
       onOpenSettings={onOpenSettings}
+      onResolveApproval={resolveApproval}
+      onRevertEdit={revertEdit}
       onSelectSession={selectSession}
       onSend={sendMessage}
       onStop={stop}

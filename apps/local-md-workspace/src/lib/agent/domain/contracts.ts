@@ -114,6 +114,7 @@ export type WorkspaceAgentWriteFileInput = {
 export type WorkspaceAgentWriteFailureReason =
   | EditConflictReason
   | "aborted"
+  | "denied"
   | "invalid-edit-count"
   | "not-markdown"
   | "outside-workspace"
@@ -145,4 +146,20 @@ export type WorkspaceAgentContext = {
     writeFile: true;
   };
   workspace: Pick<WorkspaceIdentity, "id" | "kind" | "name">;
+};
+
+/** Compact, display-only description of one applied or proposed write. */
+export type WorkspaceAgentChangeSummary = {
+  added: number;
+  /** Unified-style line diff capped to a small number of lines. */
+  diff: string;
+  removed: number;
+  truncated: boolean;
+};
+
+/** Display-safe summary of a tool call's target, shown in the Agent panel. */
+export type WorkspaceAgentToolTarget = {
+  directory?: string;
+  path?: string;
+  query?: string;
 };

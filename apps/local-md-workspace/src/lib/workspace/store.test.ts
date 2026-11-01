@@ -3,15 +3,11 @@ import type { AccessDirectoryHandle } from "./file-system.ts";
 import {
   clearStoredWorkspaceSelectedPath,
   loadStoredDropboxWorkspaceConfig,
-  loadStoredGoogleDriveWorkspaceConfig,
   loadStoredLocalWorkspaceRecord,
-  loadStoredOneDriveWorkspaceConfig,
   loadStoredWorkspaceSelectedPath,
   loadStoredWorkspaceKind,
   rememberStoredLocalWorkspace,
   saveStoredDropboxWorkspaceConfig,
-  saveStoredGoogleDriveWorkspaceConfig,
-  saveStoredOneDriveWorkspaceConfig,
   saveStoredWorkspaceSelectedPath,
   saveStoredWorkspaceKind,
 } from "./store.ts";
@@ -20,8 +16,6 @@ const DB_NAME = "local-md-workspace";
 const STORE_NAME = "workspace";
 const HANDLE_KEY = "directory-handle";
 const DROPBOX_CONFIG_KEY = "local-md-workspace:dropbox-config";
-const GOOGLE_DRIVE_CONFIG_KEY = "local-md-workspace:google-drive-config";
-const ONEDRIVE_CONFIG_KEY = "local-md-workspace:onedrive-config";
 const WORKSPACE_KIND_KEY = "local-md-workspace:workspace-kind";
 const SELECTED_PATH_KEY_PREFIX = "local-md-workspace:selected-path";
 
@@ -73,78 +67,6 @@ describe("Dropbox workspace config storage", () => {
     saveStoredDropboxWorkspaceConfig({ appKey: " " });
 
     expect(values.has(DROPBOX_CONFIG_KEY)).toBe(false);
-  });
-
-  it("saves Google Drive config without a root and drops legacy roots", () => {
-    saveStoredGoogleDriveWorkspaceConfig({
-      clientId: " test-client-id ",
-    });
-
-    expect(values.get(GOOGLE_DRIVE_CONFIG_KEY)).toBe(
-      JSON.stringify({
-        clientId: "test-client-id",
-      }),
-    );
-    expect(loadStoredGoogleDriveWorkspaceConfig()).toEqual({
-      clientId: "test-client-id",
-    });
-
-    values.set(
-      GOOGLE_DRIVE_CONFIG_KEY,
-      JSON.stringify({
-        clientId: " legacy-client-id ",
-        root: "legacy/root",
-      }),
-    );
-    expect(loadStoredGoogleDriveWorkspaceConfig()).toEqual({
-      clientId: "legacy-client-id",
-    });
-  });
-
-  it("ignores malformed or empty stored Google Drive config", () => {
-    values.set(GOOGLE_DRIVE_CONFIG_KEY, JSON.stringify({ clientId: " " }));
-    expect(loadStoredGoogleDriveWorkspaceConfig()).toBeNull();
-
-    values.set(GOOGLE_DRIVE_CONFIG_KEY, "{");
-    expect(loadStoredGoogleDriveWorkspaceConfig()).toBeNull();
-  });
-
-  it("does not persist invalid Google Drive client IDs", () => {
-    saveStoredGoogleDriveWorkspaceConfig({ clientId: " " });
-
-    expect(values.has(GOOGLE_DRIVE_CONFIG_KEY)).toBe(false);
-  });
-
-  it("saves and restores normalized non-secret OneDrive config", () => {
-    saveStoredOneDriveWorkspaceConfig({
-      clientId: " test-client-id ",
-      root: " \\notes\\daily/ ",
-    });
-
-    expect(values.get(ONEDRIVE_CONFIG_KEY)).toBe(
-      JSON.stringify({
-        clientId: "test-client-id",
-        root: "notes/daily",
-      }),
-    );
-    expect(loadStoredOneDriveWorkspaceConfig()).toEqual({
-      clientId: "test-client-id",
-      root: "notes/daily",
-    });
-  });
-
-  it("ignores malformed or empty stored OneDrive config", () => {
-    values.set(ONEDRIVE_CONFIG_KEY, JSON.stringify({ clientId: " " }));
-    expect(loadStoredOneDriveWorkspaceConfig()).toBeNull();
-
-    values.set(ONEDRIVE_CONFIG_KEY, "{");
-    expect(loadStoredOneDriveWorkspaceConfig()).toBeNull();
-  });
-
-  it("does not persist invalid OneDrive client IDs", () => {
-    saveStoredOneDriveWorkspaceConfig({ clientId: " " });
-
-    expect(values.has(ONEDRIVE_CONFIG_KEY)).toBe(false);
   });
 
   it("saves and restores the last workspace kind", () => {

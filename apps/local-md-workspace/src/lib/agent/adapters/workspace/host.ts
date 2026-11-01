@@ -6,7 +6,10 @@ import type {
   WorkspaceAgentSearchMarkdownInput,
   WorkspaceAgentWriteFileInput,
 } from "../../domain/contracts.ts";
-import type { WorkspaceAgentHost } from "../../application/host-port.ts";
+import type {
+  WorkspaceAgentHost,
+  WorkspaceAgentWriteControl,
+} from "../../application/host-port.ts";
 import { writeWorkspaceAgentFile } from "./file-edits.ts";
 import {
   resolveWorkspaceAgentLimits,
@@ -107,8 +110,13 @@ class DefaultWorkspaceAgentHost implements WorkspaceAgentHost {
     });
   }
 
-  writeFile(input: WorkspaceAgentWriteFileInput, signal?: AbortSignal) {
+  writeFile(
+    input: WorkspaceAgentWriteFileInput,
+    signal?: AbortSignal,
+    control?: WorkspaceAgentWriteControl,
+  ) {
     return writeWorkspaceAgentFile({
+      control,
       limits: this.limits,
       request: input,
       runtime: this.runtime,

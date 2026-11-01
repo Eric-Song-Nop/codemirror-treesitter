@@ -167,8 +167,33 @@ export interface WorkspaceObjectStore {
   read(path: string): Promise<SourceObservation<SourceSnapshot>>;
 }
 
+const permissionDeniedErrorNames = new Set(["NotAllowedError", "SecurityError"]);
+
+/**
+ * True when an error (or any error in its cause chain) is a File System Access
+ * permission failure: a DOM `NotAllowedError`/`SecurityError`, or a storage or
+ * OpenDAL error already classified as `permission-denied`.
+ */
+export function isPermissionDeniedError(error: unknown): boolean {
+  let seen = new Set<unknown>();
+  let current = error;
+  while (current && typeof current == "object" && !seen.has(current)) {
+    seen.add(current);
+    let record = current as { cause?: unknown; code?: unknown; name?: unknown };
+    if (record.code == "permission-denied") return true;
+    if (typeof record.name == "string" && permissionDeniedErrorNames.has(record.name)) return true;
+    current = record.cause;
+  }
+  return false;
+}
+
 export function storageErrorFromOpendal(error: OpendalBrowserError) {
-  let code = error.code == "not-found" ? "unknown" : error.code;
+  let code: WorkspaceStorageErrorCode =
+    error.code == "not-found"
+      ? "unknown"
+      : error.code != "permission-denied" && isPermissionDeniedError(error.cause)
+        ? "permission-denied"
+        : error.code;
   return new WorkspaceStorageError({
     cause: error,
     code,

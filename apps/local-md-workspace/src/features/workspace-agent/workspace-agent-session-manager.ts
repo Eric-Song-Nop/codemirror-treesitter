@@ -1,7 +1,12 @@
 import { Chat } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
+import type {
+  WorkspaceAgentHost,
+  WorkspaceAgentRevertResult,
+  WorkspaceAgentWriteControl,
+} from "@/lib/agent/application/host-port";
+import type { WorkspaceAgentChangeSummary } from "@/lib/agent/domain/contracts";
 import { redactWorkspaceAgentErrorMessage } from "@/lib/agent/application/runtime-error";
 import {
   DEFAULT_WORKSPACE_AGENT_MODEL,
@@ -16,7 +21,28 @@ export type WorkspaceAgentRunStatus = "cancelled" | "error" | "idle" | "running"
 
 export type WorkspaceAgentRunner = typeof runWorkspaceAgent;
 
+export type WorkspaceAgentWriteDecision = "allow-once" | "allow-session" | "deny";
+
+/** A write to a non-open file that is blocked until the user decides. */
+export type WorkspaceAgentPendingApproval = {
+  change: WorkspaceAgentChangeSummary;
+  id: string;
+  path: string;
+};
+
+export type WorkspaceAgentEditStatus = "applied" | "revert-failed" | "reverted" | "reverting";
+
+export type WorkspaceAgentEditRecord = {
+  change: WorkspaceAgentChangeSummary;
+  error?: string;
+  id: string;
+  path: string;
+  status: WorkspaceAgentEditStatus;
+};
+
 export type WorkspaceAgentSessionSummary = {
+  approvals: readonly WorkspaceAgentPendingApproval[];
+  edits: readonly WorkspaceAgentEditRecord[];
   id: string;
   status: WorkspaceAgentRunStatus;
   title: string | null;
@@ -39,10 +65,25 @@ type WorkspaceAgentRunConfiguration = {
   host: WorkspaceAgentHost;
   model: WorkspaceAgentModel;
   runner: WorkspaceAgentRunner;
+  writeControl: WorkspaceAgentWriteControl;
+};
+
+type PendingApprovalRuntime = {
+  resolve: (approved: boolean) => void;
+  view: WorkspaceAgentPendingApproval;
+};
+
+type EditRecordRuntime = {
+  record: WorkspaceAgentEditRecord;
+  revert: () => Promise<WorkspaceAgentRevertResult>;
 };
 
 type WorkspaceAgentSessionRuntime = {
+  /** Paths the user allowed for the rest of this session. */
+  allowedPaths: Set<string>;
+  approvals: Map<string, PendingApprovalRuntime>;
   chat: Chat<UIMessage>;
+  edits: EditRecordRuntime[];
   failure: WorkspaceAgentFailure | null;
   run: { configuration: WorkspaceAgentRunConfiguration; succeeded: boolean } | null;
   status: Exclude<WorkspaceAgentRunStatus, "error" | "running">;
@@ -53,6 +94,7 @@ const missingApiKeyMessage = "Enter a DeepSeek API key before running the Agent.
 const missingPromptMessage = "Enter a message for the Agent.";
 const missingWorkspaceMessage = "Open a workspace before running the Agent.";
 const sessionTitleLimit = 48;
+const maxEditRecordsPerSession = 100;
 
 export class WorkspaceAgentSessionManager {
   readonly store: StoreApi<WorkspaceAgentSessionsSnapshot>;
@@ -63,6 +105,8 @@ export class WorkspaceAgentSessionManager {
   private runner: WorkspaceAgentRunner;
   private sessions = new Map<string, WorkspaceAgentSessionRuntime>();
   private activeSessionId: string;
+  private nextRecordId = 0;
+  private openDocumentPath: () => string | null = () => null;
 
   constructor(runner: WorkspaceAgentRunner) {
     this.runner = runner;
@@ -79,6 +123,53 @@ export class WorkspaceAgentSessionManager {
 
   activate() {
     this.#active = true;
+  }
+
+  /**
+   * Resolves the workspace path of the document open in the editor. Writes to
+   * that path are auto-approved; every other write needs explicit approval.
+   */
+  setOpenDocumentResolver(resolver: () => string | null) {
+    this.openDocumentPath = resolver;
+  }
+
+  resolveApproval(sessionId: string, approvalId: string, decision: WorkspaceAgentWriteDecision) {
+    let session = this.sessions.get(sessionId);
+    let approval = session?.approvals.get(approvalId);
+    if (!session || !approval) return;
+    session.approvals.delete(approvalId);
+    if (decision == "allow-session") session.allowedPaths.add(approval.view.path);
+    approval.resolve(decision != "deny");
+    this.publish();
+  }
+
+  async revertEdit(sessionId: string, editId: string) {
+    let session = this.sessions.get(sessionId);
+    let edit = session?.edits.find((entry) => entry.record.id == editId);
+    if (
+      !session ||
+      !edit ||
+      (edit.record.status != "applied" && edit.record.status != "revert-failed")
+    ) {
+      return false;
+    }
+    edit.record = { ...edit.record, error: undefined, status: "reverting" };
+    this.publish();
+    let result: WorkspaceAgentRevertResult;
+    try {
+      result = await edit.revert();
+    } catch (error) {
+      result = {
+        message: error instanceof Error ? error.message : "The edit could not be reverted.",
+        status: "failed",
+      };
+    }
+    edit.record =
+      result.status == "reverted"
+        ? { ...edit.record, status: "reverted" }
+        : { ...edit.record, error: result.message, status: "revert-failed" };
+    if (this.sessions.get(sessionId) === session) this.publish();
+    return result.status == "reverted";
   }
 
   chat() {
@@ -145,15 +236,17 @@ export class WorkspaceAgentSessionManager {
       return false;
     }
 
-    let run = {
+    let run: NonNullable<WorkspaceAgentSessionRuntime["run"]> = {
       configuration: {
         apiKey: this.#apiKey,
         host,
         model: this.model,
         runner: this.runner,
+        writeControl: {},
       },
       succeeded: false,
     };
+    run.configuration.writeControl = this.createWriteControl(session, run);
     session.run = run;
     session.failure = null;
     session.chat.clearError();
@@ -208,6 +301,64 @@ export class WorkspaceAgentSessionManager {
     this.publish();
   }
 
+  private createWriteControl(
+    session: WorkspaceAgentSessionRuntime,
+    run: NonNullable<WorkspaceAgentSessionRuntime["run"]>,
+  ): WorkspaceAgentWriteControl {
+    return {
+      approve: (request) => {
+        if (session.run !== run || request.signal?.aborted) return Promise.resolve(false);
+        let openPath = this.currentOpenDocumentPath();
+        if (openPath != null && openPath == request.path) return Promise.resolve(true);
+        if (session.allowedPaths.has(request.path)) return Promise.resolve(true);
+
+        let id = `approval-${++this.nextRecordId}`;
+        return new Promise<boolean>((resolve) => {
+          let onAbort = () => settle(false);
+          let settle = (approved: boolean) => {
+            request.signal?.removeEventListener("abort", onAbort);
+            if (session.approvals.get(id)?.resolve === settle) session.approvals.delete(id);
+            resolve(approved);
+          };
+          session.approvals.set(id, {
+            resolve: settle,
+            view: { change: request.change, id, path: request.path },
+          });
+          request.signal?.addEventListener("abort", onAbort, { once: true });
+          this.publish();
+        });
+      },
+      onApplied: (edit) => {
+        if (!this.sessions.has(session.chat.id)) return;
+        session.edits.push({
+          record: {
+            change: edit.change,
+            id: `edit-${++this.nextRecordId}`,
+            path: edit.path,
+            status: "applied",
+          },
+          revert: () => edit.revert(),
+        });
+        if (session.edits.length > maxEditRecordsPerSession) session.edits.shift();
+        this.publish();
+      },
+    };
+  }
+
+  private currentOpenDocumentPath() {
+    try {
+      return this.openDocumentPath();
+    } catch {
+      return null;
+    }
+  }
+
+  private denyPendingApprovals(session: WorkspaceAgentSessionRuntime) {
+    let approvals = [...session.approvals.values()];
+    session.approvals.clear();
+    for (let approval of approvals) approval.resolve(false);
+  }
+
   private stopAllSessions(publish: boolean) {
     let changed = false;
     for (let session of this.sessions.values()) {
@@ -251,7 +402,10 @@ export class WorkspaceAgentSessionManager {
       }),
     });
     session = {
+      allowedPaths: new Set(),
+      approvals: new Map(),
       chat,
+      edits: [],
       failure: null,
       run: null,
       status: "idle",
@@ -271,6 +425,7 @@ export class WorkspaceAgentSessionManager {
   }
 
   private stopSession(session: WorkspaceAgentSessionRuntime) {
+    this.denyPendingApprovals(session);
     try {
       void session.chat.stop().catch(() => undefined);
     } catch {
@@ -303,6 +458,8 @@ export class WorkspaceAgentSessionManager {
       hasApiKey: Boolean(this.#apiKey),
       model: this.model,
       sessions: Array.from(this.sessions, ([id, session]) => ({
+        approvals: Array.from(session.approvals.values(), (approval) => approval.view),
+        edits: session.edits.map((edit) => edit.record),
         id,
         status: sessionStatus(session),
         title: session.title,

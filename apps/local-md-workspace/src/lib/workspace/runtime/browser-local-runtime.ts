@@ -3,16 +3,13 @@ import {
   openOpendalBrowserOperator,
   type CreateOpendalBrowserOperatorOptions,
 } from "@codemirror-treesitter/opendal-wasm-browser";
-import {
-  findWorkspaceFilePathForHandle,
-  queryReadWritePermission,
-  type AccessDirectoryHandle,
-} from "../file-system.ts";
+import { findWorkspaceFilePathForHandle, type AccessDirectoryHandle } from "../file-system.ts";
 import { StaticOpendalOperatorHost } from "../storage/opendal-operator-host.ts";
 import { OpendalWorkspaceObjectStore } from "../storage/opendal-workspace-object-store.ts";
 import { legacyLocalWorkspaceId, localWorkspaceSourceAliases } from "../source-identity.ts";
 import { DefaultWorkspaceDocuments } from "../documents/workspace-documents.ts";
 import { WorkspaceDocumentChangeMonitor } from "./document-changes.ts";
+import { FileSystemPermissionTracker, PermissionAwareOperatorHost } from "./local-permission.ts";
 import { createWorkspaceRuntimeDisposal } from "./runtime-disposal.ts";
 import {
   OpendalWorkspaceAssetService,
@@ -41,7 +38,12 @@ export async function createBrowserLocalWorkspaceRuntime(input: {
     },
     input.runtimeOptions ?? defaultOpendalBrowserRuntimeOptions(),
   );
-  let host = new StaticOpendalOperatorHost(identity, operator);
+  let permission = new FileSystemPermissionTracker(input.handle);
+  void permission.check();
+  let host = new PermissionAwareOperatorHost(
+    new StaticOpendalOperatorHost(identity, operator),
+    permission,
+  );
   let store = new OpendalWorkspaceObjectStore(host);
   let documentSource = new OpendalWorkspaceDocumentService(store);
   let documentChanges = new WorkspaceDocumentChangeMonitor({
@@ -69,7 +71,8 @@ export async function createBrowserLocalWorkspaceRuntime(input: {
     entries: new OpendalWorkspaceEntryService(store),
     host: {
       findFilePathForHandle: (handle) => findWorkspaceFilePathForHandle(input.handle, handle),
-      queryPermission: () => queryReadWritePermission(input.handle),
+      permission,
+      queryPermission: () => permission.check(),
     },
     identity,
     tree: new OpendalWorkspaceTreeService(store, identity.name),

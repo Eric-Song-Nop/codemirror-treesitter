@@ -3,9 +3,15 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { WorkspaceAgentHost } from "@/lib/agent/application/host-port";
 import { runWorkspaceAgent } from "@/lib/agent/runtime";
-import { WorkspaceAgentSessionManager } from "./workspace-agent-session-manager";
+import {
+  WorkspaceAgentSessionManager,
+  type WorkspaceAgentWriteDecision,
+} from "./workspace-agent-session-manager";
 
 export type {
+  WorkspaceAgentEditRecord,
+  WorkspaceAgentPendingApproval,
+  WorkspaceAgentWriteDecision,
   WorkspaceAgentErrorCode,
   WorkspaceAgentRunner,
   WorkspaceAgentRunStatus,
@@ -14,6 +20,8 @@ export type {
 
 export type UseWorkspaceAgentOptions = {
   getApiKey: () => string | null;
+  /** Workspace path of the document open in the editor, if any. */
+  getOpenDocumentPath?: () => string | null;
   runner?: typeof runWorkspaceAgent;
   scopeKey: string;
   subscribeToCredentials: (listener: () => void) => () => void;
@@ -23,6 +31,7 @@ export type UseWorkspaceAgentOptions = {
 
 export function useWorkspaceAgent({
   getApiKey,
+  getOpenDocumentPath,
   runner = runWorkspaceAgent,
   scopeKey,
   subscribeToCredentials,
@@ -51,6 +60,15 @@ export function useWorkspaceAgent({
   );
   let stop = useCallback(() => manager.stop(), [manager]);
   let stopAll = useCallback(() => manager.stopAll(), [manager]);
+  let resolveApproval = useCallback(
+    (approvalId: string, decision: WorkspaceAgentWriteDecision) =>
+      manager.resolveApproval(activeSessionId, approvalId, decision),
+    [activeSessionId, manager],
+  );
+  let revertEdit = useCallback(
+    (editId: string) => manager.revertEdit(activeSessionId, editId),
+    [activeSessionId, manager],
+  );
   let send = useCallback(
     (prompt: string, createHost: () => WorkspaceAgentHost | null) =>
       manager.send(prompt, createHost),
@@ -65,6 +83,10 @@ export function useWorkspaceAgent({
   useLayoutEffect(() => {
     manager.setRunner(runner);
   }, [manager, runner]);
+
+  useLayoutEffect(() => {
+    manager.setOpenDocumentResolver(getOpenDocumentPath ?? (() => null));
+  }, [getOpenDocumentPath, manager]);
 
   useLayoutEffect(() => {
     let syncCredential = () => manager.syncApiKey(getApiKey());
@@ -84,12 +106,16 @@ export function useWorkspaceAgent({
 
   return {
     activeSessionId,
+    approvals: activeSession.approvals,
+    edits: activeSession.edits,
     error,
     errorCode: manager.errorCode(),
     hasApiKey,
     messages,
     model,
     newChat,
+    resolveApproval,
+    revertEdit,
     running,
     selectSession,
     send,
@@ -111,9 +137,17 @@ function createWorkspaceAgentSessionAccess(runner: typeof runWorkspaceAgent) {
     deactivate: () => manager.deactivate(),
     newSession: () => manager.newSession(),
     resetSessions: () => manager.resetSessions(),
+    resolveApproval: (
+      sessionId: string,
+      approvalId: string,
+      decision: WorkspaceAgentWriteDecision,
+    ) => manager.resolveApproval(sessionId, approvalId, decision),
+    revertEdit: (sessionId: string, editId: string) => manager.revertEdit(sessionId, editId),
     selectSession: (sessionId: string) => manager.selectSession(sessionId),
     send: (prompt: string, createHost: () => WorkspaceAgentHost | null) =>
       manager.send(prompt, createHost),
+    setOpenDocumentResolver: (resolver: () => string | null) =>
+      manager.setOpenDocumentResolver(resolver),
     setModel: (model: Parameters<WorkspaceAgentSessionManager["setModel"]>[0]) =>
       manager.setModel(model),
     setRunner: (nextRunner: typeof runWorkspaceAgent) => manager.setRunner(nextRunner),

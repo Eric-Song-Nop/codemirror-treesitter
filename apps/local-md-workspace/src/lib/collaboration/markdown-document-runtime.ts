@@ -3,7 +3,7 @@ import {
   liveMdLoroCollaborationPlugin,
 } from "@codemirror-treesitter/live-md-loro";
 import type { LiveMdConfig } from "@codemirror-treesitter/live-md";
-import { LoroDoc, UndoManager, VersionVector } from "loro-crdt";
+import { LoroDoc, VersionVector, type UndoManager } from "loro-crdt";
 import type { Frontiers } from "loro-crdt";
 import { createDebouncedTask, type DebouncedTask } from "@/lib/scheduling/debounced-task";
 import type { SourceObservation } from "@/lib/workspace/storage/types";
@@ -20,6 +20,7 @@ import {
   type DocumentSourceRef,
 } from "@/lib/workspace/source-identity";
 import { hashMarkdownText } from "./markdown-hash.ts";
+import { createUserUndoManager, LOCAL_MD_EXTERNAL_SOURCE_ORIGIN } from "./undo-origins.ts";
 import {
   appendBrowserCollabUpdates,
   clearBrowserCollabUpdates,
@@ -193,7 +194,7 @@ export async function openMarkdownCollabDocument(
       source = presentSourceState(observation.value);
     }
 
-    let ownedUndoManager = new UndoManager(doc, {});
+    let ownedUndoManager = createUserUndoManager(doc);
     undoManager = ownedUndoManager;
     let value = readMarkdownText(doc);
     if (!(options.reconcileExternalEdits ?? true)) {
@@ -846,7 +847,7 @@ function replaceMarkdownText(doc: LoroDoc, value: string) {
 
     if (current) text.delete(0, current.length);
     if (value) text.insert(0, value);
-    doc.commit();
+    doc.commit({ origin: LOCAL_MD_EXTERNAL_SOURCE_ORIGIN });
   } finally {
     text.free();
   }

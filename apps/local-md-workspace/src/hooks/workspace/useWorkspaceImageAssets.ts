@@ -31,7 +31,7 @@ import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type UseWorkspaceImageAssetsOptions = {
-  editorDocument: EditorDocument;
+  editorDocument: Pick<EditorDocument, "path">;
   editorElementRef: RefObject<LiveMdEditorElement | null>;
   imageUploadAbortRef: RefObject<AbortController | null>;
   selectedFile: MarkdownFileNode | null;

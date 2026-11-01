@@ -10,7 +10,7 @@ import type {
   WorkspaceAgentWriteFileInput,
   WorkspaceAgentWriteFileResult,
 } from "../domain/contracts.ts";
-import type { WorkspaceAgentHost } from "./host-port.ts";
+import type { WorkspaceAgentHost, WorkspaceAgentWriteControl } from "./host-port.ts";
 import type { WorkspaceAgentRunEvent } from "./run-contracts.ts";
 
 export type WorkspaceAgentToolExecution = {
@@ -38,11 +38,15 @@ export interface WorkspaceAgentToolSession {
   ): Promise<WorkspaceAgentWriteFileResult>;
 }
 
-type ToolDeduplicatedEvent = Extract<WorkspaceAgentRunEvent, { type: "tool-deduplicated" }>;
+type ToolSessionEvent = Extract<
+  WorkspaceAgentRunEvent,
+  { type: "file-edit-applied" | "tool-deduplicated" }
+>;
 
 export function createWorkspaceAgentToolSession(
   host: WorkspaceAgentHost,
-  onEvent?: (event: ToolDeduplicatedEvent) => void,
+  onEvent?: (event: ToolSessionEvent) => void,
+  writeControl?: WorkspaceAgentWriteControl,
 ): WorkspaceAgentToolSession {
   let calls = new Map<string, { promise: Promise<unknown>; semanticKey: string }>();
 
@@ -100,6 +104,26 @@ export function createWorkspaceAgentToolSession(
         host.searchMarkdown(input, execution.signal),
       ),
     writeFile: (input, execution) =>
-      execute("write_file", input, execution, () => host.writeFile(input, execution.signal)),
+      execute("write_file", input, execution, () =>
+        host.writeFile(input, execution.signal, {
+          approve: writeControl?.approve
+            ? (request) => writeControl.approve!({ ...request, toolCallId: execution.callId })
+            : undefined,
+          onApplied: (edit) => {
+            let applied = { ...edit, toolCallId: execution.callId };
+            try {
+              onEvent?.({
+                change: applied.change,
+                path: applied.path,
+                toolCallId: execution.callId,
+                type: "file-edit-applied",
+              });
+            } catch {
+              // Observers must not interrupt a tool transaction.
+            }
+            writeControl?.onApplied?.(applied);
+          },
+        }),
+      ),
   };
 }

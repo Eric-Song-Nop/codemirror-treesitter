@@ -1,4 +1,5 @@
-import type { WorkspaceAgentHost } from "./host-port.ts";
+import type { WorkspaceAgentChangeSummary, WorkspaceAgentToolTarget } from "../domain/contracts.ts";
+import type { WorkspaceAgentHost, WorkspaceAgentWriteControl } from "./host-port.ts";
 
 export type WorkspaceAgentMessage = {
   content: string;
@@ -39,13 +40,21 @@ export type WorkspaceAgentRunEvent =
       type: "step-finish";
     }
   | {
+      target?: WorkspaceAgentToolTarget;
       toolCallId: string;
       toolName: string;
       type: "tool-start";
     }
   | {
+      change: WorkspaceAgentChangeSummary;
+      path: string;
+      toolCallId: string;
+      type: "file-edit-applied";
+    }
+  | {
       durationMs: number;
       outcome: "error" | "success";
+      result?: { reason?: string; status?: string };
       toolCallId: string;
       toolName: string;
       type: "tool-finish";
@@ -67,6 +76,8 @@ export type WorkspaceAgentRunRequest = {
   onEvent?: (event: WorkspaceAgentRunEvent) => void;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Approval gate and applied-edit observer enforced at tool execution. */
+  writeControl?: WorkspaceAgentWriteControl;
 };
 
 export type WorkspaceAgentRunResult = {

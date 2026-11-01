@@ -10,8 +10,12 @@ import {
   type StoredWorkspaceKind,
 } from "@/lib/workspace/store";
 import type { MarkdownDirectoryNode, MarkdownFileNode } from "@/lib/workspace/tree";
-import type { EditorDocument, SaveState, SingleFileSource } from "@/lib/workspace/types";
-import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
+import type { SaveState, SingleFileSource } from "@/lib/workspace/types";
+import type {
+  DocumentSourceState,
+  WorkspaceIdentity,
+  WorkspaceRuntime,
+} from "@/lib/workspace/runtime/types";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 export type WorkspaceDocumentOpening = {
@@ -25,13 +29,39 @@ export type WorkspaceDocumentView = {
   value: string;
 };
 
+/**
+ * Key for the editor document. The document text itself is not stored here:
+ * it lives in the Loro document (workspace files) or the editor session
+ * (standalone files) and is read through {@link workspaceLiveObjects}.
+ */
+export type WorkspaceEditorDocumentKey = {
+  path: string;
+  version: number;
+};
+
+/** Plain-data description of the active workspace runtime. */
+export type WorkspaceRuntimeKey = {
+  generation: number;
+  identity: WorkspaceIdentity;
+};
+
+/** Plain-data description of the collaborative document shown in the editor. */
+export type WorkspaceDocumentViewKey = {
+  docId: string;
+  generation: number;
+  path: string;
+};
+
+export type WorkspaceDocumentSourceKind = DocumentSourceState["kind"];
+
 export type WorkspaceAppSnapshot = {
   agentActivated: boolean;
   agentOpen: boolean;
   busy: boolean;
-  collabDocument: WorkspaceCollaborativeDocument | null;
+  documentSourceKind: WorkspaceDocumentSourceKind | null;
+  documentView: WorkspaceDocumentViewKey | null;
   dropboxConnecting: boolean;
-  editorDocument: EditorDocument;
+  editorDocument: WorkspaceEditorDocumentKey;
   errorMessage: string;
   openingDocument: WorkspaceDocumentOpening | null;
   recoveryCopyPath: string;
@@ -48,8 +78,31 @@ export type WorkspaceAppSnapshot = {
   storedWorkspaceKind: StoredWorkspaceKind | null;
   tree: MarkdownDirectoryNode | null;
   treeSelection: FileTreeDeleteTarget | null;
+  workspace: WorkspaceRuntimeKey | null;
+  workspacePermission: PermissionState | null;
+};
+
+/**
+ * Live, disposable objects that back the plain keys in the store. They are
+ * owned by the workspace lifecycle code and must not be put in Zustand state.
+ */
+export type WorkspaceLiveObjects = {
+  collabDocument: WorkspaceCollaborativeDocument | null;
+  editorValue: string;
+  generation: number;
   workspaceRuntime: WorkspaceRuntime | null;
 };
+
+const liveObjectsByStore = new WeakMap<WorkspaceAppStore, WorkspaceLiveObjects>();
+
+export function workspaceLiveObjects(store: WorkspaceAppStore): WorkspaceLiveObjects {
+  let live = liveObjectsByStore.get(store);
+  if (!live) {
+    live = { collabDocument: null, editorValue: "", generation: 0, workspaceRuntime: null };
+    liveObjectsByStore.set(store, live);
+  }
+  return live;
+}
 
 export type WorkspaceStateUpdate<Value> = Value | ((current: Value) => Value);
 export type WorkspaceStateSetter<Value> = (update: WorkspaceStateUpdate<Value>) => void;
@@ -68,7 +121,6 @@ export type WorkspaceAppSetters = {
   setAgentOpen: WorkspaceStateSetter<boolean>;
   setBusy: WorkspaceStateSetter<boolean>;
   setDropboxConnecting: WorkspaceStateSetter<boolean>;
-  setEditorDocument: WorkspaceStateSetter<EditorDocument>;
   setErrorMessage: WorkspaceStateSetter<string>;
   setRecoveryCopyPath: WorkspaceStateSetter<string>;
   setRecoveryDialogAction: WorkspaceStateSetter<DocumentRecoveryAction | null>;
@@ -82,7 +134,6 @@ export type WorkspaceAppSetters = {
   setStoredWorkspaceKind: WorkspaceStateSetter<StoredWorkspaceKind | null>;
   setTree: WorkspaceStateSetter<MarkdownDirectoryNode | null>;
   setTreeSelection: WorkspaceStateSetter<FileTreeDeleteTarget | null>;
-  setWorkspaceRuntime: WorkspaceStateSetter<WorkspaceRuntime | null>;
 };
 
 export function createWorkspaceAppStore(): WorkspaceAppStore {
@@ -107,7 +158,6 @@ export function createWorkspaceAppSetters(store: WorkspaceAppStore): WorkspaceAp
     setAgentOpen: setter("agentOpen"),
     setBusy: setter("busy"),
     setDropboxConnecting: setter("dropboxConnecting"),
-    setEditorDocument: setter("editorDocument"),
     setErrorMessage: setter("errorMessage"),
     setRecoveryCopyPath: setter("recoveryCopyPath"),
     setRecoveryDialogAction: setter("recoveryDialogAction"),
@@ -121,8 +171,35 @@ export function createWorkspaceAppSetters(store: WorkspaceAppStore): WorkspaceAp
     setStoredWorkspaceKind: setter("storedWorkspaceKind"),
     setTree: setter("tree"),
     setTreeSelection: setter("treeSelection"),
-    setWorkspaceRuntime: setter("workspaceRuntime"),
   };
+}
+
+/** Installs the active workspace runtime and publishes its plain-data key. */
+export function publishWorkspaceRuntime(
+  store: WorkspaceAppStore,
+  runtime: WorkspaceRuntime | null,
+) {
+  let live = workspaceLiveObjects(store);
+  live.workspaceRuntime = runtime;
+  store.setState({
+    workspace: runtime ? { generation: ++live.generation, identity: runtime.identity } : null,
+    workspacePermission: runtime?.host.permission?.state ?? null,
+  });
+}
+
+/**
+ * Publishes new editor text. The version only changes when the path or text
+ * differs from the last published value, matching the editor's reset contract.
+ */
+export function publishEditorDocumentValue(
+  store: WorkspaceAppStore,
+  next: { path: string; value: string },
+) {
+  let live = workspaceLiveObjects(store);
+  let current = store.getState().editorDocument;
+  if (current.path == next.path && live.editorValue == next.value) return;
+  live.editorValue = next.value;
+  store.setState({ editorDocument: { path: next.path, version: current.version + 1 } });
 }
 
 export function publishWorkspaceDocumentOpening(
@@ -130,13 +207,8 @@ export function publishWorkspaceDocumentOpening(
   opening: WorkspaceDocumentOpening,
   currentValue?: string,
 ) {
-  store.setState((state) => ({
-    editorDocument:
-      currentValue == null
-        ? state.editorDocument
-        : { ...state.editorDocument, value: currentValue },
-    openingDocument: opening,
-  }));
+  if (currentValue != null) workspaceLiveObjects(store).editorValue = currentValue;
+  store.setState({ openingDocument: opening });
 }
 
 export function clearWorkspaceDocumentOpening(store: WorkspaceAppStore) {
@@ -144,11 +216,14 @@ export function clearWorkspaceDocumentOpening(store: WorkspaceAppStore) {
 }
 
 export function clearWorkspaceDocumentView(store: WorkspaceAppStore, preserveOpening = false) {
+  let live = workspaceLiveObjects(store);
+  live.collabDocument = null;
+  live.editorValue = "";
   store.setState((state) => ({
-    collabDocument: null,
+    documentSourceKind: null,
+    documentView: null,
     editorDocument: {
       path: "",
-      value: "",
       version: state.editorDocument.version + 1,
     },
     openingDocument: preserveOpening ? state.openingDocument : null,
@@ -167,11 +242,14 @@ export function publishSingleFileDocumentView(
     value: string;
   },
 ) {
+  let live = workspaceLiveObjects(store);
+  live.collabDocument = null;
+  live.editorValue = input.value;
   store.setState((state) => ({
-    collabDocument: null,
+    documentSourceKind: null,
+    documentView: null,
     editorDocument: {
       path: input.file.path,
-      value: input.value,
       version: state.editorDocument.version + 1,
     },
     openingDocument: null,
@@ -186,11 +264,18 @@ export function publishWorkspaceDocumentView(
   store: WorkspaceAppStore,
   input: WorkspaceDocumentView,
 ) {
+  let live = workspaceLiveObjects(store);
+  live.collabDocument = input.document;
+  live.editorValue = input.value;
   store.setState((state) => ({
-    collabDocument: input.document,
+    documentSourceKind: documentSourceKind(input.document),
+    documentView: {
+      docId: input.document.docId,
+      generation: ++live.generation,
+      path: input.document.path,
+    },
     editorDocument: {
       path: input.file.path,
-      value: input.value,
       version: state.editorDocument.version + 1,
     },
     openingDocument: null,
@@ -205,14 +290,33 @@ export function publishWorkspaceDocumentView(
   }));
 }
 
+/** Refreshes the source status of the displayed document after it changes. */
+export function publishWorkspaceDocumentSourceKind(
+  store: WorkspaceAppStore,
+  document: WorkspaceCollaborativeDocument,
+) {
+  if (workspaceLiveObjects(store).collabDocument !== document) return;
+  let next = documentSourceKind(document);
+  if (store.getState().documentSourceKind != next) store.setState({ documentSourceKind: next });
+}
+
+function documentSourceKind(
+  document: WorkspaceCollaborativeDocument,
+): WorkspaceDocumentSourceKind | null {
+  // Test doubles may omit collaboration state.
+  let state = document.collabState as WorkspaceCollaborativeDocument["collabState"] | undefined;
+  return state?.source.kind ?? null;
+}
+
 function createInitialWorkspaceAppSnapshot(): WorkspaceAppSnapshot {
   return {
     agentActivated: false,
     agentOpen: false,
     busy: false,
-    collabDocument: null,
+    documentSourceKind: null,
+    documentView: null,
     dropboxConnecting: false,
-    editorDocument: { path: "", value: "", version: 0 },
+    editorDocument: { path: "", version: 0 },
     errorMessage: "",
     openingDocument: null,
     recoveryCopyPath: "",
@@ -229,7 +333,8 @@ function createInitialWorkspaceAppSnapshot(): WorkspaceAppSnapshot {
     storedWorkspaceKind: loadStoredWorkspaceKind(),
     tree: null,
     treeSelection: null,
-    workspaceRuntime: null,
+    workspace: null,
+    workspacePermission: null,
   };
 }
 

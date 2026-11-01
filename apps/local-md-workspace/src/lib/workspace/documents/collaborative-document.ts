@@ -40,6 +40,8 @@ export type ManagedCollaborativeDocumentOptions = {
   documentSource: WorkspaceDocumentPort;
   identity: WorkspaceIdentity;
   path: string;
+  /** Registry hook that pins the document against idle/LRU eviction. */
+  retain?: () => () => void;
   state: CollabDocumentState;
 };
 
@@ -113,6 +115,11 @@ export class ManagedCollaborativeDocument implements WorkspaceCollaborativeDocum
   read() {
     this.assertOpen();
     return this.value;
+  }
+
+  retain() {
+    if (this.closeRequest) return () => {};
+    return this.options.retain?.() ?? (() => {});
   }
 
   snapshot(): CollaborativeDocumentSnapshot {

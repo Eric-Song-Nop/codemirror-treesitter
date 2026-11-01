@@ -1,26 +1,23 @@
 // @vitest-environment happy-dom
 
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { LoroDoc } from "loro-crdt";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createWorkspaceApplication } from "@/app/workspace-application";
-import { createWorkspaceAppSetters } from "@/app/workspace-store";
+import { workspaceLiveObjects } from "@/app/workspace-store";
 import { resetBrowserCollabMemoryStoreForTests } from "@/lib/collaboration/collab-browser-store";
 import { resetOwnerShareRecordStoreForTests } from "@/lib/collaboration/share-storage";
 import type { AccessFileHandle } from "@/lib/workspace/file-system";
 import { createLocalFileSource } from "@/lib/workspace/single-file";
+import { WorkspaceStorageError } from "@/lib/workspace/storage/types";
+import type { WorkspaceHostPermission } from "@/lib/workspace/runtime/types";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import { createMemoryWorkspaceRuntime } from "@/test/memory-workspace-runtime";
-import { useWorkspaceDocumentActions } from "./useWorkspaceDocumentActions";
+import { WorkspaceEditorSession } from "./workspace-editor-session";
 
-type DocumentActions = ReturnType<typeof useWorkspaceDocumentActions>;
-type DocumentActionOptions = Parameters<typeof useWorkspaceDocumentActions>[0];
 type ReactActGlobal = typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 
-let container: HTMLDivElement | null = null;
 let fixture: ReturnType<typeof createDocumentActionsFixture> | null = null;
-let root: Root | null = null;
 let runtime: ReturnType<typeof createMemoryWorkspaceRuntime> | null = null;
 let testGates = new Set<{ open(): void }>();
 
@@ -32,23 +29,15 @@ beforeEach(() => {
   vi.stubGlobal("indexedDB", undefined);
   resetBrowserCollabMemoryStoreForTests();
   resetOwnerShareRecordStoreForTests();
-  container = document.body.appendChild(document.createElement("div"));
-  root = createRoot(container);
 });
 
 afterEach(async () => {
   for (let gate of testGates) gate.open();
   testGates.clear();
   fixture?.options.autoSaveTaskRef.current?.task.dispose();
-  if (root) {
-    act(() => root?.unmount());
-    root = null;
-  }
   await fixture?.application.dispose();
   await runtime?.dispose();
   runtime = null;
-  container?.remove();
-  container = null;
   fixture = null;
   resetBrowserCollabMemoryStoreForTests();
   resetOwnerShareRecordStoreForTests();
@@ -56,7 +45,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe("useWorkspaceDocumentActions", () => {
+describe("WorkspaceEditorSession document actions", () => {
   it("reuses the same collaborative document across A, B, then A selection", async () => {
     let fileA = markdownFile("a.md");
     let fileB = markdownFile("b.md");
@@ -68,7 +57,6 @@ describe("useWorkspaceDocumentActions", () => {
       { id: "memory:document-actions-a-b-a" },
     );
     fixture = createDocumentActionsFixture();
-    await renderFixture(fixture);
     await act(async () => {
       await fixture?.api?.loadFile(runtime!, fileA, { saveCurrent: false });
       expect(await fixture?.api?.saveCurrentFile()).toBe(true);
@@ -108,7 +96,6 @@ describe("useWorkspaceDocumentActions", () => {
       { id: "memory:document-actions-immutable-save" },
     );
     fixture = createDocumentActionsFixture();
-    await renderFixture(fixture);
     await act(async () => {
       await fixture?.api?.loadFile(runtime!, fileA, { saveCurrent: false });
     });
@@ -162,7 +149,6 @@ describe("useWorkspaceDocumentActions", () => {
       { id: "memory:document-actions-unselected-updates" },
     );
     fixture = createDocumentActionsFixture();
-    await renderFixture(fixture);
     await act(async () => {
       await fixture!.api!.loadFile(runtime!, fileA, { saveCurrent: false });
     });
@@ -209,7 +195,6 @@ describe("useWorkspaceDocumentActions", () => {
       id: "memory:document-actions-dirty-standalone",
     });
     fixture = createDocumentActionsFixture();
-    await renderFixture(fixture);
     let signal = fixture.application.documentViews.begin(standaloneFile.path);
     await act(async () => {
       await fixture!.api!.activateSingleFileDocument(
@@ -235,63 +220,95 @@ describe("useWorkspaceDocumentActions", () => {
     expect(fixture.options.selectedFileSourceRef.current).toBe(standaloneSource);
     expect(fixture.options.singleFileSourceRef.current).toMatchObject({ kind: "local-file" });
     expect(fixture.store.getState()).toMatchObject({
-      editorDocument: { path: standaloneFile.path, value: dirtyValue },
+      editorDocument: { path: standaloneFile.path },
       selectedFile: standaloneFile,
+    });
+    expect(workspaceLiveObjects(fixture.store).editorValue).toBe(dirtyValue);
+  });
+
+  it("re-grants folder access and resumes the selected document's failed save", async () => {
+    let file = markdownFile("note.md");
+    runtime = createMemoryWorkspaceRuntime([[file.path, "# Note\n"]], {
+      id: "memory:session-regrant",
+    });
+    let permissionState: PermissionState = "granted";
+    let listeners = new Set<(state: PermissionState) => void>();
+    let setPermission = (state: PermissionState) => {
+      permissionState = state;
+      for (let listener of listeners) listener(state);
+    };
+    let request = vi.fn(async () => {
+      setPermission("granted");
+      return permissionState;
+    });
+    let permission: WorkspaceHostPermission = {
+      get state() {
+        return permissionState;
+      },
+      check: vi.fn(async () => permissionState),
+      request,
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    runtime.host.permission = permission;
+    fixture = createDocumentActionsFixture();
+    await act(async () => {
+      await fixture!.session.replaceWorkspaceRuntime(runtime!);
+      await fixture!.api!.loadFile(runtime!, file, { saveCurrent: false });
+    });
+
+    let document = fixture.application.documentViews.current()!.collabDocument;
+    vi.spyOn(runtime.documentSource, "commit").mockRejectedValueOnce(
+      new WorkspaceStorageError({ code: "permission-denied", message: "Access revoked." }),
+    );
+    document.edit([{ expectedText: "", from: 7, insert: "Edited.\n", to: 7 }]);
+    await act(async () => {
+      await document.flush().catch(() => {});
+      setPermission("denied");
+    });
+    expect(fixture.store.getState()).toMatchObject({
+      saveState: "error",
+      workspacePermission: "denied",
+    });
+
+    let resume = vi.spyOn(document, "importExternalChange");
+    let resumed = false;
+    await act(async () => {
+      resumed = await fixture!.session.regrantWorkspaceAccess();
+    });
+
+    expect(resumed).toBe(true);
+    expect(request).toHaveBeenCalledOnce();
+    expect(resume).toHaveBeenCalledOnce();
+    expect(runtime.files.get(file.path)).toBe("# Note\nEdited.\n");
+    expect(fixture.store.getState()).toMatchObject({
+      errorMessage: "",
+      saveState: "saved",
+      workspacePermission: "granted",
     });
   });
 });
 
-async function renderFixture(nextFixture: ReturnType<typeof createDocumentActionsFixture>) {
-  await act(async () => {
-    root?.render(<DocumentActionsHarness fixture={nextFixture} />);
-  });
-}
-
-function DocumentActionsHarness({
-  fixture: nextFixture,
-}: {
-  fixture: ReturnType<typeof createDocumentActionsFixture>;
-}) {
-  nextFixture.api = useWorkspaceDocumentActions(nextFixture.options);
-  return null;
-}
-
 function createDocumentActionsFixture() {
   let application = createWorkspaceApplication();
   let store = application.store;
-  let setters = createWorkspaceAppSetters(store);
-  let saveStateRef: DocumentActionOptions["saveStateRef"] = { current: "idle" };
-  let options: DocumentActionOptions = {
-    autoSaveTaskRef: { current: null },
-    cancelImageUpload: vi.fn(),
-    cleanValueRef: { current: "" },
-    collabDocumentRef: { current: null },
+  let session = new WorkspaceEditorSession({
     documentViews: application.documentViews,
-    dirtyRef: { current: false },
-    editorValueRef: { current: "" },
-    localFileHandleRef: { current: null },
-    saveOperationRef: { current: 0 },
-    saveStateRef,
-    scheduleAutoSaveRef: { current: () => {} },
-    selectedFileSourceRef: { current: null },
-    selectedFileRef: { current: null },
+    effectRuntime: application.runtime,
+    store,
+  });
+  session.connectShareHost({
     setActiveShareRecord: vi.fn(),
     setCreatedShare: vi.fn(),
-    setEditorDocument: setters.setEditorDocument,
-    setErrorMessage: setters.setErrorMessage,
-    setRetryLoadPath: setters.setRetryLoadPath,
-    setSaveStateSynced(nextState) {
-      saveStateRef.current = nextState;
-      setters.setSaveState(nextState);
-    },
-    singleFileSourceRef: { current: null },
     startOwnerShareHost: vi.fn(async () => {}),
-    workspaceAppStore: store,
-  };
+  });
   return {
+    api: session as WorkspaceEditorSession | null,
     application,
-    api: null as DocumentActions | null,
-    options,
+    options: session.refs,
+    session,
     store,
   };
 }

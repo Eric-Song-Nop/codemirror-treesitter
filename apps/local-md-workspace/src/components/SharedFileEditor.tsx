@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { LiveMdConfig } from "@codemirror-treesitter/live-md";
 import { liveMdLoroCollaborationPlugin } from "@codemirror-treesitter/live-md-loro";
 import { AlertCircleIcon, CloudIcon, RefreshCwIcon, WifiIcon, WifiOffIcon } from "lucide-react";
-import { LoroDoc, UndoManager } from "loro-crdt";
+import { LoroDoc, type UndoManager } from "loro-crdt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
@@ -20,6 +20,7 @@ import { useSharedFileSession } from "@/hooks/shared/useSharedFileSession";
 import { translateKnownMessage, useI18n, type TFunction, type Locale } from "@/lib/i18n";
 import { useLiveMdPreload } from "@/lib/editor/live-md-preload";
 import type { SerializedCollabVersionVector } from "@/lib/collaboration/collab-browser-store";
+import { createUserUndoManager } from "@/lib/collaboration/undo-origins";
 
 type SharedFileRoute =
   | {
@@ -42,7 +43,7 @@ export function SharedFileEditor({ href = window.location.href }: SharedFileEdit
     let doc = new LoroDoc();
     let undoManager: UndoManager;
     try {
-      undoManager = new UndoManager(doc, {});
+      undoManager = createUserUndoManager(doc);
     } catch (error) {
       doc.free();
       throw error;

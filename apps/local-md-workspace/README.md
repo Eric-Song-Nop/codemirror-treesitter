@@ -21,11 +21,17 @@ packages.
 - Route local-directory and cloud workspace content through one OpenDAL browser
   operator and `WorkspaceObjectStore`, with explicit revisions, conditional
   writes, readback verification, document-owned persistence ordering, and token
-  renewal that never blindly replays an indeterminate mutation. OneDrive and
-  Google Drive runtime construction exists in source, but those providers are
-  not exposed in the current Grove UI.
+  renewal that never blindly replays an indeterminate mutation. Dropbox is the
+  only cloud provider; the provider-neutral PKCE flow in
+  `src/lib/workspace/providers/pkce-oauth.ts` is the extension point for adding
+  another one.
 - Build a Markdown file tree, create/rename/delete files and folders, materialize
-  collaborative edits, and surface permission/storage errors. Every opened
+  collaborative edits, and surface permission/storage errors. Local folder
+  read/write permission is re-queried when the page becomes visible and before
+  the first write after it was hidden; `NotAllowedError`/`SecurityError`
+  failures map to `permission-denied`, writes are blocked until access returns,
+  and a "Grant access again" banner re-prompts and resumes the selected
+  document's pending save. Every opened
   workspace document remains monitored for its workspace lifetime:
   BrowserLocal uses a non-recursive `FileSystemObserver` on each immediate
   parent when available, with an adaptive authoritative polling fallback shared
@@ -43,8 +49,19 @@ packages.
   the rendered document as PDF through the browser.
 - Maintain one Loro-backed document for every opened workspace path so local,
   remote, cross-tab, and external-file changes share one content authority even
-  while the file is not selected.
+  while the file is not selected. Documents are reference-counted: editor views
+  and in-flight Agent edits retain them, unretained documents close after 60 s
+  idle, and an LRU cap of 32 evicts the oldest idle documents. Documents with
+  unsaved changes are never evicted.
 - Create, rotate, revoke, and host shared-file links through the Grove relay.
+  The share host secret (the bearer for hosting, `/rotate`, and `/revoke`) is
+  read from page memory first and persisted in `localStorage` so the owner can
+  re-host, rotate, or revoke from a new tab; it is forgotten after revocation.
+  Threat model: the host secret is stored at rest unencrypted in the browser
+  profile. This protects against nothing on a compromised profile or under
+  XSS. If the product accepts a passphrase prompt for sharing, a
+  passphrase-locked vault like the Agent credential vault is the available
+  upgrade.
 - Open guest shared-file routes and sync through the relay without requiring
   access to the owner's local or cloud workspace.
 - Refresh expired Grove relay sessions automatically for guests and owner
@@ -74,8 +91,17 @@ packages.
 - `src/App.tsx`: i18n boundary and route shell for the workspace and shared-file
   editor.
 - `src/components/workspace/LocalWorkspaceApp.tsx`: main local workspace
-  composition root for restore flow, file operations, autosave, image assets,
-  sharing, owner hosting, and conflict handling.
+  composition root for restore flow, file operations, image assets, sharing,
+  owner hosting, and conflict handling. It subscribes only to low-frequency
+  store fields through `useWorkspaceRootState`; the containers in
+  `WorkspaceChrome.tsx` subscribe to save state, busy flags, error text, and
+  editor versions themselves.
+- `src/hooks/workspace/workspace-editor-session.ts`: the non-React editor
+  session that owns selected-document state, standalone autosave, collaborative
+  save status, document switching, runtime replacement, and folder-access
+  re-grant. Zustand holds only plain keys and status; the live runtime, the
+  displayed collaborative document, and the editor text live in
+  `workspaceLiveObjects(store)`.
 - `src/components/LiveMdEditor.tsx`: React wrapper for the LiveMD custom
   element and image input handling.
 - `src/components/FileTree.tsx`: Markdown tree navigation and file/folder
@@ -93,22 +119,24 @@ packages.
 - `src/lib/workspace/documents/*`: normalized-path collaborative document
   registry, Loro authority, browser recovery, external reconciliation, and the
   coalescing filesystem materializer.
-- `src/lib/workspace/providers/*`: provider-specific OAuth, redirect drafts,
-  configuration, and shared OpenDAL workspace identity. Dropbox, Google Drive,
-  and OneDrive each own a dedicated provider directory.
+- `src/lib/workspace/providers/*`: shared OpenDAL workspace identity, the
+  provider-neutral OAuth PKCE client (`pkce-oauth.ts`: S256 only, 64-byte state
+  and verifier, origin-checked popup `postMessage`, verifier in `sessionStorage`
+  only during a full-page redirect), and the Dropbox provider directory
+  (configuration, redirect drafts, and its PKCE provider config).
 - `src/lib/workspace/storage/*`: provider-neutral object storage contract,
   exact OpenDAL operator lifetime, explicit revision/CAS policy, indeterminate
   outcomes, and cross-tab path locking.
 - `src/lib/workspace/runtime/*`: focused tree, entry, asset, and low-level source
-  ports; BrowserLocal/cloud runtime assembly; per-document observation; and
+  ports; BrowserLocal/cloud runtime assembly; BrowserLocal folder-permission
+  tracking (`local-permission.ts`); per-document observation; and
   workspace-owned document-registry disposal. Workspace runtime replacement is
   serialized by an Effect service rather than a component-owned Promise queue.
 - `src/lib/workspace/workspace-data-cache.ts` and `query-keys.ts`: the narrow
   TanStack Query boundary for discardable workspace read data. They do not
   cache collaboration documents or runtime handles.
-- `src/hooks/workspace/use*WorkspaceRuntime.ts`: OAuth-aware provider runtime
-  construction. Dropbox is used by the current Grove UI; Google Drive and
-  OneDrive remain dormant.
+- `src/hooks/workspace/useDropboxWorkspaceRuntime.ts`: OAuth-aware Dropbox
+  runtime construction.
 - `src/lib/platform/*`: browser capability detection, PWA registration, and
   installed-PWA share-target launch handling.
 - `src/lib/editor/*`: React-side LiveMD initialization and retry state.
@@ -201,6 +229,21 @@ validate expected text atomically, then flush source projection separately from
 the applied logical edit. Guest shares, standalone drafts, arbitrary network,
 shell/eval/DOM automation, file lifecycle operations, persistent indexes, and
 conversation persistence are excluded.
+
+Every tool call shows its target path (or directory/query) in the panel, and
+each write shows a line-count summary and a short diff (capped at 40 lines).
+Writes to the document open in the editor apply directly. A write to any other
+file blocks at tool execution until the user clicks **Allow once**, **Allow
+this file for this chat**, or **Deny**; denial, Stop, or teardown rejects the
+write with `reason: "denied"` and nothing is committed. Each chat lists its
+applied edits ("Edited <path>") with a one-click **Revert** that reapplies the
+pre-edit text through the shared Loro document (resolved via
+`WorkspaceRuntime.documents.document(path)`); revert refuses when the edited
+span has changed since. Agent edits and reverts commit with the
+`live-md:external-edit` origin and are excluded from the user's undo stack.
+read/search/list results reach the model inside nonce-delimited
+`<untrusted-workspace-content>` blocks, and the system policy states their
+contents are data, not commands.
 
 The UI loads on first panel open and the AI SDK/DeepSeek adapter on first run;
 the model runtime stays outside the launcher and offline precache. See

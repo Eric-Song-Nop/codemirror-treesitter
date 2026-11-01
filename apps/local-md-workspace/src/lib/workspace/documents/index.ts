@@ -14,5 +14,7 @@ export type {
 export { normalizeWorkspaceDocumentPath } from "./collaborative-document.ts";
 export {
   DefaultWorkspaceDocuments,
+  WORKSPACE_DOCUMENT_IDLE_CLOSE_MS,
+  WORKSPACE_DOCUMENT_MAX_LIVE,
   type WorkspaceDocumentsOptions,
 } from "./workspace-documents.ts";
