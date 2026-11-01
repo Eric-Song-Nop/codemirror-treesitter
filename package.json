@@ -2,6 +2,7 @@
   "name": "codemirror-treesitter",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "workspaces": [
     "packages/*",
     "apps/*",
@@ -17,6 +18,7 @@
     "web-tree-sitter": "file:vendor/web-tree-sitter"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.1",
     "effect": "4.0.0-beta.107",
     "vite-plus": "catalog:"
   },
