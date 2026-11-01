@@ -153,6 +153,27 @@ Programming errors (invalid paths, broken invariants) stay defects.
   `runStandaloneEffect` (service-free effects, same Promise mapping as the
   bridge) with the caller's abort signal.
 
+### Agent runs
+
+- Each Agent turn runs as a fiber (`startRunFiber` in
+  `features/workspace-agent/workspace-agent-session-manager.ts`). The chat
+  transport hands the model/tool loop to the session's executor; interrupting
+  the fiber aborts the signal given to the runner. Stop, credential lock or
+  delete (the key becomes unavailable), scope changes, and deactivation call
+  `stopSession`, which interrupts the fiber synchronously, so the model request
+  and pending tool work stop before the chat finishes stopping. Interruption
+  rejects with an `AbortError`, which the chat treats as a stop.
+- The write-approval gate is an `Effect.callback`: it registers the pending
+  approval and waits for the user's decision; interrupting it (the run's signal
+  aborted) withdraws the request and denies the write.
+- The AI SDK stays behind its dynamic runtime adapter and lazy chunk; the
+  runner, tool session, and workspace host remain Promise ports taking an
+  `AbortSignal`. The credential vault is unchanged (PBKDF2-HMAC-SHA256 with
+  600,000 iterations, AES-GCM, `grove-agent-credentials`, fail closed). The API
+  key stays in the run configuration object and is never placed in Effect
+  state that outlives the run, span attributes, or Effect logging; the app
+  installs no Effect tracer, logger export, or error reporter.
+
 ### Calling Effect from the UI
 
 `runWorkspaceEffect(runtime, effect, { signal })` and the

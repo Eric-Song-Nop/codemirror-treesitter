@@ -1,5 +1,7 @@
 import { Chat } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
+import { Effect, Fiber } from "effect";
+import { runStandaloneEffect } from "@/app/effect-bridge";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type {
   WorkspaceAgentHost,
@@ -12,6 +14,7 @@ import {
   DEFAULT_WORKSPACE_AGENT_MODEL,
   type WorkspaceAgentModel,
 } from "@/lib/agent/providers/deepseek/config";
+import type { WorkspaceAgentRunResult } from "@/lib/agent/application/run-contracts";
 import type { runWorkspaceAgent } from "@/lib/agent/runtime";
 import { createWorkspaceAgentChatTransport } from "./chat-transport";
 
@@ -62,10 +65,23 @@ type WorkspaceAgentFailure = {
 
 type WorkspaceAgentRunConfiguration = {
   apiKey: string;
+  /** Runs the model/tool loop as this run's fiber (see `startRunFiber`). */
+  execute: WorkspaceAgentRunExecutor;
   host: WorkspaceAgentHost;
   model: WorkspaceAgentModel;
   runner: WorkspaceAgentRunner;
   writeControl: WorkspaceAgentWriteControl;
+};
+
+export type WorkspaceAgentRunExecutor = (
+  start: (signal: AbortSignal) => Promise<WorkspaceAgentRunResult>,
+  chatSignal: AbortSignal | undefined,
+) => Promise<WorkspaceAgentRunResult>;
+
+type WorkspaceAgentRun = {
+  configuration: WorkspaceAgentRunConfiguration;
+  fiber: Fiber.Fiber<WorkspaceAgentRunResult, unknown> | null;
+  succeeded: boolean;
 };
 
 type PendingApprovalRuntime = {
@@ -85,7 +101,7 @@ type WorkspaceAgentSessionRuntime = {
   chat: Chat<UIMessage>;
   edits: EditRecordRuntime[];
   failure: WorkspaceAgentFailure | null;
-  run: { configuration: WorkspaceAgentRunConfiguration; succeeded: boolean } | null;
+  run: WorkspaceAgentRun | null;
   status: Exclude<WorkspaceAgentRunStatus, "error" | "running">;
   title: string | null;
 };
@@ -236,14 +252,16 @@ export class WorkspaceAgentSessionManager {
       return false;
     }
 
-    let run: NonNullable<WorkspaceAgentSessionRuntime["run"]> = {
+    let run: WorkspaceAgentRun = {
       configuration: {
         apiKey: this.#apiKey,
+        execute: (start, chatSignal) => startRunFiber(run, start, chatSignal),
         host,
         model: this.model,
         runner: this.runner,
         writeControl: {},
       },
+      fiber: null,
       succeeded: false,
     };
     run.configuration.writeControl = this.createWriteControl(session, run);
@@ -303,7 +321,7 @@ export class WorkspaceAgentSessionManager {
 
   private createWriteControl(
     session: WorkspaceAgentSessionRuntime,
-    run: NonNullable<WorkspaceAgentSessionRuntime["run"]>,
+    run: WorkspaceAgentRun,
   ): WorkspaceAgentWriteControl {
     return {
       approve: (request) => {
@@ -313,20 +331,24 @@ export class WorkspaceAgentSessionManager {
         if (session.allowedPaths.has(request.path)) return Promise.resolve(true);
 
         let id = `approval-${++this.nextRecordId}`;
-        return new Promise<boolean>((resolve) => {
-          let onAbort = () => settle(false);
+        // The gate waits for the user's decision. Interrupting it (the run's
+        // signal aborted by Stop, lock, or delete) withdraws the request and
+        // denies the write.
+        let gate = Effect.callback<boolean>((resume) => {
           let settle = (approved: boolean) => {
-            request.signal?.removeEventListener("abort", onAbort);
             if (session.approvals.get(id)?.resolve === settle) session.approvals.delete(id);
-            resolve(approved);
+            resume(Effect.succeed(approved));
           };
           session.approvals.set(id, {
             resolve: settle,
             view: { change: request.change, id, path: request.path },
           });
-          request.signal?.addEventListener("abort", onAbort, { once: true });
           this.publish();
+          return Effect.sync(() => {
+            if (session.approvals.get(id)?.resolve === settle) session.approvals.delete(id);
+          });
         });
+        return runStandaloneEffect(gate, { signal: request.signal }).catch(() => false);
       },
       onApplied: (edit) => {
         if (!this.sessions.has(session.chat.id)) return;
@@ -425,6 +447,9 @@ export class WorkspaceAgentSessionManager {
   }
 
   private stopSession(session: WorkspaceAgentSessionRuntime) {
+    // Interrupting the run fiber aborts the model request and tool loop now,
+    // before the chat finishes stopping asynchronously.
+    session.run?.fiber?.interruptUnsafe();
     this.denyPendingApprovals(session);
     try {
       void session.chat.stop().catch(() => undefined);
@@ -466,6 +491,29 @@ export class WorkspaceAgentSessionManager {
       })),
     };
   }
+}
+
+/**
+ * Runs one Agent turn as a fiber. Its interruption aborts the signal handed to
+ * the runner, so `stopSession` (Stop, credential lock or delete, deactivation)
+ * cancels the model request and pending tool work deterministically; the
+ * chat's own abort signal interrupts it too. Interruption rejects with an
+ * `AbortError`, which the chat treats as a stop. The API key stays in the run
+ * configuration and is never placed in fiber state, spans, or logs.
+ */
+function startRunFiber(
+  run: WorkspaceAgentRun,
+  start: (signal: AbortSignal) => Promise<WorkspaceAgentRunResult>,
+  chatSignal: AbortSignal | undefined,
+) {
+  let fiber = Effect.runFork(
+    Effect.tryPromise({ catch: (cause) => cause, try: (signal) => start(signal) }),
+    { signal: chatSignal },
+  );
+  run.fiber = fiber;
+  return runStandaloneEffect(Fiber.join(fiber)).finally(() => {
+    if (run.fiber === fiber) run.fiber = null;
+  });
 }
 
 function isSessionBusy(session: WorkspaceAgentSessionRuntime) {

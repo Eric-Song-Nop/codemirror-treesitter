@@ -207,6 +207,11 @@ How the app uses Effect (details in
   with `makeScopedWorkspaceRuntime`.
 - Retry only operations that are safe to replay, with a bounded `Schedule`
   filtered to retryable failures.
+- Agent turns run as fibers that Stop, lock, delete, and deactivation interrupt
+  synchronously. Never put the API key, passphrase, or derived key into Effect
+  `Ref`s, fiber-local state, span attributes, or `Effect.log*` calls, and do
+  not install an Effect tracer, logger export, or `ErrorReporter` that could
+  receive Agent errors.
 - Promise APIs remain only at named boundaries: the `WorkspaceRuntime` ports
   and `dispose()` consumed by the document, collaboration, and Agent layers,
   and the bridge. React rendering, the Zustand read model, the document-view
