@@ -1,0 +1,31 @@
+---
+"@codemirror-treesitter/language": minor
+"@codemirror-treesitter/live-md": minor
+"@codemirror-treesitter/language-data": patch
+"@codemirror-treesitter/commands": patch
+"@codemirror-treesitter/autocomplete": patch
+"@codemirror-treesitter/basic-setup": patch
+"@codemirror-treesitter/merge": patch
+"@codemirror-treesitter/lsp-client": patch
+"@codemirror-treesitter/live-md-loro": patch
+"@codemirror-treesitter/live-md-theme": patch
+"@codemirror-treesitter/live-md-theme-catppuccin": patch
+"@codemirror-treesitter/live-md-theme-github": patch
+"@codemirror-treesitter/live-md-theme-gruvbox": patch
+"@codemirror-treesitter/theme": patch
+"@codemirror-treesitter/theme-catppuccin": patch
+"@codemirror-treesitter/theme-github": patch
+"@codemirror-treesitter/theme-gruvbox": patch
+"@codemirror-treesitter/theme-palettes": patch
+---
+
+Review fix pass. Every package now ships an MIT LICENSE with upstream
+CodeMirror attribution. `language` keeps incremental state across in-flight
+parses, scopes highlight queries to the requested range with last-pattern-wins
+precedence, shares one native parser per lineage, resumes stream parsing across
+slices, and follows Lezer `resolve` side semantics. `live-md` computes its value
+lazily, debounces persistence (`liveMdPersistDelay`, `flushPersistence()`),
+loads KaTeX and its fonts on demand, sanitizes Mermaid SVG on both render paths,
+and no longer autofocuses by default. `autocomplete` fixes two closeBrackets
+bugs; `lsp-client` reports its own clientInfo and fixes disconnect; `merge`
+re-renders the unified view after language load.
