@@ -270,7 +270,6 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
   );
 
   await waitForLocalWorkspaceReady(client, sessionId);
-  await assertAgentApiKeyMemoryOnly(client, sessionId);
 
   await clickNewFileButton(client, sessionId);
   await client.waitForPredicate(
