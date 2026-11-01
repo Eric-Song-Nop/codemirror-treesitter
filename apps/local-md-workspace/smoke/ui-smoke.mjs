@@ -34,6 +34,9 @@ let chrome = spawn(
   [
     "--headless=new",
     "--remote-debugging-port=0",
+    // The flows assume the desktop layout; headless Chrome's default window can
+    // fall below the md breakpoint, where the sidebar drawer covers the editor.
+    "--window-size=1440,900",
     `--user-data-dir=${userDataDir}`,
     "--no-default-browser-check",
     "--no-first-run",
