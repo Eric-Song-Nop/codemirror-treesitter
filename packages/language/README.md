@@ -89,7 +89,7 @@ The root entry point is `src/index.ts`.
 
 Every package that needs syntax information depends on this one. It is consumed
 by `language-data`, `commands`, `autocomplete`, `basic-setup`, `merge`,
-`lsp-client`, `theme-gruvbox`, `live-md`, and the apps.
+`lsp-client`, `theme`, `live-md`, and the apps.
 
 ## Current Implementation Notes
 

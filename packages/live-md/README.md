@@ -106,8 +106,8 @@ import {
   type LiveMdMarkdownConfig,
   type LiveMdPlugin,
 } from "@codemirror-treesitter/live-md";
-import { gruvboxDarkLiveMdTheme } from "@codemirror-treesitter/live-md-theme-gruvbox";
-import { gruvboxDark } from "@codemirror-treesitter/theme-gruvbox";
+import { gruvboxDarkLiveMdTheme } from "@codemirror-treesitter/live-md-theme/gruvbox";
+import { gruvboxDark } from "@codemirror-treesitter/theme/gruvbox";
 
 await prepareLiveMd();
 
