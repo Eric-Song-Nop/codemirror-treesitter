@@ -1,7 +1,4 @@
-import {
-  createLiveMdTheme,
-  type LiveMdThemeColorVariables,
-} from "@codemirror-treesitter/live-md-theme";
+import { createLiveMdTheme, type LiveMdThemeColorVariables } from "./index.js";
 import { githubLightColors as c } from "@codemirror-treesitter/theme-palettes";
 
 const githubLightLiveMdVariables: LiveMdThemeColorVariables = {

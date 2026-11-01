@@ -4,7 +4,7 @@ import {
   createEditorTheme,
   createHighlightStyle,
   type SemanticThemeSpec,
-} from "@codemirror-treesitter/theme";
+} from "./index.js";
 import { githubLightColors } from "@codemirror-treesitter/theme-palettes";
 
 export { githubLightColors };

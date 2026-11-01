@@ -1,7 +1,7 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { highlightingFor, syntaxHighlighting, tags } from "@codemirror-treesitter/language";
-import { createCodeMirrorTheme } from "@codemirror-treesitter/theme";
+import { createCodeMirrorTheme } from "../src/index.js";
 import { describe, expect, it } from "vite-plus/test";
 import {
   gruvboxDark,
@@ -16,7 +16,7 @@ import {
   gruvboxLightSpec,
   gruvboxLightTheme,
   gruvboxLightThemeSpec,
-} from "../src/index.js";
+} from "../src/gruvbox.js";
 
 describe("gruvbox theme", () => {
   it("installs dark and light editor themes", () => {

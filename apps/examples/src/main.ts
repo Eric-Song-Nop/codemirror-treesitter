@@ -44,7 +44,7 @@ import {
   gruvboxLightHighlightStyle,
   gruvboxLightTheme,
   type GruvboxColors,
-} from "@codemirror-treesitter/theme-gruvbox";
+} from "@codemirror-treesitter/theme/gruvbox";
 import {
   CompletionContext as LezerCompletionContext,
   autocompletion as lezerAutocompletion,

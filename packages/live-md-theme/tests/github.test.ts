@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { liveMdThemeColorVariableNames } from "@codemirror-treesitter/live-md-theme";
-import { githubLightLiveMdTheme } from "../src/index.js";
+import { liveMdThemeColorVariableNames } from "../src/index.js";
+import { githubLightLiveMdTheme } from "../src/github.js";
 
 describe("GitHub LiveMD themes", () => {
   it("covers every reusable LiveMD color token", () => {

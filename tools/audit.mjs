@@ -231,9 +231,47 @@ async function checkThemePackages() {
     if (!palettesSource.includes(exportName)) fail(`theme-palettes is missing ${exportName}`);
   }
 
-  let codeMirrorThemePackages = [
+  let codeMirrorThemePkg = JSON.parse(await readText("packages/theme/package.json"));
+  let liveMdThemePkg = JSON.parse(await readText("packages/live-md-theme/package.json"));
+  let themeFamilies = ["gruvbox", "github", "catppuccin"];
+  for (let [dir, pkg] of [
+    ["theme", codeMirrorThemePkg],
+    ["live-md-theme", liveMdThemePkg],
+  ]) {
+    let config = await readText(`packages/${dir}/vite.config.ts`);
+    for (let family of themeFamilies) {
+      if (pkg.exports?.[`./${family}`] != `./dist/${family}.mjs`) {
+        fail(`${dir} package does not export ./${family} as its own build entry`);
+      }
+      if (!config.includes(`${family}: "src/${family}.ts"`)) {
+        fail(`${dir} vite.config.ts does not pack src/${family}.ts as a separate entry`);
+      }
+    }
+    if (pkg.dependencies?.["@codemirror-treesitter/theme-palettes"] == null) {
+      fail(`${dir} does not depend on the shared palette package`);
+    }
+    for (let name of ["@codemirror/language", "@lezer/highlight"]) {
+      if (pkg.dependencies?.[name] != null) fail(`${dir} depends on ${name}`);
+    }
+  }
+
+  for (let forbidden of [
+    "@codemirror-treesitter/live-md",
+    "@codemirror-treesitter/live-md-theme",
+  ]) {
+    if (codeMirrorThemePkg.dependencies?.[forbidden] != null) {
+      fail(`theme should not depend on ${forbidden}`);
+    }
+  }
+  for (let forbidden of ["@codemirror-treesitter/live-md", "@codemirror-treesitter/theme"]) {
+    if (liveMdThemePkg.dependencies?.[forbidden] != null) {
+      fail(`live-md-theme should not depend on ${forbidden}`);
+    }
+  }
+
+  let codeMirrorThemeEntries = [
     {
-      dir: "theme-gruvbox",
+      family: "gruvbox",
       exports: [
         "gruvboxDarkColors",
         "gruvboxDarkThemeSpec",
@@ -248,7 +286,7 @@ async function checkThemePackages() {
       ],
     },
     {
-      dir: "theme-github",
+      family: "github",
       exports: [
         "githubLightColors",
         "githubLightThemeSpec",
@@ -258,7 +296,7 @@ async function checkThemePackages() {
       ],
     },
     {
-      dir: "theme-catppuccin",
+      family: "catppuccin",
       exports: [
         "catppuccinLatteColors",
         "catppuccinLatteThemeSpec",
@@ -274,39 +312,38 @@ async function checkThemePackages() {
     },
   ];
 
-  for (let themePackage of codeMirrorThemePackages) {
-    let pkg = JSON.parse(await readText(`packages/${themePackage.dir}/package.json`));
-    if (pkg.dependencies?.["@codemirror-treesitter/theme"] == null) {
-      fail(`${themePackage.dir} does not depend on the shared semantic theme package`);
-    }
-    if (pkg.dependencies?.["@codemirror-treesitter/theme-palettes"] == null) {
-      fail(`${themePackage.dir} does not depend on the shared palette package`);
-    }
-    if (pkg.dependencies?.["@codemirror-treesitter/live-md"] != null) {
-      fail(`${themePackage.dir} should not depend on LiveMD`);
-    }
-    for (let name of ["@codemirror/language", "@lezer/highlight"]) {
-      if (pkg.dependencies?.[name] != null) fail(`${themePackage.dir} depends on ${name}`);
-    }
-
-    let source = await readText(`packages/${themePackage.dir}/src/index.ts`);
-    for (let snippet of [
-      'from "@codemirror-treesitter/theme"',
-      'from "@codemirror-treesitter/theme-palettes"',
-      ...themePackage.exports,
-    ]) {
-      if (!source.includes(snippet)) fail(`${themePackage.dir} source is missing ${snippet}`);
-    }
+  let codeMirrorThemeFiles = await collectFiles("packages/theme/src", (file) =>
+    file.endsWith(".ts"),
+  );
+  for (let file of codeMirrorThemeFiles) {
+    let source = await readText(file);
     for (let forbidden of [
       "@codemirror-treesitter/live-md",
       "liveMdCodeFenceHighlighting",
       "LiveMdExtensions",
     ]) {
-      if (source.includes(forbidden)) fail(`${themePackage.dir} leaks LiveMD through ${forbidden}`);
+      if (source.includes(forbidden)) fail(`${relative(file)} leaks LiveMD through ${forbidden}`);
+    }
+  }
+
+  for (let entry of codeMirrorThemeEntries) {
+    let file = `packages/theme/src/${entry.family}.ts`;
+    let source = await readText(file);
+    for (let snippet of [
+      'from "./index.js"',
+      'from "@codemirror-treesitter/theme-palettes"',
+      ...entry.exports,
+    ]) {
+      if (!source.includes(snippet)) fail(`${file} is missing ${snippet}`);
+    }
+    for (let other of themeFamilies) {
+      if (other != entry.family && source.includes(`"./${other}.js"`)) {
+        fail(`${file} imports the ${other} theme entry`);
+      }
     }
     for (let duplicateMapping of ["EditorView.theme(", "HighlightStyle.define("]) {
       if (source.includes(duplicateMapping)) {
-        fail(`${themePackage.dir} duplicates shared theme mapping through ${duplicateMapping}`);
+        fail(`${file} duplicates shared theme mapping through ${duplicateMapping}`);
       }
     }
   }
@@ -322,47 +359,47 @@ async function checkThemePackages() {
     if (!liveMdThemeBase.includes(exportName)) fail(`live-md-theme is missing ${exportName}`);
   }
 
-  let liveMdThemePackages = [
+  let liveMdThemeEntries = [
+    { family: "gruvbox", exports: ["gruvboxDarkLiveMdTheme", "gruvboxLightLiveMdTheme"] },
+    { family: "github", exports: ["githubLightLiveMdTheme"] },
     {
-      dir: "live-md-theme-gruvbox",
-      exports: ["gruvboxDarkLiveMdTheme", "gruvboxLightLiveMdTheme"],
-    },
-    { dir: "live-md-theme-github", exports: ["githubLightLiveMdTheme"] },
-    {
-      dir: "live-md-theme-catppuccin",
+      family: "catppuccin",
       exports: ["catppuccinLatteLiveMdTheme", "catppuccinMacchiatoLiveMdTheme"],
     },
   ];
 
-  for (let themePackage of liveMdThemePackages) {
-    let pkg = JSON.parse(await readText(`packages/${themePackage.dir}/package.json`));
-    if (pkg.dependencies?.["@codemirror-treesitter/live-md-theme"] == null) {
-      fail(`${themePackage.dir} does not depend on the shared LiveMD theme package`);
-    }
-    if (pkg.dependencies?.["@codemirror-treesitter/theme-palettes"] == null) {
-      fail(`${themePackage.dir} does not depend on the shared palette package`);
-    }
+  let liveMdThemeFiles = await collectFiles("packages/live-md-theme/src", (file) =>
+    file.endsWith(".ts"),
+  );
+  for (let file of liveMdThemeFiles) {
+    let source = await readText(file);
     for (let forbidden of [
-      "@codemirror-treesitter/live-md",
-      "@codemirror-treesitter/theme",
-      "@codemirror-treesitter/theme-gruvbox",
-      "@codemirror-treesitter/theme-github",
-      "@codemirror-treesitter/theme-catppuccin",
+      /["']@codemirror-treesitter\/live-md(?:\/[^"']*)?["']/,
+      /["']@codemirror-treesitter\/theme(?:\/[^"']*)?["']/,
     ]) {
-      if (pkg.dependencies?.[forbidden] != null)
-        fail(`${themePackage.dir} depends on ${forbidden}`);
-    }
-
-    let source = await readText(`packages/${themePackage.dir}/src/index.ts`);
-    for (let snippet of [
-      'from "@codemirror-treesitter/live-md-theme"',
-      'from "@codemirror-treesitter/theme-palettes"',
-      ...themePackage.exports,
-    ]) {
-      if (!source.includes(snippet)) fail(`${themePackage.dir} source is missing ${snippet}`);
+      if (forbidden.test(source)) {
+        fail(`${relative(file)} imports LiveMD runtime or CodeMirror theme code`);
+      }
     }
     for (let forbidden of ["syntaxHighlighting", "HighlightStyle", "EditorView.theme("]) {
-      if (source.includes(forbidden)) fail(`${themePackage.dir} owns CodeMirror styling`);
+      if (source.includes(forbidden)) fail(`${relative(file)} owns CodeMirror styling`);
+    }
+  }
+
+  for (let entry of liveMdThemeEntries) {
+    let file = `packages/live-md-theme/src/${entry.family}.ts`;
+    let source = await readText(file);
+    for (let snippet of [
+      'from "./index.js"',
+      'from "@codemirror-treesitter/theme-palettes"',
+      ...entry.exports,
+    ]) {
+      if (!source.includes(snippet)) fail(`${file} is missing ${snippet}`);
+    }
+    for (let other of themeFamilies) {
+      if (other != entry.family && source.includes(`"./${other}.js"`)) {
+        fail(`${file} imports the ${other} theme entry`);
+      }
     }
   }
 
@@ -790,24 +827,24 @@ async function checkExamplesComparisonImplementation() {
 
 async function checkExamplesUseGruvboxTheme() {
   let pkg = JSON.parse(await readText("apps/examples/package.json"));
-  if (!pkg.dependencies?.["@codemirror-treesitter/theme-gruvbox"]) {
+  if (!pkg.dependencies?.["@codemirror-treesitter/theme"]) {
     fail("apps/examples is missing the local Gruvbox theme dependency");
   }
 
   let config = await readText("apps/examples/vite.config.ts");
   let sharedConfig = await readText("vite.shared.ts");
   let aliasesGruvboxTheme =
-    config.includes("../../packages/theme-gruvbox/src/index.ts") ||
+    config.includes("../../packages/theme/src/gruvbox.ts") ||
     (config.includes("workspaceAliases") &&
-      sharedConfig.includes('"@codemirror-treesitter/theme-gruvbox"') &&
-      sharedConfig.includes("packages/theme-gruvbox/src/index.ts"));
+      sharedConfig.includes('"@codemirror-treesitter/theme/gruvbox"') &&
+      sharedConfig.includes("packages/theme/src/gruvbox.ts"));
   if (!aliasesGruvboxTheme) {
     fail("apps/examples does not alias the local Gruvbox theme source");
   }
 
   let source = await readText("apps/examples/src/main.ts");
   for (let snippet of [
-    'from "@codemirror-treesitter/theme-gruvbox"',
+    'from "@codemirror-treesitter/theme/gruvbox"',
     "gruvboxDarkTheme",
     "gruvboxLightTheme",
     "gruvboxDarkHighlightStyle",
