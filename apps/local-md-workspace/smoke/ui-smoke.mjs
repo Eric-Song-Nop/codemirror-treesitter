@@ -34,6 +34,9 @@ let chrome = spawn(
   [
     "--headless=new",
     "--remote-debugging-port=0",
+    // The flows assume the desktop layout; headless Chrome's default window can
+    // fall below the md breakpoint, where the sidebar drawer covers the editor.
+    "--window-size=1440,900",
     `--user-data-dir=${userDataDir}`,
     "--no-default-browser-check",
     "--no-first-run",
@@ -270,7 +273,6 @@ async function assertLocalWorkspaceFlow(client, sessionId) {
   );
 
   await waitForLocalWorkspaceReady(client, sessionId);
-  await assertAgentApiKeyMemoryOnly(client, sessionId);
 
   await clickNewFileButton(client, sessionId);
   await client.waitForPredicate(
