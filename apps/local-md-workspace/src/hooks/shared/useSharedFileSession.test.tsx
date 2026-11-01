@@ -54,9 +54,36 @@ describe("useSharedFileSession", () => {
     let [url, init] = fetchMock.mock.calls[1]!;
     expect(url).toBeInstanceOf(URL);
     expect((url as URL).href).toBe("https://relay.example/api/shares/share-id/session");
-    expect(init?.signal).toBe(controller.signal);
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
     expect(typeof init?.body).toBe("string");
     expect(JSON.parse(init!.body as string)).toEqual({ role: "guest", secret: "guest-secret" });
+  });
+
+  it("aborts the in-flight refresh request when the connection aborts the refresh", async () => {
+    let requestSignal: AbortSignal | undefined;
+    let fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(sessionResponse("initial-token"))
+      .mockImplementationOnce(
+        (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            requestSignal = init?.signal ?? undefined;
+            requestSignal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await renderSessionHook();
+    await waitFor(() => currentApi?.session?.sessionToken == "initial-token");
+    let controller = new AbortController();
+
+    let refresh = currentApi!.refreshSession(controller.signal).catch((error: unknown) => error);
+    await waitFor(() => requestSignal != null);
+    controller.abort();
+
+    expect(((await refresh) as DOMException).name).toBe("AbortError");
+    expect(requestSignal?.aborted).toBe(true);
   });
 });
 

@@ -28,6 +28,21 @@ export function runWorkspaceEffect<A, E, R = WorkspaceAppServices>(
   });
 }
 
+/**
+ * Runs an effect that needs no application services (for example a relay HTTP
+ * request) with the same Promise mapping as {@link runWorkspaceEffect}.
+ * Aborting `signal` interrupts it, which aborts its in-flight requests.
+ */
+export function runStandaloneEffect<A, E>(
+  effect: Effect.Effect<A, E>,
+  options: { signal?: AbortSignal } = {},
+): Promise<A> {
+  return Effect.runPromiseExit(effect, { signal: options.signal }).then((exit) => {
+    if (Exit.isSuccess(exit)) return exit.value;
+    throw promiseRejection(exit.cause);
+  });
+}
+
 /** Maps a failed Exit's cause to the value a Promise caller should see. */
 export function promiseRejection(cause: Cause.Cause<unknown>) {
   if (Cause.hasInterruptsOnly(cause)) {

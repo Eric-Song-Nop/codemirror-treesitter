@@ -125,10 +125,39 @@ Programming errors (invalid paths, broken invariants) stay defects.
 - `DropboxWorkspaces` runs at most one authorization at a time; waiting callers
   reuse its token. Interrupting an authorization closes its popup.
 
+### Shared-file relay
+
+- `lib/collaboration/share-relay-client.ts` exposes Effect operations (create,
+  join, rotate, revoke). Each request is aborted when its fiber is interrupted
+  and fails with `ShareRelayNotConfigured`, `ShareRelayRequestError`
+  (`reason`: `unauthorized`, `expired`, `rate-limited`, `unavailable`,
+  `rejected`; `message` keeps the localized "Could not ... (status)." text), or
+  `ShareRelayProtocolError`. The idempotent create replays once on network
+  failure or 5xx (`relayShareCreateRetrySchedule`).
+- `ShareRelayConnection` keeps a synchronous public API and synchronous frame
+  handling (so Loro imports and sends keep their order), while its lifetime is
+  an Effect fiber: each WebSocket is a scoped resource whose release removes
+  listeners, stops the heartbeat, and closes it; reconnects wait on
+  `shareRelayReconnectSchedule` (250ms doubling to 10s plus up to 300ms
+  jitter, restarted after a socket opens); a session refresh is an
+  interruptible Effect. Socket endings are typed (`ShareRelayConnectionLost`,
+  `ShareRelayUnauthorized`, `ShareRelayResyncRequired`,
+  `ShareRelaySessionRefreshRequired`, `ShareRelaySessionExpired`,
+  `ShareRelaySessionRefreshFailed`). `close()`, `pause()`, and a new
+  `connect()` interrupt the fiber, which aborts an in-flight refresh request
+  and closes the socket. The wire protocol is unchanged.
+- Owner share records (`share-storage.ts`) and the collaboration browser store
+  (`collab-browser-store.ts`) remain Promise modules over browser storage;
+  `share-storage.ts` reaches the relay operations through injected Promise
+  ports whose defaults run the Effects. Hooks run relay Effects through
+  `runStandaloneEffect` (service-free effects, same Promise mapping as the
+  bridge) with the caller's abort signal.
+
 ### Calling Effect from the UI
 
 `runWorkspaceEffect(runtime, effect, { signal })` and the
-`useWorkspaceEffectRunner()` hook run an effect on the application runtime. The
+`useWorkspaceEffectRunner()` hook run an effect on the application runtime;
+`runStandaloneEffect(effect, { signal })` runs a service-free effect. The
 returned Promise resolves with the value, rejects with the typed failure
 itself (or the defect), and rejects with a `DOMException` named `AbortError`
 when the effect was interrupted, which existing `isAbortError` checks ignore.

@@ -157,7 +157,9 @@ packages.
 - `src/lib/export/workspace-file.ts`: localized export naming, warnings, and
   browser download handling.
 - `src/lib/collaboration/*`: local Loro document persistence, share identity,
-  relay protocol/client/connection, share storage, Markdown hashing, and
+  relay protocol, typed relay errors (`relay-errors.ts`), the Effect relay
+  client, the relay connection (an Effect-managed WebSocket lifetime with a
+  reconnect `Schedule`), share storage, Markdown hashing, and
   document sync helpers. `markdown-document.ts` is a lightweight facade; it loads
   `markdown-document-runtime.ts` only when a file is opened.
 - `src/lib/agent/domain` and `src/lib/agent/application`: SDK-independent tool

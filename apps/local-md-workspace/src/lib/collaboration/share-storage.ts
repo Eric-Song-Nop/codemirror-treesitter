@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import type { WorkspaceStorageKind } from "@/lib/workspace/storage/types";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import {
@@ -15,9 +16,9 @@ import {
   type CollabDocumentState,
 } from "./markdown-document.ts";
 import {
-  createRelayShare as defaultCreateRelayShare,
-  revokeRelayShare as defaultRevokeRelayShare,
-  rotateRelayShare as defaultRotateRelayShare,
+  createRelayShare as createRelayShareEffect,
+  revokeRelayShare as revokeRelayShareEffect,
+  rotateRelayShare as rotateRelayShareEffect,
   type RelayShareCreateRequest,
   type RelayShareRevokeResult,
   type RelayShareRotateRequest,
@@ -100,6 +101,22 @@ export type RevokeOwnerShareOptions = {
 type ShareRecordStore = Pick<Storage, "getItem" | "key" | "removeItem" | "setItem"> & {
   readonly length: number;
 };
+
+/*
+ * Owner share records live in browser storage behind Promise APIs. The relay
+ * operations they call are Effects (typed relay errors, interruption aborts the
+ * request); these default ports are the Promise boundary to them, and tests
+ * inject their own.
+ */
+const defaultCreateRelayShare = (relayOrigin: string, request: RelayShareCreateRequest) =>
+  Effect.runPromise(createRelayShareEffect(relayOrigin, request));
+const defaultRotateRelayShare = (
+  relayOrigin: string,
+  shareId: string,
+  request: Parameters<typeof rotateRelayShareEffect>[2],
+) => Effect.runPromise(rotateRelayShareEffect(relayOrigin, shareId, request));
+const defaultRevokeRelayShare = (relayOrigin: string, shareId: string, hostSecret: string) =>
+  Effect.runPromise(revokeRelayShareEffect(relayOrigin, shareId, hostSecret));
 
 let memoryShareRecords = new Map<string, string>();
 let hostSecretMemory = new Map<string, string>();
