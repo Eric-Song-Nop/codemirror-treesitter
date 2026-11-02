@@ -59,7 +59,7 @@
   "vars": {
     // Optional comma-separated CORS/WebSocket Origin allowlist. Blank keeps
     // the permissive reflect-any-origin behavior.
-    "ALLOWED_ORIGINS": "",
+    "ALLOWED_ORIGINS": "https://grovemd.net,https://app.grovemd.net",
   },
   "observability": {
     "enabled": true,

@@ -257,7 +257,9 @@ vp run collab-editor#types
 Release flow: add a changeset with `vp exec changeset` for any change to a
 public `packages/*` package and commit the `.changeset/*.md` file. Pushes to
 `main` run `.github/workflows/release.yml`, which runs `vp run ready` and then
-`changesets/action` to open a version PR or publish with `NPM_TOKEN`.
+`changesets/action` to open a version PR. Merging that PR publishes through
+`tools/release-publish.mjs`, which rewrites `workspace:` ranges because npm does
+not, and skips publishing with a warning while `NPM_TOKEN` is unset.
 
 ## Documentation Expectations
 

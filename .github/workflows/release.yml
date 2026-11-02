@@ -41,7 +41,7 @@ jobs:
         uses: changesets/action@v1
         with:
           version: vp exec changeset version
-          publish: vp exec changeset publish
+          publish: node tools/release-publish.mjs
           commit: "chore: version packages"
           title: "chore: version packages"
         env:

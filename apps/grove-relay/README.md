@@ -71,13 +71,16 @@ a different document under the same id.
 
 ## Origin Allowlist
 
-`ALLOWED_ORIGINS` (a Wrangler var, blank by default) accepts comma-separated
-origins such as `https://grovemd.net,http://localhost:5173`. When set, CORS
-responses reflect only listed origins and WebSocket upgrades whose `Origin`
-header is present but not listed are rejected with 403; upgrades without an
-`Origin` header (non-browser clients) are allowed. When blank, any origin is
-reflected. Set it in `wrangler.jsonc` and `wrangler.worker.ci.jsonc`: deploys
-replace dashboard-set vars.
+`ALLOWED_ORIGINS` is a Wrangler var holding comma-separated origins. Production
+allows `https://grovemd.net` and `https://app.grovemd.net`. Set it in both
+`wrangler.jsonc` and `wrangler.worker.ci.jsonc`, because deploys replace
+dashboard-set vars. CORS responses reflect only listed origins, and WebSocket
+upgrades whose `Origin` header is present but not listed are rejected with 403.
+Upgrades without an `Origin` header (non-browser clients) are allowed.
+
+The committed `.dev.vars` blanks the value for local development, where any
+origin is reflected, so `dev.mjs` and the UI smoke work on any local port. It
+holds no secrets and only applies to local runs.
 
 ## Source Layout
 
