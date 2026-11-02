@@ -1,6 +1,6 @@
 {
   "name": "@codemirror-treesitter/language-data",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Tree-sitter language metadata and dynamic loading for the CodeMirror code editor",
   "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/language-data#readme",
   "bugs": {

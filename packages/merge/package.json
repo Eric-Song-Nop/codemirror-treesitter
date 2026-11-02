@@ -1,6 +1,6 @@
 {
   "name": "@codemirror-treesitter/merge",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Lezer-free diff and merge views for the tree-sitter CodeMirror build",
   "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/merge#readme",
   "bugs": {

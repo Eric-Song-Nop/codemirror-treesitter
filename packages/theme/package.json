@@ -1,6 +1,6 @@
 {
   "name": "@codemirror-treesitter/theme",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Shared semantic theme helpers and Gruvbox, GitHub, and Catppuccin themes for the tree-sitter CodeMirror build",
   "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/theme#readme",
   "bugs": {

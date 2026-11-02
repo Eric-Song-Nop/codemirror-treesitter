@@ -1,6 +1,6 @@
 {
   "name": "@codemirror-treesitter/live-md-theme",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Reusable LiveMD presentation theme token contract with Gruvbox, GitHub, and Catppuccin presentation themes",
   "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/live-md-theme#readme",
   "bugs": {

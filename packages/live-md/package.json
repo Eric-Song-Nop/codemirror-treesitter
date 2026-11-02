@@ -1,6 +1,6 @@
 {
   "name": "@codemirror-treesitter/live-md",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "LiveMD Markdown editor runtime built on the local tree-sitter CodeMirror packages",
   "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/live-md#readme",
   "bugs": {

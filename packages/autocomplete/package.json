@@ -1,6 +1,6 @@
 {
   "name": "@codemirror-treesitter/autocomplete",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Lezer-free autocomplete and bracket closing hooks for the tree-sitter CodeMirror build",
   "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/autocomplete#readme",
   "bugs": {

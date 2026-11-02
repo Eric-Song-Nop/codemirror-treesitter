@@ -1,6 +1,6 @@
 {
   "name": "@codemirror-treesitter/language",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Tree-sitter language support infrastructure for the CodeMirror code editor",
   "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/language#readme",
   "bugs": {

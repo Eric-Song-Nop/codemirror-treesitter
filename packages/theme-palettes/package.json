@@ -1,6 +1,6 @@
 {
   "name": "@codemirror-treesitter/theme-palettes",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Shared color palettes for CodeMirror and LiveMD theme packages",
   "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/theme-palettes#readme",
   "bugs": {

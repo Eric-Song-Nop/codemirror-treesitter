@@ -1,6 +1,6 @@
 {
   "name": "@codemirror-treesitter/basic-setup",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Lezer-free basic CodeMirror setup using the tree-sitter language package",
   "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/codemirror#readme",
   "bugs": {
