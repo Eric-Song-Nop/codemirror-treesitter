@@ -213,7 +213,7 @@ export function LocalWorkspaceApp() {
     workspaceRuntimeRef,
   });
   let markdownConfig = collabDocument?.liveMdConfig?.markdown ?? null;
-  let { clearDropboxAccessToken, createDropboxRuntime, setDropboxRedirectAccessToken } =
+  let { clearDropboxAccessToken, openDropboxRuntime, setDropboxRedirectAccessToken } =
     useDropboxWorkspaceRuntime({
       dirtyRef,
       editorValueRef,
@@ -369,7 +369,7 @@ export function LocalWorkspaceApp() {
   } = useWorkspaceOpeners({
     cancelImageUpload,
     clearDropboxAccessToken,
-    createDropboxRuntime,
+    openDropboxRuntime,
     folderAccessUnavailableMessage,
     loadTree,
     refreshWorkspaceForCurrentEditor,
@@ -537,7 +537,7 @@ export function LocalWorkspaceApp() {
     beginDocumentViewChange,
     cancelImageUpload,
     collabDocumentRef,
-    createDropboxRuntime,
+    openDropboxRuntime,
     discardMaterializedDraft,
     documentViews,
     editorElementRef,

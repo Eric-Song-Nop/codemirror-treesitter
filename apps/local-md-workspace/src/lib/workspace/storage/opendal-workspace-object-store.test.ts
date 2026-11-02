@@ -4,8 +4,10 @@ import {
   type OpendalMetadata,
   type OpendalOperatorInfo,
 } from "@codemirror-treesitter/opendal-wasm-browser";
+import { Effect, Scope } from "effect";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { StaticOpendalOperatorHost } from "./opendal-operator-host.ts";
+import { promiseObjectStore, type PromiseObjectStore } from "@/test/effect-object-store";
+import { makeStaticOpendalOperatorHost } from "./opendal-operator-host.ts";
 import {
   observedFingerprint,
   OpendalWorkspaceObjectStore,
@@ -356,28 +358,102 @@ describe("BrowserWorkspacePathLock", () => {
       release = resolve;
     });
     let events: string[] = [];
-    let first = lockA.run({
-      execute: async () => {
+    let first = Effect.runPromise(
+      Effect.promise(async () => {
         events.push("first-start");
         await gate;
         events.push("first-end");
-      },
-      intents: [{ mode: "exclusive", path: "notes" }],
-      workspaceId: "workspace",
-    });
+      }).pipe(
+        lockA.withLocks({
+          intents: [{ mode: "exclusive", path: "notes" }],
+          workspaceId: "workspace",
+        }),
+      ),
+    );
     await vi.waitFor(() => expect(events).toEqual(["first-start"]));
-    let second = lockB.run({
-      execute: async () => {
+    let second = Effect.runPromise(
+      Effect.sync(() => {
         events.push("second");
-      },
-      intents: [{ mode: "shared", path: "notes/a.md" }],
-      workspaceId: "workspace",
-    });
+      }).pipe(
+        lockB.withLocks({
+          intents: [{ mode: "shared", path: "notes/a.md" }],
+          workspaceId: "workspace",
+        }),
+      ),
+    );
     await Promise.resolve();
     expect(events).toEqual(["first-start"]);
     release();
     await Promise.all([first, second]);
     expect(events).toEqual(["first-start", "first-end", "second"]);
+  });
+
+  it("releases an in-page lock when the holder is interrupted", async () => {
+    let lock = new BrowserWorkspacePathLock(undefined);
+    let intents = {
+      intents: [{ mode: "exclusive" as const, path: "notes" }],
+      workspaceId: "workspace",
+    };
+    let holder = Effect.runFork(Effect.never.pipe(lock.withLocks(intents)));
+    await Promise.resolve();
+    let acquired = false;
+    let waiting = Effect.runPromise(
+      Effect.sync(() => {
+        acquired = true;
+        return "acquired";
+      }).pipe(lock.withLocks(intents)),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(acquired).toBe(false);
+    holder.interruptUnsafe();
+    await expect(waiting).resolves.toBe("acquired");
+  });
+
+  it("holds Web Locks until the effect exits and aborts an interrupted wait", async () => {
+    let requests: Array<{ name: string; signal?: AbortSignal }> = [];
+    let held = new Set<string>();
+    let manager = {
+      request<T>(
+        name: string,
+        options: { mode: "exclusive" | "shared"; signal?: AbortSignal },
+        callback: () => Promise<T>,
+      ) {
+        requests.push({ name, signal: options.signal });
+        if (name.endsWith("blocked")) {
+          return new Promise<T>((_resolve, reject) => {
+            options.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          });
+        }
+        held.add(name);
+        return callback().finally(() => held.delete(name));
+      },
+    };
+    let lock = new BrowserWorkspacePathLock(manager);
+
+    await Effect.runPromise(
+      Effect.sync(() => expect(held.size).toBe(2)).pipe(
+        lock.withLocks({
+          intents: [{ mode: "exclusive", path: "a.md" }],
+          workspaceId: "workspace",
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect(held.size).toBe(0));
+
+    let blocked = Effect.runFork(
+      Effect.void.pipe(
+        lock.withLocks({
+          intents: [{ mode: "exclusive", path: "blocked" }],
+          workspaceId: "workspace",
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect(requests.at(-1)?.name).toContain("blocked"));
+    blocked.interruptUnsafe();
+    await vi.waitFor(() => expect(requests.at(-1)?.signal?.aborted).toBe(true));
+    await vi.waitFor(() => expect(held.size).toBe(0));
   });
 });
 
@@ -385,13 +461,21 @@ function createStore(
   operator: OpendalExactBrowserOperator,
   options: { captureAttempts?: number } = {},
 ) {
-  return new OpendalWorkspaceObjectStore(
-    new StaticOpendalOperatorHost({ id: "workspace", kind: "local", name: "Workspace" }, operator),
-    { ...options, lock: new BrowserWorkspacePathLock(undefined) },
+  let host = Effect.runSync(
+    makeStaticOpendalOperatorHost(
+      { id: "workspace", kind: "local", name: "Workspace" },
+      Effect.succeed(operator),
+    ).pipe(Scope.provide(Scope.makeUnsafe())),
+  );
+  return promiseObjectStore(
+    new OpendalWorkspaceObjectStore(host, {
+      ...options,
+      lock: new BrowserWorkspacePathLock(undefined),
+    }),
   );
 }
 
-async function presentRead(store: OpendalWorkspaceObjectStore, path: string) {
+async function presentRead(store: PromiseObjectStore, path: string) {
   let observation = await store.read(path);
   if (observation.state != "present") throw new Error("expected a present observation");
   return observation.value;

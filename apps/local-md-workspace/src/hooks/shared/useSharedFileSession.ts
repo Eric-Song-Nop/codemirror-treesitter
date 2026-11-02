@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { runStandaloneEffect } from "@/app/effect-bridge";
 import { createRelayShareSession } from "@/lib/collaboration/share-relay-client";
 import { workspaceQueryKeys } from "@/lib/workspace/query-keys";
 
@@ -25,8 +26,10 @@ export function useSharedFileSession({
       if (!enabled) {
         throw new Error("Shared file relay is not configured.");
       }
-      let fetchWithAbort: typeof fetch = (input, init) => fetch(input, { ...init, signal });
-      return createRelayShareSession(relayOrigin, shareId, "guest", guestSecret, fetchWithAbort);
+      return runStandaloneEffect(
+        createRelayShareSession(relayOrigin, shareId, "guest", guestSecret),
+        { signal },
+      );
     },
     queryKey: enabled
       ? workspaceQueryKeys.sharedSession(relayOrigin, shareId, guestSecretToken)
@@ -53,10 +56,10 @@ export function useSharedFileSession({
   }, [sharedSessionQuery.data]);
 
   let refreshSession = useCallback(
-    (signal: AbortSignal) => {
-      let fetchWithAbort: typeof fetch = (input, init) => fetch(input, { ...init, signal });
-      return createRelayShareSession(relayOrigin, shareId, "guest", guestSecret, fetchWithAbort);
-    },
+    (signal: AbortSignal) =>
+      runStandaloneEffect(createRelayShareSession(relayOrigin, shareId, "guest", guestSecret), {
+        signal,
+      }),
     [guestSecret, relayOrigin, shareId],
   );
 

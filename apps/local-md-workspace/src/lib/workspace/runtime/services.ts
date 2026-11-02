@@ -1,4 +1,11 @@
-import type { WorkspaceObjectStore } from "../storage/types.ts";
+import { Effect } from "effect";
+import {
+  WorkspaceMutationNotApplied,
+  WorkspaceNotFound,
+  WorkspaceUnsupportedImage,
+  type WorkspaceStoreError,
+} from "../storage/errors.ts";
+import type { WorkspaceEntry, WorkspaceObjectStore } from "../storage/types.ts";
 import {
   buildMarkdownDirectoryFromEntries,
   joinWorkspacePath,
@@ -33,27 +40,41 @@ const ignoredWorkspaceDirectories = new Set([
   "target",
 ]);
 
-export class OpendalWorkspaceDocumentService implements WorkspaceDocumentPort {
-  constructor(private readonly store: WorkspaceObjectStore) {}
+/**
+ * Runs a storage effect for a Promise-facing workspace port. Workspace runtimes
+ * pass a runner bound to the services they were built with, so storage retries
+ * and clocks follow the application runtime; the default uses Effect's default
+ * services. Failures reject with the typed error itself.
+ */
+export type WorkspaceEffectRunner = <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
 
-  async observe(path: string) {
-    let observation = await this.store.read(path);
-    if (observation.state != "present") return observation;
-    return {
-      state: "present" as const,
-      value: {
-        ...observation.value,
-        value: new TextDecoder().decode(observation.value.bytes),
-      } satisfies WorkspaceTextSnapshot,
-    };
+const defaultRunner: WorkspaceEffectRunner = (effect) => Effect.runPromise(effect);
+
+/*
+ * The classes below are the Promise boundary of the storage layer: the
+ * document, collaboration, and Agent layers consume `WorkspaceRuntime` ports as
+ * Promises, while every port method is implemented as one Effect program over
+ * the Effect-native `WorkspaceObjectStore`.
+ */
+
+export class OpendalWorkspaceDocumentService implements WorkspaceDocumentPort {
+  constructor(
+    private readonly store: WorkspaceObjectStore,
+    private readonly run: WorkspaceEffectRunner = defaultRunner,
+  ) {}
+
+  observe(path: string) {
+    return this.run(observeDocument(this.store, path));
   }
 
   commit(input: Parameters<WorkspaceDocumentPort["commit"]>[0]) {
-    return this.store.commit({
-      bytes: new TextEncoder().encode(input.value),
-      condition: input.condition,
-      path: input.path,
-    });
+    return this.run(
+      this.store.commit({
+        bytes: new TextEncoder().encode(input.value),
+        condition: input.condition,
+        path: input.path,
+      }),
+    );
   }
 }
 
@@ -61,142 +82,216 @@ export class OpendalWorkspaceTreeService implements WorkspaceTreePort {
   constructor(
     private readonly store: WorkspaceObjectStore,
     private readonly rootName: string,
+    private readonly run: WorkspaceEffectRunner = defaultRunner,
   ) {}
 
-  async readTree() {
+  readTree() {
     return this.readDirectory("", this.rootName);
   }
 
   listEntries(path: string) {
-    return this.store.listDirectory(path);
+    return this.run(this.store.listDirectory(path));
   }
 
-  async readDirectory(path: string, name: string): Promise<MarkdownDirectoryNode> {
-    let entries = (await this.store.listDirectory(path))
-      .filter((entry) => !isIgnoredDirectory(entry.path, entry.kind))
-      .map(storageEntryToLegacyEntry);
-    return buildMarkdownDirectoryFromEntries(name, path, entries);
+  readDirectory(path: string, name: string): Promise<MarkdownDirectoryNode> {
+    return this.run(
+      this.store
+        .listDirectory(path)
+        .pipe(
+          Effect.map((entries) =>
+            buildMarkdownDirectoryFromEntries(
+              name,
+              path,
+              entries
+                .filter((entry) => !isIgnoredDirectory(entry.path, entry.kind))
+                .map(storageEntryToLegacyEntry),
+            ),
+          ),
+        ),
+    );
   }
 }
 
 export class OpendalWorkspaceEntryService implements WorkspaceEntryPort {
-  constructor(private readonly store: WorkspaceObjectStore) {}
+  constructor(
+    private readonly store: WorkspaceObjectStore,
+    private readonly run: WorkspaceEffectRunner = defaultRunner,
+  ) {}
 
-  async create(rawPath: string) {
-    let target = normalizeWorkspaceCreateTarget(rawPath);
-    if (target.kind == "directory") {
-      assertApplied(
-        await this.store.createDirectory(target.path, { kind: "if-absent" }),
-        target.path,
-      );
-      return null;
-    }
-
-    let result = await this.store.commit({
-      bytes: new TextEncoder().encode(starterMarkdown(target.path)),
-      condition: { kind: "if-absent" },
-      path: target.path,
-    });
-    if (result.status == "committed") return target.path;
-    throw mutationFailure(target.path, result.status);
+  create(rawPath: string) {
+    return this.run(createEntry(this.store, rawPath));
   }
 
   probe(path: string) {
-    return this.store.probe(path);
+    return this.run(this.store.probe(path));
   }
 
   delete(input: Parameters<WorkspaceEntryPort["delete"]>[0]) {
-    return this.store.delete({
-      condition: input.revision
-        ? { kind: "if-unchanged", revision: input.revision }
-        : { kind: "unconditional" },
-      path: input.path,
-      recursive: input.kind == "directory",
-    });
+    return this.run(
+      this.store.delete({
+        condition: input.revision
+          ? { kind: "if-unchanged", revision: input.revision }
+          : { kind: "unconditional" },
+        path: input.path,
+        recursive: input.kind == "directory",
+      }),
+    );
   }
 
-  async rename(input: Parameters<WorkspaceEntryPort["rename"]>[0]) {
-    let name =
-      input.kind == "file"
-        ? normalizeMarkdownFileName(input.rawName)
-        : normalizeWorkspaceDirectoryName(input.rawName);
-    let parent = input.path.split("/").slice(0, -1).join("/");
-    let to = joinWorkspacePath(parent, name);
-    if (to == input.path) return { path: input.path, result: { status: "applied" as const } };
-
-    return { path: to, result: await this.move({ ...input, from: input.path, to }) };
+  rename(input: Parameters<WorkspaceEntryPort["rename"]>[0]) {
+    return this.run(
+      Effect.gen({ self: this }, function* () {
+        let name =
+          input.kind == "file"
+            ? normalizeMarkdownFileName(input.rawName)
+            : normalizeWorkspaceDirectoryName(input.rawName);
+        let parent = input.path.split("/").slice(0, -1).join("/");
+        let to = joinWorkspacePath(parent, name);
+        if (to == input.path) return { path: input.path, result: { status: "applied" as const } };
+        return {
+          path: to,
+          result: yield* moveEntry(this.store, { ...input, from: input.path, to }),
+        };
+      }),
+    );
   }
 
   move(input: Parameters<WorkspaceEntryPort["move"]>[0]) {
-    return this.store.move({
-      from: input.from,
-      kind: input.kind,
-      sourceCondition: input.revision
-        ? { kind: "if-unchanged", revision: input.revision }
-        : { kind: "unconditional" },
-      targetCondition: { kind: "if-absent" },
-      to: input.to,
-    });
+    return this.run(moveEntry(this.store, input));
   }
 }
 
 export class OpendalWorkspaceAssetService implements WorkspaceAssetPort {
-  constructor(private readonly store: WorkspaceObjectStore) {}
+  constructor(
+    private readonly store: WorkspaceObjectStore,
+    private readonly run: WorkspaceEffectRunner = defaultRunner,
+  ) {}
 
-  async read(path: string) {
-    let observation = await this.store.read(path);
-    if (observation.state == "present") return observation.value.bytes;
-    if (observation.state == "unavailable") throw observation.error;
-    throw new Error(`${path} does not exist.`);
+  read(path: string) {
+    return this.run(readAsset(this.store, path));
   }
 
-  async create(markdownFilePath: string, imageFile: File) {
-    if (!isImageFile(imageFile)) {
-      throw new Error(`${imageFile.name || "Dropped file"} is not a supported image.`);
-    }
-    let parent = markdownFilePath.split("/").slice(0, -1).join("/");
-    let assetsPath = joinWorkspacePath(parent, "assets");
-    let directory = await this.store.createDirectory(assetsPath, { kind: "unconditional" });
-    assertApplied(directory, assetsPath);
-
-    let { baseName, extension } = imageAssetNameParts(imageFile);
-    let bytes = new Uint8Array(await imageFile.arrayBuffer());
-    for (let suffix = 0; suffix < 10_000; suffix++) {
-      let name = `${baseName}${suffix ? `-${suffix + 1}` : ""}${extension}`;
-      let path = joinWorkspacePath(assetsPath, name);
-      let result = await this.store.commit({
-        bytes,
-        condition: { kind: "if-absent" },
-        path,
-      });
-      if (result.status == "conflict") continue;
-      if (result.status == "unknown") throw mutationFailure(path, "unknown");
-      return {
-        file: imageFile,
-        markdownReference: `assets/${name}`,
-        name,
-        path,
-      };
-    }
-    throw new Error("Could not allocate a unique image asset name.");
+  create(markdownFilePath: string, imageFile: File) {
+    return this.run(createImageAsset(this.store, markdownFilePath, imageFile));
   }
 
   delete(path: string) {
-    return this.store.delete({ condition: { kind: "unconditional" }, path });
+    return this.run(this.store.delete({ condition: { kind: "unconditional" }, path }));
   }
 
   write(input: Parameters<WorkspaceAssetPort["write"]>[0]) {
-    return this.store.commit({
-      bytes: input.value,
-      condition: input.condition,
-      path: input.path,
-    });
+    return this.run(
+      this.store.commit({
+        bytes: input.value,
+        condition: input.condition,
+        path: input.path,
+      }),
+    );
   }
 }
 
-function storageEntryToLegacyEntry(
-  entry: Awaited<ReturnType<WorkspaceObjectStore["listDirectory"]>>[number],
-): LegacyWorkspaceEntry {
+const observeDocument = Effect.fn("WorkspaceDocuments.observe")(function* (
+  store: WorkspaceObjectStore,
+  path: string,
+) {
+  let observation = yield* store.read(path);
+  if (observation.state != "present") return observation;
+  return {
+    state: "present" as const,
+    value: {
+      ...observation.value,
+      value: new TextDecoder().decode(observation.value.bytes),
+    } satisfies WorkspaceTextSnapshot,
+  };
+});
+
+const createEntry = Effect.fn("WorkspaceEntries.create")(function* (
+  store: WorkspaceObjectStore,
+  rawPath: string,
+): Effect.fn.Return<string | null, WorkspaceMutationNotApplied | WorkspaceStoreError> {
+  let target = normalizeWorkspaceCreateTarget(rawPath);
+  if (target.kind == "directory") {
+    yield* assertApplied(
+      yield* store.createDirectory(target.path, { kind: "if-absent" }),
+      target.path,
+    );
+    return null;
+  }
+
+  let result = yield* store.commit({
+    bytes: new TextEncoder().encode(starterMarkdown(target.path)),
+    condition: { kind: "if-absent" },
+    path: target.path,
+  });
+  if (result.status == "committed") return target.path;
+  return yield* WorkspaceMutationNotApplied.forStatus(target.path, result.status);
+});
+
+function moveEntry(store: WorkspaceObjectStore, input: Parameters<WorkspaceEntryPort["move"]>[0]) {
+  return store.move({
+    from: input.from,
+    kind: input.kind,
+    sourceCondition: input.revision
+      ? { kind: "if-unchanged", revision: input.revision }
+      : { kind: "unconditional" },
+    targetCondition: { kind: "if-absent" },
+    to: input.to,
+  });
+}
+
+const readAsset = Effect.fn("WorkspaceAssets.read")(function* (
+  store: WorkspaceObjectStore,
+  path: string,
+) {
+  let observation = yield* store.read(path);
+  if (observation.state == "present") return observation.value.bytes;
+  if (observation.state == "unavailable") return yield* Effect.fail(observation.error);
+  return yield* new WorkspaceNotFound({ message: `${path} does not exist.`, path });
+});
+
+const createImageAsset = Effect.fn("WorkspaceAssets.create")(function* (
+  store: WorkspaceObjectStore,
+  markdownFilePath: string,
+  imageFile: File,
+) {
+  if (!isImageFile(imageFile)) {
+    let name = imageFile.name || "Dropped file";
+    return yield* new WorkspaceUnsupportedImage({
+      message: `${name} is not a supported image.`,
+      name,
+    });
+  }
+  let parent = markdownFilePath.split("/").slice(0, -1).join("/");
+  let assetsPath = joinWorkspacePath(parent, "assets");
+  yield* assertApplied(
+    yield* store.createDirectory(assetsPath, { kind: "unconditional" }),
+    assetsPath,
+  );
+
+  let { baseName, extension } = imageAssetNameParts(imageFile);
+  let bytes = new Uint8Array(yield* Effect.promise(() => imageFile.arrayBuffer()));
+  for (let suffix = 0; suffix < 10_000; suffix++) {
+    let name = `${baseName}${suffix ? `-${suffix + 1}` : ""}${extension}`;
+    let path = joinWorkspacePath(assetsPath, name);
+    let result = yield* store.commit({ bytes, condition: { kind: "if-absent" }, path });
+    if (result.status == "conflict") continue;
+    if (result.status == "unknown")
+      return yield* WorkspaceMutationNotApplied.forStatus(path, "unknown");
+    return {
+      file: imageFile,
+      markdownReference: `assets/${name}`,
+      name,
+      path,
+    };
+  }
+  return yield* new WorkspaceMutationNotApplied({
+    message: "Could not allocate a unique image asset name.",
+    path: assetsPath,
+    status: "exhausted",
+  });
+});
+
+function storageEntryToLegacyEntry(entry: WorkspaceEntry): LegacyWorkspaceEntry {
   return {
     isDirectory: entry.kind == "directory",
     isFile: entry.kind == "file",
@@ -209,15 +304,10 @@ function isIgnoredDirectory(path: string, kind: "directory" | "file") {
   return kind == "directory" && ignoredWorkspaceDirectories.has(name);
 }
 
-function assertApplied(
-  result: Awaited<ReturnType<WorkspaceObjectStore["createDirectory"]>>,
-  path: string,
-) {
-  if (result.status != "applied") throw mutationFailure(path, result.status);
-}
-
-function mutationFailure(path: string, status: string) {
-  return new Error(`Workspace mutation for ${path} ended with ${status}.`);
+function assertApplied(result: { status: string }, path: string) {
+  return result.status == "applied"
+    ? Effect.void
+    : Effect.fail(WorkspaceMutationNotApplied.forStatus(path, result.status));
 }
 
 function isImageFile(file: File) {

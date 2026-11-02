@@ -9,7 +9,7 @@ import { resetBrowserCollabMemoryStoreForTests } from "@/lib/collaboration/colla
 import { resetOwnerShareRecordStoreForTests } from "@/lib/collaboration/share-storage";
 import type { AccessFileHandle } from "@/lib/workspace/file-system";
 import { createLocalFileSource } from "@/lib/workspace/single-file";
-import { WorkspaceStorageError } from "@/lib/workspace/storage/types";
+import { workspaceStorageError } from "@/lib/workspace/storage/types";
 import type { WorkspaceHostPermission } from "@/lib/workspace/runtime/types";
 import type { MarkdownFileNode } from "@/lib/workspace/tree";
 import { createMemoryWorkspaceRuntime } from "@/test/memory-workspace-runtime";
@@ -261,7 +261,7 @@ describe("WorkspaceEditorSession document actions", () => {
 
     let document = fixture.application.documentViews.current()!.collabDocument;
     vi.spyOn(runtime.documentSource, "commit").mockRejectedValueOnce(
-      new WorkspaceStorageError({ code: "permission-denied", message: "Access revoked." }),
+      workspaceStorageError({ code: "permission-denied", message: "Access revoked." }),
     );
     document.edit([{ expectedText: "", from: 7, insert: "Edited.\n", to: 7 }]);
     await act(async () => {

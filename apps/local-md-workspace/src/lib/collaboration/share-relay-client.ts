@@ -1,3 +1,12 @@
+import { Effect, Predicate, Schedule } from "effect";
+import {
+  relayRequestReason,
+  ShareRelayNotConfigured,
+  ShareRelayProtocolError,
+  ShareRelayRequestError,
+  type ShareRelayOperation,
+} from "./relay-errors.ts";
+
 export type RelayShareCreateRequest = {
   displayName: string;
   expiresAt: number | null;
@@ -38,14 +47,19 @@ export type RelayShareRevokeResult = {
   shareId: string;
 };
 
-export async function createRelayShare(
+/** One immediate replay for a create whose response was lost (network or 5xx). */
+export const relayShareCreateRetrySchedule = Schedule.recurs(1);
+
+/**
+ * Creates the relay share. The create is idempotent (`Idempotency-Key` is the
+ * share id), so a network failure or 5xx is replayed once.
+ */
+export const createRelayShare = Effect.fn("createRelayShare")(function* (
   relayOrigin: string | null | undefined,
   request: RelayShareCreateRequest,
   fetchImpl: typeof fetch = fetch,
 ) {
-  let origin = normalizeRelayOrigin(relayOrigin);
-  if (!origin) throw new Error("Shared file relay is not configured.");
-
+  let origin = yield* requireRelayOrigin(relayOrigin);
   let body = JSON.stringify({
     displayName: request.displayName,
     expiresAt: request.expiresAt,
@@ -54,39 +68,34 @@ export async function createRelayShare(
     shareId: request.shareId,
     snapshot: encodeBase64(request.snapshot),
   });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let response: Response;
-    try {
-      response = await fetchImpl(new URL("/api/shares", origin), {
-        body,
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key": request.shareId,
-        },
-        method: "POST",
-      });
-    } catch (error) {
-      if (attempt == 0) continue;
-      throw error;
-    }
+  yield* relayRequest("create", fetchImpl, new URL("/api/shares", origin), {
+    body,
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": request.shareId,
+    },
+    method: "POST",
+  }).pipe(
+    Effect.retry(
+      relayShareCreateRetrySchedule.pipe(
+        Schedule.setInputType<ShareRelayRequestError>(),
+        Schedule.while(({ input }) => input.retryable),
+      ),
+    ),
+  );
+});
 
-    if (response.ok) return;
-    if (attempt == 0 && response.status >= 500) continue;
-    throw new Error(`Could not create shared file (${response.status}).`);
-  }
-}
-
-export async function createRelayShareSession(
+export const createRelayShareSession = Effect.fn("createRelayShareSession")(function* (
   relayOrigin: string | null | undefined,
   shareId: string,
   role: RelayShareRole,
   secret: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<RelayShareSession> {
-  let origin = normalizeRelayOrigin(relayOrigin);
-  if (!origin) throw new Error("Shared file relay is not configured.");
-
-  let response = await fetchImpl(
+) {
+  let origin = yield* requireRelayOrigin(relayOrigin);
+  let response = yield* relayRequest(
+    "join",
+    fetchImpl,
     new URL(`/api/shares/${encodeURIComponent(shareId)}/session`, origin),
     {
       body: JSON.stringify({ role, secret }),
@@ -94,24 +103,19 @@ export async function createRelayShareSession(
       method: "POST",
     },
   );
+  return yield* parseResponse(response, parseRelayShareSession);
+});
 
-  if (!response.ok) {
-    throw new Error(`Could not join shared file (${response.status}).`);
-  }
-
-  return parseRelayShareSession(await response.json());
-}
-
-export async function rotateRelayShare(
+export const rotateRelayShare = Effect.fn("rotateRelayShare")(function* (
   relayOrigin: string | null | undefined,
   shareId: string,
   request: RelayShareRotateRequest,
   fetchImpl: typeof fetch = fetch,
-): Promise<RelayShareRotateResult> {
-  let origin = normalizeRelayOrigin(relayOrigin);
-  if (!origin) throw new Error("Shared file relay is not configured.");
-
-  let response = await fetchImpl(
+) {
+  let origin = yield* requireRelayOrigin(relayOrigin);
+  let response = yield* relayRequest(
+    "rotate",
+    fetchImpl,
     new URL(`/api/shares/${encodeURIComponent(shareId)}/rotate`, origin),
     {
       body: JSON.stringify({
@@ -123,24 +127,19 @@ export async function rotateRelayShare(
       method: "POST",
     },
   );
+  return yield* parseResponse(response, parseRelayShareRotateResult);
+});
 
-  if (!response.ok) {
-    throw new Error(`Could not rotate shared file link (${response.status}).`);
-  }
-
-  return parseRelayShareRotateResult(await response.json());
-}
-
-export async function revokeRelayShare(
+export const revokeRelayShare = Effect.fn("revokeRelayShare")(function* (
   relayOrigin: string | null | undefined,
   shareId: string,
   hostSecret: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<RelayShareRevokeResult> {
-  let origin = normalizeRelayOrigin(relayOrigin);
-  if (!origin) throw new Error("Shared file relay is not configured.");
-
-  let response = await fetchImpl(
+) {
+  let origin = yield* requireRelayOrigin(relayOrigin);
+  let response = yield* relayRequest(
+    "revoke",
+    fetchImpl,
     new URL(`/api/shares/${encodeURIComponent(shareId)}/revoke`, origin),
     {
       body: JSON.stringify({ hostSecret }),
@@ -148,12 +147,73 @@ export async function revokeRelayShare(
       method: "POST",
     },
   );
+  return yield* parseResponse(response, parseRelayShareRevokeResult);
+});
 
-  if (!response.ok) {
-    throw new Error(`Could not stop sharing this file (${response.status}).`);
-  }
+const failureMessages: Record<ShareRelayOperation, (status: number) => string> = {
+  create: (status) => `Could not create shared file (${status}).`,
+  join: (status) => `Could not join shared file (${status}).`,
+  revoke: (status) => `Could not stop sharing this file (${status}).`,
+  rotate: (status) => `Could not rotate shared file link (${status}).`,
+};
 
-  return parseRelayShareRevokeResult(await response.json());
+function requireRelayOrigin(relayOrigin: string | null | undefined) {
+  let origin = normalizeRelayOrigin(relayOrigin);
+  return origin ? Effect.succeed(origin) : Effect.fail(ShareRelayNotConfigured.make());
+}
+
+/**
+ * Sends one relay request. Interruption aborts it. A network failure is an
+ * `unavailable` request error that keeps the browser's message; a non-2xx
+ * response fails with the operation's user-facing message.
+ */
+function relayRequest(
+  operation: ShareRelayOperation,
+  fetchImpl: typeof fetch,
+  url: URL,
+  init: RequestInit,
+) {
+  return Effect.tryPromise({
+    catch: (cause) =>
+      new ShareRelayRequestError({
+        cause,
+        message: Predicate.isError(cause) ? cause.message : String(cause),
+        operation,
+        reason: "unavailable",
+      }),
+    try: (signal) => fetchImpl(url, { ...init, signal }),
+  }).pipe(
+    Effect.flatMap((response) =>
+      response.ok
+        ? Effect.succeed(response)
+        : Effect.fail(
+            new ShareRelayRequestError({
+              message: failureMessages[operation](response.status),
+              operation,
+              reason: relayRequestReason(response.status),
+              status: response.status,
+            }),
+          ),
+    ),
+  );
+}
+
+function parseResponse<T>(response: Response, parse: (value: unknown) => T) {
+  return Effect.tryPromise({
+    catch: () =>
+      new ShareRelayProtocolError({ message: "Shared file relay sent an invalid response." }),
+    try: () => response.json() as Promise<unknown>,
+  }).pipe(
+    Effect.flatMap((value) =>
+      Effect.try({
+        catch: (cause) =>
+          new ShareRelayProtocolError({
+            message: Predicate.isError(cause) ? cause.message : String(cause),
+          }),
+        try: () => parse(value),
+      }),
+    ),
+  );
 }
 
 export function shareRelayWebSocketUrl(
@@ -162,7 +222,7 @@ export function shareRelayWebSocketUrl(
   clientId: string,
 ) {
   let origin = normalizeRelayOrigin(relayOrigin);
-  if (!origin) throw new Error("Shared file relay is not configured.");
+  if (!origin) throw ShareRelayNotConfigured.make();
 
   let url = new URL(`/api/shares/${encodeURIComponent(shareId)}/ws`, origin);
   url.protocol = url.protocol == "http:" || url.protocol == "ws:" ? "ws:" : "wss:";

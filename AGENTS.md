@@ -35,8 +35,10 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Product/runtime integrations: LiveMD uses KaTeX, Mermaid, and
   `beautiful-mermaid`; optional collaboration uses `loro-crdt` and
   `loro-codemirror`; `apps/local-md-workspace` uses React 19, shadcn/radix UI,
-  Zustand for its authoritative application read model, Effect for typed async
-  orchestration and scoped resource lifecycles, i18next/react-i18next, the
+  Zustand for its authoritative application read model, Effect 4 as the
+  backbone of its async I/O (tagged errors, scoped workspace runtimes,
+  interruption, `Schedule` retries) behind one `ManagedRuntime`,
+  i18next/react-i18next, the
   browser File System Access API, Dropbox OAuth PKCE, the OpenDAL browser WASM
   wrapper, Grove shared-file relay clients, and a lazy Vercel AI SDK
   `@ai-sdk/deepseek` browser Agent with user-provided credentials, a fixed
@@ -180,7 +182,40 @@ Before writing any Effect code, first read `node_modules/effect/AGENTS.md`
 
 If you need to learn more about particular Effect APIs and concepts that the
 guide does not cover, search through the source code in
-`node_modules/effect/src`.
+`node_modules/effect/src`. The app is on Effect 4 (`Context.Service`,
+`Schema.TaggedError`, `Effect.fn`, `Semaphore.make`); verify APIs against the
+installed source rather than Effect 3 memory. `@effect/vitest` is not
+installed: tests run Effects with `Effect.runPromise` and control time with
+`TestClock` from `effect/testing`.
+
+How the app uses Effect (details in
+`apps/local-md-workspace/EFFECT_ZUSTAND_MIGRATION.md`):
+
+- Services live in one layer, `workspaceAppLayer`
+  (`src/app/effect-runtime.ts`): `WorkspaceRuntimeTransitions`,
+  `LocalWorkspaceStorage`, `CloudWorkspaceStorage`, `DropboxWorkspaces`, and
+  `OpendalOperators`. Add new services there.
+- UI code runs Effects only through `src/app/effect-bridge.ts`
+  (`runWorkspaceEffect`, `useWorkspaceEffectRunner`); do not call
+  `Effect.runPromise` from components or hooks. Typed failures reject as their
+  `Error`, interruption rejects as an `AbortError`.
+- Errors that cross module boundaries are `Schema.TaggedError`s whose
+  `message` keeps the exact English text `lib/workspace/errors.ts` and the
+  i18n catalog map; keep those strings stable when touching them.
+- Resources (operators, listeners, monitors, document registries, sockets)
+  are acquired with their release in a `Scope`; workspace runtimes are built
+  with `makeScopedWorkspaceRuntime`.
+- Retry only operations that are safe to replay, with a bounded `Schedule`
+  filtered to retryable failures.
+- Agent turns run as fibers that Stop, lock, delete, and deactivation interrupt
+  synchronously. Never put the API key, passphrase, or derived key into Effect
+  `Ref`s, fiber-local state, span attributes, or `Effect.log*` calls, and do
+  not install an Effect tracer, logger export, or `ErrorReporter` that could
+  receive Agent errors.
+- Promise APIs remain only at named boundaries: the `WorkspaceRuntime` ports
+  and `dispose()` consumed by the document, collaboration, and Agent layers,
+  and the bridge. React rendering, the Zustand read model, the document-view
+  coordinator, and collaborative-document internals do not use Effect.
 
 ## Common Commands
 

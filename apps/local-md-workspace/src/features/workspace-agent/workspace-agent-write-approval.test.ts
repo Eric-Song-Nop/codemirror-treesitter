@@ -89,6 +89,53 @@ describe("Agent write approval gate", () => {
   });
 });
 
+describe("Agent run fibers", () => {
+  it.each([
+    ["stop", (manager: WorkspaceAgentSessionManager) => manager.stop()],
+    ["credential lock", (manager: WorkspaceAgentSessionManager) => manager.syncApiKey(null)],
+    ["deactivation", (manager: WorkspaceAgentSessionManager) => manager.deactivate()],
+  ] as const)("aborts the running turn synchronously on %s", async (_label, cancel) => {
+    let signal: AbortSignal | undefined;
+    let runner: WorkspaceAgentRunner = (input) =>
+      new Promise((_resolve, reject) => {
+        signal = input.signal;
+        input.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        );
+      });
+    let runtime = createMemoryWorkspaceRuntime([["open.md", "A\n"]], {
+      id: `memory:fiber-${runtimes.length}`,
+    });
+    runtimes.push(runtime);
+    let manager = new WorkspaceAgentSessionManager(runner);
+    manager.activate();
+    manager.syncApiKey("sk-test");
+
+    let send = manager.send("wait", () => createWorkspaceAgentHost({ runtime }));
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    expect(signal!.aborted).toBe(false);
+
+    cancel(manager);
+
+    expect(signal!.aborted).toBe(true);
+    await expect(send).resolves.toBe(false);
+  });
+
+  it("withdraws a pending approval when its run is interrupted", async () => {
+    let fixture = setup();
+    let send = fixture.manager.send("edit both", () => fixture.host);
+    await vi.waitFor(() => expect(fixture.activeSession().approvals).toHaveLength(1));
+
+    fixture.manager.stopAll();
+
+    expect(fixture.activeSession().approvals).toEqual([]);
+    await send;
+    await vi.waitFor(() => expect(fixture.results).toHaveLength(2));
+    expect(fixture.results[1]).toMatchObject({ status: "not-applied" });
+    expect(await fixture.read("other.md")).toBe("B\n");
+  });
+});
+
 function setup() {
   let runtime = createMemoryWorkspaceRuntime(
     [

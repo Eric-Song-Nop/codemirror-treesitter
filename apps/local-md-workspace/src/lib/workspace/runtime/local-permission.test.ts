@@ -1,10 +1,11 @@
 import { OpendalBrowserError } from "@codemirror-treesitter/opendal-wasm-browser";
+import { Effect } from "effect";
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { OpendalOperatorHost } from "../storage/opendal-operator-host.ts";
 import { isPermissionDeniedError, storageErrorFromOpendal } from "../storage/types.ts";
 import {
   FileSystemPermissionTracker,
-  PermissionAwareOperatorHost,
+  withLocalPermissionChecks,
   type PermissionHandle,
 } from "./local-permission.ts";
 
@@ -32,7 +33,7 @@ describe("FileSystemPermissionTracker", () => {
     let visibility = fakeVisibility();
     let tracker = new FileSystemPermissionTracker(handle, { visibility });
     let inner = fakeHost();
-    let host = new PermissionAwareOperatorHost(inner, tracker);
+    let host = permissionHost(inner, tracker);
 
     await host.run({ execute: async () => "ok", operation: "unconditional-mutation" });
     expect(handle.queryPermission).not.toHaveBeenCalled();
@@ -57,7 +58,7 @@ describe("FileSystemPermissionTracker", () => {
     let tracker = new FileSystemPermissionTracker(handle, { visibility: null });
     await tracker.check();
     let inner = fakeHost();
-    let host = new PermissionAwareOperatorHost(inner, tracker);
+    let host = permissionHost(inner, tracker);
 
     await expect(
       host.run({ execute: async () => "ok", operation: "unconditional-mutation" }),
@@ -79,16 +80,16 @@ describe("FileSystemPermissionTracker", () => {
   it("maps NotAllowedError and SecurityError from operations to permission-denied", async () => {
     let handle = fakeHandle("granted");
     let tracker = new FileSystemPermissionTracker(handle, { visibility: null });
-    let host = new PermissionAwareOperatorHost(
-      fakeHost(async () => {
-        handle.state = "denied";
-        throw new DOMException("The request is not allowed.", "NotAllowedError");
-      }),
-      tracker,
-    );
+    let host = permissionHost(fakeHost(), tracker);
 
     let readError = await host
-      .run({ execute: async () => "unused", operation: "read" })
+      .run({
+        execute: async () => {
+          handle.state = "denied";
+          throw new DOMException("The request is not allowed.", "NotAllowedError");
+        },
+        operation: "read",
+      })
       .catch((cause: unknown) => cause);
     expect(readError).toMatchObject({ code: "permission-denied", operation: "read" });
     await vi.waitFor(() => expect(tracker.state).toBe("denied"));
@@ -144,14 +145,26 @@ function fakeVisibility() {
   return source;
 }
 
-function fakeHost(execute?: () => Promise<unknown>) {
+function fakeHost() {
   let host = {
-    dispose: vi.fn(async () => {}),
     identity: { id: "local:test", kind: "local" as const, name: "Test" },
     operatorInfo: {} as OpendalOperatorHost["operatorInfo"],
     run: vi.fn((input: Parameters<OpendalOperatorHost["run"]>[0]) =>
-      execute ? execute() : input.execute({} as never),
+      Effect.tryPromise({ catch: (cause) => cause, try: () => input.execute({} as never) }).pipe(
+        Effect.catch((cause) =>
+          cause instanceof OpendalBrowserError ? Effect.fail(cause) : Effect.die(cause),
+        ),
+      ),
     ),
   };
   return host as typeof host & OpendalOperatorHost;
+}
+
+/** Promise view of the permission-checking host. */
+function permissionHost(inner: OpendalOperatorHost, tracker: FileSystemPermissionTracker) {
+  let host = withLocalPermissionChecks(inner, tracker);
+  return {
+    run: <T>(input: Parameters<OpendalOperatorHost["run"]>[0] & { execute: () => Promise<T> }) =>
+      Effect.runPromise(host.run(input)),
+  };
 }

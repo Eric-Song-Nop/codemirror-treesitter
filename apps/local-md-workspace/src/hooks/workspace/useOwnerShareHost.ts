@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
+import { runStandaloneEffect } from "@/app/effect-bridge";
 import {
   configuredShareRelayOrigin,
   createRelayShareSession,
@@ -70,11 +71,8 @@ export function useOwnerShareHost({
       }
 
       try {
-        let relaySession = await createRelayShareSession(
-          configuredShareRelayOrigin(),
-          record.shareId,
-          "host",
-          hostSecret,
+        let relaySession = await runStandaloneEffect(
+          createRelayShareSession(configuredShareRelayOrigin(), record.shareId, "host", hostSecret),
         );
         if (options.shouldContinue && !options.shouldContinue()) return;
         let { ShareRelayConnection } = await import("@/lib/collaboration/share-relay-connection");
@@ -102,13 +100,14 @@ export function useOwnerShareHost({
             );
           },
           refreshSessionToken: async (signal) => {
-            let fetchWithAbort: typeof fetch = (input, init) => fetch(input, { ...init, signal });
-            let refreshed = await createRelayShareSession(
-              configuredShareRelayOrigin(),
-              record.shareId,
-              "host",
-              hostSecret,
-              fetchWithAbort,
+            let refreshed = await runStandaloneEffect(
+              createRelayShareSession(
+                configuredShareRelayOrigin(),
+                record.shareId,
+                "host",
+                hostSecret,
+              ),
+              { signal },
             );
             signal.throwIfAborted();
             if (shareHostConnectionRef.current != connection) {

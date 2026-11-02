@@ -1,4 +1,14 @@
+import { Duration, Effect, Random, Schedule, type Fiber } from "effect";
 import { VersionVector, type LoroDoc } from "loro-crdt";
+import {
+  ShareRelayConnectionLost,
+  ShareRelayProtocolError,
+  ShareRelayResyncRequired,
+  ShareRelaySessionExpired,
+  ShareRelaySessionRefreshFailed,
+  ShareRelaySessionRefreshRequired,
+  ShareRelayUnauthorized,
+} from "./relay-errors.ts";
 import {
   RelayWireKind,
   decodeRelayWireFrame,
@@ -51,24 +61,57 @@ export const maxQueuedRelayBytes = 1024 * 1024;
 export const maxSingleQueuedDocumentUpdateBytes = 256 * 1024;
 export const maxRelayBatchMessages = 64;
 
+/**
+ * Delay between reconnect attempts: 250ms doubling to at most 10s, plus up to
+ * 300ms of random jitter. The attempt count restarts once a socket opens.
+ */
+export const shareRelayReconnectSchedule = Schedule.min([
+  Schedule.exponential("250 millis"),
+  Schedule.spaced("10 seconds"),
+]).pipe(
+  Schedule.modifyDelay(({ duration }) =>
+    Effect.map(Random.nextIntBetween(0, 300), (jitter) =>
+      Duration.sum(duration, Duration.millis(jitter)),
+    ),
+  ),
+);
+
+/** Why one WebSocket session ended. */
+type SocketEnd =
+  | ShareRelayConnectionLost
+  | ShareRelayProtocolError
+  | ShareRelayResyncRequired
+  | ShareRelaySessionRefreshRequired
+  | ShareRelayUnauthorized;
+
+type SocketClose = { code: number; reason: string };
+
+/**
+ * One shared-file relay connection.
+ *
+ * The public API is synchronous (the editor enqueues updates from Loro
+ * callbacks), and frame handling stays synchronous so imports and sends keep
+ * their order. The connection's lifetime is an Effect fiber: each WebSocket is
+ * a scoped resource whose release closes it and removes its listeners;
+ * reconnects wait on {@link shareRelayReconnectSchedule}; session refresh is
+ * an interruptible Effect. `close()`, `pause()`, and a new `connect()`
+ * interrupt the fiber, which aborts an in-flight refresh and closes the socket.
+ */
 export class ShareRelayConnection {
-  private activeGeneration = 0;
   private closed = false;
+  private endSocket: ((end: SocketEnd) => void) | null = null;
   private flushTimer: number | null = null;
-  private heartbeatTimer: number | null = null;
   private lastMessageAt = 0;
   private offlineBaseVersion: VersionVector | null = null;
   private queue: QueuedRelayMessage[] = [];
   private queuedBytes = 0;
   private queueRequiresResync = false;
-  private reconnectAttempt = 0;
-  private reconnectTimer: number | null = null;
   private receivedInitialSync = false;
-  private sessionRefreshController: AbortController | null = null;
-  private sessionRefreshPromise: Promise<void> | null = null;
+  private session: Fiber.Fiber<void> | null = null;
   private sessionRefreshRequired = false;
   private sessionToken: string;
   private socket: WebSocket | null = null;
+  private socketClose: SocketClose = { code: 1000, reason: "Reconnecting" };
 
   constructor(private readonly options: ShareRelayConnectionOptions) {
     this.sessionToken = options.sessionToken;
@@ -77,13 +120,8 @@ export class ShareRelayConnection {
   close() {
     this.flushNow();
     this.closed = true;
-    this.activeGeneration++;
-    this.cancelSessionRefresh();
     this.sessionRefreshRequired = false;
-    this.clearReconnectTimer();
-    this.stopHeartbeat();
-    this.socket?.close(1000, "Page closed");
-    this.socket = null;
+    this.stopSession({ code: 1000, reason: "Page closed" });
     this.releaseOfflineBaseVersion();
   }
 
@@ -103,79 +141,183 @@ export class ShareRelayConnection {
       this.pause();
       return;
     }
-    if (this.sessionRefreshRequired) {
-      this.startSessionRefresh();
-      return;
-    }
 
-    this.clearReconnectTimer();
-    this.stopHeartbeat();
-    this.socket?.close(1000, "Reconnecting");
-    this.options.onConnectionState?.("connecting");
+    this.stopSession({ code: 1000, reason: "Reconnecting" });
+    this.session = Effect.runFork(this.runSession());
+  }
 
-    let generation = ++this.activeGeneration;
-    let socket: WebSocket;
-    try {
-      socket = new WebSocket(
-        shareRelayWebSocketUrl(
-          this.options.relayOrigin,
-          this.options.shareId,
-          this.options.clientId,
-        ),
-      );
-    } catch (error) {
-      this.options.onError?.(errorToMessage(error));
-      return;
-    }
+  private stopSession(close: SocketClose) {
+    let session = this.session;
+    this.session = null;
+    if (!session) return;
+    this.socketClose = close;
+    session.interruptUnsafe();
+  }
 
-    socket.binaryType = "arraybuffer";
-    this.socket = socket;
-    this.receivedInitialSync = false;
-    this.lastMessageAt = Date.now();
+  /**
+   * The connection's lifetime: refresh the session token when required, run one
+   * socket until it ends, then decide whether and when to try again.
+   */
+  private runSession(): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      let backoff = yield* Schedule.toStepWithSleep(shareRelayReconnectSchedule);
+      let reconnectLater = Effect.gen({ self: this }, function* () {
+        this.captureOfflineBaseVersion();
+        this.options.onConnectionState?.("offline");
+        if (navigator.onLine === false) return false;
+        // The schedule never ends, so its step cannot report completion.
+        yield* Effect.orDie(backoff(undefined));
+        return true;
+      });
 
-    socket.addEventListener("open", () => {
-      if (!this.isActive(generation, socket)) return;
-      this.reconnectAttempt = 0;
-      socket.send(
-        JSON.stringify({
-          clientId: this.options.clientId,
-          sessionToken: this.sessionToken,
-          type: "auth",
-          versionVector: serializeDocVersionVector(this.options.doc),
+      while (true) {
+        if (this.sessionRefreshRequired) {
+          let refreshed = yield* Effect.result(this.refreshSessionToken());
+          if (refreshed._tag == "Failure") {
+            this.options.onError?.(refreshed.failure.message);
+            if (refreshed.failure._tag == "ShareRelaySessionExpired") {
+              this.options.onConnectionState?.("offline");
+              return;
+            }
+            if (!(yield* reconnectLater)) return;
+            continue;
+          }
+          this.sessionToken = refreshed.success;
+          this.sessionRefreshRequired = false;
+          backoff = yield* Schedule.toStepWithSleep(shareRelayReconnectSchedule);
+        }
+
+        this.options.onConnectionState?.("connecting");
+        let end = yield* Effect.flip(this.runSocket());
+        switch (end._tag) {
+          case "ShareRelaySessionRefreshRequired":
+            this.sessionRefreshRequired = true;
+            this.captureOfflineBaseVersion();
+            this.options.onConnectionState?.("connecting");
+            continue;
+          case "ShareRelayUnauthorized":
+            this.options.onError?.(end.message);
+            this.options.onConnectionState?.("offline");
+            return;
+          case "ShareRelayResyncRequired":
+            this.options.onConnectionState?.("resync-required");
+            return;
+          case "ShareRelayProtocolError":
+            this.options.onError?.(end.message);
+            return;
+          case "ShareRelayConnectionLost":
+            if (end.opened) backoff = yield* Schedule.toStepWithSleep(shareRelayReconnectSchedule);
+            if (!(yield* reconnectLater)) return;
+            continue;
+        }
+      }
+    });
+  }
+
+  private refreshSessionToken(): Effect.Effect<
+    string,
+    ShareRelaySessionExpired | ShareRelaySessionRefreshFailed
+  > {
+    let refresh = this.options.refreshSessionToken;
+    if (!refresh) {
+      return Effect.fail(
+        new ShareRelaySessionExpired({
+          message: "Shared file access expired. Request a new session to reconnect.",
         }),
       );
-      this.startHeartbeat(generation, socket);
+    }
+    return Effect.tryPromise({
+      catch: (cause) =>
+        new ShareRelaySessionRefreshFailed({ cause, message: errorToMessage(cause) }),
+      try: (signal) => refresh(signal),
     });
+  }
 
-    socket.addEventListener("message", (event: MessageEvent<ArrayBuffer | string>) => {
-      if (!this.isActive(generation, socket)) return;
-      this.lastMessageAt = Date.now();
-      this.handleMessage(event.data);
-    });
+  /**
+   * Runs one WebSocket as a scoped resource. It fails with why the socket ended;
+   * releasing it removes its listeners, stops its heartbeat, and closes it.
+   */
+  private runSocket(): Effect.Effect<never, SocketEnd> {
+    return Effect.scoped(
+      Effect.gen({ self: this }, function* () {
+        let socket = yield* Effect.acquireRelease(
+          Effect.try({
+            catch: (cause) => new ShareRelayProtocolError({ message: errorToMessage(cause) }),
+            try: () =>
+              new WebSocket(
+                shareRelayWebSocketUrl(
+                  this.options.relayOrigin,
+                  this.options.shareId,
+                  this.options.clientId,
+                ),
+              ),
+          }),
+          (socket) =>
+            Effect.sync(() => {
+              if (this.socket === socket) this.socket = null;
+              let { code, reason } = this.socketClose;
+              this.socketClose = { code: 1000, reason: "Reconnecting" };
+              if (socket.readyState != WebSocket.CLOSED) socket.close(code, reason);
+            }),
+        );
+        socket.binaryType = "arraybuffer";
+        this.socket = socket;
+        this.receivedInitialSync = false;
+        this.lastMessageAt = Date.now();
+        return yield* this.awaitSocketEnd(socket);
+      }),
+    );
+  }
 
-    socket.addEventListener("close", (event) => {
-      if (!this.isActive(generation, socket)) return;
-      this.socket = null;
-      this.stopHeartbeat();
-      if (event.code == clientCloseCodeSessionRefreshRequired) {
-        this.requireSessionRefresh();
-        return;
-      }
-      if (event.code == 1008 || event.code == clientCloseCodePolicy) {
-        this.options.onError?.(policyCloseMessage(event.reason));
-        this.options.onConnectionState?.("offline");
-        return;
-      }
-      if (event.code == clientCloseCodeResyncRequired) {
-        this.options.onConnectionState?.("resync-required");
-        return;
-      }
-      this.scheduleReconnect();
-    });
+  private awaitSocketEnd(socket: WebSocket) {
+    return Effect.callback<never, SocketEnd>((resume) => {
+      let opened = false;
+      let heartbeat: number | null = null;
+      let end = (reason: SocketEnd) => resume(Effect.fail(reason));
+      this.endSocket = end;
 
-    socket.addEventListener("error", () => {
-      if (!this.isActive(generation, socket)) return;
-      socket.close();
+      let handleOpen = () => {
+        opened = true;
+        socket.send(
+          JSON.stringify({
+            clientId: this.options.clientId,
+            sessionToken: this.sessionToken,
+            type: "auth",
+            versionVector: serializeDocVersionVector(this.options.doc),
+          }),
+        );
+        heartbeat = window.setInterval(() => {
+          if (Date.now() - this.lastMessageAt > 60_000) {
+            socket.close(clientCloseCodeStale, "Stale connection");
+            return;
+          }
+          if (socket.readyState == WebSocket.OPEN) socket.send(JSON.stringify({ type: "ping" }));
+        }, 25_000);
+      };
+      let handleMessage = (event: MessageEvent<ArrayBuffer | string>) => {
+        if (this.socket !== socket) return;
+        this.lastMessageAt = Date.now();
+        this.handleMessage(event.data);
+      };
+      let handleClose = (event: CloseEvent) => {
+        if (this.socket === socket) this.socket = null;
+        end(socketEndFromClose(event, opened));
+      };
+      let handleError = () => socket.close();
+
+      socket.addEventListener("open", handleOpen);
+      socket.addEventListener("message", handleMessage);
+      socket.addEventListener("close", handleClose);
+      socket.addEventListener("error", handleError);
+
+      return Effect.sync(() => {
+        if (this.endSocket === end) this.endSocket = null;
+        if (heartbeat != null) clearInterval(heartbeat);
+        socket.removeEventListener("open", handleOpen);
+        socket.removeEventListener("message", handleMessage);
+        socket.removeEventListener("close", handleClose);
+        socket.removeEventListener("error", handleError);
+      });
     });
   }
 
@@ -217,11 +359,7 @@ export class ShareRelayConnection {
 
   pause() {
     this.captureOfflineBaseVersion();
-    this.cancelSessionRefresh();
-    this.clearReconnectTimer();
-    this.stopHeartbeat();
-    this.socket?.close(1000, "Offline");
-    this.socket = null;
+    this.stopSession({ code: 1000, reason: "Offline" });
     if (this.queueRequiresResync) {
       this.options.onConnectionState?.("resync-required");
       return;
@@ -232,11 +370,6 @@ export class ShareRelayConnection {
   private clearFlushTimer() {
     if (this.flushTimer != null) clearTimeout(this.flushTimer);
     this.flushTimer = null;
-  }
-
-  private clearReconnectTimer() {
-    if (this.reconnectTimer != null) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
   }
 
   private flushQueue() {
@@ -306,7 +439,6 @@ export class ShareRelayConnection {
     this.queueRequiresResync = true;
     this.releaseOfflineBaseVersion();
     this.clearFlushTimer();
-    this.clearReconnectTimer();
     this.options.onError?.(message);
     this.options.onConnectionState?.("resync-required");
     this.socket?.close(clientCloseCodeResyncRequired, "Resync required");
@@ -374,10 +506,6 @@ export class ShareRelayConnection {
     }
   }
 
-  private isActive(generation: number, socket: WebSocket) {
-    return this.activeGeneration == generation && this.socket == socket;
-  }
-
   private readyToSend() {
     return this.socket?.readyState == WebSocket.OPEN && this.receivedInitialSync;
   }
@@ -443,95 +571,15 @@ export class ShareRelayConnection {
     this.queue = retained;
   }
 
-  private reconnectDelay() {
-    let base = Math.min(250 * 2 ** this.reconnectAttempt, 10_000);
-    this.reconnectAttempt++;
-    return base + (crypto.getRandomValues(new Uint16Array(1))[0]! % 301);
-  }
-
   private scheduleFlush() {
     if (!this.readyToSend() || this.flushTimer != null) return;
     this.flushTimer = window.setTimeout(() => this.flushQueue(), 50);
   }
 
-  private scheduleReconnect() {
-    this.captureOfflineBaseVersion();
-    if (this.reconnectTimer != null || navigator.onLine === false) {
-      this.options.onConnectionState?.("offline");
-      return;
-    }
-
-    this.options.onConnectionState?.("offline");
-    this.reconnectTimer = window.setTimeout(() => {
-      this.reconnectTimer = null;
-      this.connect();
-    }, this.reconnectDelay());
-  }
-
+  /** Ends the current socket so the session loop refreshes the token first. */
   private requireSessionRefresh() {
     if (this.closed) return;
-    this.sessionRefreshRequired = true;
-    this.captureOfflineBaseVersion();
-    this.clearReconnectTimer();
-    this.stopHeartbeat();
-    this.options.onConnectionState?.("connecting");
-    this.startSessionRefresh();
-  }
-
-  private startSessionRefresh() {
-    if (this.closed || this.sessionRefreshPromise) return;
-    let refreshSessionToken = this.options.refreshSessionToken;
-    if (!refreshSessionToken) {
-      this.options.onError?.("Shared file access expired. Request a new session to reconnect.");
-      this.options.onConnectionState?.("offline");
-      return;
-    }
-
-    let controller = new AbortController();
-    this.sessionRefreshController = controller;
-    let task = Promise.resolve().then(async () => {
-      try {
-        let sessionToken = await refreshSessionToken(controller.signal);
-        if (controller.signal.aborted || this.closed || !this.sessionRefreshRequired) return;
-        this.sessionToken = sessionToken;
-        this.sessionRefreshRequired = false;
-        this.reconnectAttempt = 0;
-        this.connect();
-      } catch (error) {
-        if (controller.signal.aborted || this.closed) return;
-        this.options.onError?.(errorToMessage(error));
-        this.scheduleReconnect();
-      } finally {
-        if (this.sessionRefreshController == controller) {
-          this.sessionRefreshController = null;
-          this.sessionRefreshPromise = null;
-        }
-      }
-    });
-    this.sessionRefreshPromise = task;
-  }
-
-  private cancelSessionRefresh() {
-    this.sessionRefreshController?.abort();
-    this.sessionRefreshController = null;
-    this.sessionRefreshPromise = null;
-  }
-
-  private startHeartbeat(generation: number, socket: WebSocket) {
-    this.stopHeartbeat();
-    this.heartbeatTimer = window.setInterval(() => {
-      if (!this.isActive(generation, socket)) return;
-      if (Date.now() - this.lastMessageAt > 60_000) {
-        socket.close(clientCloseCodeStale, "Stale connection");
-        return;
-      }
-      if (socket.readyState == WebSocket.OPEN) socket.send(JSON.stringify({ type: "ping" }));
-    }, 25_000);
-  }
-
-  private stopHeartbeat() {
-    if (this.heartbeatTimer != null) clearInterval(this.heartbeatTimer);
-    this.heartbeatTimer = null;
+    this.endSocket?.(new ShareRelaySessionRefreshRequired());
   }
 
   private hasQueuedMessages() {
@@ -607,6 +655,17 @@ function parseVersionVector(value: unknown) {
     version.set(peer as `${number}`, counter);
   }
   return new VersionVector(version);
+}
+
+function socketEndFromClose(event: CloseEvent, opened: boolean): SocketEnd {
+  if (event.code == clientCloseCodeSessionRefreshRequired) {
+    return new ShareRelaySessionRefreshRequired();
+  }
+  if (event.code == 1008 || event.code == clientCloseCodePolicy) {
+    return new ShareRelayUnauthorized({ message: policyCloseMessage(event.reason) });
+  }
+  if (event.code == clientCloseCodeResyncRequired) return new ShareRelayResyncRequired();
+  return new ShareRelayConnectionLost({ code: event.code, opened });
 }
 
 function policyCloseMessage(reason: string) {

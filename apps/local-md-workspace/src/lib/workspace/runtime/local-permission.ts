@@ -1,12 +1,10 @@
-import {
-  OpendalBrowserError,
-  type OpendalExactBrowserOperator,
-} from "@codemirror-treesitter/opendal-wasm-browser";
+import { OpendalBrowserError } from "@codemirror-treesitter/opendal-wasm-browser";
+import { Effect } from "effect";
 import type {
   OpendalOperationClass,
   OpendalOperatorHost,
 } from "../storage/opendal-operator-host.ts";
-import { isPermissionDeniedError } from "../storage/types.ts";
+import { isPermissionDeniedError } from "../storage/errors.ts";
 import type { WorkspaceHostPermission } from "./types.ts";
 
 type PermissionMode = "read" | "readwrite";
@@ -94,18 +92,26 @@ export class FileSystemPermissionTracker implements WorkspaceHostPermission {
     return state;
   }
 
-  /** Resolves when a write may proceed, or rejects with a permission-denied error. */
-  async ensureWritable(operation: "delete" | "write") {
-    if (this.stale || this.current != "granted") await this.check();
-    if (this.current == "granted") return;
-    throw new OpendalBrowserError({
-      code: "permission-denied",
-      message:
-        this.current == "prompt"
-          ? "Workspace folder access needs to be granted again."
-          : "Workspace folder access was revoked.",
-      mutationOutcome: "not-applied",
-      operation,
+  /**
+   * Succeeds when a write may proceed, or fails with a `permission-denied`
+   * OpenDAL error (confirmed not applied) that the object store translates to
+   * `WorkspacePermissionDenied`.
+   */
+  ensureWritable(operation: "delete" | "write"): Effect.Effect<void, OpendalBrowserError> {
+    return Effect.gen({ self: this }, function* () {
+      if (this.stale || this.current != "granted") yield* Effect.promise(() => this.check());
+      if (this.current == "granted") return;
+      return yield* Effect.fail(
+        new OpendalBrowserError({
+          code: "permission-denied",
+          message:
+            this.current == "prompt"
+              ? "Workspace folder access needs to be granted again."
+              : "Workspace folder access was revoked.",
+          mutationOutcome: "not-applied",
+          operation,
+        }),
+      );
     });
   }
 
@@ -148,39 +154,39 @@ export class FileSystemPermissionTracker implements WorkspaceHostPermission {
 
 /**
  * Wraps a browser-local operator host so writes check folder permission first
- * and permission failures from any operation are surfaced as `permission-denied`.
+ * and permission failures from any operator call surface as `permission-denied`.
+ * The tracker's listeners are released by the runtime scope that created it.
  */
-export class PermissionAwareOperatorHost implements OpendalOperatorHost {
-  constructor(
-    private readonly inner: OpendalOperatorHost,
-    private readonly permission: FileSystemPermissionTracker,
-  ) {}
-
-  get identity() {
-    return this.inner.identity;
-  }
-
-  get operatorInfo() {
-    return this.inner.operatorInfo;
-  }
-
-  async run<T>(input: {
-    execute: (operator: OpendalExactBrowserOperator) => Promise<T>;
-    operation: OpendalOperationClass;
-  }): Promise<T> {
-    if (input.operation != "read") await this.permission.ensureWritable("write");
-    try {
-      return await this.inner.run(input);
-    } catch (error) {
-      if (!this.permission.reportFailure(error)) throw error;
-      throw asPermissionDeniedError(error, input.operation);
-    }
-  }
-
-  async dispose() {
-    this.permission.dispose();
-    await this.inner.dispose();
-  }
+export function withLocalPermissionChecks(
+  inner: OpendalOperatorHost,
+  permission: FileSystemPermissionTracker,
+): OpendalOperatorHost {
+  return {
+    get identity() {
+      return inner.identity;
+    },
+    get operatorInfo() {
+      return inner.operatorInfo;
+    },
+    run: (input) => {
+      let run = Effect.suspend(() =>
+        inner.run({
+          execute: async (operator) => {
+            try {
+              return await input.execute(operator);
+            } catch (error) {
+              if (!permission.reportFailure(error)) throw error;
+              throw asPermissionDeniedError(error, input.operation);
+            }
+          },
+          operation: input.operation,
+        }),
+      );
+      return input.operation == "read"
+        ? run
+        : Effect.andThen(permission.ensureWritable("write"), run);
+    },
+  };
 }
 
 function asPermissionDeniedError(error: unknown, operation: OpendalOperationClass) {
