@@ -1,5 +1,7 @@
 import type { WorkspaceDocumentViewCoordinator } from "@/app/document-view-coordinator";
-import type { WorkspaceEffectRuntime } from "@/app/effect-runtime";
+import type { Effect, Scope } from "effect";
+import { runWorkspaceEffect } from "@/app/effect-bridge";
+import type { WorkspaceAppServices, WorkspaceEffectRuntime } from "@/app/effect-runtime";
 import {
   clearWorkspaceDocumentView,
   publishEditorDocumentValue,
@@ -26,7 +28,10 @@ import type {
 import { errorToMessage } from "@/lib/workspace/errors";
 import type { AccessFileHandle } from "@/lib/workspace/file-system";
 import type { DropboxRedirectDraft } from "@/lib/workspace/providers/dropbox/redirect-draft";
-import { transitionWorkspaceRuntime } from "@/lib/workspace/runtime/runtime-lifecycle";
+import {
+  releaseWorkspaceRuntime,
+  transitionWorkspaceRuntime,
+} from "@/lib/workspace/runtime/runtime-lifecycle";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 import { createSingleFileDraftSource, singleFileMarkdownNode } from "@/lib/workspace/single-file";
 import {
@@ -49,6 +54,18 @@ import {
   type SingleFileSource,
   type SourceAutoSaveTask,
 } from "@/lib/workspace/types";
+
+/** A scoped effect that opens a workspace runtime on the application runtime. */
+export type OpenWorkspaceRuntime<E = unknown> = Effect.Effect<
+  WorkspaceRuntime,
+  E,
+  Scope.Scope | WorkspaceAppServices
+>;
+
+export type ReplaceWorkspaceRuntime = <E = never>(
+  next: OpenWorkspaceRuntime<E> | WorkspaceRuntime,
+  options?: { signal?: AbortSignal },
+) => Promise<WorkspaceRuntime>;
 
 /** Read-only view of a session field for hooks that still take ref-shaped inputs. */
 export type SessionRef<T> = { readonly current: T };
@@ -127,7 +144,7 @@ export class WorkspaceEditorSession {
   constructor(
     private readonly input: {
       documentViews: WorkspaceDocumentViewCoordinator;
-      effectRuntime?: Pick<WorkspaceEffectRuntime, "runPromise">;
+      effectRuntime?: Pick<WorkspaceEffectRuntime, "runPromiseExit">;
       store: WorkspaceAppStore;
     },
   ) {
@@ -449,28 +466,57 @@ export class WorkspaceEditorSession {
   // ---------------------------------------------------------------------------
   // Workspace runtime lifecycle
 
-  replaceWorkspaceRuntime = (nextRuntime: WorkspaceRuntime) => {
+  /**
+   * Activates a workspace runtime: either an already built runtime or a scoped
+   * effect that opens one (see `LocalWorkspaceStorage`, `DropboxWorkspaces`).
+   * The runtime is acquired in its own scope; if opening fails, is interrupted
+   * (`signal`), or activation fails, everything it acquired is released, and the
+   * replaced runtime is released after the new one is active.
+   */
+  replaceWorkspaceRuntime: ReplaceWorkspaceRuntime = (next, options = {}) => {
     let effectRuntime = this.input.effectRuntime;
     if (!effectRuntime) throw new Error("The editor session has no workspace effect runtime.");
-    return effectRuntime.runPromise(
+    // `signal` cancels opening; once the runtime is active the transition finishes.
+    let activated = false;
+    let cancel = new AbortController();
+    let onAbort = () => {
+      if (!activated) cancel.abort();
+    };
+    if (options.signal?.aborted) onAbort();
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    return runWorkspaceEffect(
+      effectRuntime,
       transitionWorkspaceRuntime({
         activate: (runtime) => {
+          activated = true;
           publishWorkspaceRuntime(this.store, runtime);
           this.watchPermission(runtime);
         },
         clearDocumentView: this.clearDocumentView,
         current: () => this.workspaceRuntime,
-        next: nextRuntime,
+        next,
       }),
-    );
+      { signal: cancel.signal },
+    ).finally(() => options.signal?.removeEventListener("abort", onAbort));
   };
 
-  /** Disposes the active runtime; used when the workspace root unmounts. */
+  /** Releases the active runtime; used when the workspace root unmounts. */
   disposeWorkspaceRuntime() {
-    let runtime = this.workspaceRuntime;
-    this.watchPermission(null);
-    workspaceLiveObjects(this.store).workspaceRuntime = null;
-    void runtime?.dispose();
+    let release = {
+      current: () => this.workspaceRuntime,
+      deactivate: () => {
+        this.watchPermission(null);
+        workspaceLiveObjects(this.store).workspaceRuntime = null;
+      },
+    };
+    let effectRuntime = this.input.effectRuntime;
+    if (!effectRuntime) {
+      let runtime = release.current();
+      release.deactivate();
+      void runtime?.dispose().catch(() => {});
+      return;
+    }
+    void runWorkspaceEffect(effectRuntime, releaseWorkspaceRuntime(release)).catch(() => {});
   }
 
   // ---------------------------------------------------------------------------

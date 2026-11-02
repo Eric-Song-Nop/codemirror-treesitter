@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import {
   createRelayShare,
@@ -7,6 +8,55 @@ import {
   shareRelayWebSocketUrl,
 } from "./share-relay-client.ts";
 
+describe("typed shared file relay errors", () => {
+  it.each([
+    [401, "unauthorized"],
+    [403, "unauthorized"],
+    [410, "expired"],
+    [429, "rate-limited"],
+    [503, "unavailable"],
+    [404, "rejected"],
+  ] as const)("classifies a %i join as %s and keeps the mapped message", async (status, reason) => {
+    let fetchImpl = (async () => new Response("", { status })) as typeof fetch;
+    await expect(
+      Effect.runPromise(
+        createRelayShareSession("https://relay.example", "share-id", "guest", "secret", fetchImpl),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "ShareRelayRequestError",
+      message: `Could not join shared file (${status}).`,
+      operation: "join",
+      reason,
+      status,
+    });
+  });
+
+  it("replays a create once on 5xx and then reports the failure", async () => {
+    let calls = 0;
+    let fetchImpl = (async () => {
+      calls += 1;
+      return new Response("", { status: 503 });
+    }) as typeof fetch;
+
+    await expect(
+      Effect.runPromise(createRelayShare("https://relay.example", relayRequest(), fetchImpl)),
+    ).rejects.toMatchObject({
+      message: "Could not create shared file (503).",
+      reason: "unavailable",
+    });
+    expect(calls).toBe(2);
+  });
+
+  it("reports a missing relay origin as a typed error", async () => {
+    await expect(
+      Effect.runPromise(createRelayShareSession("", "share-id", "guest", "secret")),
+    ).rejects.toMatchObject({
+      _tag: "ShareRelayNotConfigured",
+      message: "Shared file relay is not configured.",
+    });
+  });
+});
+
 describe("shared file relay client", () => {
   it("creates relay shares with a normalized origin and encoded snapshot", async () => {
     let calls: Array<{ body: string; init?: RequestInit; url: string }> = [];
@@ -15,17 +65,19 @@ describe("shared file relay client", () => {
       return new Response("{}", { status: 201 });
     }) as typeof fetch;
 
-    await createRelayShare(
-      "relay.example/path?ignored=1",
-      {
-        displayName: "note.md",
-        expiresAt: Date.UTC(2026, 5, 13),
-        guestSecretHash: "guest-hash",
-        hostSecretHash: "host-hash",
-        shareId: "share-id",
-        snapshot: new Uint8Array([1, 2, 3, 250]),
-      },
-      fetchImpl,
+    await Effect.runPromise(
+      createRelayShare(
+        "relay.example/path?ignored=1",
+        {
+          displayName: "note.md",
+          expiresAt: Date.UTC(2026, 5, 13),
+          guestSecretHash: "guest-hash",
+          hostSecretHash: "host-hash",
+          shareId: "share-id",
+          snapshot: new Uint8Array([1, 2, 3, 250]),
+        },
+        fetchImpl,
+      ),
     );
 
     expect(calls).toHaveLength(1);
@@ -50,19 +102,19 @@ describe("shared file relay client", () => {
       throw new Error("unexpected fetch");
     }) as typeof fetch;
 
-    await expect(createRelayShare("", relayRequest(), fetchImpl)).rejects.toThrow(
-      "Shared file relay is not configured.",
-    );
-    await expect(createRelayShare("https://", relayRequest(), fetchImpl)).rejects.toThrow(
-      "Shared file relay is not configured.",
-    );
+    await expect(
+      Effect.runPromise(createRelayShare("", relayRequest(), fetchImpl)),
+    ).rejects.toThrow("Shared file relay is not configured.");
+    await expect(
+      Effect.runPromise(createRelayShare("https://", relayRequest(), fetchImpl)),
+    ).rejects.toThrow("Shared file relay is not configured.");
   });
 
   it("surfaces relay creation failures", async () => {
     let fetchImpl = (async () => new Response("conflict", { status: 409 })) as typeof fetch;
 
     await expect(
-      createRelayShare("https://relay.example", relayRequest(), fetchImpl),
+      Effect.runPromise(createRelayShare("https://relay.example", relayRequest(), fetchImpl)),
     ).rejects.toThrow("Could not create shared file (409).");
   });
 
@@ -80,7 +132,7 @@ describe("shared file relay client", () => {
     }) as typeof fetch;
     let request = relayRequest();
 
-    await createRelayShare("https://relay.example", request, fetchImpl);
+    await Effect.runPromise(createRelayShare("https://relay.example", request, fetchImpl));
 
     expect(calls).toHaveLength(2);
     expect(calls[0]).toEqual(calls[1]);
@@ -109,12 +161,14 @@ describe("shared file relay client", () => {
     }) as typeof fetch;
 
     await expect(
-      createRelayShareSession(
-        "https://relay.example",
-        "share-id",
-        "guest",
-        "guest-secret",
-        fetchImpl,
+      Effect.runPromise(
+        createRelayShareSession(
+          "https://relay.example",
+          "share-id",
+          "guest",
+          "guest-secret",
+          fetchImpl,
+        ),
       ),
     ).resolves.toEqual({
       displayName: "note.md",
@@ -161,15 +215,17 @@ describe("shared file relay client", () => {
     }) as typeof fetch;
 
     await expect(
-      rotateRelayShare(
-        "https://relay.example",
-        "share-id",
-        {
-          expiresAt: Date.UTC(2026, 5, 13),
-          hostSecret: "host-secret",
-          nextGuestSecretHash: "next-guest-hash",
-        },
-        fetchImpl,
+      Effect.runPromise(
+        rotateRelayShare(
+          "https://relay.example",
+          "share-id",
+          {
+            expiresAt: Date.UTC(2026, 5, 13),
+            hostSecret: "host-secret",
+            nextGuestSecretHash: "next-guest-hash",
+          },
+          fetchImpl,
+        ),
       ),
     ).resolves.toEqual({
       expiresAt: Date.UTC(2026, 5, 13),
@@ -206,7 +262,9 @@ describe("shared file relay client", () => {
     }) as typeof fetch;
 
     await expect(
-      revokeRelayShare("https://relay.example", "share-id", "host-secret", fetchImpl),
+      Effect.runPromise(
+        revokeRelayShare("https://relay.example", "share-id", "host-secret", fetchImpl),
+      ),
     ).resolves.toEqual({
       revokedAt: Date.UTC(2026, 5, 6),
       shareId: "share-id",

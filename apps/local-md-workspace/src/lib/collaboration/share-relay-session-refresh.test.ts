@@ -145,6 +145,99 @@ describe("shared file relay session refresh", () => {
   });
 });
 
+describe("shared file relay reconnect policy", () => {
+  it("backs off between failed attempts and restarts the schedule after a socket opens", async () => {
+    vi.useFakeTimers();
+    installBrowserMocks();
+    let states: string[] = [];
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc: new LoroDoc(),
+      onConnectionState: (state) => states.push(state),
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+    connection.connect();
+    mockSockets[0]!.serverClose(1006, "");
+    expect(states.at(-1)).toBe("offline");
+
+    // First retry: 250ms plus at most 300ms of jitter.
+    await vi.advanceTimersByTimeAsync(249);
+    expect(mockSockets).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(301);
+    expect(mockSockets).toHaveLength(2);
+
+    // A second consecutive failure waits at least 500ms.
+    mockSockets[1]!.serverClose(1006, "");
+    await vi.advanceTimersByTimeAsync(499);
+    expect(mockSockets).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(301);
+    expect(mockSockets).toHaveLength(3);
+
+    // Once a socket has opened, the next drop starts again from 250ms.
+    mockSockets[2]!.open();
+    mockSockets[2]!.serverClose(1006, "");
+    await vi.advanceTimersByTimeAsync(550);
+    expect(mockSockets).toHaveLength(4);
+    connection.close();
+  });
+
+  it("stops without reconnecting when the relay rejects the session", async () => {
+    vi.useFakeTimers();
+    installBrowserMocks();
+    let errors: string[] = [];
+    let states: string[] = [];
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc: new LoroDoc(),
+      onConnectionState: (state) => states.push(state),
+      onError: (message) => errors.push(message),
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+    connection.connect();
+    mockSockets[0]!.open();
+    mockSockets[0]!.serverClose(1008, "Share session is no longer valid");
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mockSockets).toHaveLength(1);
+    expect(errors).toEqual(["Shared file access was rejected."]);
+    expect(states.at(-1)).toBe("offline");
+    connection.close();
+  });
+
+  it("cancels a pending reconnect when paused or closed", async () => {
+    vi.useFakeTimers();
+    installBrowserMocks();
+    let connection = new ShareRelayConnection({
+      clientId: "client-id",
+      doc: new LoroDoc(),
+      relayOrigin: "https://relay.example",
+      sessionToken: "session-token",
+      shareId: "share-id",
+    });
+    connection.connect();
+    mockSockets[0]!.serverClose(1006, "");
+    connection.pause();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mockSockets).toHaveLength(1);
+
+    connection.connect();
+    expect(mockSockets).toHaveLength(2);
+    mockSockets[1]!.open();
+    connection.pause();
+    expect(mockSockets[1]!.lastClose).toEqual({ code: 1000, reason: "Offline" });
+
+    connection.connect();
+    connection.close();
+    expect(mockSockets[2]!.lastClose).toEqual({ code: 1000, reason: "Page closed" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mockSockets).toHaveLength(3);
+  });
+});
+
 function installBrowserMocks() {
   vi.stubGlobal("navigator", { onLine: true });
   vi.stubGlobal("window", globalThis);

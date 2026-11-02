@@ -14,13 +14,17 @@ import type {
   StoredDropboxWorkspaceConfig,
   StoredLocalWorkspaceRecord,
 } from "@/lib/workspace/store";
-import { createBrowserLocalWorkspaceRuntime } from "@/lib/workspace/runtime/browser-local-runtime";
+import type {
+  OpenWorkspaceRuntime,
+  ReplaceWorkspaceRuntime,
+} from "@/hooks/workspace/workspace-editor-session";
+import { openLocalWorkspace } from "@/lib/workspace/runtime/browser-local-runtime";
 import type { WorkspaceRuntime } from "@/lib/workspace/runtime/types";
 
 type UseWorkspaceOpenersOptions = {
   cancelImageUpload: () => void;
   clearDropboxAccessToken: () => void;
-  createDropboxRuntime: (config: StoredDropboxWorkspaceConfig) => Promise<WorkspaceRuntime>;
+  openDropboxRuntime: (config: StoredDropboxWorkspaceConfig) => OpenWorkspaceRuntime;
   folderAccessUnavailableMessage: string;
   loadTree: (
     runtime: WorkspaceRuntime,
@@ -39,7 +43,7 @@ type UseWorkspaceOpenersOptions = {
   setErrorMessage: (message: string) => void;
   setRetryLoadPath: (path: string | null) => void;
   setSidebarOpen: (open: boolean) => void;
-  replaceWorkspaceRuntime: (runtime: WorkspaceRuntime) => Promise<void>;
+  replaceWorkspaceRuntime: ReplaceWorkspaceRuntime;
   storedDropboxConfig: StoredDropboxWorkspaceConfig | null;
   storedLocalWorkspace: StoredLocalWorkspaceRecord | null;
   workspaceRuntime: WorkspaceRuntime | null;
@@ -48,7 +52,7 @@ type UseWorkspaceOpenersOptions = {
 export function useWorkspaceOpeners({
   cancelImageUpload,
   clearDropboxAccessToken,
-  createDropboxRuntime,
+  openDropboxRuntime,
   folderAccessUnavailableMessage,
   loadTree,
   refreshWorkspaceForCurrentEditor,
@@ -84,9 +88,10 @@ export function useWorkspaceOpeners({
         return;
       }
       let record = await rememberWorkspaceHandle(handle);
-      let runtime = await createBrowserLocalWorkspaceRuntime({ handle, workspaceId: record.id });
+      let runtime = await replaceWorkspaceRuntime(
+        openLocalWorkspace({ handle, workspaceId: record.id }),
+      );
       clearDropboxAccessToken();
-      await replaceWorkspaceRuntime(runtime);
       setSidebarOpen(defaultSidebarOpen());
       await loadTree(runtime, loadWorkspaceSelectedPath(runtime.identity));
     } catch (error) {
@@ -125,8 +130,7 @@ export function useWorkspaceOpeners({
       setDropboxConnecting(true);
 
       try {
-        let runtime = await createDropboxRuntime(config);
-        await replaceWorkspaceRuntime(runtime);
+        let runtime = await replaceWorkspaceRuntime(openDropboxRuntime(config));
         setSidebarOpen(defaultSidebarOpen());
         await loadTree(
           runtime,
@@ -148,7 +152,7 @@ export function useWorkspaceOpeners({
     },
     [
       cancelImageUpload,
-      createDropboxRuntime,
+      openDropboxRuntime,
       loadTree,
       restoreCloudRedirectEditorDraft,
       saveCurrentFile,
@@ -175,12 +179,13 @@ export function useWorkspaceOpeners({
         return;
       }
 
-      let runtime = await createBrowserLocalWorkspaceRuntime({
-        handle: storedLocalWorkspace.handle,
-        workspaceId: storedLocalWorkspace.id,
-      });
+      let runtime = await replaceWorkspaceRuntime(
+        openLocalWorkspace({
+          handle: storedLocalWorkspace.handle,
+          workspaceId: storedLocalWorkspace.id,
+        }),
+      );
       clearDropboxAccessToken();
-      await replaceWorkspaceRuntime(runtime);
       setSidebarOpen(defaultSidebarOpen());
       await loadTree(runtime, loadWorkspaceSelectedPath(runtime.identity), {
         saveBeforeSelect: false,

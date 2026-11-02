@@ -1,20 +1,28 @@
+import { Effect } from "effect";
+
 export type WorkspacePathLockIntent = {
   mode: "exclusive" | "shared";
   path: string;
 };
 
+/**
+ * Cross-tab path locks for one workspace. `withLocks` acquires every expanded
+ * lock in a stable order, runs the effect, and releases the locks when the
+ * effect exits, fails, or is interrupted. Waiting for a lock is interruptible.
+ */
 export interface WorkspacePathLock {
-  run<T>(input: {
-    execute: () => Promise<T>;
+  withLocks(input: {
     intents: WorkspacePathLockIntent[];
     workspaceId: string;
-  }): Promise<T>;
+  }): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
+
+type LockMode = "exclusive" | "shared";
 
 type BrowserLockManager = {
   request<T>(
     name: string,
-    options: { mode: "exclusive" | "shared" },
+    options: { mode: LockMode; signal?: AbortSignal },
     callback: () => Promise<T>,
   ): Promise<T>;
 };
@@ -26,14 +34,20 @@ export class BrowserWorkspacePathLock implements WorkspacePathLock {
     private readonly browserLocks: BrowserLockManager | undefined = globalThis.navigator?.locks,
   ) {}
 
-  run<T>(input: {
-    execute: () => Promise<T>;
-    intents: WorkspacePathLockIntent[];
-    workspaceId: string;
-  }) {
-    let locks = expandLockIntents(input.workspaceId, input.intents);
-    if (this.browserLocks) return runWithBrowserLocks(this.browserLocks, locks, input.execute);
-    return runWithInPageLocks(locks, input.execute);
+  withLocks(input: { intents: WorkspacePathLockIntent[]; workspaceId: string }) {
+    return <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+      Effect.suspend(() => {
+        let locks = expandLockIntents(input.workspaceId, input.intents);
+        let manager = this.browserLocks;
+        return Effect.scoped(
+          Effect.gen(function* () {
+            for (let lock of locks) {
+              yield* manager ? acquireBrowserLock(manager, lock) : acquireInPageLock(lock.key);
+            }
+            return yield* effect;
+          }),
+        );
+      });
   }
 }
 
@@ -58,42 +72,50 @@ export function expandLockIntents(workspaceId: string, intents: WorkspacePathLoc
     .sort((a, b) => a.key.localeCompare(b.key));
 }
 
-async function runWithBrowserLocks<T>(
-  manager: BrowserLockManager,
-  locks: Array<{ key: string; mode: "exclusive" | "shared" }>,
-  execute: () => Promise<T>,
-): Promise<T> {
-  let acquire = (index: number): Promise<T> => {
-    let lock = locks[index];
-    if (!lock) return execute();
-    return manager.request(lock.key, { mode: lock.mode }, () => acquire(index + 1));
-  };
-  return acquire(0);
+/**
+ * Holds one Web Lock until the surrounding scope closes. The lock callback
+ * returns a promise that resolves only when the scope releases it; a grant
+ * that races an interruption is released immediately.
+ */
+function acquireBrowserLock(manager: BrowserLockManager, lock: { key: string; mode: LockMode }) {
+  return Effect.uninterruptibleMask((restore) =>
+    restore(
+      Effect.callback<() => void>((resume, signal) => {
+        manager
+          .request(lock.key, { mode: lock.mode, signal }, () => {
+            if (signal.aborted) return Promise.resolve();
+            return new Promise<void>((release) => {
+              resume(Effect.succeed(() => release()));
+            });
+          })
+          .catch((error: unknown) => {
+            if (!signal.aborted) resume(Effect.die(error));
+          });
+      }),
+    ).pipe(Effect.tap((release) => Effect.addFinalizer(() => Effect.sync(release)))),
+  );
 }
 
-async function runWithInPageLocks<T>(locks: Array<{ key: string }>, execute: () => Promise<T>) {
-  let releases: Array<() => void> = [];
-  try {
-    for (let lock of locks) releases.push(await acquireInPageLock(lock.key));
-    return await execute();
-  } finally {
-    for (let release of releases.toReversed()) release();
-  }
-}
-
-async function acquireInPageLock(key: string) {
-  let previous = inPageLocks.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  let current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let tail = previous.then(() => current);
-  inPageLocks.set(key, tail);
-  await previous;
-  return () => {
-    release();
-    if (inPageLocks.get(key) === tail) inPageLocks.delete(key);
-  };
+/** Same-page FIFO lock used when the Web Locks API is unavailable. */
+function acquireInPageLock(key: string) {
+  return Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      let previous = inPageLocks.get(key) ?? Promise.resolve();
+      let release!: () => void;
+      let current = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let tail = previous.then(() => current);
+      inPageLocks.set(key, tail);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          release();
+          if (inPageLocks.get(key) === tail) inPageLocks.delete(key);
+        }),
+      );
+      yield* restore(Effect.promise(() => previous));
+    }),
+  );
 }
 
 function normalizeLockPath(rawPath: string) {

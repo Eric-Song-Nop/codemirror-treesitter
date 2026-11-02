@@ -1,5 +1,87 @@
 import { describe, expect, it } from "vite-plus/test";
 import { workspaceErrorMessage } from "./errors.ts";
+import { OAuthAuthorizationError, WorkspaceAccountChanged } from "./providers/oauth-errors.ts";
+import {
+  WorkspaceAuthRenewalFailed,
+  WorkspaceMutationNotApplied,
+  WorkspaceUnsupportedImage,
+  isWorkspaceStorageError,
+  workspaceStorageError,
+} from "./storage/errors.ts";
+import { translateKnownMessage } from "../i18n.tsx";
+
+describe("typed workspace errors", () => {
+  it("keeps the code and retryable contract on every storage error", () => {
+    let cases = [
+      ["permission-denied", "WorkspacePermissionDenied", false],
+      ["authentication-expired", "WorkspaceAuthExpired", false],
+      ["already-exists", "WorkspaceConflict", false],
+      ["condition-failed", "WorkspaceConflict", false],
+      ["rate-limited", "WorkspaceTransientFailure", true],
+      ["temporary", "WorkspaceTransientFailure", true],
+      ["unsupported", "WorkspaceUnsupported", false],
+      ["unknown", "WorkspaceStorageFailure", false],
+    ] as const;
+    for (let [code, tag, retryable] of cases) {
+      let error = workspaceStorageError({ code, message: code });
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({ _tag: tag, code, message: code, retryable });
+      expect(isWorkspaceStorageError(error)).toBe(true);
+    }
+    expect(isWorkspaceStorageError(new Error("plain"))).toBe(false);
+  });
+
+  it("maps typed OAuth errors through the existing message table", () => {
+    let blocked = new OAuthAuthorizationError({
+      message: "Dropbox authorization popup was blocked.",
+      provider: "Dropbox",
+      reason: "popup-blocked",
+    });
+    expect(workspaceErrorMessage(blocked)).toBe(
+      "Dropbox authorization popup was blocked. Allow popups for this site and try again.",
+    );
+  });
+
+  it("maps a failed credential renewal to the provider error behind it", () => {
+    let renewal = WorkspaceAuthRenewalFailed.fromCause(
+      new OAuthAuthorizationError({
+        message: "Dropbox authorization was closed before it completed.",
+        provider: "Dropbox",
+        reason: "closed",
+      }),
+    );
+    expect(workspaceErrorMessage(renewal)).toBe(
+      "Dropbox authorization was closed before it completed. Reconnect Dropbox workspace to continue.",
+    );
+    expect(
+      workspaceErrorMessage(
+        WorkspaceAuthRenewalFailed.fromCause(
+          new WorkspaceAccountChanged({
+            message: "Dropbox account changed. Reconnect Dropbox workspace to continue.",
+            provider: "Dropbox",
+          }),
+        ),
+      ),
+    ).toBe("Dropbox account changed. Reconnect Dropbox workspace to continue.");
+  });
+
+  it("keeps port failure messages that the i18n catalog localizes", () => {
+    let t = ((key: string, values?: Record<string, string>) =>
+      `${key}${values ? JSON.stringify(values) : ""}`) as Parameters<
+      typeof translateKnownMessage
+    >[1];
+    let image = new WorkspaceUnsupportedImage({
+      message: "photo.heic is not a supported image.",
+      name: "photo.heic",
+    });
+    expect(translateKnownMessage(workspaceErrorMessage(image), t)).toBe(
+      'errors.unsupportedImage{"name":"photo.heic"}',
+    );
+    expect(WorkspaceMutationNotApplied.forStatus("notes/a.md", "conflict").message).toBe(
+      "Workspace mutation for notes/a.md ended with conflict.",
+    );
+  });
+});
 
 describe("workspace error messages", () => {
   it("distinguishes Dropbox write conflicts from missing paths", () => {

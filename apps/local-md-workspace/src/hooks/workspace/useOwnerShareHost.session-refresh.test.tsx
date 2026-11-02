@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { Effect } from "effect";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LoroDoc } from "loro-crdt";
@@ -73,22 +74,15 @@ afterEach(() => {
 
 describe("useOwnerShareHost session refresh", () => {
   it("reissues an owner session with the host secret and refresh abort signal", async () => {
+    let refreshSignal: AbortSignal | undefined;
     relayMocks.createRelayShareSession
-      .mockResolvedValueOnce(relaySession("initial-token"))
-      .mockImplementationOnce(
-        async (
-          _origin: string,
-          _shareId: string,
-          _role: string,
-          _secret: string,
-          fetchImpl: typeof fetch,
-        ) => {
-          await fetchImpl("https://relay.example/refresh", { method: "POST" });
+      .mockReturnValueOnce(Effect.succeed(relaySession("initial-token")))
+      .mockReturnValueOnce(
+        Effect.tryPromise(async (signal) => {
+          refreshSignal = signal;
           return relaySession("fresh-token");
-        },
+        }),
       );
-    let fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
-    vi.stubGlobal("fetch", fetchMock);
     let { context, record } = ownerShareFixture();
     localStorage.setItem(record.hostSecretRef, "host-secret");
     await renderOwnerShareHostHook();
@@ -109,9 +103,10 @@ describe("useOwnerShareHost session refresh", () => {
       record.shareId,
       "host",
       "host-secret",
-      expect.any(Function),
     );
-    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+    // The refresh runs as an Effect whose interruption follows the connection's signal.
+    expect(refreshSignal).toBeInstanceOf(AbortSignal);
+    expect(refreshSignal?.aborted).toBe(false);
   });
 });
 

@@ -86,8 +86,13 @@ packages.
 - `src/app/workspace-application.ts` and
   `src/app/WorkspaceApplicationProvider.tsx`: the StrictMode-external app
   lifetime and stable React composition boundary.
-- `src/app/effect-runtime.ts`: the app-owned Effect `ManagedRuntime`
-  composition boundary.
+- `src/app/effect-runtime.ts`: the app-owned Effect `ManagedRuntime` and its
+  service layer (workspace runtime transitions, local and cloud storage,
+  Dropbox sessions, OpenDAL operators).
+- `src/app/effect-bridge.ts`: the only place UI code runs Effects
+  (`runWorkspaceEffect`, `useWorkspaceEffectRunner`): typed failures reject as
+  their `Error`, interruption rejects as an `AbortError`, and hook-run effects
+  are interrupted on unmount.
 - `src/App.tsx`: i18n boundary and route shell for the workspace and shared-file
   editor.
 - `src/components/workspace/LocalWorkspaceApp.tsx`: main local workspace
@@ -119,24 +124,29 @@ packages.
 - `src/lib/workspace/documents/*`: normalized-path collaborative document
   registry, Loro authority, browser recovery, external reconciliation, and the
   coalescing filesystem materializer.
-- `src/lib/workspace/providers/*`: shared OpenDAL workspace identity, the
-  provider-neutral OAuth PKCE client (`pkce-oauth.ts`: S256 only, 64-byte state
-  and verifier, origin-checked popup `postMessage`, verifier in `sessionStorage`
-  only during a full-page redirect), and the Dropbox provider directory
-  (configuration, redirect drafts, and its PKCE provider config).
-- `src/lib/workspace/storage/*`: provider-neutral object storage contract,
-  exact OpenDAL operator lifetime, explicit revision/CAS policy, indeterminate
-  outcomes, and cross-tab path locking.
+- `src/lib/workspace/providers/*`: shared OpenDAL workspace identity, typed
+  OAuth errors (`oauth-errors.ts`), the provider-neutral Effect OAuth PKCE
+  client (`pkce-oauth.ts`: S256 only, 64-byte state and verifier,
+  origin-checked popup `postMessage`, verifier in `sessionStorage` only during
+  a full-page redirect, popup closed on interruption), and the Dropbox provider
+  directory (configuration, redirect drafts, its PKCE provider config, and the
+  `DropboxWorkspaces` service with a single in-flight authorization).
+- `src/lib/workspace/storage/*`: tagged storage errors (`errors.ts`), the
+  Effect object storage contract, scoped OpenDAL operator hosts with bounded
+  transient retries and single-flight credential renewal, explicit
+  revision/CAS policy, indeterminate outcomes, and scoped cross-tab path locks.
 - `src/lib/workspace/runtime/*`: focused tree, entry, asset, and low-level source
-  ports; BrowserLocal/cloud runtime assembly; BrowserLocal folder-permission
-  tracking (`local-permission.ts`); per-document observation; and
-  workspace-owned document-registry disposal. Workspace runtime replacement is
-  serialized by an Effect service rather than a component-owned Promise queue.
+  ports (the Promise facade over the Effect store); scoped BrowserLocal/cloud
+  runtime assembly (`LocalWorkspaceStorage`, `CloudWorkspaceStorage`,
+  `runtime-scope.ts`); BrowserLocal folder-permission tracking
+  (`local-permission.ts`); per-document observation; and the
+  `WorkspaceRuntimeTransitions` service that owns the active runtime's scope.
 - `src/lib/workspace/workspace-data-cache.ts` and `query-keys.ts`: the narrow
   TanStack Query boundary for discardable workspace read data. They do not
   cache collaboration documents or runtime handles.
-- `src/hooks/workspace/useDropboxWorkspaceRuntime.ts`: OAuth-aware Dropbox
-  runtime construction.
+- `src/hooks/workspace/useDropboxWorkspaceRuntime.ts`: React adapter that
+  supplies UI context (redirect draft, localized name) to `DropboxWorkspaces`
+  and persists the chosen configuration.
 - `src/lib/platform/*`: browser capability detection, PWA registration, and
   installed-PWA share-target launch handling.
 - `src/lib/editor/*`: React-side LiveMD initialization and retry state.
@@ -147,7 +157,9 @@ packages.
 - `src/lib/export/workspace-file.ts`: localized export naming, warnings, and
   browser download handling.
 - `src/lib/collaboration/*`: local Loro document persistence, share identity,
-  relay protocol/client/connection, share storage, Markdown hashing, and
+  relay protocol, typed relay errors (`relay-errors.ts`), the Effect relay
+  client, the relay connection (an Effect-managed WebSocket lifetime with a
+  reconnect `Schedule`), share storage, Markdown hashing, and
   document sync helpers. `markdown-document.ts` is a lightweight facade; it loads
   `markdown-document-runtime.ts` only when a file is opened.
 - `src/lib/agent/domain` and `src/lib/agent/application`: SDK-independent tool
@@ -179,8 +191,9 @@ packages.
 - [Browser Agent Architecture](./BROWSER_AGENT_PLAN.md): browser-side workspace
   tools, path-based collaborative-document editing, BYOK boundaries, and
   resource budgets.
-- [Effect and Zustand migration](./EFFECT_ZUSTAND_MIGRATION.md): app-only
-  dependency boundary, lifecycle invariants, and phased migration plan.
+- [Effect and Zustand boundaries](./EFFECT_ZUSTAND_MIGRATION.md): app-only
+  dependency boundary, the Effect service/layer map, scoped runtime lifetimes,
+  the tagged error model, retry schedules, and how the UI calls Effects.
 
 ## Configuration
 

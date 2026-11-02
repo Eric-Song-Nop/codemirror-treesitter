@@ -18,6 +18,11 @@ type WorkspaceAgentRunner = (
 type WorkspaceAgentTransportOptions = {
   getConfiguration: () => {
     apiKey: string;
+    /** Runs the turn under the session's control; defaults to a direct call. */
+    execute?: (
+      start: (signal: AbortSignal) => Promise<WorkspaceAgentRunResult>,
+      chatSignal: AbortSignal | undefined,
+    ) => Promise<WorkspaceAgentRunResult>;
     host: WorkspaceAgentHost;
     model: WorkspaceAgentModel;
     runner: WorkspaceAgentRunner;
@@ -72,48 +77,56 @@ export function createWorkspaceAgentChatTransport({
           };
 
           write({ messageId: responseId, type: "start" });
-          let result = await configuration.runner({
-            apiKey: configuration.apiKey,
-            host: configuration.host,
-            messages: textMessages(messages),
-            model: configuration.model,
-            onEvent: (event) => {
-              if (event.type == "text-delta") writeText(event.delta);
-              else if (event.type == "tool-start") {
-                toolId(event.toolCallId, event.toolName, event.target);
-              } else if (event.type == "file-edit-applied") {
-                edits.set(event.toolCallId, { change: event.change, path: event.path });
-              } else if (event.type == "tool-finish" || event.type == "tool-deduplicated") {
-                let id = toolId(event.toolCallId, event.toolName);
-                if (event.type == "tool-finish" && event.outcome == "error") {
-                  write({
-                    errorText: "error",
-                    toolCallId: id,
-                    type: "tool-output-error",
-                  });
-                } else {
-                  let output: WorkspaceAgentToolDisplayOutput = {
-                    ...edits.get(event.toolCallId),
-                    status:
-                      event.type == "tool-deduplicated"
-                        ? "deduplicated"
-                        : event.result?.reason == "denied"
-                          ? "denied"
-                          : event.result?.status == "not-applied"
-                            ? "not-applied"
-                            : "success",
-                  };
-                  write({
-                    output,
-                    toolCallId: id,
-                    type: "tool-output-available",
-                  });
-                }
-              }
-            },
-            signal: abortSignal,
-            writeControl: configuration.writeControl,
-          });
+          let execute =
+            configuration.execute ??
+            ((start: (signal: AbortSignal) => Promise<WorkspaceAgentRunResult>) =>
+              start(abortSignal ?? new AbortController().signal));
+          let result = await execute(
+            (signal) =>
+              configuration.runner({
+                apiKey: configuration.apiKey,
+                host: configuration.host,
+                messages: textMessages(messages),
+                model: configuration.model,
+                onEvent: (event) => {
+                  if (event.type == "text-delta") writeText(event.delta);
+                  else if (event.type == "tool-start") {
+                    toolId(event.toolCallId, event.toolName, event.target);
+                  } else if (event.type == "file-edit-applied") {
+                    edits.set(event.toolCallId, { change: event.change, path: event.path });
+                  } else if (event.type == "tool-finish" || event.type == "tool-deduplicated") {
+                    let id = toolId(event.toolCallId, event.toolName);
+                    if (event.type == "tool-finish" && event.outcome == "error") {
+                      write({
+                        errorText: "error",
+                        toolCallId: id,
+                        type: "tool-output-error",
+                      });
+                    } else {
+                      let output: WorkspaceAgentToolDisplayOutput = {
+                        ...edits.get(event.toolCallId),
+                        status:
+                          event.type == "tool-deduplicated"
+                            ? "deduplicated"
+                            : event.result?.reason == "denied"
+                              ? "denied"
+                              : event.result?.status == "not-applied"
+                                ? "not-applied"
+                                : "success",
+                      };
+                      write({
+                        output,
+                        toolCallId: id,
+                        type: "tool-output-available",
+                      });
+                    }
+                  }
+                },
+                signal,
+                writeControl: configuration.writeControl,
+              }),
+            abortSignal,
+          );
           writeText(result.message.content.slice(text.length));
           if (text) write({ id: `${responseId}-text`, type: "text-end" });
           write({ finishReason: result.finishReason, type: "finish" });
