@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 import { liveMdThemeColorVariableNames } from "@codemirror-treesitter/live-md-theme";
-import { githubLightLiveMdTheme } from "@codemirror-treesitter/live-md-theme-github";
+import { githubLightLiveMdTheme } from "@codemirror-treesitter/live-md-theme/github";
 import { themeDefinitions } from "./theme";
 
 const workspaceCss = readText("../index.css");
@@ -28,9 +28,9 @@ describe("workspace theme contract", () => {
     let localLiveMdBlock = cssBlock(workspaceCss, ".local-md-live-editor");
 
     expect(localLiveMdBlock).not.toContain("--theme-live-md-");
-    expect(liveMdEditorSource).toContain("@codemirror-treesitter/live-md-theme-github");
-    expect(liveMdEditorSource).toContain("@codemirror-treesitter/live-md-theme-gruvbox");
-    expect(liveMdEditorSource).toContain("@codemirror-treesitter/live-md-theme-catppuccin");
+    expect(liveMdEditorSource).toContain("@codemirror-treesitter/live-md-theme/github");
+    expect(liveMdEditorSource).toContain("@codemirror-treesitter/live-md-theme/gruvbox");
+    expect(liveMdEditorSource).toContain("@codemirror-treesitter/live-md-theme/catppuccin");
     expect(liveMdEditorSource).not.toContain("LiveMdExtensions");
   });
 

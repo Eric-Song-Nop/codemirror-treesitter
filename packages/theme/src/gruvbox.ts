@@ -1,10 +1,6 @@
 import type { Extension } from "@codemirror/state";
 import { syntaxHighlighting } from "@codemirror-treesitter/language";
-import {
-  createEditorTheme,
-  createHighlightStyle,
-  type SemanticThemeSpec,
-} from "@codemirror-treesitter/theme";
+import { createEditorTheme, createHighlightStyle, type SemanticThemeSpec } from "./index.js";
 import {
   gruvboxDarkColors,
   gruvboxLightColors,

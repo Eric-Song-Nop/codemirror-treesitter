@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { liveMdThemeColorVariableNames } from "@codemirror-treesitter/live-md-theme";
-import { catppuccinLatteLiveMdTheme, catppuccinMacchiatoLiveMdTheme } from "../src/index.js";
+import { liveMdThemeColorVariableNames } from "../src/index.js";
+import { catppuccinLatteLiveMdTheme, catppuccinMacchiatoLiveMdTheme } from "../src/catppuccin.js";
 
 describe("Catppuccin LiveMD themes", () => {
   it("covers every reusable LiveMD color token", () => {

@@ -1,7 +1,7 @@
 {
   "name": "@codemirror-treesitter/theme",
   "version": "0.0.0",
-  "description": "Shared semantic theme helpers for the tree-sitter CodeMirror build",
+  "description": "Shared semantic theme helpers and Gruvbox, GitHub, and Catppuccin themes for the tree-sitter CodeMirror build",
   "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/theme#readme",
   "bugs": {
     "url": "https://github.com/Eric-Song-Nop/codemirror-treesitter/issues"
@@ -21,6 +21,9 @@
   "types": "./dist/index.d.mts",
   "exports": {
     ".": "./dist/index.mjs",
+    "./catppuccin": "./dist/catppuccin.mjs",
+    "./github": "./dist/github.mjs",
+    "./gruvbox": "./dist/gruvbox.mjs",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -30,6 +33,7 @@
   },
   "dependencies": {
     "@codemirror-treesitter/language": "workspace:*",
+    "@codemirror-treesitter/theme-palettes": "workspace:*",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.43.0"
   },

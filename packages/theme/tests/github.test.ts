@@ -7,7 +7,7 @@ import {
   githubLightColors,
   githubLightHighlightStyle,
   githubLightThemeSpec,
-} from "../src/index.js";
+} from "../src/github.js";
 
 describe("GitHub Light theme", () => {
   it("installs a light editor theme", () => {

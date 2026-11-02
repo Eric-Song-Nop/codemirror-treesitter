@@ -12,7 +12,7 @@ export default defineConfig({
       "@codemirror-treesitter/language-data",
       "@codemirror-treesitter/live-md",
       "@codemirror-treesitter/live-md-theme",
-      "@codemirror-treesitter/theme-gruvbox",
+      "@codemirror-treesitter/theme/gruvbox",
       "loro-codemirror/sync",
       "loro-codemirror",
     ]),

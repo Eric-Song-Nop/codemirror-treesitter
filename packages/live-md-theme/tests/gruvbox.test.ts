@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { liveMdThemeColorVariableNames } from "@codemirror-treesitter/live-md-theme";
-import { gruvboxDarkLiveMdTheme, gruvboxLightLiveMdTheme } from "../src/index.js";
+import { liveMdThemeColorVariableNames } from "../src/index.js";
+import { gruvboxDarkLiveMdTheme, gruvboxLightLiveMdTheme } from "../src/gruvbox.js";
 
 describe("Gruvbox LiveMD themes", () => {
   it("cover every reusable LiveMD color token", () => {

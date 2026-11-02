@@ -9,7 +9,7 @@ import {
   catppuccinMacchiato,
   catppuccinMacchiatoColors,
   catppuccinMacchiatoHighlightStyle,
-} from "../src/index.js";
+} from "../src/catppuccin.js";
 
 describe("catppuccin theme", () => {
   it("installs Latte as a light editor theme and Macchiato as a dark editor theme", () => {

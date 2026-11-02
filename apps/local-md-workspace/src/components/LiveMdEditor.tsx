@@ -6,18 +6,18 @@ import {
   type LiveMdEditorElement,
 } from "@codemirror-treesitter/live-md";
 import type { LiveMdThemeSpec } from "@codemirror-treesitter/live-md-theme";
-import { gruvboxDark, gruvboxLight } from "@codemirror-treesitter/theme-gruvbox";
-import { catppuccinLatte, catppuccinMacchiato } from "@codemirror-treesitter/theme-catppuccin";
-import { githubLight } from "@codemirror-treesitter/theme-github";
+import { gruvboxDark, gruvboxLight } from "@codemirror-treesitter/theme/gruvbox";
+import { catppuccinLatte, catppuccinMacchiato } from "@codemirror-treesitter/theme/catppuccin";
+import { githubLight } from "@codemirror-treesitter/theme/github";
 import {
   gruvboxDarkLiveMdTheme,
   gruvboxLightLiveMdTheme,
-} from "@codemirror-treesitter/live-md-theme-gruvbox";
+} from "@codemirror-treesitter/live-md-theme/gruvbox";
 import {
   catppuccinLatteLiveMdTheme,
   catppuccinMacchiatoLiveMdTheme,
-} from "@codemirror-treesitter/live-md-theme-catppuccin";
-import { githubLightLiveMdTheme } from "@codemirror-treesitter/live-md-theme-github";
+} from "@codemirror-treesitter/live-md-theme/catppuccin";
+import { githubLightLiveMdTheme } from "@codemirror-treesitter/live-md-theme/github";
 import { useLiveMdPreload } from "@/lib/editor/live-md-preload";
 import { useTheme, type Theme } from "@/theme";
 

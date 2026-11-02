@@ -24,21 +24,17 @@ export const workspaceAliases = {
     "packages/opendal-wasm-browser/src/index.ts",
     import.meta.url,
   ).pathname,
+  "@codemirror-treesitter/theme/catppuccin": new URL(
+    "packages/theme/src/catppuccin.ts",
+    import.meta.url,
+  ).pathname,
+  "@codemirror-treesitter/theme/github": new URL("packages/theme/src/github.ts", import.meta.url)
+    .pathname,
+  "@codemirror-treesitter/theme/gruvbox": new URL("packages/theme/src/gruvbox.ts", import.meta.url)
+    .pathname,
   "@codemirror-treesitter/theme": new URL("packages/theme/src/index.ts", import.meta.url).pathname,
   "@codemirror-treesitter/theme-palettes": new URL(
     "packages/theme-palettes/src/index.ts",
-    import.meta.url,
-  ).pathname,
-  "@codemirror-treesitter/theme-catppuccin": new URL(
-    "packages/theme-catppuccin/src/index.ts",
-    import.meta.url,
-  ).pathname,
-  "@codemirror-treesitter/theme-github": new URL(
-    "packages/theme-github/src/index.ts",
-    import.meta.url,
-  ).pathname,
-  "@codemirror-treesitter/theme-gruvbox": new URL(
-    "packages/theme-gruvbox/src/index.ts",
     import.meta.url,
   ).pathname,
   "@codemirror-treesitter/live-md/fixtures": new URL(
@@ -51,20 +47,20 @@ export const workspaceAliases = {
   ).pathname,
   "@codemirror-treesitter/live-md": new URL("packages/live-md/src/index.ts", import.meta.url)
     .pathname,
+  "@codemirror-treesitter/live-md-theme/catppuccin": new URL(
+    "packages/live-md-theme/src/catppuccin.ts",
+    import.meta.url,
+  ).pathname,
+  "@codemirror-treesitter/live-md-theme/github": new URL(
+    "packages/live-md-theme/src/github.ts",
+    import.meta.url,
+  ).pathname,
+  "@codemirror-treesitter/live-md-theme/gruvbox": new URL(
+    "packages/live-md-theme/src/gruvbox.ts",
+    import.meta.url,
+  ).pathname,
   "@codemirror-treesitter/live-md-theme": new URL(
     "packages/live-md-theme/src/index.ts",
-    import.meta.url,
-  ).pathname,
-  "@codemirror-treesitter/live-md-theme-catppuccin": new URL(
-    "packages/live-md-theme-catppuccin/src/index.ts",
-    import.meta.url,
-  ).pathname,
-  "@codemirror-treesitter/live-md-theme-github": new URL(
-    "packages/live-md-theme-github/src/index.ts",
-    import.meta.url,
-  ).pathname,
-  "@codemirror-treesitter/live-md-theme-gruvbox": new URL(
-    "packages/live-md-theme-gruvbox/src/index.ts",
     import.meta.url,
   ).pathname,
   "@codemirror-treesitter/live-md-loro": new URL(

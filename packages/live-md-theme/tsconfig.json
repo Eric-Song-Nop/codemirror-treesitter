@@ -1,4 +1,9 @@
 {
   "extends": "../../tsconfig.package.json",
+  "compilerOptions": {
+    "paths": {
+      "@codemirror-treesitter/theme-palettes": ["../theme-palettes/src/index.ts"]
+    }
+  },
   "include": ["src", "tests"]
 }

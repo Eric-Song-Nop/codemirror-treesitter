@@ -1,7 +1,4 @@
-import {
-  createLiveMdTheme,
-  type LiveMdThemeColorVariables,
-} from "@codemirror-treesitter/live-md-theme";
+import { createLiveMdTheme, type LiveMdThemeColorVariables } from "./index.js";
 import {
   gruvboxDarkColors,
   gruvboxLightColors,
