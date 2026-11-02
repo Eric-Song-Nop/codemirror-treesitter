@@ -1,6 +1,6 @@
 {
   "name": "@codemirror-treesitter/live-md-loro",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Optional Loro collaboration bindings for the LiveMD editor",
   "homepage": "https://github.com/Eric-Song-Nop/codemirror-treesitter/tree/main/packages/live-md-loro#readme",
   "bugs": {
